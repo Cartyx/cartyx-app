@@ -17,6 +17,10 @@ import {
   PlayerWindowWrapper,
   EditPlayerModalWrapper,
 } from '~/components/wiki/players/PlayerWindowWrapper';
+import {
+  LocationWindowWrapper,
+  EditLocationModalWrapper,
+} from '~/components/wiki/locations/LocationWindowWrapper';
 import { GMScreenDialogs, type DialogState } from './GMScreenDialogs';
 import { ScreenBar } from './ScreenBar';
 import { StackCard } from './StackCard';
@@ -50,6 +54,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
   const [editingRaceId, setEditingRaceId] = useState<string | null>(null);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
+  const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [flashWindowId, setFlashWindowId] = useState<string | null>(null);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -432,6 +437,15 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
               onEdit={() => setEditingPlayerId(w.documentId)}
             />
           );
+        } else if (w.collection === 'location') {
+          windowContent = (
+            <LocationWindowWrapper
+              locationId={w.documentId}
+              campaignId={campaignId}
+              isGM={isGM}
+              onEdit={() => setEditingLocationId(w.documentId)}
+            />
+          );
         } else {
           windowContent = (
             <div className="p-4 overflow-auto h-full">
@@ -446,7 +460,11 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
         let titleSuffix: React.ReactNode;
         const iconKey = `${doc?.isPublic ?? 'none'}:${doc?.link ?? ''}`;
 
-        if (w.collection === 'rule' || w.collection === 'character') {
+        if (
+          w.collection === 'rule' ||
+          w.collection === 'character' ||
+          w.collection === 'location'
+        ) {
           if (doc?.isPublic === true) {
             titleIcon = (
               <span aria-label="Public">
@@ -714,6 +732,13 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
           campaignId={campaignId}
           playerId={editingPlayerId}
           onClose={() => setEditingPlayerId(null)}
+        />
+      )}
+      {editingLocationId !== null && (
+        <EditLocationModalWrapper
+          campaignId={campaignId}
+          locationId={editingLocationId}
+          onClose={() => setEditingLocationId(null)}
         />
       )}
     </div>

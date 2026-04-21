@@ -30,6 +30,10 @@ import {
   PlayerWindowWrapper,
   EditPlayerModalWrapper,
 } from '~/components/wiki/players/PlayerWindowWrapper';
+import {
+  LocationWindowWrapper,
+  EditLocationModalWrapper,
+} from '~/components/wiki/locations/LocationWindowWrapper';
 import type { TabletopMessage } from '~/types/tabletop';
 import type { PingData } from './PingOverlay';
 
@@ -84,6 +88,7 @@ export function TabletopView({
   const [editingRaceId, setEditingRaceId] = useState<string | null>(null);
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
+  const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [localWindows, setLocalWindows] = useState<ManagedWindow[]>([]);
   const localScreenIdRef = useRef<string | null>(null);
@@ -293,6 +298,15 @@ export function TabletopView({
               onEdit={() => setEditingPlayerId(w.documentId)}
             />
           );
+        } else if (w.collection === 'location') {
+          windowContent = (
+            <LocationWindowWrapper
+              locationId={w.documentId}
+              campaignId={campaignId}
+              isGM={isGM}
+              onEdit={() => setEditingLocationId(w.documentId)}
+            />
+          );
         } else {
           windowContent = (
             <div className="p-4 overflow-auto h-full">
@@ -307,7 +321,11 @@ export function TabletopView({
         let titleSuffix: React.ReactNode;
         const iconKey = `${doc?.isPublic ?? 'none'}:${doc?.link ?? ''}`;
 
-        if (w.collection === 'rule' || w.collection === 'character') {
+        if (
+          w.collection === 'rule' ||
+          w.collection === 'character' ||
+          w.collection === 'location'
+        ) {
           if (doc?.isPublic === true) {
             titleIcon = (
               <span aria-label="Public">
@@ -571,6 +589,13 @@ export function TabletopView({
           campaignId={campaignId}
           playerId={editingPlayerId}
           onClose={() => setEditingPlayerId(null)}
+        />
+      )}
+      {editingLocationId !== null && (
+        <EditLocationModalWrapper
+          campaignId={campaignId}
+          locationId={editingLocationId}
+          onClose={() => setEditingLocationId(null)}
         />
       )}
     </div>
