@@ -444,6 +444,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
               campaignId={campaignId}
               isGM={isGM}
               onEdit={() => setEditingLocationId(w.documentId)}
+              onOpenLocation={(locId) => handleOpenItem('location', locId)}
             />
           );
         } else {

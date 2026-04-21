@@ -7,11 +7,13 @@ export function LocationWindowWrapper({
   campaignId,
   isGM,
   onEdit,
+  onOpenLocation,
 }: {
   locationId: string;
   campaignId: string;
   isGM: boolean;
   onEdit: () => void;
+  onOpenLocation?: (locationId: string) => void;
 }) {
   const { location, isLoading } = useLocation(locationId, campaignId);
 
@@ -31,7 +33,14 @@ export function LocationWindowWrapper({
     );
   }
 
-  return <LocationWindow location={location} isGM={isGM} onEdit={onEdit} />;
+  return (
+    <LocationWindow
+      location={location}
+      isGM={isGM}
+      onEdit={onEdit}
+      onOpenLocation={onOpenLocation}
+    />
+  );
 }
 
 export function EditLocationModalWrapper({

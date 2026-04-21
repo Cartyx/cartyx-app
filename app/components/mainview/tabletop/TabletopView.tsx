@@ -305,6 +305,15 @@ export function TabletopView({
               campaignId={campaignId}
               isGM={isGM}
               onEdit={() => setEditingLocationId(w.documentId)}
+              onOpenLocation={(locId) => {
+                if (activeScreenId) {
+                  mutations.openWindow.mutate({
+                    screenId: activeScreenId,
+                    collection: 'location',
+                    documentId: locId,
+                  });
+                }
+              }}
             />
           );
         } else {

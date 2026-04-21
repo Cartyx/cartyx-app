@@ -9,11 +9,12 @@ interface LocationWindowProps {
   location: LocationData;
   isGM?: boolean;
   onEdit?: () => void;
+  onOpenLocation?: (locationId: string) => void;
 }
 
 type Tab = 'general' | 'gm-notes' | 'hierarchy';
 
-export function LocationWindow({ location, isGM, onEdit }: LocationWindowProps) {
+export function LocationWindow({ location, isGM, onEdit, onOpenLocation }: LocationWindowProps) {
   const [activeTab, setActiveTab] = useState<Tab>('general');
 
   const tabs: { id: Tab; label: string }[] = [
@@ -117,14 +118,17 @@ export function LocationWindow({ location, isGM, onEdit }: LocationWindowProps) 
                 </h4>
                 <ul className="space-y-1">
                   {location.parentLocations.map((ref) => (
-                    <li
-                      key={ref.id}
-                      className="flex items-center gap-2 text-xs text-slate-300 px-2 py-1.5 bg-white/[0.02] rounded"
-                    >
-                      <span>{ref.name}</span>
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-500/10 border border-violet-500/20 text-violet-400 font-sans font-bold text-[8px] tracking-tight capitalize">
-                        {ref.locationType}
-                      </span>
+                    <li key={ref.id}>
+                      <button
+                        type="button"
+                        onClick={() => onOpenLocation?.(ref.id)}
+                        className="flex items-center gap-2 w-full text-left text-xs text-slate-300 px-2 py-1.5 bg-white/[0.02] rounded hover:bg-white/[0.06] hover:text-blue-400 transition-colors"
+                      >
+                        <span>{ref.name}</span>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-500/10 border border-violet-500/20 text-violet-400 font-sans font-bold text-[8px] tracking-tight capitalize">
+                          {ref.locationType}
+                        </span>
+                      </button>
                     </li>
                   ))}
                 </ul>
@@ -137,14 +141,17 @@ export function LocationWindow({ location, isGM, onEdit }: LocationWindowProps) 
                 </h4>
                 <ul className="space-y-1">
                   {location.childLocations.map((ref) => (
-                    <li
-                      key={ref.id}
-                      className="flex items-center gap-2 text-xs text-slate-300 px-2 py-1.5 bg-white/[0.02] rounded"
-                    >
-                      <span>{ref.name}</span>
-                      <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-500/10 border border-violet-500/20 text-violet-400 font-sans font-bold text-[8px] tracking-tight capitalize">
-                        {ref.locationType}
-                      </span>
+                    <li key={ref.id}>
+                      <button
+                        type="button"
+                        onClick={() => onOpenLocation?.(ref.id)}
+                        className="flex items-center gap-2 w-full text-left text-xs text-slate-300 px-2 py-1.5 bg-white/[0.02] rounded hover:bg-white/[0.06] hover:text-blue-400 transition-colors"
+                      >
+                        <span>{ref.name}</span>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-500/10 border border-violet-500/20 text-violet-400 font-sans font-bold text-[8px] tracking-tight capitalize">
+                          {ref.locationType}
+                        </span>
+                      </button>
                     </li>
                   ))}
                 </ul>
