@@ -44,7 +44,14 @@ export const updateTabletopScreenSettingsSchema = z.object({
 // Windows (on tabletop screens)
 // ---------------------------------------------------------------------------
 
-const TABLETOP_COLLECTIONS: [string, ...string[]] = ['note', 'character', 'race', 'rule', 'player'];
+const TABLETOP_COLLECTIONS: [string, ...string[]] = [
+  'note',
+  'character',
+  'race',
+  'rule',
+  'player',
+  'location',
+];
 
 export const openTabletopWindowSchema = z.object({
   screenId: z.string().trim().min(1),

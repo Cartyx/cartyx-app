@@ -11,6 +11,7 @@ export const SUPPORTED_COLLECTIONS: [string, ...string[]] = [
   'race',
   'rule',
   'player',
+  'location',
 ];
 
 // ---------------------------------------------------------------------------

@@ -90,6 +90,21 @@ const COLLECTION_REGISTRY: Record<string, CollectionFetcher> = {
       >;
     },
   },
+  location: {
+    async fetch(ids: string[], campaignId: string) {
+      const { Location } = await import('../db/models/Location');
+      return Location.find({ _id: { $in: ids }, campaignId }, '_id name description isPublic')
+        .lean()
+        .then((docs) =>
+          docs.map((d) => ({
+            _id: d._id,
+            title: (d as { name?: string }).name,
+            content: (d as { description?: string }).description,
+            isPublic: (d as { isPublic?: boolean }).isPublic,
+          }))
+        ) as Promise<Array<{ _id: unknown; title?: string; content?: string; isPublic?: boolean }>>;
+    },
+  },
   player: {
     async fetch(ids: string[], campaignId: string) {
       const { Player } = await import('../db/models/Player');
