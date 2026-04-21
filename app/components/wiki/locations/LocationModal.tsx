@@ -14,6 +14,7 @@ import { useLocationTypes } from '~/hooks/useLocationTypes';
 import { useLocations } from '~/hooks/useLocations';
 import { useCampaign } from '~/hooks/useCampaigns';
 import type { LocationRef } from '~/types/location';
+import { LocationImageUpload } from './LocationImageUpload';
 import { ShowOnTabletopButton } from '~/components/wiki/shared/ShowOnTabletopButton';
 import { TagAutocompleteInput } from '~/components/shared/TagAutocompleteInput';
 
@@ -400,6 +401,19 @@ export function LocationModal({ isOpen, onClose, campaignId, locationId }: Locat
               Press Enter or comma to add. Suggestions appear as you type.
             </p>
           </div>
+
+          {/* Images — edit mode only */}
+          {locationId && (
+            <div>
+              <h3 className="text-xs font-semibold text-slate-400 mb-2 tracking-wide">Images</h3>
+              <LocationImageUpload
+                locationId={locationId}
+                campaignId={campaignId}
+                images={fetchedLocation?.images ?? []}
+                disabled={isDisabled}
+              />
+            </div>
+          )}
 
           <div className="flex items-center gap-6 pt-2">
             <label className="flex items-center gap-3 cursor-pointer group">

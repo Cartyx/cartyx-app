@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { LocationData } from '~/types/location';
 import { MARKDOWN_PROSE_CLASSES } from '~/utils/markdownProseClasses';
+import { LocationGallery } from './LocationGallery';
 
 interface LocationWindowProps {
   location: LocationData;
@@ -12,13 +13,14 @@ interface LocationWindowProps {
   onOpenLocation?: (locationId: string) => void;
 }
 
-type Tab = 'general' | 'gm-notes' | 'hierarchy';
+type Tab = 'general' | 'gallery' | 'gm-notes' | 'hierarchy';
 
 export function LocationWindow({ location, isGM, onEdit, onOpenLocation }: LocationWindowProps) {
   const [activeTab, setActiveTab] = useState<Tab>('general');
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'general', label: 'General' },
+    { id: 'gallery', label: 'Gallery' },
     ...(isGM ? [{ id: 'gm-notes' as Tab, label: 'GM Notes' }] : []),
     { id: 'hierarchy', label: 'Hierarchy' },
   ];
@@ -90,6 +92,8 @@ export function LocationWindow({ location, isGM, onEdit, onOpenLocation }: Locat
             )}
           </div>
         )}
+
+        {activeTab === 'gallery' && <LocationGallery images={location.images} />}
 
         {activeTab === 'gm-notes' && isGM && (
           <div>
