@@ -113,15 +113,18 @@ export function LocationWindow({ location, isGM, onEdit }: LocationWindowProps) 
             {location.parentLocations.length > 0 && (
               <div>
                 <h4 className="font-sans font-bold text-[10px] text-slate-500 uppercase tracking-wider mb-1">
-                  Parent Locations
+                  Located In
                 </h4>
                 <ul className="space-y-1">
-                  {location.parentLocations.map((id) => (
+                  {location.parentLocations.map((ref) => (
                     <li
-                      key={id}
-                      className="text-xs text-slate-400 px-2 py-1 bg-white/[0.02] rounded"
+                      key={ref.id}
+                      className="flex items-center gap-2 text-xs text-slate-300 px-2 py-1.5 bg-white/[0.02] rounded"
                     >
-                      {id}
+                      <span>{ref.name}</span>
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-500/10 border border-violet-500/20 text-violet-400 font-sans font-bold text-[8px] tracking-tight capitalize">
+                        {ref.locationType}
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -130,22 +133,25 @@ export function LocationWindow({ location, isGM, onEdit }: LocationWindowProps) 
             {location.childLocations.length > 0 && (
               <div>
                 <h4 className="font-sans font-bold text-[10px] text-slate-500 uppercase tracking-wider mb-1">
-                  Child Locations
+                  Contains
                 </h4>
                 <ul className="space-y-1">
-                  {location.childLocations.map((id) => (
+                  {location.childLocations.map((ref) => (
                     <li
-                      key={id}
-                      className="text-xs text-slate-400 px-2 py-1 bg-white/[0.02] rounded"
+                      key={ref.id}
+                      className="flex items-center gap-2 text-xs text-slate-300 px-2 py-1.5 bg-white/[0.02] rounded"
                     >
-                      {id}
+                      <span>{ref.name}</span>
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-violet-500/10 border border-violet-500/20 text-violet-400 font-sans font-bold text-[8px] tracking-tight capitalize">
+                        {ref.locationType}
+                      </span>
                     </li>
                   ))}
                 </ul>
               </div>
             )}
             {location.parentLocations.length === 0 && location.childLocations.length === 0 && (
-              <p className="text-xs text-slate-600 italic">No parent or child locations linked.</p>
+              <p className="text-xs text-slate-600 italic">No location hierarchy configured yet.</p>
             )}
           </div>
         )}

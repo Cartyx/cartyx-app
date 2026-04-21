@@ -8,7 +8,7 @@ import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
 import { normalizeTags } from '../utils/helpers';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { ensureTags as ensureTagsFn } from './tags';
-import type { LocationData, LocationListItem } from '~/types/location';
+import type { LocationData, LocationListItem, LocationRef } from '~/types/location';
 import {
   createLocationSchema,
   updateLocationSchema,
@@ -31,15 +31,15 @@ function serializeLocation(
     description?: string;
     gmNotes?: string;
     isPublic?: boolean;
-    parentLocations?: unknown[];
-    childLocations?: unknown[];
     mapImage?: string | null;
     tags?: string[];
     createdAt?: Date;
     updatedAt?: Date;
   },
   canEdit: boolean,
-  showGmNotes: boolean
+  showGmNotes: boolean,
+  resolvedParents: LocationRef[],
+  resolvedChildren: LocationRef[]
 ): LocationData {
   return {
     id: String(r._id),
@@ -50,14 +50,31 @@ function serializeLocation(
     description: r.description ?? '',
     gmNotes: showGmNotes ? (r.gmNotes ?? '') : '',
     isPublic: r.isPublic ?? true,
-    parentLocations: (r.parentLocations ?? []).map(String),
-    childLocations: (r.childLocations ?? []).map(String),
+    parentLocations: resolvedParents,
+    childLocations: resolvedChildren,
     mapImage: r.mapImage ?? null,
     tags: r.tags ?? [],
     canEdit,
     createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : '',
     updatedAt: r.updatedAt instanceof Date ? r.updatedAt.toISOString() : '',
   };
+}
+
+/**
+ * Resolve an array of location ObjectIds to LocationRef objects.
+ */
+async function resolveLocationRefs(ids: unknown[], campaignId: string): Promise<LocationRef[]> {
+  if (!ids || ids.length === 0) return [];
+  const stringIds = ids.map(String);
+  const docs = await Location.find(
+    { _id: { $in: stringIds }, campaignId },
+    '_id name locationType'
+  ).lean();
+  return docs.map((d) => ({
+    id: String(d._id),
+    name: (d as { name?: string }).name ?? '',
+    locationType: (d as { locationType?: string }).locationType ?? '',
+  }));
 }
 
 function serializeLocationListItem(
@@ -172,7 +189,8 @@ export const createLocation = createServerFn({ method: 'POST' })
         location_id: newId,
       });
 
-      return { success: true, location: serializeLocation(doc, true, true) };
+      const resolvedParents = await resolveLocationRefs(doc.parentLocations ?? [], data.campaignId);
+      return { success: true, location: serializeLocation(doc, true, true, resolvedParents, []) };
     } catch (e) {
       serverCaptureException(e, sessionUserId, {
         action: 'createLocation',
@@ -244,7 +262,18 @@ export const updateLocation = createServerFn({ method: 'POST' })
         updated_by: userId,
       });
 
-      return { success: true, location: serializeLocation(existing, true, true) };
+      const resolvedParents = await resolveLocationRefs(
+        existing.parentLocations ?? [],
+        data.campaignId
+      );
+      const resolvedChildren = await resolveLocationRefs(
+        existing.childLocations ?? [],
+        data.campaignId
+      );
+      return {
+        success: true,
+        location: serializeLocation(existing, true, true, resolvedParents, resolvedChildren),
+      };
     } catch (e) {
       serverCaptureException(e, sessionUserId, { action: 'updateLocation', locationId: data.id });
       throw e;
@@ -416,7 +445,10 @@ export const getLocation = createServerFn({ method: 'GET' })
       const canEdit = isOwner || member.isGM;
       const showGmNotes = member.isGM || isOwner;
 
-      return serializeLocation(doc, canEdit, showGmNotes);
+      const resolvedParents = await resolveLocationRefs(doc.parentLocations ?? [], data.campaignId);
+      const resolvedChildren = await resolveLocationRefs(doc.childLocations ?? [], data.campaignId);
+
+      return serializeLocation(doc, canEdit, showGmNotes, resolvedParents, resolvedChildren);
     } catch (e) {
       serverCaptureException(e, sessionUserId, { action: 'getLocation', locationId: data.id });
       throw e;

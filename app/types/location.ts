@@ -1,3 +1,9 @@
+export interface LocationRef {
+  id: string;
+  name: string;
+  locationType: string;
+}
+
 export interface LocationData {
   id: string;
   campaignId: string;
@@ -7,8 +13,8 @@ export interface LocationData {
   description: string;
   gmNotes: string;
   isPublic: boolean;
-  parentLocations: string[];
-  childLocations: string[];
+  parentLocations: LocationRef[];
+  childLocations: LocationRef[];
   mapImage: string | null;
   tags: string[];
   canEdit: boolean;

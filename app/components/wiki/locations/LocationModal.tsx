@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Globe, Lock } from 'lucide-react';
+import { X, Globe, Lock, Search } from 'lucide-react';
 import { FormInput } from '~/components/FormInput';
 import { PixelButton } from '~/components/PixelButton';
 import { MarkdownEditor } from '~/components/shared/MarkdownEditor';
@@ -13,6 +13,7 @@ import {
 import { useLocationTypes } from '~/hooks/useLocationTypes';
 import { useLocations } from '~/hooks/useLocations';
 import { useCampaign } from '~/hooks/useCampaigns';
+import type { LocationRef } from '~/types/location';
 import { ShowOnTabletopButton } from '~/components/wiki/shared/ShowOnTabletopButton';
 import { TagAutocompleteInput } from '~/components/shared/TagAutocompleteInput';
 
@@ -47,7 +48,10 @@ export function LocationModal({ isOpen, onClose, campaignId, locationId }: Locat
   const [description, setDescription] = useState('');
   const [gmNotes, setGmNotes] = useState('');
   const [isPublic, setIsPublic] = useState(true);
-  const [parentLocations, setParentLocations] = useState<string[]>([]);
+  const [parentLocations, setParentLocations] = useState<LocationRef[]>([]);
+  const [parentSearch, setParentSearch] = useState('');
+  const [showParentDropdown, setShowParentDropdown] = useState(false);
+  const parentSearchRef = useRef<HTMLInputElement>(null);
   const [tags, setTags] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
@@ -70,6 +74,8 @@ export function LocationModal({ isOpen, onClose, campaignId, locationId }: Locat
     setGmNotes('');
     setIsPublic(true);
     setParentLocations([]);
+    setParentSearch('');
+    setShowParentDropdown(false);
     setTags([]);
     setError(null);
     setFieldErrors({});
@@ -119,7 +125,7 @@ export function LocationModal({ isOpen, onClose, campaignId, locationId }: Locat
       description: description.trim(),
       gmNotes: gmNotes.trim(),
       isPublic,
-      parentLocations,
+      parentLocations: parentLocations.map((ref) => ref.id),
       tags,
     };
 
@@ -267,33 +273,110 @@ export function LocationModal({ isOpen, onClose, campaignId, locationId }: Locat
             />
           )}
 
-          {/* Parent Locations */}
+          {/* Located In */}
           <div>
             <label
-              htmlFor="location-parents"
+              htmlFor="location-parent-search"
               className="block text-xs font-semibold text-slate-400 mb-2 tracking-wide"
             >
-              Parent Locations
+              Located In
             </label>
-            <select
-              id="location-parents"
-              multiple
-              value={parentLocations}
-              onChange={(e) => {
-                const selected = Array.from(e.target.selectedOptions, (o) => o.value);
-                setParentLocations(selected);
-              }}
-              disabled={isDisabled}
-              className="w-full bg-[#080A12] border border-white/[0.07] rounded px-3 py-2 font-sans font-semibold text-xs text-white outline-none focus:border-blue-500/50 transition-colors min-h-[4rem]"
-            >
-              {parentOptions.map((loc) => (
-                <option key={loc.id} value={loc.id}>
-                  {loc.name} ({loc.locationType})
-                </option>
-              ))}
-            </select>
+
+            {/* Selected parents as removable chips */}
+            {parentLocations.length > 0 && (
+              <div className="flex flex-wrap gap-1 mb-2">
+                {parentLocations.map((ref) => (
+                  <span
+                    key={ref.id}
+                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-violet-500/10 border border-violet-500/20 text-violet-300 font-sans font-semibold text-[10px]"
+                  >
+                    {ref.name}
+                    <span className="text-violet-500 text-[8px] capitalize">
+                      ({ref.locationType})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setParentLocations((prev) => prev.filter((p) => p.id !== ref.id))
+                      }
+                      disabled={isDisabled}
+                      className="text-violet-400/50 hover:text-rose-400 transition-colors ml-0.5"
+                      aria-label={`Remove ${ref.name}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {/* Search input */}
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3 w-3 text-slate-500" />
+              <input
+                id="location-parent-search"
+                ref={parentSearchRef}
+                type="text"
+                value={parentSearch}
+                onChange={(e) => {
+                  setParentSearch(e.target.value);
+                  setShowParentDropdown(true);
+                }}
+                onFocus={() => setShowParentDropdown(true)}
+                onBlur={() => {
+                  // Delay to allow click on dropdown item
+                  setTimeout(() => setShowParentDropdown(false), 200);
+                }}
+                placeholder="Search locations to add..."
+                disabled={isDisabled}
+                className="w-full bg-[#080A12] border border-white/[0.07] rounded pl-8 pr-3 py-2 font-sans font-semibold text-xs text-white outline-none focus:border-blue-500/50 transition-colors placeholder:text-slate-600"
+              />
+
+              {/* Dropdown results */}
+              {showParentDropdown && parentSearch.trim().length > 0 && (
+                <div className="absolute z-50 left-0 right-0 top-full mt-1 max-h-40 overflow-y-auto rounded border border-white/[0.07] bg-[#0D1117] shadow-xl">
+                  {(() => {
+                    const selectedIds = new Set(parentLocations.map((p) => p.id));
+                    const filtered = parentOptions.filter(
+                      (loc) =>
+                        !selectedIds.has(loc.id) &&
+                        loc.name.toLowerCase().includes(parentSearch.toLowerCase())
+                    );
+                    if (filtered.length === 0) {
+                      return (
+                        <div className="px-3 py-2 text-[10px] text-slate-500">
+                          No matching locations
+                        </div>
+                      );
+                    }
+                    return filtered.slice(0, 20).map((loc) => (
+                      <button
+                        key={loc.id}
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setParentLocations((prev) => [
+                            ...prev,
+                            { id: loc.id, name: loc.name, locationType: loc.locationType },
+                          ]);
+                          setParentSearch('');
+                          setShowParentDropdown(false);
+                          parentSearchRef.current?.focus();
+                        }}
+                        className="flex items-center gap-2 w-full px-3 py-1.5 text-left hover:bg-white/[0.05] transition-colors"
+                      >
+                        <span className="text-xs text-slate-200">{loc.name}</span>
+                        <span className="inline-flex items-center px-1 py-0.5 rounded bg-violet-500/10 border border-violet-500/20 text-violet-400 font-sans font-bold text-[8px] capitalize">
+                          {loc.locationType}
+                        </span>
+                      </button>
+                    ));
+                  })()}
+                </div>
+              )}
+            </div>
             <p className="text-xs text-slate-700 mt-1.5">
-              Hold Ctrl/Cmd to select multiple. Leave empty for top-level.
+              Search and select which locations this is inside of. Leave empty for top-level.
             </p>
           </div>
 
