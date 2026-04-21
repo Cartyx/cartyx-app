@@ -9,6 +9,8 @@ import {
   createLocationSchema,
   updateLocationSchema,
   deleteLocationSchema,
+  addLocationImageSchema,
+  deleteLocationImageSchema,
 } from '~/types/schemas/locations';
 
 // ---------------------------------------------------------------------------
@@ -48,6 +50,20 @@ const deleteLocationFn = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const { deleteLocation } = await import('~/server/functions/locations');
     return deleteLocation({ data });
+  });
+
+const addLocationImageFn = createServerFn({ method: 'POST' })
+  .inputValidator(addLocationImageSchema)
+  .handler(async ({ data }) => {
+    const { addLocationImage } = await import('~/server/functions/locations');
+    return addLocationImage({ data });
+  });
+
+const deleteLocationImageFn = createServerFn({ method: 'POST' })
+  .inputValidator(deleteLocationImageSchema)
+  .handler(async ({ data }) => {
+    const { deleteLocationImage } = await import('~/server/functions/locations');
+    return deleteLocationImage({ data });
   });
 
 // ---------------------------------------------------------------------------
@@ -248,6 +264,96 @@ export function useDeleteLocation() {
 
   return {
     remove,
+    isLoading: mutation.isPending,
+    error:
+      mutation.error instanceof Error
+        ? mutation.error.message
+        : mutation.error
+          ? String(mutation.error)
+          : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Image hooks
+// ---------------------------------------------------------------------------
+
+interface AddLocationImageInput {
+  id: string;
+  campaignId: string;
+  imageKey: string;
+  url: string;
+  title: string;
+}
+
+export function useAddLocationImage() {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: async (input: AddLocationImageInput) => addLocationImageFn({ data: input }),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.locations.detail(variables.id, variables.campaignId),
+      });
+      queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.tabletop.all });
+    },
+    onError: (e, variables) => {
+      captureException(e, { action: 'addLocationImage', locationId: variables.id });
+    },
+  });
+
+  const addImage = async (input: AddLocationImageInput) => {
+    try {
+      return await mutation.mutateAsync(input);
+    } catch {
+      return null;
+    }
+  };
+
+  return {
+    addImage,
+    isLoading: mutation.isPending,
+    error:
+      mutation.error instanceof Error
+        ? mutation.error.message
+        : mutation.error
+          ? String(mutation.error)
+          : null,
+  };
+}
+
+interface DeleteLocationImageInput {
+  id: string;
+  campaignId: string;
+  imageKey: string;
+}
+
+export function useDeleteLocationImage() {
+  const queryClient = useQueryClient();
+  const mutation = useMutation({
+    mutationFn: async (input: DeleteLocationImageInput) => deleteLocationImageFn({ data: input }),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({
+        queryKey: queryKeys.locations.detail(variables.id, variables.campaignId),
+      });
+      queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
+      queryClient.invalidateQueries({ queryKey: queryKeys.tabletop.all });
+    },
+    onError: (e, variables) => {
+      captureException(e, { action: 'deleteLocationImage', locationId: variables.id });
+    },
+  });
+
+  const deleteImage = async (input: DeleteLocationImageInput) => {
+    try {
+      return await mutation.mutateAsync(input);
+    } catch {
+      return null;
+    }
+  };
+
+  return {
+    deleteImage,
     isLoading: mutation.isPending,
     error:
       mutation.error instanceof Error
