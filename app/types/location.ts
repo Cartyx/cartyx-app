@@ -4,6 +4,13 @@ export interface LocationRef {
   locationType: string;
 }
 
+export interface LocationImage {
+  imageKey: string;
+  url: string;
+  title: string;
+  uploadedAt: string;
+}
+
 export interface LocationData {
   id: string;
   campaignId: string;
@@ -15,6 +22,7 @@ export interface LocationData {
   isPublic: boolean;
   parentLocations: LocationRef[];
   childLocations: LocationRef[];
+  images: LocationImage[];
   mapImage: string | null;
   tags: string[];
   canEdit: boolean;

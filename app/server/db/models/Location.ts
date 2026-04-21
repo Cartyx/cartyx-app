@@ -32,6 +32,17 @@ const locationSchema = new mongoose.Schema(
       ),
       default: null,
     },
+    images: [
+      new mongoose.Schema(
+        {
+          imageKey: { type: String, required: true },
+          url: { type: String, required: true },
+          title: { type: String, required: true },
+          uploadedAt: { type: Date, default: Date.now },
+        },
+        { _id: false }
+      ),
+    ],
     tags: { type: [String], default: [] },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },

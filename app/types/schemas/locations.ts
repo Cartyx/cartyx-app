@@ -62,3 +62,21 @@ export const deleteLocationTypeSchema = z.object({
   id: z.string().trim().min(1),
   campaignId: z.string().trim().min(1),
 });
+
+// ---------------------------------------------------------------------------
+// Location Images
+// ---------------------------------------------------------------------------
+
+export const addLocationImageSchema = z.object({
+  id: z.string().trim().min(1),
+  campaignId: z.string().trim().min(1),
+  imageKey: z.string().trim().min(1),
+  url: z.string().url(),
+  title: z.string().trim().min(1, 'Image title is required'),
+});
+
+export const deleteLocationImageSchema = z.object({
+  id: z.string().trim().min(1),
+  campaignId: z.string().trim().min(1),
+  imageKey: z.string().trim().min(1),
+});
