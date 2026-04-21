@@ -350,7 +350,7 @@ export function FloatingWindow({
             aria-label={`Minimize ${title}`}
             onMouseDown={(event) => event.stopPropagation()}
             onClick={handleMinimize}
-            className="flex h-5 w-5 items-center justify-center rounded bg-yellow-500/20 text-yellow-400 transition-colors hover:bg-yellow-500/40"
+            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded bg-yellow-500/20 text-yellow-400 transition-colors hover:bg-yellow-500/40"
           >
             <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
@@ -359,7 +359,7 @@ export function FloatingWindow({
             aria-label={maximizeLabel}
             onMouseDown={(event) => event.stopPropagation()}
             onClick={handleMaximizeToggle}
-            className="flex h-5 w-5 items-center justify-center rounded bg-green-500/20 text-green-400 transition-colors hover:bg-green-500/40"
+            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded bg-green-500/20 text-green-400 transition-colors hover:bg-green-500/40"
           >
             {maximizeIcon}
           </button>
@@ -368,7 +368,7 @@ export function FloatingWindow({
             aria-label={`Close ${title}`}
             onMouseDown={(event) => event.stopPropagation()}
             onClick={handleClose}
-            className="flex h-5 w-5 items-center justify-center rounded bg-red-500/20 text-red-400 transition-colors hover:bg-red-500/40"
+            className="flex h-5 w-5 cursor-pointer items-center justify-center rounded bg-red-500/20 text-red-400 transition-colors hover:bg-red-500/40"
           >
             <X className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
@@ -381,7 +381,7 @@ export function FloatingWindow({
         <div
           aria-hidden="true"
           onMouseDown={handleResizeMouseDown}
-          className="absolute bottom-0 right-0 h-3 w-3 cursor-se-resize bg-[linear-gradient(135deg,transparent_0%,transparent_45%,rgba(148,163,184,0.4)_45%,rgba(148,163,184,0.4)_55%,transparent_55%,transparent_100%)]"
+          className="absolute bottom-0 right-0 h-5 w-5 cursor-se-resize bg-[linear-gradient(135deg,transparent_0%,transparent_45%,rgba(148,163,184,0.4)_45%,rgba(148,163,184,0.4)_55%,transparent_55%,transparent_100%)]"
         />
       ) : null}
     </div>
