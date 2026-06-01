@@ -3,9 +3,11 @@
  *
  *   - 25 locations in a 4-level parent/child hierarchy
  *   - 30 characters across 4 factions, with relationships
+ *   - 6 races (Wiki entries)
+ *   - 8 house rules (4 public, 1 GM-only, etc.)
  *   - 5 tabletop screens, each with 2-3 pre-opened floating windows
+ *   - 2 GM screens with pre-opened NPC + rule windows AND quick-reference stacks
  *   - 5 sessions (one active, two completed, two scheduled)
- *   - 2 simulated player members + the GM
  *   - Visible SVG fixture images on every location
  *
  * Used both as the heaviest scenario for manual tabletop iteration and as
@@ -545,6 +547,190 @@ const RELATIONSHIPS: Array<[number, string, number]> = [
   [25, 'reports to', 9], // Faisal → Brennan
 ];
 
+// Races (Wiki → Races)
+interface RaceSpec {
+  title: string;
+  content: string;
+  tags: string[];
+}
+const RACES: RaceSpec[] = [
+  {
+    title: 'Human',
+    content:
+      '# Humans of Theronia\n\nThe most numerous race on the continent. Adaptable, ambitious, short-lived compared to elves.\n\n**Ability bonus:** +1 to all ability scores.\n**Common subtypes:** Vellarian (northern, hardy), Astryni (cosmopolitan), Karthian-blooded (mountain stock), Solassian (desert-adapted).',
+    tags: ['race', 'common'],
+  },
+  {
+    title: 'Elf',
+    content:
+      '# Elves of Theronia\n\nMostly half-elves now — the pureblood elven kingdoms collapsed two centuries ago. Long-lived, magic-attuned, often distant.\n\n**Ability bonus:** +2 Dexterity.\n**Trait:** Trance — 4 hours of meditation replaces 8 hours of sleep.',
+    tags: ['race', 'common'],
+  },
+  {
+    title: 'Dwarf',
+    content:
+      '# Dwarves of Theronia\n\nKarthian Highlands are dwarven ancestral homeland. Master smiths, miners, and stonemasons. Tight clan structure.\n\n**Ability bonus:** +2 Constitution.\n**Trait:** Darkvision 60ft. Resistance to poison damage.',
+    tags: ['race', 'common'],
+  },
+  {
+    title: 'Halfling',
+    content:
+      '# Halflings of Theronia\n\nSettled communities scattered across the Astryn Lowlands. Cheerful, curious, unexpectedly resilient.\n\n**Ability bonus:** +2 Dexterity, +1 Charisma.\n**Trait:** Lucky — reroll a natural 1 on attack rolls, ability checks, and saving throws.',
+    tags: ['race', 'common'],
+  },
+  {
+    title: 'Tiefling',
+    content:
+      '# Tieflings of Theronia\n\nDescended from a 700-year-old infernal compact made by the lost city of Aelthor. Found in every nation; uniformly distrusted in Solassia.\n\n**Ability bonus:** +1 Intelligence, +2 Charisma.\n**Trait:** Innate Thaumaturgy cantrip. Fire resistance.',
+    tags: ['race', 'uncommon'],
+  },
+  {
+    title: 'Dragonborn',
+    content:
+      '# Dragonborn of Theronia\n\nRare — most live in the volcanic isles south of Solassia. The Stoneharrow free company is the largest dragonborn organisation on the continent.\n\n**Ability bonus:** +2 Strength, +1 Charisma.\n**Trait:** Breath weapon (varies by ancestry). Damage resistance to your draconic ancestry damage type.',
+    tags: ['race', 'rare'],
+  },
+];
+
+// House / homebrew rules (Wiki → Rules)
+interface RuleSpec {
+  title: string;
+  content: string;
+  tags: string[];
+  isPublic: boolean;
+}
+const RULES: RuleSpec[] = [
+  {
+    title: 'Critical Failures',
+    content:
+      'On a natural 1 with an attack roll, the attacker provokes an opportunity attack from any adjacent enemy. Spell attacks are exempt.',
+    tags: ['combat', 'house-rule'],
+    isPublic: true,
+  },
+  {
+    title: 'Inspiration Refresh',
+    content:
+      'Each player who shows up to a session on time gains 1 Inspiration at the start. Unused Inspiration carries over up to a cap of 3.',
+    tags: ['meta', 'house-rule'],
+    isPublic: true,
+  },
+  {
+    title: 'Death Saving Throws',
+    content:
+      '**Stabilising on a 20:** Restore 1 HP instead of just stabilising.\n**Critical failure on a 1:** Counts as two failed saves.\n**No nearby allies:** Death saves are made with disadvantage.',
+    tags: ['combat'],
+    isPublic: true,
+  },
+  {
+    title: 'Combat Initiative',
+    content:
+      'We use group initiative: enemies roll once for the side, players roll individually. Highest goes first.',
+    tags: ['combat'],
+    isPublic: true,
+  },
+  {
+    title: 'Long Rest',
+    content:
+      'A long rest restores HP and spell slots only if taken in a safe location. In the wilderness or hostile territory, a long rest restores half HP and no spell slots without a successful Survival check (DC 15).',
+    tags: ['exploration', 'house-rule'],
+    isPublic: true,
+  },
+  {
+    title: 'Faction Reputation',
+    content:
+      '_GM-only mechanic._ Each player starts at 0 reputation with each of the four major factions. Actions for or against a faction shift reputation in the appropriate direction. At ±5, the faction will actively work with or against the party.',
+    tags: ['social', 'gm-only'],
+    isPublic: false,
+  },
+  {
+    title: 'Spell Components',
+    content:
+      'Material components without a listed gp cost are assumed to be in a component pouch. Costly components must be tracked.',
+    tags: ['magic'],
+    isPublic: true,
+  },
+  {
+    title: 'Travel & Encumbrance',
+    content:
+      'We use simplified encumbrance: heavy armor + a backpack = slowed unless STR is at least 13. Mounts cancel slowed.',
+    tags: ['exploration', 'house-rule'],
+    isPublic: true,
+  },
+];
+
+// GM Screens (the tabbed GM dashboard, separate from tabletop screens).
+// Each pulls in NPCs, rules, and locations as pre-opened windows + reference stacks.
+interface GMScreenLayout {
+  name: string;
+  tabOrder: number;
+  /** Floating-window picks: { kind, indexIntoArray, x, y } */
+  windows: Array<{ kind: 'character' | 'rule' | 'location'; index: number; x: number; y: number }>;
+  /** Quick-reference stacks: tabbed lists of items the GM can click to expand. */
+  stacks: Array<{
+    name: string;
+    x: number;
+    y: number;
+    items: Array<{ kind: 'character' | 'rule' | 'race'; index: number }>;
+  }>;
+}
+const GMSCREEN_LAYOUTS: GMScreenLayout[] = [
+  {
+    name: 'Council & Plot',
+    tabOrder: 0,
+    windows: [
+      { kind: 'character', index: 0, x: 60, y: 60 }, // Aldric (King)
+      { kind: 'character', index: 8, x: 560, y: 60 }, // Octavia (Senator)
+      { kind: 'character', index: 21, x: 60, y: 480 }, // Hierophant
+      { kind: 'rule', index: 5, x: 560, y: 480 }, // Faction Reputation (GM-only)
+    ],
+    stacks: [
+      {
+        name: 'Vellarian Crown',
+        x: 1080,
+        y: 60,
+        items: [0, 1, 2, 3, 4, 5, 6, 7].map((i) => ({ kind: 'character' as const, index: i })),
+      },
+      {
+        name: 'Astryn Senate',
+        x: 1080,
+        y: 360,
+        items: [8, 9, 10, 11, 12, 13, 14].map((i) => ({ kind: 'character' as const, index: i })),
+      },
+      {
+        name: 'Key Rules',
+        x: 1080,
+        y: 660,
+        items: [5, 4, 1].map((i) => ({ kind: 'rule' as const, index: i })),
+      },
+    ],
+  },
+  {
+    name: 'Combat Reference',
+    tabOrder: 1,
+    windows: [
+      { kind: 'rule', index: 3, x: 60, y: 60 }, // Combat Initiative
+      { kind: 'rule', index: 2, x: 560, y: 60 }, // Death Saving Throws
+      { kind: 'rule', index: 0, x: 60, y: 380 }, // Critical Failures
+      { kind: 'character', index: 22, x: 560, y: 380 }, // Ramira (Sun General)
+      { kind: 'character', index: 4, x: 60, y: 700 }, // Gareth (Vellarian Marshal)
+    ],
+    stacks: [
+      {
+        name: 'All Races',
+        x: 1080,
+        y: 60,
+        items: [0, 1, 2, 3, 4, 5].map((i) => ({ kind: 'race' as const, index: i })),
+      },
+      {
+        name: 'Combat Rules',
+        x: 1080,
+        y: 460,
+        items: [0, 2, 3, 6].map((i) => ({ kind: 'rule' as const, index: i })),
+      },
+    ],
+  },
+];
+
 // 5 tabletop screens, each with 2-3 pre-opened windows.
 const SCREEN_LAYOUTS: Array<{ name: string; tabOrder: number; openWindows: number }> = [
   { name: 'Council Chamber', tabOrder: 0, openWindows: 3 },
@@ -760,6 +946,86 @@ async function seed(ctx: FixtureContext): Promise<{ campaignIds: ObjectId[] }> {
   });
   await db.collection('tabletopscreen').insertMany(screenDocs);
 
+  // ----- Races -----
+  const raceIds: ObjectId[] = RACES.map(() => new ObjectId());
+  await db.collection('races').insertMany(
+    RACES.map((r, i) => ({
+      _id: raceIds[i],
+      campaignId,
+      createdBy: gm._id,
+      title: r.title,
+      content: r.content,
+      tags: [...r.tags, 'fixture'],
+      createdAt: now,
+      updatedAt: now,
+    }))
+  );
+
+  // ----- Rules -----
+  const ruleIds: ObjectId[] = RULES.map(() => new ObjectId());
+  await db.collection('rules').insertMany(
+    RULES.map((r, i) => ({
+      _id: ruleIds[i],
+      campaignId,
+      createdBy: gm._id,
+      title: r.title,
+      content: r.content,
+      tags: [...r.tags, 'fixture'],
+      isPublic: r.isPublic,
+      createdAt: now,
+      updatedAt: now,
+    }))
+  );
+
+  // ----- GM Screens with pre-opened NPC / rule / location windows + stacks -----
+  // Resolve the (kind, index) refs against the freshly-inserted id arrays.
+  const idLookup = {
+    character: charIds,
+    rule: ruleIds,
+    race: raceIds,
+    location: LOCATIONS.map((spec) => locsByName.get(spec.name)!),
+  };
+  const collectionForKind: Record<'character' | 'rule' | 'race' | 'location', string> = {
+    character: 'character',
+    rule: 'rule',
+    race: 'race',
+    location: 'location',
+  };
+
+  const gmScreenDocs = GMSCREEN_LAYOUTS.map((layout) => ({
+    _id: new ObjectId(),
+    campaignId,
+    name: layout.name,
+    tabOrder: layout.tabOrder,
+    createdBy: gm._id,
+    windows: layout.windows.map((w, i) => ({
+      _id: new ObjectId(),
+      collection: collectionForKind[w.kind],
+      documentId: idLookup[w.kind][w.index],
+      state: 'open' as const,
+      x: w.x,
+      y: w.y,
+      width: 460,
+      height: 380,
+      zIndex: i + 1,
+    })),
+    stacks: layout.stacks.map((s) => ({
+      _id: new ObjectId(),
+      name: s.name,
+      x: s.x,
+      y: s.y,
+      items: s.items.map((item) => ({
+        _id: new ObjectId(),
+        collection: collectionForKind[item.kind],
+        documentId: idLookup[item.kind][item.index],
+        label: '',
+      })),
+    })),
+    createdAt: now,
+    updatedAt: now,
+  }));
+  await db.collection('gmscreen').insertMany(gmScreenDocs);
+
   // ----- Update User.campaigns array -----
   await db.collection('users').updateOne(
     { _id: gm._id },
@@ -775,9 +1041,14 @@ async function seed(ctx: FixtureContext): Promise<{ campaignIds: ObjectId[] }> {
   console.log(`  campaign:    ${CAMPAIGN_NAME}`);
   console.log(`  locations:   ${LOCATIONS.length} (with images)`);
   console.log(`  characters:  ${CHARACTERS.length} (${RELATIONSHIPS.length} relationships)`);
+  console.log(`  races:       ${RACES.length}`);
+  console.log(`  rules:       ${RULES.length}`);
   console.log(`  sessions:    ${sessionSpecs.length}`);
   console.log(
-    `  screens:     ${SCREEN_LAYOUTS.length} (${SCREEN_LAYOUTS.reduce((s, l) => s + l.openWindows, 0)} pre-opened windows)`
+    `  tabletops:   ${SCREEN_LAYOUTS.length} (${SCREEN_LAYOUTS.reduce((s, l) => s + l.openWindows, 0)} pre-opened windows)`
+  );
+  console.log(
+    `  GM screens:  ${GMSCREEN_LAYOUTS.length} (${GMSCREEN_LAYOUTS.reduce((s, l) => s + l.windows.length, 0)} windows, ${GMSCREEN_LAYOUTS.reduce((s, l) => s + l.stacks.length, 0)} stacks)`
   );
 
   return { campaignIds: [campaignId] };
