@@ -48,3 +48,11 @@ issues/
 
 # PartyKit
 .partykit/
+.playwright-mcp
+.remember
+scripts/__pycache__
+
+# Playwright
+e2e/.auth/
+playwright-report/
+test-results/

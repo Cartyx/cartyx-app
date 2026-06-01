@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { Users, Dna, ScrollText, UserCircle } from 'lucide-react';
+import { Users, Dna, ScrollText, UserCircle, MapPin } from 'lucide-react';
 import { CharactersPanel } from './characters/CharactersPanel';
 import { RacesPanel } from './races/RacesPanel';
 import { RulesPanel } from './rules/RulesPanel';
 import { PlayersPanel } from './players/PlayersPanel';
+import { LocationsPanel } from './locations/LocationsPanel';
 
-type WikiCategoryId = 'characters' | 'players' | 'races' | 'rules';
+type WikiCategoryId = 'characters' | 'players' | 'races' | 'rules' | 'locations';
 
 interface WikiCategory {
   id: WikiCategoryId;
@@ -18,6 +19,7 @@ const WIKI_CATEGORIES: WikiCategory[] = [
   { id: 'players', label: 'Players', icon: UserCircle },
   { id: 'races', label: 'Races', icon: Dna },
   { id: 'rules', label: 'Rules', icon: ScrollText },
+  { id: 'locations', label: 'Locations', icon: MapPin },
 ];
 
 export function WikiPanel() {
@@ -55,6 +57,8 @@ export function WikiPanel() {
         <RacesPanel onBack={() => setSelectedCategory(null)} />
       ) : selectedCategory === 'rules' ? (
         <RulesPanel onBack={() => setSelectedCategory(null)} />
+      ) : selectedCategory === 'locations' ? (
+        <LocationsPanel onBack={() => setSelectedCategory(null)} />
       ) : null}
     </div>
   );

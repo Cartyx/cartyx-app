@@ -1,5 +1,7 @@
+import { useCallback } from 'react';
 import { z } from 'zod';
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
+import { createServerFn } from '@tanstack/react-start';
 import { Plus } from 'lucide-react';
 import { getMe } from '~/server/functions/auth';
 import { useCampaign } from '~/hooks/useCampaigns';
@@ -16,6 +18,21 @@ import { KeyAlliesWidget } from '~/components/mainview/widgets/KeyAlliesWidget';
 import { PartyMembersWidget } from '~/components/mainview/widgets/PartyMembersWidget';
 import { SessionsListWidget } from '~/components/mainview/widgets/SessionsListWidget';
 import { ActivePlayerProvider } from '~/providers/ActivePlayerProvider';
+
+const getTabletopPartyTokenFn = createServerFn({ method: 'GET' })
+  .inputValidator(z.object({ campaignId: z.string().min(1) }))
+  .handler(async ({ data }) => {
+    const { getSession } = await import('~/server/session');
+    const user = await getSession();
+    if (!user) return '';
+
+    const { connectDB, isDBConnected } = await import('~/server/db/connection');
+    await connectDB();
+    if (!isDBConnected()) return '';
+
+    const { createPartyToken } = await import('~/server/session');
+    return createPartyToken(user.id, data.campaignId, 'tabletop');
+  });
 
 export const playSearchSchema = z.object({
   tab: z.enum(['dashboard', 'tabletop', 'gmscreens']).catch('dashboard'),
@@ -50,6 +67,12 @@ function PlayPageContent() {
   const { activePlayer, isLoading: isPlayerLoading } = useActivePlayerContext();
 
   const activeSession = campaign?.sessions.find((s) => s.status === 'active');
+
+  const getTabletopToken = useCallback(async () => {
+    if (!campaignId) return '';
+    const token = await getTabletopPartyTokenFn({ data: { campaignId } });
+    return token ?? '';
+  }, [campaignId]);
 
   const needsNewPlayer = !isCampaignLoading && !isPlayerLoading && !activePlayer && !campaign?.isGM;
 
@@ -115,13 +138,18 @@ function PlayPageContent() {
             </DashboardView>
           </div>
           <div
-            className="flex items-center justify-center h-full text-slate-400 font-sans font-semibold text-xs"
+            className="h-full"
             role="tabpanel"
             id="tab-panel-tabletop"
             aria-labelledby="tab-tabletop"
             hidden={effectiveTab !== 'tabletop'}
           >
-            <TabletopView />
+            <TabletopView
+              campaignId={campaignId}
+              isGM={campaign?.isGM ?? false}
+              getToken={getTabletopToken}
+              sessionId={activeSession?.id ?? null}
+            />
           </div>
           {campaign?.isGM && (
             <div

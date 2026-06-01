@@ -91,4 +91,45 @@ export const queryKeys = {
     all: ['diceRolls'] as const,
     list: (sessionId: string) => ['diceRolls', 'list', sessionId] as const,
   },
+  locations: {
+    all: ['locations'] as const,
+    list: (
+      campaignId: string,
+      search?: string,
+      visibility?: string,
+      locationType?: string,
+      tags?: string[]
+    ) =>
+      [
+        'locations',
+        'list',
+        campaignId,
+        search ?? '',
+        visibility ?? 'all',
+        locationType ?? '',
+        tags ?? [],
+      ] as const,
+    detail: (id: string, campaignId?: string) =>
+      ['locations', 'detail', campaignId ?? '', id] as const,
+  },
+  locationTypes: {
+    all: ['locationTypes'] as const,
+    list: (campaignId: string) => ['locationTypes', 'list', campaignId] as const,
+  },
+  tabletop: {
+    all: ['tabletop'] as const,
+    list: (campaignId: string) => ['tabletop', 'list', campaignId] as const,
+    detail: (campaignId: string, screenId: string) =>
+      ['tabletop', 'detail', campaignId, screenId] as const,
+    playerState: (campaignId: string) => ['tabletop', 'playerState', campaignId] as const,
+  },
+  sessionEvents: {
+    all: ['sessionEvents'] as const,
+    list: (campaignId: string, sessionId: string) =>
+      ['sessionEvents', 'list', campaignId, sessionId] as const,
+  },
+  cleanup: {
+    all: ['cleanup'] as const,
+    orphanImages: (campaignId: string) => ['cleanup', 'orphanImages', campaignId] as const,
+  },
 };

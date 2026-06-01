@@ -21,10 +21,33 @@ export function PlayerCard({ player, onClick }: PlayerCardProps) {
   if (player.characterClass) infoSegments.push(player.characterClass);
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
+      draggable="true"
+      onDragStart={(e) => {
+        e.dataTransfer.setData(
+          'application/x-cartyx-document',
+          JSON.stringify({
+            collection: 'player',
+            documentId: player.id,
+            title: fullName,
+          })
+        );
+        e.dataTransfer.effectAllowed = 'copy';
+        e.currentTarget.style.opacity = '0.4';
+      }}
+      onDragEnd={(e) => {
+        e.currentTarget.style.opacity = '';
+      }}
       onClick={onClick}
-      className={`flex items-center gap-3 w-full px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors text-left${isDeceased ? ' opacity-70' : ''}`}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      className={`flex items-center gap-3 w-full px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors text-left cursor-grab active:cursor-grabbing${isDeceased ? ' opacity-70' : ''}`}
       style={
         isDeceased
           ? {
@@ -68,6 +91,6 @@ export function PlayerCard({ player, onClick }: PlayerCardProps) {
           </div>
         )}
       </div>
-    </button>
+    </div>
   );
 }

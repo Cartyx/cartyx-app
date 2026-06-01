@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { RaceWindow } from './RaceWindow';
 import { useRace } from '~/hooks/useRaces';
+import { useCampaign } from '~/hooks/useCampaigns';
+import { ShowOnTabletopButton } from '~/components/wiki/shared/ShowOnTabletopButton';
 
 interface RaceViewModalProps {
   isOpen: boolean;
@@ -13,6 +15,8 @@ interface RaceViewModalProps {
 
 export function RaceViewModal({ isOpen, onClose, raceId, campaignId }: RaceViewModalProps) {
   const { race, isLoading } = useRace(raceId, campaignId);
+  const { campaign } = useCampaign(campaignId);
+  const isGM = campaign?.isGM ?? false;
 
   useEffect(() => {
     if (!isOpen) return;
@@ -47,14 +51,22 @@ export function RaceViewModal({ isOpen, onClose, raceId, campaignId }: RaceViewM
           >
             {race?.title ?? 'Race'}
           </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-slate-500 hover:text-white transition-colors"
-            aria-label="Close modal"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            <ShowOnTabletopButton
+              campaignId={campaignId}
+              collection="race"
+              documentId={raceId}
+              isGM={isGM}
+            />
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-slate-500 hover:text-white transition-colors"
+              aria-label="Close modal"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto min-h-0">
