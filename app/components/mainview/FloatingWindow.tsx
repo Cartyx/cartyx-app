@@ -122,13 +122,23 @@ export function FloatingWindow({
     };
   }, []);
 
-  const focusWindow = useCallback(() => {
+  // Move DOM focus to the window only — does not trigger any React state
+  // update in the parent. Safe to call synchronously during mousedown.
+  const focusWindowDom = useCallback(() => {
     const element = windowRef.current;
     if (element && document.activeElement !== element) {
       element.focus();
     }
+  }, []);
+
+  // Full focus: DOM focus + propagate onFocus so the parent re-orders z-index.
+  // Use this for explicit gestures (title-bar drag, resize) where no child
+  // click handler is at risk of being raced. Avoid in plain `onMouseDown` on
+  // the window body — see handleWindowMouseDown / handleWindowClick below.
+  const focusWindow = useCallback(() => {
+    focusWindowDom();
     onFocus?.();
-  }, [onFocus]);
+  }, [focusWindowDom, onFocus]);
 
   const setState = useCallback(
     (nextState: FloatingWindowState) => {
@@ -177,6 +187,20 @@ export function FloatingWindow({
     [onClose]
   );
 
+  // Window body: defer BOTH focus side-effects to the click event so any
+  // descendant onClick handlers run on the original render tree. Triggering
+  // either element.focus() (shifts DOM focus away from a clicked child mid-
+  // click) or onFocus() (parent state update → re-render between mousedown
+  // and click) during mousedown can swallow setState calls inside window
+  // content — e.g. clicking Gallery on a freshly-opened LocationWindow would
+  // highlight the tab without flipping `activeTab`. Mousedown-driven focus is
+  // still preserved for the title-bar drag handle and the resize handle.
+  const handleWindowClick = useCallback(() => {
+    focusWindow();
+  }, [focusWindow]);
+
+  // Title-bar drag and resize gestures still need synchronous focus on
+  // mousedown — those don't have child click handlers to race with.
   const handleWindowMouseDown = useCallback(() => {
     focusWindow();
   }, [focusWindow]);
@@ -297,14 +321,14 @@ export function FloatingWindow({
   );
 
   return (
-    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions -- onMouseDown brings the floating window to front (z-order focus); keyboard focus is handled via tabIndex={-1}
+    // eslint-disable-next-line jsx-a11y/no-noninteractive-element-interactions, jsx-a11y/click-events-have-key-events -- onClick brings the floating window to front (z-order). See handleWindowClick for why this is on click instead of mousedown. There is no keyboard equivalent for z-ordering itself; keyboard users still reach all controls inside via Tab (tabIndex={-1} on the dialog).
     <div
       ref={windowRef}
       role="dialog"
       aria-labelledby={titleId}
       data-window-id={id}
       tabIndex={-1}
-      onMouseDown={handleWindowMouseDown}
+      onClick={handleWindowClick}
       onFocusCapture={() => setIsFocused(true)}
       onBlurCapture={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
