@@ -10,9 +10,24 @@ npm run fixture reset crowded         # destroy + reseed the "crowded" fixture
 npm run fixture destroy crowded       # destroy only — no reseed
 npm run fixture destroy --all         # destroy every fixture-managed campaign
 npm run fixture destroy --id=<id> --force   # destroy a specific campaign (only with --force)
+npm run fixture clean-e2e             # remove E2E test screen + e2e/* image refs
+npm run fixture sweep-r2              # delete R2 objects no document references
+npm run fixture nuke                  # destroy --all + clean-e2e + sweep-r2
 ```
 
 After `reset`, log into the app and the fixture campaign will be visible in your campaign list (you're seeded as the GM).
+
+## Teardown story
+
+The product isn't in production yet — we want to be able to change the fixture shape (and the underlying schemas) without thinking about migrations. The teardown commands give that:
+
+- **`destroy <name>`** — wipes a single fixture's campaigns, their session-scoped data, R2 images, and runs the fixture's optional `teardown()` hook.
+- **`destroy --all`** — same but for every fixture-managed campaign in the system.
+- **`clean-e2e`** — removes the "E2E Test Screen" tabletopscreen and `e2e/*` image keys that `e2e/globalSetup.ts` attaches to whatever campaign/location it picks. These survive `destroy --all` because they attach to non-fixture data.
+- **`sweep-r2`** — lists R2 objects under tracked upload prefixes and deletes anything not referenced by any document. Backstop for crashes mid-seed and accumulated leakage. Drives storage cost to zero waste.
+- **`nuke`** — runs all three in sequence. The "reset everything to a clean slate, I'm rebuilding the fixture from scratch" button.
+
+R2 cleanup is best-effort: failures are reported but don't block the destroy.
 
 ## Safety
 
@@ -39,6 +54,13 @@ After `reset`, log into the app and the fixture campaign will be visible in your
        const db = conn.db!;
        // ... insert docs, stamp `metadata: marker('<name>')` on each Campaign
        return { campaignIds: [insertedCampaignId] };
+     },
+     // Optional — only needed if the fixture creates data outside the
+     // campaign-scoped collections (User patches, global tags, R2 prefixes
+     // not under uploads/, etc.). The generic destroyer handles every
+     // campaign-scoped collection automatically.
+     async teardown({ conn }) {
+       // e.g. await conn.db!.collection('someGlobalThing').deleteMany({ tag: 'myFixture' });
      },
    };
    ```

@@ -9,7 +9,12 @@
  *     plus best-effort R2 image cleanup
  *   - Fixture marker schema so we only ever destroy what we created
  */
-import { S3Client, DeleteObjectCommand, type DeleteObjectCommandOutput } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  DeleteObjectCommand,
+  type DeleteObjectCommandOutput,
+  ListObjectsV2Command,
+} from '@aws-sdk/client-s3';
 import mongoose, { type Connection } from 'mongoose';
 import { ObjectId } from 'mongodb';
 
@@ -274,4 +279,191 @@ export async function destroyCampaigns(
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// E2E artifact cleanup
+// ---------------------------------------------------------------------------
+
+/**
+ * `e2e/globalSetup.ts` creates two artefacts in the dev DB that don't live
+ * inside a fixture-managed campaign:
+ *   - a tabletopscreen named "E2E Test Screen" (attached to whatever
+ *     campaign globalSetup picked as the first GM campaign)
+ *   - an "E2E Lightbox Fixture" image (imageKey starts with `e2e/`)
+ *     attached to whatever location it picked
+ *
+ * These survive `fixture destroy --all` because they're attached to real
+ * (non-fixture) campaigns/locations. This helper sweeps them up directly.
+ */
+export interface CleanE2eResult {
+  screensDeleted: number;
+  locationsTouched: number;
+  imagesPulled: number;
+  r2KeysDeleted: number;
+}
+
+export async function cleanE2eArtifacts(conn: Connection): Promise<CleanE2eResult> {
+  const db = conn.db!;
+
+  // 1. tabletopscreens named "E2E Test Screen"
+  const screenRes = await db.collection('tabletopscreen').deleteMany({ name: 'E2E Test Screen' });
+
+  // 2. Find every location with at least one e2e/* image, then $pull those images.
+  const locsWithE2eImages = await db
+    .collection('location')
+    .find(
+      { 'images.imageKey': { $regex: /^e2e\// } },
+      { projection: { _id: 1, 'images.imageKey': 1 } }
+    )
+    .toArray();
+
+  const r2KeysToDelete = new Set<string>();
+  let imagesPulled = 0;
+  for (const loc of locsWithE2eImages) {
+    const images = (loc.images ?? []) as Array<{ imageKey?: string }>;
+    for (const img of images) {
+      if (img.imageKey && img.imageKey.startsWith('e2e/')) {
+        r2KeysToDelete.add(img.imageKey);
+        imagesPulled++;
+      }
+    }
+  }
+  if (locsWithE2eImages.length > 0) {
+    await db.collection('location').updateMany(
+      { 'images.imageKey': { $regex: /^e2e\// } },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      { $pull: { images: { imageKey: { $regex: /^e2e\// } } } } as any
+    );
+  }
+
+  // 3. R2 cleanup for those e2e/* keys (best-effort)
+  let r2KeysDeleted = 0;
+  const r2 = createR2Client();
+  if (r2 && r2KeysToDelete.size > 0) {
+    const settled = await Promise.allSettled(
+      [...r2KeysToDelete].map((key) =>
+        r2.client.send(new DeleteObjectCommand({ Bucket: r2.bucket, Key: key }))
+      )
+    );
+    for (const s of settled) if (s.status === 'fulfilled') r2KeysDeleted++;
+  }
+
+  return {
+    screensDeleted: screenRes.deletedCount ?? 0,
+    locationsTouched: locsWithE2eImages.length,
+    imagesPulled,
+    r2KeysDeleted,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Orphan R2 sweep
+// ---------------------------------------------------------------------------
+
+/**
+ * After fixture destroy, sweep R2 under tracked prefixes and delete any
+ * object that no document in the system references. Backstop for the case
+ * where a fixture seed crashed mid-upload (R2 PUT done, DB insert never
+ * happened) or where past leakage left bytes behind. Drives R2 cost down
+ * to zero waste.
+ */
+export interface OrphanSweepResult {
+  inspected: number;
+  inUse: number;
+  orphansDeleted: number;
+  orphansFailed: number;
+  skippedNoR2: boolean;
+}
+
+const TRACKED_R2_PREFIXES = [
+  'uploads/locations/',
+  'uploads/characters/',
+  'uploads/players/',
+  'uploads/campaigns/',
+  'fixture/',
+];
+
+export async function sweepOrphanR2Keys(conn: Connection): Promise<OrphanSweepResult> {
+  const r2 = createR2Client();
+  if (!r2) {
+    return { inspected: 0, inUse: 0, orphansDeleted: 0, orphansFailed: 0, skippedNoR2: true };
+  }
+
+  const cdnUrl = process.env.CDN_URL?.replace(/\/+$/, '') ?? null;
+  const db = conn.db!;
+
+  // Build the set of in-use R2 keys across every campaign-scoped doc.
+  const inUse = new Set<string>();
+
+  for await (const doc of db
+    .collection('location')
+    .find({}, { projection: { 'images.imageKey': 1 } })
+    .stream()) {
+    const images = (doc.images ?? []) as Array<{ imageKey?: string }>;
+    for (const img of images) if (img.imageKey) inUse.add(img.imageKey);
+  }
+
+  const urlSources: Array<[string, string]> = [
+    ['characters', 'picture'],
+    ['players', 'picture'],
+    ['campaigns', 'imagePath'],
+  ];
+  for (const [coll, field] of urlSources) {
+    for await (const doc of db
+      .collection(coll)
+      .find({}, { projection: { [field]: 1 } })
+      .stream()) {
+      const url = (doc as Record<string, unknown>)[field] as string | undefined;
+      if (!url || !cdnUrl) continue;
+      if (!url.startsWith(cdnUrl + '/')) continue;
+      inUse.add(url.slice(cdnUrl.length + 1));
+    }
+  }
+
+  // List R2 objects under each tracked prefix.
+  let inspected = 0;
+  const orphanKeys: string[] = [];
+  for (const prefix of TRACKED_R2_PREFIXES) {
+    let continuationToken: string | undefined;
+    let pages = 0;
+    while (pages++ < 20) {
+      const resp = await r2.client.send(
+        new ListObjectsV2Command({
+          Bucket: r2.bucket,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+        })
+      );
+      for (const obj of resp.Contents ?? []) {
+        if (!obj.Key) continue;
+        inspected++;
+        if (!inUse.has(obj.Key)) orphanKeys.push(obj.Key);
+      }
+      if (!resp.IsTruncated) break;
+      continuationToken = resp.NextContinuationToken;
+    }
+  }
+
+  let orphansDeleted = 0;
+  let orphansFailed = 0;
+  if (orphanKeys.length > 0) {
+    const settled = await Promise.allSettled<DeleteObjectCommandOutput>(
+      orphanKeys.map((key) =>
+        r2.client.send(new DeleteObjectCommand({ Bucket: r2.bucket, Key: key }))
+      )
+    );
+    for (const s of settled) {
+      if (s.status === 'fulfilled') orphansDeleted++;
+      else orphansFailed++;
+    }
+  }
+
+  return {
+    inspected,
+    inUse: inUse.size,
+    orphansDeleted,
+    orphansFailed,
+    skippedNoR2: false,
+  };
 }

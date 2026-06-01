@@ -16,11 +16,13 @@
  * real campaigns. Pass `--force` to destroy by campaign id.
  */
 import {
+  cleanE2eArtifacts,
   connectMongo,
-  disconnectMongo,
   destroyCampaigns,
+  disconnectMongo,
   findGm,
   FIXTURE_MARKER,
+  sweepOrphanR2Keys,
   type FixtureMetadata,
 } from './helpers';
 import { crowdedFixture } from './fixtures/crowded';
@@ -43,6 +45,15 @@ export interface Fixture {
   name: string;
   description: string;
   seed(ctx: FixtureContext): Promise<{ campaignIds: ObjectId[] }>;
+  /**
+   * Optional hook for cleanup that lives OUTSIDE the campaign-scoped
+   * collection walk (custom Users, global Tags, R2 keys with unusual
+   * prefixes, etc.). Called after destroyCampaigns finishes during
+   * `fixture destroy <name>` and `fixture destroy --all`. Pure no-op if
+   * the fixture only ever creates campaign-scoped data — the generic
+   * destroyer already handles that case.
+   */
+  teardown?(ctx: FixtureContext): Promise<void>;
 }
 
 const FIXTURES: Fixture[] = [crowdedFixture, kankaFixture];
@@ -113,9 +124,64 @@ async function cmdDestroy(args: {
       force: args.force,
     });
     logDestroy(result);
+
+    // Invoke per-fixture teardown hooks for everything we just destroyed
+    // (or all of them if --all). Lets fixtures clean up data that lives
+    // outside the campaign-scoped collection walk.
+    const toTearDown: Fixture[] = args.all ? FIXTURES : args.name ? [findFixture(args.name)] : [];
+    if (toTearDown.length > 0) {
+      const gm = await findGm(conn);
+      for (const fixture of toTearDown) {
+        if (!fixture.teardown) continue;
+        console.log(`[destroy] running ${fixture.name}.teardown()`);
+        await fixture.teardown({ conn, gm, marker: makeMarker });
+      }
+    }
   } finally {
     await disconnectMongo();
   }
+}
+
+async function cmdCleanE2e(): Promise<void> {
+  const conn = await connectMongo();
+  try {
+    const r = await cleanE2eArtifacts(conn);
+    console.log(`[clean-e2e] removed ${r.screensDeleted} E2E test screen(s)`);
+    console.log(
+      `[clean-e2e] pulled ${r.imagesPulled} E2E image(s) from ${r.locationsTouched} location(s)`
+    );
+    if (r.r2KeysDeleted) console.log(`[clean-e2e] R2 keys deleted: ${r.r2KeysDeleted}`);
+  } finally {
+    await disconnectMongo();
+  }
+}
+
+async function cmdSweepR2(): Promise<void> {
+  const conn = await connectMongo();
+  try {
+    const r = await sweepOrphanR2Keys(conn);
+    if (r.skippedNoR2) {
+      console.log('[sweep-r2] R2 not configured — skipping.');
+      return;
+    }
+    console.log(
+      `[sweep-r2] inspected ${r.inspected} keys, ${r.inUse} in-use, deleted ${r.orphansDeleted} orphan(s), failed ${r.orphansFailed}`
+    );
+  } finally {
+    await disconnectMongo();
+  }
+}
+
+async function cmdNuke(): Promise<void> {
+  // Full teardown: every fixture-managed campaign + E2E artefacts + orphan
+  // R2 keys. The "rebuild from scratch with no migration worries" path.
+  console.log('[nuke] step 1/3 — destroying all fixture-managed campaigns');
+  await cmdDestroy({ all: true });
+  console.log('\n[nuke] step 2/3 — cleaning E2E artefacts');
+  await cmdCleanE2e();
+  console.log('\n[nuke] step 3/3 — sweeping orphan R2 keys');
+  await cmdSweepR2();
+  console.log('\n[nuke] ✓ dev DB and R2 bucket are clean of fixture/test data.');
 }
 
 function logDestroy(result: Awaited<ReturnType<typeof destroyCampaigns>>): void {
@@ -172,6 +238,15 @@ async function main(): Promise<void> {
         force: flags.force === true,
       });
       return;
+    case 'clean-e2e':
+      await cmdCleanE2e();
+      return;
+    case 'sweep-r2':
+      await cmdSweepR2();
+      return;
+    case 'nuke':
+      await cmdNuke();
+      return;
     case '':
     case 'help':
     case '--help':
@@ -182,7 +257,10 @@ async function main(): Promise<void> {
           `  npm run fixture reset <name>\n` +
           `  npm run fixture destroy <name>\n` +
           `  npm run fixture destroy --all\n` +
-          `  npm run fixture destroy --id=<campaignId> --force\n`
+          `  npm run fixture destroy --id=<campaignId> --force\n` +
+          `  npm run fixture clean-e2e        # remove E2E test screen + e2e/* image refs\n` +
+          `  npm run fixture sweep-r2         # delete R2 objects no doc references\n` +
+          `  npm run fixture nuke             # destroy --all + clean-e2e + sweep-r2\n`
       );
       return;
     default:
