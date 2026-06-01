@@ -84,6 +84,15 @@ def save_image(svg_content: str, filename: str) -> str:
 # Campaign data
 # ---------------------------------------------------------------------------
 
+# Default location types from app/server/db/models/LocationType.ts.
+# Auto-seeded on first listLocationTypes request, but pre-seeding here makes
+# the dev/e2e environment deterministic.
+DEFAULT_LOCATION_TYPES = [
+    "continent", "country", "region", "state", "province",
+    "city", "town", "village", "cave", "dungeon", "planet",
+]
+
+
 CAMPAIGNS = [
     {
         "name": "The Lost Mines of Phandelver",
@@ -92,6 +101,18 @@ CAMPAIGNS = [
             "of supplies to the rough-and-tumble settlement of Phandalin. Along the way, "
             "they stumble into a web of intrigue involving the mysterious Wave Echo Cave."
         ),
+        "locations": [
+            {
+                "name": "Phandalin",
+                "locationType": "town",
+                "description": (
+                    "A rough-and-tumble frontier settlement on the Triboar Trail. "
+                    "Once destroyed by orcs, recently resettled by farmers and prospectors."
+                ),
+                "isPublic": True,
+                "tags": ["starting-area", "town"],
+            },
+        ],
         "schedule": {
             "frequency": "weekly",
             "dayOfWeek": "Saturday",
@@ -280,6 +301,39 @@ def main() -> None:
                 "updatedAt": now,
             })
             print(f"    session #{sess['number']}  {sess['name']} [{sess['status']}]")
+
+        # Insert default LocationTypes for the campaign (matches LocationType.ts behavior)
+        db.locationtype.insert_many([
+            {
+                "campaignId": campaign_id,
+                "name": name,
+                "isDefault": True,
+                "sortOrder": i,
+            }
+            for i, name in enumerate(DEFAULT_LOCATION_TYPES)
+        ])
+        print(f"    location types  ({len(DEFAULT_LOCATION_TYPES)} defaults)")
+
+        # Insert any seed locations defined for this campaign
+        for loc in defn.get("locations", []):
+            db.location.insert_one({
+                "campaignId": campaign_id,
+                "createdBy": gm_id,
+                "name": loc["name"],
+                "locationType": loc["locationType"],
+                "description": loc.get("description", ""),
+                "gmNotes": loc.get("gmNotes", ""),
+                "isPublic": loc.get("isPublic", True),
+                "parentLocations": [],
+                "childLocations": [],
+                "mapImage": None,
+                "mapBounds": None,
+                "images": [],
+                "tags": loc.get("tags", []),
+                "createdAt": now,
+                "updatedAt": now,
+            })
+            print(f"    location  {loc['name']} ({loc['locationType']})")
 
         # Insert characters
         for char in defn["characters"]:

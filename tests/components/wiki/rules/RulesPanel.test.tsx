@@ -11,6 +11,12 @@ vi.mock('~/hooks/useCampaigns');
 vi.mock('~/hooks/useTags', () => ({
   useTags: () => ({ tags: [], isLoading: false, error: null }),
 }));
+vi.mock('~/hooks/useTabletopScreens', () => ({
+  useTabletopScreenList: () => ({ screens: [], isLoading: false, error: null }),
+  useTabletopMutations: () => ({
+    openWindow: { mutate: vi.fn(), isPending: false },
+  }),
+}));
 vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ campaignId: 'campaign-123' }),
 }));

@@ -11,10 +11,26 @@ updates:
       - 'dependencies'
     commit-message:
       prefix: 'chore(deps)'
+    # Cooldown — wait 10 days after a version is published before opening
+    # a PR for it. Defends against supply-chain attacks where a compromised
+    # maintainer publishes a malicious version: 10 days is well within the
+    # typical window for the npm community to spot and yank. The CI guard
+    # in `scripts/check-package-age.mjs` enforces the same threshold on
+    # manual installs.
+    cooldown:
+      default-days: 10
     ignore:
       # Only accept patch and minor updates for major version packages
       - dependency-name: 'mongoose'
         update-types: ['version-update:semver-major']
+
+      # --- FontAwesome 7 boundary ---
+      # FontAwesome 7 is a major architectural rewrite that breaks
+      # compatibility with @fortawesome/react-fontawesome v3 and our
+      # pro-solid-svg-icons vendor bundle. Hold at v6 until the full
+      # FontAwesome 7 ecosystem (react-fontawesome, icon packages) is stable.
+      - dependency-name: '@fortawesome/fontawesome-svg-core'
+        versions: ['>=7.0.0']
 
       # --- Vite 8 boundary: these versions require Vite 8 / Rolldown ---
       # Vite 8 switches from Rollup to Rolldown and breaks our React Compiler
@@ -33,6 +49,17 @@ updates:
         versions: ['>=5.0.0']
       - dependency-name: '@vitest/browser-playwright'
         versions: ['>=5.0.0']
+
+      # --- ESLint 10 boundary ---
+      # ESLint 10 introduces breaking rule-API changes and removes legacy
+      # (eslintrc) config support; typescript-eslint v9 pairs with it. Hold
+      # at ESLint 9 + typescript-eslint v8 until the upgrade is validated.
+      - dependency-name: 'eslint'
+        versions: ['>=10.0.0']
+      - dependency-name: '@typescript-eslint/eslint-plugin'
+        versions: ['>=9.0.0']
+      - dependency-name: '@typescript-eslint/parser'
+        versions: ['>=9.0.0']
 
   - package-ecosystem: 'github-actions'
     directory: '/'

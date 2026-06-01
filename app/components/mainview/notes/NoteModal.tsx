@@ -8,6 +8,8 @@ import { MarkdownEditor } from '~/components/shared/MarkdownEditor';
 import type { CampaignData } from '~/types/campaign';
 import { useCreateNote, useUpdateNote, useDeleteNote, useNote } from '~/hooks/useNotes';
 import { TagAutocompleteInput } from '~/components/shared/TagAutocompleteInput';
+import { useCampaign } from '~/hooks/useCampaigns';
+import { ShowOnTabletopButton } from '~/components/wiki/shared/ShowOnTabletopButton';
 
 interface NoteModalProps {
   isOpen: boolean;
@@ -31,6 +33,8 @@ export function NoteModal({
   sessions,
   defaultSessionId,
 }: NoteModalProps) {
+  const { campaign } = useCampaign(campaignId);
+  const isGM = campaign?.isGM ?? false;
   const { note: fetchedNote, isLoading: isFetchingNote } = useNote(noteId ?? '', campaignId);
   const { create, isLoading: isCreating } = useCreateNote();
   const { update, isLoading: isUpdating } = useUpdateNote();
@@ -187,14 +191,24 @@ export function NoteModal({
               {noteId ? 'Edit Note' : 'Create Note'}
             </h2>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-slate-500 hover:text-white transition-colors"
-            aria-label="Close modal"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {noteId && (
+              <ShowOnTabletopButton
+                campaignId={campaignId}
+                collection="note"
+                documentId={noteId}
+                isGM={isGM}
+              />
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-slate-500 hover:text-white transition-colors"
+              aria-label="Close modal"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 min-h-0">

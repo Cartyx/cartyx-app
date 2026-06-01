@@ -5,6 +5,8 @@ import { FormInput } from '~/components/FormInput';
 import { PixelButton } from '~/components/PixelButton';
 import { MarkdownEditor } from '~/components/shared/MarkdownEditor';
 import { useCreateRule, useUpdateRule, useDeleteRule, useRule } from '~/hooks/useRules';
+import { useCampaign } from '~/hooks/useCampaigns';
+import { ShowOnTabletopButton } from '~/components/wiki/shared/ShowOnTabletopButton';
 import { TagAutocompleteInput } from '~/components/shared/TagAutocompleteInput';
 
 interface RuleModalProps {
@@ -20,10 +22,13 @@ interface FieldErrors {
 }
 
 export function RuleModal({ isOpen, onClose, campaignId, ruleId }: RuleModalProps) {
+  const isEdit = !!ruleId;
   const { rule: fetchedRule, isLoading: isFetchingRule } = useRule(ruleId ?? '', campaignId);
   const { create, isLoading: isCreating } = useCreateRule();
   const { update, isLoading: isUpdating } = useUpdateRule();
   const { remove, isLoading: isDeleting } = useDeleteRule();
+  const { campaign } = useCampaign(campaignId);
+  const isGM = campaign?.isGM ?? false;
 
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
@@ -148,16 +153,26 @@ export function RuleModal({ isOpen, onClose, campaignId, ruleId }: RuleModalProp
             id="rule-modal-title"
             className="font-sans font-bold text-sm text-blue-400 uppercase tracking-widest"
           >
-            {ruleId ? 'Edit Rule' : 'Create Rule'}
+            {isEdit ? 'Edit Rule' : 'Create Rule'}
           </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-slate-500 hover:text-white transition-colors"
-            aria-label="Close modal"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {isEdit && ruleId && (
+              <ShowOnTabletopButton
+                campaignId={campaignId}
+                collection="rule"
+                documentId={ruleId}
+                isGM={isGM}
+              />
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-slate-500 hover:text-white transition-colors"
+              aria-label="Close modal"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 min-h-0">

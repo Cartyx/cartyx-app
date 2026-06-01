@@ -8,135 +8,136 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from './routes/__root';
-import { Route as TermsRouteImport } from './routes/terms';
-import { Route as PrivacyRouteImport } from './routes/privacy';
-import { Route as DashboardRouteImport } from './routes/dashboard';
-import { Route as IndexRouteImport } from './routes/index';
-import { Route as CampaignsIndexRouteImport } from './routes/campaigns/index';
-import { Route as CampaignsNewRouteImport } from './routes/campaigns/new';
-import { Route as AuthLogoutRouteImport } from './routes/auth/logout';
-import { Route as AuthProviderRouteImport } from './routes/auth/$provider';
-import { Route as CampaignsCampaignIdSessionsRouteImport } from './routes/campaigns/$campaignId/sessions';
-import { Route as CampaignsCampaignIdPlayRouteImport } from './routes/campaigns/$campaignId/play';
-import { Route as CampaignsCampaignIdEditRouteImport } from './routes/campaigns/$campaignId/edit';
-import { Route as CampaignJoinRouteImport } from './routes/campaign/join';
-import { Route as AuthCallbackProviderRouteImport } from './routes/auth/callback/$provider';
+import { Route as rootRouteImport } from './routes/__root'
+import { Route as TermsRouteImport } from './routes/terms'
+import { Route as PrivacyRouteImport } from './routes/privacy'
+import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as CampaignsIndexRouteImport } from './routes/campaigns/index'
+import { Route as CampaignsNewRouteImport } from './routes/campaigns/new'
+import { Route as CampaignJoinRouteImport } from './routes/campaign/join'
+import { Route as AuthLogoutRouteImport } from './routes/auth/logout'
+import { Route as AuthProviderRouteImport } from './routes/auth/$provider'
+import { Route as CampaignsCampaignIdSessionsRouteImport } from './routes/campaigns/$campaignId/sessions'
+import { Route as CampaignsCampaignIdPlayRouteImport } from './routes/campaigns/$campaignId/play'
+import { Route as CampaignsCampaignIdEditRouteImport } from './routes/campaigns/$campaignId/edit'
+import { Route as AuthCallbackProviderRouteImport } from './routes/auth/callback/$provider'
 
 const TermsRoute = TermsRouteImport.update({
   id: '/terms',
   path: '/terms',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const PrivacyRoute = PrivacyRouteImport.update({
   id: '/privacy',
   path: '/privacy',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const DashboardRoute = DashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const CampaignsIndexRoute = CampaignsIndexRouteImport.update({
   id: '/campaigns/',
   path: '/campaigns/',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const CampaignsNewRoute = CampaignsNewRouteImport.update({
   id: '/campaigns/new',
   path: '/campaigns/new',
   getParentRoute: () => rootRouteImport,
-} as any);
-const AuthLogoutRoute = AuthLogoutRouteImport.update({
-  id: '/auth/logout',
-  path: '/auth/logout',
-  getParentRoute: () => rootRouteImport,
-} as any);
-const AuthProviderRoute = AuthProviderRouteImport.update({
-  id: '/auth/$provider',
-  path: '/auth/$provider',
-  getParentRoute: () => rootRouteImport,
-} as any);
-const CampaignsCampaignIdSessionsRoute = CampaignsCampaignIdSessionsRouteImport.update({
-  id: '/campaigns/$campaignId/sessions',
-  path: '/campaigns/$campaignId/sessions',
-  getParentRoute: () => rootRouteImport,
-} as any);
-const CampaignsCampaignIdPlayRoute = CampaignsCampaignIdPlayRouteImport.update({
-  id: '/campaigns/$campaignId/play',
-  path: '/campaigns/$campaignId/play',
-  getParentRoute: () => rootRouteImport,
-} as any);
-const CampaignsCampaignIdEditRoute = CampaignsCampaignIdEditRouteImport.update({
-  id: '/campaigns/$campaignId/edit',
-  path: '/campaigns/$campaignId/edit',
-  getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 const CampaignJoinRoute = CampaignJoinRouteImport.update({
   id: '/campaign/join',
   path: '/campaign/join',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
+const AuthLogoutRoute = AuthLogoutRouteImport.update({
+  id: '/auth/logout',
+  path: '/auth/logout',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AuthProviderRoute = AuthProviderRouteImport.update({
+  id: '/auth/$provider',
+  path: '/auth/$provider',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CampaignsCampaignIdSessionsRoute =
+  CampaignsCampaignIdSessionsRouteImport.update({
+    id: '/campaigns/$campaignId/sessions',
+    path: '/campaigns/$campaignId/sessions',
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const CampaignsCampaignIdPlayRoute = CampaignsCampaignIdPlayRouteImport.update({
+  id: '/campaigns/$campaignId/play',
+  path: '/campaigns/$campaignId/play',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CampaignsCampaignIdEditRoute = CampaignsCampaignIdEditRouteImport.update({
+  id: '/campaigns/$campaignId/edit',
+  path: '/campaigns/$campaignId/edit',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthCallbackProviderRoute = AuthCallbackProviderRouteImport.update({
   id: '/auth/callback/$provider',
   path: '/auth/callback/$provider',
   getParentRoute: () => rootRouteImport,
-} as any);
+} as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute;
-  '/dashboard': typeof DashboardRoute;
-  '/privacy': typeof PrivacyRoute;
-  '/terms': typeof TermsRoute;
-  '/auth/$provider': typeof AuthProviderRoute;
-  '/auth/logout': typeof AuthLogoutRoute;
-  '/campaign/join': typeof CampaignJoinRoute;
-  '/campaigns/new': typeof CampaignsNewRoute;
-  '/campaigns/': typeof CampaignsIndexRoute;
-  '/auth/callback/$provider': typeof AuthCallbackProviderRoute;
-  '/campaigns/$campaignId/edit': typeof CampaignsCampaignIdEditRoute;
-  '/campaigns/$campaignId/play': typeof CampaignsCampaignIdPlayRoute;
-  '/campaigns/$campaignId/sessions': typeof CampaignsCampaignIdSessionsRoute;
+  '/': typeof IndexRoute
+  '/dashboard': typeof DashboardRoute
+  '/privacy': typeof PrivacyRoute
+  '/terms': typeof TermsRoute
+  '/auth/$provider': typeof AuthProviderRoute
+  '/auth/logout': typeof AuthLogoutRoute
+  '/campaign/join': typeof CampaignJoinRoute
+  '/campaigns/new': typeof CampaignsNewRoute
+  '/campaigns/': typeof CampaignsIndexRoute
+  '/auth/callback/$provider': typeof AuthCallbackProviderRoute
+  '/campaigns/$campaignId/edit': typeof CampaignsCampaignIdEditRoute
+  '/campaigns/$campaignId/play': typeof CampaignsCampaignIdPlayRoute
+  '/campaigns/$campaignId/sessions': typeof CampaignsCampaignIdSessionsRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute;
-  '/dashboard': typeof DashboardRoute;
-  '/privacy': typeof PrivacyRoute;
-  '/terms': typeof TermsRoute;
-  '/auth/$provider': typeof AuthProviderRoute;
-  '/auth/logout': typeof AuthLogoutRoute;
-  '/campaign/join': typeof CampaignJoinRoute;
-  '/campaigns/new': typeof CampaignsNewRoute;
-  '/campaigns': typeof CampaignsIndexRoute;
-  '/auth/callback/$provider': typeof AuthCallbackProviderRoute;
-  '/campaigns/$campaignId/edit': typeof CampaignsCampaignIdEditRoute;
-  '/campaigns/$campaignId/play': typeof CampaignsCampaignIdPlayRoute;
-  '/campaigns/$campaignId/sessions': typeof CampaignsCampaignIdSessionsRoute;
+  '/': typeof IndexRoute
+  '/dashboard': typeof DashboardRoute
+  '/privacy': typeof PrivacyRoute
+  '/terms': typeof TermsRoute
+  '/auth/$provider': typeof AuthProviderRoute
+  '/auth/logout': typeof AuthLogoutRoute
+  '/campaign/join': typeof CampaignJoinRoute
+  '/campaigns/new': typeof CampaignsNewRoute
+  '/campaigns': typeof CampaignsIndexRoute
+  '/auth/callback/$provider': typeof AuthCallbackProviderRoute
+  '/campaigns/$campaignId/edit': typeof CampaignsCampaignIdEditRoute
+  '/campaigns/$campaignId/play': typeof CampaignsCampaignIdPlayRoute
+  '/campaigns/$campaignId/sessions': typeof CampaignsCampaignIdSessionsRoute
 }
 export interface FileRoutesById {
-  __root__: typeof rootRouteImport;
-  '/': typeof IndexRoute;
-  '/dashboard': typeof DashboardRoute;
-  '/privacy': typeof PrivacyRoute;
-  '/terms': typeof TermsRoute;
-  '/auth/$provider': typeof AuthProviderRoute;
-  '/auth/logout': typeof AuthLogoutRoute;
-  '/campaign/join': typeof CampaignJoinRoute;
-  '/campaigns/new': typeof CampaignsNewRoute;
-  '/campaigns/': typeof CampaignsIndexRoute;
-  '/auth/callback/$provider': typeof AuthCallbackProviderRoute;
-  '/campaigns/$campaignId/edit': typeof CampaignsCampaignIdEditRoute;
-  '/campaigns/$campaignId/play': typeof CampaignsCampaignIdPlayRoute;
-  '/campaigns/$campaignId/sessions': typeof CampaignsCampaignIdSessionsRoute;
+  __root__: typeof rootRouteImport
+  '/': typeof IndexRoute
+  '/dashboard': typeof DashboardRoute
+  '/privacy': typeof PrivacyRoute
+  '/terms': typeof TermsRoute
+  '/auth/$provider': typeof AuthProviderRoute
+  '/auth/logout': typeof AuthLogoutRoute
+  '/campaign/join': typeof CampaignJoinRoute
+  '/campaigns/new': typeof CampaignsNewRoute
+  '/campaigns/': typeof CampaignsIndexRoute
+  '/auth/callback/$provider': typeof AuthCallbackProviderRoute
+  '/campaigns/$campaignId/edit': typeof CampaignsCampaignIdEditRoute
+  '/campaigns/$campaignId/play': typeof CampaignsCampaignIdPlayRoute
+  '/campaigns/$campaignId/sessions': typeof CampaignsCampaignIdSessionsRoute
 }
 export interface FileRouteTypes {
-  fileRoutesByFullPath: FileRoutesByFullPath;
+  fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
     | '/dashboard'
@@ -150,8 +151,8 @@ export interface FileRouteTypes {
     | '/auth/callback/$provider'
     | '/campaigns/$campaignId/edit'
     | '/campaigns/$campaignId/play'
-    | '/campaigns/$campaignId/sessions';
-  fileRoutesByTo: FileRoutesByTo;
+    | '/campaigns/$campaignId/sessions'
+  fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
     | '/dashboard'
@@ -165,7 +166,7 @@ export interface FileRouteTypes {
     | '/auth/callback/$provider'
     | '/campaigns/$campaignId/edit'
     | '/campaigns/$campaignId/play'
-    | '/campaigns/$campaignId/sessions';
+    | '/campaigns/$campaignId/sessions'
   id:
     | '__root__'
     | '/'
@@ -180,118 +181,118 @@ export interface FileRouteTypes {
     | '/auth/callback/$provider'
     | '/campaigns/$campaignId/edit'
     | '/campaigns/$campaignId/play'
-    | '/campaigns/$campaignId/sessions';
-  fileRoutesById: FileRoutesById;
+    | '/campaigns/$campaignId/sessions'
+  fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute;
-  DashboardRoute: typeof DashboardRoute;
-  PrivacyRoute: typeof PrivacyRoute;
-  TermsRoute: typeof TermsRoute;
-  AuthProviderRoute: typeof AuthProviderRoute;
-  AuthLogoutRoute: typeof AuthLogoutRoute;
-  CampaignJoinRoute: typeof CampaignJoinRoute;
-  CampaignsNewRoute: typeof CampaignsNewRoute;
-  CampaignsIndexRoute: typeof CampaignsIndexRoute;
-  AuthCallbackProviderRoute: typeof AuthCallbackProviderRoute;
-  CampaignsCampaignIdEditRoute: typeof CampaignsCampaignIdEditRoute;
-  CampaignsCampaignIdPlayRoute: typeof CampaignsCampaignIdPlayRoute;
-  CampaignsCampaignIdSessionsRoute: typeof CampaignsCampaignIdSessionsRoute;
+  IndexRoute: typeof IndexRoute
+  DashboardRoute: typeof DashboardRoute
+  PrivacyRoute: typeof PrivacyRoute
+  TermsRoute: typeof TermsRoute
+  AuthProviderRoute: typeof AuthProviderRoute
+  AuthLogoutRoute: typeof AuthLogoutRoute
+  CampaignJoinRoute: typeof CampaignJoinRoute
+  CampaignsNewRoute: typeof CampaignsNewRoute
+  CampaignsIndexRoute: typeof CampaignsIndexRoute
+  AuthCallbackProviderRoute: typeof AuthCallbackProviderRoute
+  CampaignsCampaignIdEditRoute: typeof CampaignsCampaignIdEditRoute
+  CampaignsCampaignIdPlayRoute: typeof CampaignsCampaignIdPlayRoute
+  CampaignsCampaignIdSessionsRoute: typeof CampaignsCampaignIdSessionsRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
     '/terms': {
-      id: '/terms';
-      path: '/terms';
-      fullPath: '/terms';
-      preLoaderRoute: typeof TermsRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof TermsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/privacy': {
-      id: '/privacy';
-      path: '/privacy';
-      fullPath: '/privacy';
-      preLoaderRoute: typeof PrivacyRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/dashboard': {
-      id: '/dashboard';
-      path: '/dashboard';
-      fullPath: '/dashboard';
-      preLoaderRoute: typeof DashboardRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/dashboard'
+      path: '/dashboard'
+      fullPath: '/dashboard'
+      preLoaderRoute: typeof DashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/': {
-      id: '/';
-      path: '/';
-      fullPath: '/';
-      preLoaderRoute: typeof IndexRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
-    '/campaign/join': {
-      id: '/campaign/join';
-      path: '/campaign/join';
-      fullPath: '/campaign/join';
-      preLoaderRoute: typeof CampaignJoinRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/campaigns/': {
-      id: '/campaigns/';
-      path: '/campaigns';
-      fullPath: '/campaigns/';
-      preLoaderRoute: typeof CampaignsIndexRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/campaigns/'
+      path: '/campaigns'
+      fullPath: '/campaigns/'
+      preLoaderRoute: typeof CampaignsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/campaigns/new': {
-      id: '/campaigns/new';
-      path: '/campaigns/new';
-      fullPath: '/campaigns/new';
-      preLoaderRoute: typeof CampaignsNewRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/campaigns/new'
+      path: '/campaigns/new'
+      fullPath: '/campaigns/new'
+      preLoaderRoute: typeof CampaignsNewRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/campaign/join': {
+      id: '/campaign/join'
+      path: '/campaign/join'
+      fullPath: '/campaign/join'
+      preLoaderRoute: typeof CampaignJoinRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/auth/logout': {
-      id: '/auth/logout';
-      path: '/auth/logout';
-      fullPath: '/auth/logout';
-      preLoaderRoute: typeof AuthLogoutRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/auth/logout'
+      path: '/auth/logout'
+      fullPath: '/auth/logout'
+      preLoaderRoute: typeof AuthLogoutRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/auth/$provider': {
-      id: '/auth/$provider';
-      path: '/auth/$provider';
-      fullPath: '/auth/$provider';
-      preLoaderRoute: typeof AuthProviderRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/auth/$provider'
+      path: '/auth/$provider'
+      fullPath: '/auth/$provider'
+      preLoaderRoute: typeof AuthProviderRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/campaigns/$campaignId/sessions': {
-      id: '/campaigns/$campaignId/sessions';
-      path: '/campaigns/$campaignId/sessions';
-      fullPath: '/campaigns/$campaignId/sessions';
-      preLoaderRoute: typeof CampaignsCampaignIdSessionsRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/campaigns/$campaignId/sessions'
+      path: '/campaigns/$campaignId/sessions'
+      fullPath: '/campaigns/$campaignId/sessions'
+      preLoaderRoute: typeof CampaignsCampaignIdSessionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/campaigns/$campaignId/play': {
-      id: '/campaigns/$campaignId/play';
-      path: '/campaigns/$campaignId/play';
-      fullPath: '/campaigns/$campaignId/play';
-      preLoaderRoute: typeof CampaignsCampaignIdPlayRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/campaigns/$campaignId/play'
+      path: '/campaigns/$campaignId/play'
+      fullPath: '/campaigns/$campaignId/play'
+      preLoaderRoute: typeof CampaignsCampaignIdPlayRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/campaigns/$campaignId/edit': {
-      id: '/campaigns/$campaignId/edit';
-      path: '/campaigns/$campaignId/edit';
-      fullPath: '/campaigns/$campaignId/edit';
-      preLoaderRoute: typeof CampaignsCampaignIdEditRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/campaigns/$campaignId/edit'
+      path: '/campaigns/$campaignId/edit'
+      fullPath: '/campaigns/$campaignId/edit'
+      preLoaderRoute: typeof CampaignsCampaignIdEditRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/auth/callback/$provider': {
-      id: '/auth/callback/$provider';
-      path: '/auth/callback/$provider';
-      fullPath: '/auth/callback/$provider';
-      preLoaderRoute: typeof AuthCallbackProviderRouteImport;
-      parentRoute: typeof rootRouteImport;
-    };
+      id: '/auth/callback/$provider'
+      path: '/auth/callback/$provider'
+      fullPath: '/auth/callback/$provider'
+      preLoaderRoute: typeof AuthCallbackProviderRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -309,16 +310,16 @@ const rootRouteChildren: RootRouteChildren = {
   CampaignsCampaignIdEditRoute: CampaignsCampaignIdEditRoute,
   CampaignsCampaignIdPlayRoute: CampaignsCampaignIdPlayRoute,
   CampaignsCampaignIdSessionsRoute: CampaignsCampaignIdSessionsRoute,
-};
+}
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
-  ._addFileTypes<FileRouteTypes>();
+  ._addFileTypes<FileRouteTypes>()
 
-import type { getRouter } from './router.tsx';
-import type { createStart } from '@tanstack/react-start';
+import type { getRouter } from './router.tsx'
+import type { createStart } from '@tanstack/react-start'
 declare module '@tanstack/react-start' {
   interface Register {
-    ssr: true;
-    router: Awaited<ReturnType<typeof getRouter>>;
+    ssr: true
+    router: Awaited<ReturnType<typeof getRouter>>
   }
 }

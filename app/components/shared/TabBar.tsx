@@ -5,6 +5,7 @@ export interface Tab {
   label: string;
   icon?: ReactNode;
   hidden?: boolean;
+  badge?: boolean;
 }
 
 interface TabBarProps {
@@ -22,7 +23,7 @@ export function TabBar({ tabs, activeTab, onTabChange, accentColor = '#3498db' }
         <button
           key={tab.id}
           onClick={() => onTabChange(tab.id)}
-          className={`px-5 py-2.5 text-xs font-medium transition-colors flex items-center gap-1.5 ${
+          className={`relative px-5 py-2.5 text-xs font-medium transition-colors flex items-center gap-1.5 ${
             activeTab === tab.id
               ? 'text-slate-200 border-b-2'
               : 'text-slate-500 hover:text-slate-400'
@@ -31,6 +32,9 @@ export function TabBar({ tabs, activeTab, onTabChange, accentColor = '#3498db' }
         >
           {tab.icon}
           {tab.label}
+          {tab.badge && activeTab !== tab.id && (
+            <span className="absolute top-1.5 right-1.5 h-2 w-2 rounded-full bg-[#2563EB] animate-pulse" />
+          )}
         </button>
       ))}
     </div>

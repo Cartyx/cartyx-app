@@ -6,6 +6,8 @@ import { PixelButton } from '~/components/PixelButton';
 import { MarkdownEditor } from '~/components/shared/MarkdownEditor';
 import { TagAutocompleteInput } from '~/components/shared/TagAutocompleteInput';
 import { useRace, useCreateRace, useUpdateRace, useDeleteRace } from '~/hooks/useRaces';
+import { useCampaign } from '~/hooks/useCampaigns';
+import { ShowOnTabletopButton } from '~/components/wiki/shared/ShowOnTabletopButton';
 
 interface RaceModalProps {
   isOpen: boolean;
@@ -26,6 +28,8 @@ export function RaceModal({ isOpen, onClose, campaignId, raceId }: RaceModalProp
   const { create, isLoading: isCreating } = useCreateRace();
   const { update, isLoading: isUpdating } = useUpdateRace();
   const { remove, isLoading: isDeleting } = useDeleteRace();
+  const { campaign } = useCampaign(campaignId);
+  const isGM = campaign?.isGM ?? false;
 
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
@@ -144,14 +148,24 @@ export function RaceModal({ isOpen, onClose, campaignId, raceId }: RaceModalProp
           >
             {isEdit ? 'Edit Race' : 'Create Race'}
           </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-slate-500 hover:text-white transition-colors"
-            aria-label="Close modal"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {isEdit && raceId && (
+              <ShowOnTabletopButton
+                campaignId={campaignId}
+                collection="race"
+                documentId={raceId}
+                isGM={isGM}
+              />
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-slate-500 hover:text-white transition-colors"
+              aria-label="Close modal"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 min-h-0">

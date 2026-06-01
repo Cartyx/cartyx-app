@@ -1,0 +1,181 @@
+import { Note } from '../db/models/Note';
+import { Character } from '../db/models/Character';
+import { Race } from '../db/models/Race';
+import { Rule } from '../db/models/Rule';
+import type { HydratedDocument } from '~/types/tabletop';
+
+// ---------------------------------------------------------------------------
+// Collection registry — maps collection names to fetch logic
+// ---------------------------------------------------------------------------
+
+interface CollectionFetcher {
+  fetch(
+    ids: string[],
+    campaignId: string
+  ): Promise<
+    Array<{ _id: unknown; title?: string; content?: string; isPublic?: boolean; link?: string }>
+  >;
+}
+
+const COLLECTION_REGISTRY: Record<string, CollectionFetcher> = {
+  note: {
+    async fetch(ids: string[], campaignId: string) {
+      return Note.find({ _id: { $in: ids }, campaignId }, '_id title note')
+        .lean()
+        .then((docs) =>
+          docs.map((d) => ({
+            _id: d._id,
+            title: (d as { title?: string }).title,
+            content: (d as { note?: string }).note,
+          }))
+        ) as Promise<Array<{ _id: unknown; title?: string; content?: string }>>;
+    },
+  },
+  character: {
+    async fetch(ids: string[], campaignId: string) {
+      return Character.find(
+        { _id: { $in: ids }, campaignId },
+        '_id firstName lastName notes isPublic link'
+      )
+        .lean()
+        .then((docs) =>
+          docs.map((d) => {
+            const ch = d as {
+              _id: unknown;
+              firstName?: string;
+              lastName?: string;
+              notes?: string;
+              isPublic?: boolean;
+              link?: string;
+            };
+            return {
+              _id: ch._id,
+              title: `${ch.firstName ?? ''} ${ch.lastName ?? ''}`.trim(),
+              content: ch.notes,
+              isPublic: ch.isPublic,
+              link: ch.link,
+            };
+          })
+        ) as Promise<
+        Array<{ _id: unknown; title?: string; content?: string; isPublic?: boolean; link?: string }>
+      >;
+    },
+  },
+  race: {
+    async fetch(ids: string[], campaignId: string) {
+      return Race.find({ _id: { $in: ids }, campaignId }, '_id title content')
+        .lean()
+        .then((docs) =>
+          docs.map((d) => ({
+            _id: d._id,
+            title: (d as { title?: string }).title,
+            content: (d as { content?: string }).content,
+          }))
+        ) as Promise<Array<{ _id: unknown; title?: string; content?: string }>>;
+    },
+  },
+  rule: {
+    async fetch(ids: string[], campaignId: string) {
+      return Rule.find({ _id: { $in: ids }, campaignId }, '_id title content isPublic')
+        .lean()
+        .then((docs) =>
+          docs.map((d) => ({
+            _id: d._id,
+            title: (d as { title?: string }).title,
+            content: (d as { content?: string }).content,
+            isPublic: (d as { isPublic?: boolean }).isPublic,
+          }))
+        ) as Promise<
+        Array<{ _id: unknown; title?: string; content?: string; isPublic?: boolean; link?: string }>
+      >;
+    },
+  },
+  location: {
+    async fetch(ids: string[], campaignId: string) {
+      const { Location } = await import('../db/models/Location');
+      return Location.find({ _id: { $in: ids }, campaignId }, '_id name description isPublic')
+        .lean()
+        .then((docs) =>
+          docs.map((d) => ({
+            _id: d._id,
+            title: (d as { name?: string }).name,
+            content: (d as { description?: string }).description,
+            isPublic: (d as { isPublic?: boolean }).isPublic,
+          }))
+        ) as Promise<Array<{ _id: unknown; title?: string; content?: string; isPublic?: boolean }>>;
+    },
+  },
+  player: {
+    async fetch(ids: string[], campaignId: string) {
+      const { Player } = await import('../db/models/Player');
+      return Player.find(
+        { _id: { $in: ids }, campaignId },
+        '_id firstName lastName description color'
+      )
+        .lean()
+        .then(
+          (
+            docs: Array<{
+              _id: unknown;
+              firstName?: string;
+              lastName?: string;
+              description?: string;
+              color?: string;
+            }>
+          ) =>
+            docs.map((d) => ({
+              _id: d._id,
+              title: `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim(),
+              content: d.description ?? '',
+              isPublic: true,
+              color: d.color ?? '#3498db',
+            }))
+        );
+    },
+  },
+};
+
+/**
+ * Batch-hydrate a set of `{ collection, documentId }` refs.
+ * Groups by collection, fetches each batch, and returns a lookup map
+ * keyed by `"collection:documentId"`.
+ */
+export async function hydrateRefs(
+  refs: Array<{ collection: string; documentId: string }>,
+  campaignId: string
+): Promise<Record<string, HydratedDocument>> {
+  const grouped = new Map<string, Set<string>>();
+  for (const ref of refs) {
+    if (!ref.collection || !ref.documentId) continue;
+    let set = grouped.get(ref.collection);
+    if (!set) {
+      set = new Set();
+      grouped.set(ref.collection, set);
+    }
+    set.add(ref.documentId);
+  }
+
+  const hydrated: Record<string, HydratedDocument> = {};
+
+  await Promise.all(
+    Array.from(grouped.entries()).map(async ([collectionName, idSet]) => {
+      const fetcher = COLLECTION_REGISTRY[collectionName];
+      if (!fetcher) return;
+
+      const docs = await fetcher.fetch(Array.from(idSet), campaignId);
+      for (const doc of docs) {
+        const id = String(doc._id);
+        hydrated[`${collectionName}:${id}`] = {
+          id,
+          collection: collectionName,
+          title: doc.title ?? '',
+          content: doc.content ?? '',
+          ...(doc.isPublic !== undefined && { isPublic: doc.isPublic }),
+          ...(doc.link && { link: doc.link }),
+        };
+      }
+    })
+  );
+
+  return hydrated;
+}

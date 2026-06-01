@@ -10,6 +10,15 @@ vi.mock('~/hooks/useNotes');
 vi.mock('~/hooks/useTags', () => ({
   useTags: () => ({ tags: [], isLoading: false, error: null }),
 }));
+vi.mock('~/hooks/useCampaigns', () => ({
+  useCampaign: () => ({ campaign: { isGM: false }, isLoading: false }),
+}));
+vi.mock('~/hooks/useTabletopScreens', () => ({
+  useTabletopScreenList: () => ({ screens: [], isLoading: false, error: null }),
+  useTabletopMutations: () => ({
+    openWindow: { mutate: vi.fn(), isPending: false },
+  }),
+}));
 
 // Mock CodeMirror (same approach as MarkdownEditor tests)
 let lastCmOnChange: ((value: string) => void) | undefined;

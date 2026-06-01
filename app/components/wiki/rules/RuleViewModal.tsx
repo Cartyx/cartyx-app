@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { Globe, Lock, X } from 'lucide-react';
 import { RuleWindow } from './RuleWindow';
 import { useRule } from '~/hooks/useRules';
+import { useCampaign } from '~/hooks/useCampaigns';
+import { ShowOnTabletopButton } from '~/components/wiki/shared/ShowOnTabletopButton';
 
 interface RuleViewModalProps {
   isOpen: boolean;
@@ -13,6 +15,8 @@ interface RuleViewModalProps {
 
 export function RuleViewModal({ isOpen, onClose, ruleId, campaignId }: RuleViewModalProps) {
   const { rule, isLoading } = useRule(ruleId, campaignId);
+  const { campaign } = useCampaign(campaignId);
+  const isGM = campaign?.isGM ?? false;
 
   useEffect(() => {
     if (!isOpen) return;
@@ -58,14 +62,22 @@ export function RuleViewModal({ isOpen, onClose, ruleId, campaignId }: RuleViewM
               )}
             </h2>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-slate-500 hover:text-white transition-colors shrink-0"
-            aria-label="Close modal"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            <ShowOnTabletopButton
+              campaignId={campaignId}
+              collection="rule"
+              documentId={ruleId}
+              isGM={isGM}
+            />
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-slate-500 hover:text-white transition-colors"
+              aria-label="Close modal"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto min-h-0">

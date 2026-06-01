@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { ExternalLink, Globe, Lock, X } from 'lucide-react';
 import { CharacterWindow } from './CharacterWindow';
 import { useCharacter } from '~/hooks/useCharacters';
+import { useCampaign } from '~/hooks/useCampaigns';
+import { ShowOnTabletopButton } from '~/components/wiki/shared/ShowOnTabletopButton';
 
 interface CharacterViewModalProps {
   isOpen: boolean;
@@ -18,6 +20,8 @@ export function CharacterViewModal({
   campaignId,
 }: CharacterViewModalProps) {
   const { character, isLoading } = useCharacter(characterId, campaignId);
+  const { campaign } = useCampaign(campaignId);
+  const isGM = campaign?.isGM ?? false;
 
   useEffect(() => {
     if (!isOpen) return;
@@ -74,14 +78,22 @@ export function CharacterViewModal({
               </a>
             )}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-slate-500 hover:text-white transition-colors shrink-0"
-            aria-label="Close modal"
-          >
-            <X className="h-5 w-5" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            <ShowOnTabletopButton
+              campaignId={campaignId}
+              collection="character"
+              documentId={characterId}
+              isGM={isGM}
+            />
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-slate-500 hover:text-white transition-colors"
+              aria-label="Close modal"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
         </header>
 
         <div className="flex-1 overflow-y-auto min-h-0">
