@@ -43,10 +43,9 @@ updates:
         versions: ['>=5.0.0']
 
       # --- ESLint 10 boundary ---
-      # ESLint 10 drops legacy (eslintrc) config support entirely and ships
-      # breaking rule-API changes; typescript-eslint v9 pairs with it. Hold
-      # at ESLint 9 + typescript-eslint v8 until we plan a dedicated flat-
-      # config migration PR.
+      # ESLint 10 introduces breaking rule-API changes and removes legacy
+      # (eslintrc) config support; typescript-eslint v9 pairs with it. Hold
+      # at ESLint 9 + typescript-eslint v8 until the upgrade is validated.
       - dependency-name: 'eslint'
         versions: ['>=10.0.0']
       - dependency-name: '@typescript-eslint/eslint-plugin'
