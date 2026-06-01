@@ -66,7 +66,16 @@ test.describe('Location image gallery (GM edit flow)', () => {
     await page.getByRole('button', { name: /Upload Image/i }).click();
 
     // Wait for the new thumbnail to land in the grid — React Query refetches.
-    await expect(page.getByAltText(uploadTitle)).toBeVisible({ timeout: 10_000 });
+    const thumb = page.getByAltText(uploadTitle);
+    await expect(thumb).toBeVisible({ timeout: 10_000 });
+
+    // Self-clean so each run doesn't accumulate orphan entries in the dev DB.
+    // (The R2 PUT itself is mocked, so no R2 bytes were ever written.)
+    const thumbContainer = thumb.locator('..');
+    await thumbContainer.hover();
+    await thumbContainer.getByRole('button', { name: `Remove ${uploadTitle}` }).click();
+    await page.getByRole('button', { name: 'Yes' }).click();
+    await expect(thumb).toHaveCount(0, { timeout: 10_000 });
   });
 
   test('GM can delete an existing image via the inline confirmation', async ({

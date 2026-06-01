@@ -66,10 +66,17 @@ export default async function globalSetup(): Promise<void> {
   // Ensure the location has the E2E fixture image so LocationGallery has a
   // thumbnail to click in the lightbox spec. Uses a stable imageKey for
   // idempotency. The publicUrl is a data: URL so the browser can render it
-  // without hitting R2 — the lightbox just shows an <img src> regardless.
-  const fixtureImageKey = 'e2e/lightbox-fixture.png';
+  // without hitting R2 — and it's a recognizable colored SVG (not a 1×1
+  // transparent PNG) so manual testers can actually see it in the gallery.
+  const fixtureImageKey = 'e2e/lightbox-fixture.svg';
   const fixturePublicUrl =
-    'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    'data:image/svg+xml;utf8,' +
+    encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">' +
+        '<rect width="64" height="64" fill="#4A90E2"/>' +
+        '<text x="32" y="38" text-anchor="middle" fill="white" font-family="sans-serif" font-size="14" font-weight="bold">E2E</text>' +
+        '</svg>'
+    );
   const hasFixtureImage = (location.images ?? []).some(
     (img: { imageKey?: string }) => img.imageKey === fixtureImageKey
   );

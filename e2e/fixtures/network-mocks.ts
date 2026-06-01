@@ -33,23 +33,26 @@ export async function mockPostHog(page: Page): Promise<void> {
 }
 
 /**
- * Stub R2 direct upload: the server fn returns a fake presigned URL and the PUT
- * to the (fake) R2 host returns 200. No real R2 traffic is generated.
+ * Stub the R2 PUT so the upload spec doesn't write real bytes to Cloudflare R2
+ * on every run. We deliberately do NOT mock `getUploadUrl` — TanStack Start
+ * server-fn responses use a custom wire format (`x-tss-serialized` headers
+ * and framed bodies), and a hand-rolled `route.fulfill` doesn't satisfy the
+ * client parser. Letting the server-fn run gives us a real presigned URL;
+ * intercepting the PUT means R2 never actually receives the bytes.
+ *
+ * Side effect: the addLocationImage server-fn still records the real R2
+ * imageKey + cdn-dev URL in MongoDB. The thumbnail's <img> source points at
+ * a 404 in R2, but the element is still in the DOM so Playwright assertions
+ * succeed. For manual exploratory testing, prefer uploading real images via
+ * the UI.
  */
 export async function mockR2DirectUpload(page: Page): Promise<void> {
-  await page.route(/_serverFn.*getUploadUrl/, async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({
-        uploadUrl: 'https://test.r2.example/upload?signature=test',
-        imageKey: `uploads/locations/${Date.now()}-test.png`,
-        publicUrl: 'https://test.cdn.example/uploads/locations/test.png',
-      }),
-    });
-  });
-  await page.route('https://test.r2.example/**', async (route) => {
-    await route.fulfill({ status: 200, body: '' });
+  await page.route(/\.r2\.cloudflarestorage\.com\//, async (route) => {
+    if (route.request().method() === 'PUT') {
+      await route.fulfill({ status: 200, body: '' });
+      return;
+    }
+    await route.continue();
   });
 }
 
