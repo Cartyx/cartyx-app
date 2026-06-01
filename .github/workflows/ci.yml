@@ -28,6 +28,20 @@ jobs:
       - name: Security audit
         run: npm audit --audit-level=high --omit=dev
 
+      - name: Package age guard (supply-chain defence)
+        # Fail if any direct dep was published less than MIN_AGE_DAYS (10) ago.
+        # Mirrors the `cooldown` rule in `.github/dependabot.yml`. To bypass
+        # for an emergency CVE fix, set SKIP_AGE_CHECK=1 in the workflow run
+        # and document in the PR. STRICT_AGE_CHECK=1 also gates transitives.
+        #
+        # `continue-on-error: true` during rollout — the existing lockfile
+        # was regenerated recently (#432) and has ~20 direct deps published
+        # in the last 10 days. They will age out by ~2026-06-11, after
+        # which this flag should be removed so the step becomes blocking.
+        # TODO(2026-06-12): drop `continue-on-error` once the lockfile ages.
+        continue-on-error: true
+        run: npm run check:deps-age
+
       - name: Type check
         run: npm run typecheck
 
