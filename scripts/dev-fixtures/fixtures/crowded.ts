@@ -13,11 +13,41 @@
  * Used both as the heaviest scenario for manual tabletop iteration and as
  * the stress-test target for performance work.
  */
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { ObjectId } from 'mongodb';
 import type { Fixture, FixtureContext } from '../cli';
 
 const FIXTURE_NAME = 'crowded';
 const CAMPAIGN_NAME = '[Fixture: crowded] Continental Crisis';
+
+// Source SRD content extracted by scripts/srd/extract-rules.ts.
+// If these directories don't exist, the fixture falls back to a tiny inline
+// set so the seeder still works on a fresh checkout that hasn't run extract.
+const SRD_RACES_DIR = join(process.cwd(), 'docs/srd/races');
+const SRD_RULES_DIR = join(process.cwd(), 'docs/srd/rules');
+
+/** Strip the leading `# Title` and the SRD attribution footer. */
+function stripMdShell(md: string): string {
+  return md
+    .replace(/^#[^\n]*\n+/, '')
+    .replace(/\n---\n\n_Adapted from[\s\S]+$/m, '')
+    .trim();
+}
+
+/** Parse `# Title` from the first heading line. */
+function extractMdTitle(md: string, fallbackSlug: string): string {
+  const m = /^#\s+(.+?)\s*$/m.exec(md);
+  return m?.[1] ?? fallbackSlug;
+}
+
+function dirExists(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
 
 // Default LocationTypes from app/server/db/models/LocationType.ts
 const DEFAULT_LOCATION_TYPES = [
@@ -547,132 +577,96 @@ const RELATIONSHIPS: Array<[number, string, number]> = [
   [25, 'reports to', 9], // Faisal → Brennan
 ];
 
-// Races (Wiki → Races)
+// Races — loaded from docs/srd/races/*.md (SRD 5.2.1, CC-BY 4.0).
 interface RaceSpec {
   title: string;
   content: string;
   tags: string[];
 }
-const RACES: RaceSpec[] = [
-  {
-    title: 'Human',
-    content:
-      '# Humans of Theronia\n\nThe most numerous race on the continent. Adaptable, ambitious, short-lived compared to elves.\n\n**Ability bonus:** +1 to all ability scores.\n**Common subtypes:** Vellarian (northern, hardy), Astryni (cosmopolitan), Karthian-blooded (mountain stock), Solassian (desert-adapted).',
-    tags: ['race', 'common'],
-  },
-  {
-    title: 'Elf',
-    content:
-      '# Elves of Theronia\n\nMostly half-elves now — the pureblood elven kingdoms collapsed two centuries ago. Long-lived, magic-attuned, often distant.\n\n**Ability bonus:** +2 Dexterity.\n**Trait:** Trance — 4 hours of meditation replaces 8 hours of sleep.',
-    tags: ['race', 'common'],
-  },
-  {
-    title: 'Dwarf',
-    content:
-      '# Dwarves of Theronia\n\nKarthian Highlands are dwarven ancestral homeland. Master smiths, miners, and stonemasons. Tight clan structure.\n\n**Ability bonus:** +2 Constitution.\n**Trait:** Darkvision 60ft. Resistance to poison damage.',
-    tags: ['race', 'common'],
-  },
-  {
-    title: 'Halfling',
-    content:
-      '# Halflings of Theronia\n\nSettled communities scattered across the Astryn Lowlands. Cheerful, curious, unexpectedly resilient.\n\n**Ability bonus:** +2 Dexterity, +1 Charisma.\n**Trait:** Lucky — reroll a natural 1 on attack rolls, ability checks, and saving throws.',
-    tags: ['race', 'common'],
-  },
-  {
-    title: 'Tiefling',
-    content:
-      '# Tieflings of Theronia\n\nDescended from a 700-year-old infernal compact made by the lost city of Aelthor. Found in every nation; uniformly distrusted in Solassia.\n\n**Ability bonus:** +1 Intelligence, +2 Charisma.\n**Trait:** Innate Thaumaturgy cantrip. Fire resistance.',
-    tags: ['race', 'uncommon'],
-  },
-  {
-    title: 'Dragonborn',
-    content:
-      '# Dragonborn of Theronia\n\nRare — most live in the volcanic isles south of Solassia. The Stoneharrow free company is the largest dragonborn organisation on the continent.\n\n**Ability bonus:** +2 Strength, +1 Charisma.\n**Trait:** Breath weapon (varies by ancestry). Damage resistance to your draconic ancestry damage type.',
-    tags: ['race', 'rare'],
-  },
-];
 
-// House / homebrew rules (Wiki → Rules)
+function loadRaces(): RaceSpec[] {
+  if (!dirExists(SRD_RACES_DIR)) {
+    console.warn(
+      `[fixture:crowded] ${SRD_RACES_DIR} missing — falling back to minimal inline races. Run \`npm run srd:extract\` to populate.`
+    );
+    return [
+      { title: 'Human', content: 'Adaptable, ambitious humans.', tags: ['race', 'fallback'] },
+      { title: 'Elf', content: 'Long-lived, magic-attuned elves.', tags: ['race', 'fallback'] },
+    ];
+  }
+  const files = readdirSync(SRD_RACES_DIR).filter((f) => f.endsWith('.md'));
+  return files.map((f) => {
+    const raw = readFileSync(join(SRD_RACES_DIR, f), 'utf-8');
+    const slug = f.replace(/\.md$/, '');
+    const title = extractMdTitle(raw, slug);
+    return { title, content: stripMdShell(raw), tags: ['race', 'srd', 'fixture'] };
+  });
+}
+const RACES: RaceSpec[] = loadRaces();
+
+// Rules — loaded from docs/srd/rules/<section>/*.md (SRD 5.2.1, CC-BY 4.0).
 interface RuleSpec {
   title: string;
   content: string;
   tags: string[];
   isPublic: boolean;
 }
-const RULES: RuleSpec[] = [
-  {
-    title: 'Critical Failures',
-    content:
-      'On a natural 1 with an attack roll, the attacker provokes an opportunity attack from any adjacent enemy. Spell attacks are exempt.',
-    tags: ['combat', 'house-rule'],
-    isPublic: true,
-  },
-  {
-    title: 'Inspiration Refresh',
-    content:
-      'Each player who shows up to a session on time gains 1 Inspiration at the start. Unused Inspiration carries over up to a cap of 3.',
-    tags: ['meta', 'house-rule'],
-    isPublic: true,
-  },
-  {
-    title: 'Death Saving Throws',
-    content:
-      '**Stabilising on a 20:** Restore 1 HP instead of just stabilising.\n**Critical failure on a 1:** Counts as two failed saves.\n**No nearby allies:** Death saves are made with disadvantage.',
-    tags: ['combat'],
-    isPublic: true,
-  },
-  {
-    title: 'Combat Initiative',
-    content:
-      'We use group initiative: enemies roll once for the side, players roll individually. Highest goes first.',
-    tags: ['combat'],
-    isPublic: true,
-  },
-  {
-    title: 'Long Rest',
-    content:
-      'A long rest restores HP and spell slots only if taken in a safe location. In the wilderness or hostile territory, a long rest restores half HP and no spell slots without a successful Survival check (DC 15).',
-    tags: ['exploration', 'house-rule'],
-    isPublic: true,
-  },
-  {
-    title: 'Faction Reputation',
-    content:
-      '_GM-only mechanic._ Each player starts at 0 reputation with each of the four major factions. Actions for or against a faction shift reputation in the appropriate direction. At ±5, the faction will actively work with or against the party.',
-    tags: ['social', 'gm-only'],
-    isPublic: false,
-  },
-  {
-    title: 'Spell Components',
-    content:
-      'Material components without a listed gp cost are assumed to be in a component pouch. Costly components must be tracked.',
-    tags: ['magic'],
-    isPublic: true,
-  },
-  {
-    title: 'Travel & Encumbrance',
-    content:
-      'We use simplified encumbrance: heavy armor + a backpack = slowed unless STR is at least 13. Mounts cancel slowed.',
-    tags: ['exploration', 'house-rule'],
-    isPublic: true,
-  },
-];
+
+function loadRules(): RuleSpec[] {
+  if (!dirExists(SRD_RULES_DIR)) {
+    console.warn(
+      `[fixture:crowded] ${SRD_RULES_DIR} missing — falling back to minimal inline rules. Run \`npm run srd:extract\` to populate.`
+    );
+    return [
+      {
+        title: 'Initiative',
+        content: 'Roll a Dexterity check to determine the order of turns in combat.',
+        tags: ['combat', 'fallback'],
+        isPublic: true,
+      },
+    ];
+  }
+  const sections = readdirSync(SRD_RULES_DIR, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name);
+  const rules: RuleSpec[] = [];
+  for (const section of sections) {
+    const sectionDir = join(SRD_RULES_DIR, section);
+    const files = readdirSync(sectionDir).filter((f) => f.endsWith('.md'));
+    for (const f of files) {
+      const raw = readFileSync(join(sectionDir, f), 'utf-8');
+      const slug = f.replace(/\.md$/, '');
+      const title = extractMdTitle(raw, slug);
+      rules.push({
+        title,
+        content: stripMdShell(raw),
+        tags: [section, 'srd', 'fixture'],
+        isPublic: true,
+      });
+    }
+  }
+  return rules;
+}
+const RULES: RuleSpec[] = loadRules();
 
 // GM Screens (the tabbed GM dashboard, separate from tabletop screens).
 // Each pulls in NPCs, rules, and locations as pre-opened windows + reference stacks.
+// Characters reference by index (we control the order). Rules and races
+// reference by title (loaded dynamically from SRD markdown) so the layout
+// stays stable as the SRD content grows.
+type GMScreenItem =
+  | { kind: 'character'; index: number }
+  | { kind: 'rule'; title: string }
+  | { kind: 'race'; title: string }
+  | { kind: 'location'; index: number };
+
 interface GMScreenLayout {
   name: string;
   tabOrder: number;
-  /** Floating-window picks: { kind, indexIntoArray, x, y } */
-  windows: Array<{ kind: 'character' | 'rule' | 'location'; index: number; x: number; y: number }>;
-  /** Quick-reference stacks: tabbed lists of items the GM can click to expand. */
-  stacks: Array<{
-    name: string;
-    x: number;
-    y: number;
-    items: Array<{ kind: 'character' | 'rule' | 'race'; index: number }>;
-  }>;
+  windows: Array<GMScreenItem & { x: number; y: number }>;
+  stacks: Array<{ name: string; x: number; y: number; items: GMScreenItem[] }>;
 }
+
 const GMSCREEN_LAYOUTS: GMScreenLayout[] = [
   {
     name: 'Council & Plot',
@@ -681,7 +675,7 @@ const GMSCREEN_LAYOUTS: GMScreenLayout[] = [
       { kind: 'character', index: 0, x: 60, y: 60 }, // Aldric (King)
       { kind: 'character', index: 8, x: 560, y: 60 }, // Octavia (Senator)
       { kind: 'character', index: 21, x: 60, y: 480 }, // Hierophant
-      { kind: 'rule', index: 5, x: 560, y: 480 }, // Faction Reputation (GM-only)
+      { kind: 'rule', title: 'Initiative', x: 560, y: 480 },
     ],
     stacks: [
       {
@@ -697,10 +691,15 @@ const GMSCREEN_LAYOUTS: GMScreenLayout[] = [
         items: [8, 9, 10, 11, 12, 13, 14].map((i) => ({ kind: 'character' as const, index: i })),
       },
       {
-        name: 'Key Rules',
+        name: 'Combat Rules',
         x: 1080,
         y: 660,
-        items: [5, 4, 1].map((i) => ({ kind: 'rule' as const, index: i })),
+        items: [
+          { kind: 'rule', title: 'Initiative' },
+          { kind: 'rule', title: 'Making an Attack' },
+          { kind: 'rule', title: 'Opportunity Attacks' },
+          { kind: 'rule', title: 'Death Saving Throws' },
+        ],
       },
     ],
   },
@@ -708,9 +707,9 @@ const GMSCREEN_LAYOUTS: GMScreenLayout[] = [
     name: 'Combat Reference',
     tabOrder: 1,
     windows: [
-      { kind: 'rule', index: 3, x: 60, y: 60 }, // Combat Initiative
-      { kind: 'rule', index: 2, x: 560, y: 60 }, // Death Saving Throws
-      { kind: 'rule', index: 0, x: 60, y: 380 }, // Critical Failures
+      { kind: 'rule', title: 'Initiative', x: 60, y: 60 },
+      { kind: 'rule', title: 'Death Saving Throws', x: 560, y: 60 },
+      { kind: 'rule', title: 'Critical Hits', x: 60, y: 380 },
       { kind: 'character', index: 22, x: 560, y: 380 }, // Ramira (Sun General)
       { kind: 'character', index: 4, x: 60, y: 700 }, // Gareth (Vellarian Marshal)
     ],
@@ -719,13 +718,28 @@ const GMSCREEN_LAYOUTS: GMScreenLayout[] = [
         name: 'All Races',
         x: 1080,
         y: 60,
-        items: [0, 1, 2, 3, 4, 5].map((i) => ({ kind: 'race' as const, index: i })),
+        items: [
+          'Dragonborn',
+          'Dwarf',
+          'Elf',
+          'Gnome',
+          'Goliath',
+          'Halfling',
+          'Human',
+          'Orc',
+          'Tiefling',
+        ].map((title) => ({ kind: 'race' as const, title })),
       },
       {
-        name: 'Combat Rules',
+        name: 'Conditions',
         x: 1080,
         y: 460,
-        items: [0, 2, 3, 6].map((i) => ({ kind: 'rule' as const, index: i })),
+        items: [
+          'Blinded (Condition)',
+          'Charmed (Condition)',
+          'Poisoned (Condition)',
+          'Prone (Condition)',
+        ].map((title) => ({ kind: 'rule' as const, title })),
       },
     ],
   },
@@ -978,19 +992,42 @@ async function seed(ctx: FixtureContext): Promise<{ campaignIds: ObjectId[] }> {
   );
 
   // ----- GM Screens with pre-opened NPC / rule / location windows + stacks -----
-  // Resolve the (kind, index) refs against the freshly-inserted id arrays.
-  const idLookup = {
-    character: charIds,
-    rule: ruleIds,
-    race: raceIds,
-    location: LOCATIONS.map((spec) => locsByName.get(spec.name)!),
-  };
-  const collectionForKind: Record<'character' | 'rule' | 'race' | 'location', string> = {
-    character: 'character',
-    rule: 'rule',
-    race: 'race',
-    location: 'location',
-  };
+  // Build title→id lookups for rules and races so layout references stay
+  // stable as SRD content grows. Falls back to the first id when a title
+  // isn't found, so a typo in a layout file doesn't crash the seed.
+  const ruleIdByTitle = new Map<string, ObjectId>(
+    RULES.map((r, i) => [r.title, ruleIds[i]!] as const)
+  );
+  const raceIdByTitle = new Map<string, ObjectId>(
+    RACES.map((r, i) => [r.title, raceIds[i]!] as const)
+  );
+  const locationIds: ObjectId[] = LOCATIONS.map((spec) => locsByName.get(spec.name)!);
+
+  function resolveItem(item: GMScreenItem): { collection: string; documentId: ObjectId } {
+    if (item.kind === 'character') {
+      return { collection: 'character', documentId: charIds[item.index]! };
+    }
+    if (item.kind === 'location') {
+      return { collection: 'location', documentId: locationIds[item.index]! };
+    }
+    if (item.kind === 'rule') {
+      const id = ruleIdByTitle.get(item.title);
+      if (!id) {
+        console.warn(
+          `[crowded] GM screen references rule "${item.title}" — not found in SRD content, using first rule as fallback`
+        );
+      }
+      return { collection: 'rule', documentId: id ?? ruleIds[0]! };
+    }
+    // race
+    const id = raceIdByTitle.get(item.title);
+    if (!id) {
+      console.warn(
+        `[crowded] GM screen references race "${item.title}" — not found in SRD content, using first race as fallback`
+      );
+    }
+    return { collection: 'race', documentId: id ?? raceIds[0]! };
+  }
 
   const gmScreenDocs = GMSCREEN_LAYOUTS.map((layout) => ({
     _id: new ObjectId(),
@@ -998,28 +1035,34 @@ async function seed(ctx: FixtureContext): Promise<{ campaignIds: ObjectId[] }> {
     name: layout.name,
     tabOrder: layout.tabOrder,
     createdBy: gm._id,
-    windows: layout.windows.map((w, i) => ({
-      _id: new ObjectId(),
-      collection: collectionForKind[w.kind],
-      documentId: idLookup[w.kind][w.index],
-      state: 'open' as const,
-      x: w.x,
-      y: w.y,
-      width: 460,
-      height: 380,
-      zIndex: i + 1,
-    })),
+    windows: layout.windows.map((w, i) => {
+      const { collection, documentId } = resolveItem(w);
+      return {
+        _id: new ObjectId(),
+        collection,
+        documentId,
+        state: 'open' as const,
+        x: w.x,
+        y: w.y,
+        width: 460,
+        height: 380,
+        zIndex: i + 1,
+      };
+    }),
     stacks: layout.stacks.map((s) => ({
       _id: new ObjectId(),
       name: s.name,
       x: s.x,
       y: s.y,
-      items: s.items.map((item) => ({
-        _id: new ObjectId(),
-        collection: collectionForKind[item.kind],
-        documentId: idLookup[item.kind][item.index],
-        label: '',
-      })),
+      items: s.items.map((item) => {
+        const { collection, documentId } = resolveItem(item);
+        return {
+          _id: new ObjectId(),
+          collection,
+          documentId,
+          label: '',
+        };
+      }),
     })),
     createdAt: now,
     updatedAt: now,
