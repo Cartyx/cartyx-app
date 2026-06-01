@@ -11,6 +11,14 @@ updates:
       - 'dependencies'
     commit-message:
       prefix: 'chore(deps)'
+    # Cooldown — wait 10 days after a version is published before opening
+    # a PR for it. Defends against supply-chain attacks where a compromised
+    # maintainer publishes a malicious version: 10 days is well within the
+    # typical window for the npm community to spot and yank. The CI guard
+    # in `scripts/check-package-age.mjs` enforces the same threshold on
+    # manual installs.
+    cooldown:
+      default-days: 10
     ignore:
       # Only accept patch and minor updates for major version packages
       - dependency-name: 'mongoose'
