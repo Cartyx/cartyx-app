@@ -42,6 +42,17 @@ updates:
       - dependency-name: '@vitest/browser-playwright'
         versions: ['>=5.0.0']
 
+      # --- ESLint 10 boundary ---
+      # ESLint 10 introduces breaking rule-API changes and removes legacy
+      # (eslintrc) config support; typescript-eslint v9 pairs with it. Hold
+      # at ESLint 9 + typescript-eslint v8 until the upgrade is validated.
+      - dependency-name: 'eslint'
+        versions: ['>=10.0.0']
+      - dependency-name: '@typescript-eslint/eslint-plugin'
+        versions: ['>=9.0.0']
+      - dependency-name: '@typescript-eslint/parser'
+        versions: ['>=9.0.0']
+
   - package-ecosystem: 'github-actions'
     directory: '/'
     target-branch: 'dev'
