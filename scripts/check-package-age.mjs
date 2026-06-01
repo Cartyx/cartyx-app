@@ -115,7 +115,7 @@ async function pool(items, limit, fn) {
 }
 
 /**
- * Fetch the published-time map for a package. Returns null on any error so a
+ * Fetch the published-time map for a package. Returns `{ ok: false, error }` on any error so a
  * registry hiccup doesn't block the build — failing-open here is the right
  * trade because the dependabot cooldown layer already gives belt-and-braces.
  */
