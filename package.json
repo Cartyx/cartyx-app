@@ -64,7 +64,7 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "vite": "^7.3.1",
-    "zod": "^3.24.1"
+    "zod": "^4.4.3"
   },
   "overrides": {
     "h3-v2": "npm:h3@2.0.1-rc.19",
