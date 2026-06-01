@@ -79,7 +79,7 @@ async function loadLockfile() {
     if (!path || path === '') continue; // root package
     if (entry.link) continue; // workspace / link:
     const resolvedUrl = entry.resolved ?? '';
-    if (!resolvedUrl.startsWith('https://')) continue; // file:, git+, link:, no resolved
+    if (!/^https?:\/\//.test(resolvedUrl)) continue; // file:, git+, link:, no resolved
     if (!entry.version) continue;
     if (entry.version.startsWith('file:') || entry.version.startsWith('link:')) continue;
     const name = pathToPackageName(path);
