@@ -128,4 +128,8 @@ export const queryKeys = {
     list: (campaignId: string, sessionId: string) =>
       ['sessionEvents', 'list', campaignId, sessionId] as const,
   },
+  cleanup: {
+    all: ['cleanup'] as const,
+    orphanImages: (campaignId: string) => ['cleanup', 'orphanImages', campaignId] as const,
+  },
 };

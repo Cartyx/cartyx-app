@@ -42,6 +42,14 @@ vi.mock('~/components/mainview/NotesPanel', () => ({
   ),
 }));
 
+vi.mock('~/components/mainview/SettingsPanel', () => ({
+  SettingsPanel: () => (
+    <div data-testid="settings-panel">
+      <h2>Settings</h2>
+    </div>
+  ),
+}));
+
 vi.mock('~/hooks/useAuth', () => ({
   useAuth: vi.fn(() => ({ user: { id: 'u1', name: 'Test' } })),
 }));
@@ -137,7 +145,6 @@ describe('InspectorSidebar', () => {
       screen.getByTestId('settings-panel')
     );
     expect(screen.getByRole('heading', { name: 'Settings' })).toBeInTheDocument();
-    expect(screen.getByTestId('settings-panel')).toHaveTextContent('Coming Soon');
   });
 
   it('respects defaultTab prop', () => {
