@@ -48,6 +48,13 @@ if (!Number.isFinite(MIN_AGE_DAYS) || MIN_AGE_DAYS < 0) {
   process.exit(2);
 }
 
+if (!Number.isInteger(CONCURRENCY) || CONCURRENCY < 1) {
+  console.error(
+    `[check-package-age] Invalid AGE_CHECK_CONCURRENCY=${process.env.AGE_CHECK_CONCURRENCY} (expected a positive integer)`
+  );
+  process.exit(2);
+}
+
 const thresholdMs = Date.now() - MIN_AGE_DAYS * 24 * 60 * 60 * 1000;
 const threshold = new Date(thresholdMs).toISOString();
 
