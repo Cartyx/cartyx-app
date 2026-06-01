@@ -52,7 +52,7 @@
     "konva": "^10.2.5",
     "lucide-react": "^1.6.0",
     "mongoose": "^9.3.3",
-    "nitro": "^3.0.260311-beta",
+    "nitro": "^3.0.260522-beta",
     "partysocket": "^1.1.16",
     "posthog-js": "^1.363.3",
     "posthog-node": "^5.28.5",
