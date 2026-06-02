@@ -6,9 +6,7 @@ spell specifies the ability that the target uses for
 the save and what happens on a success or failure.
 Here’s how to calculate the DC for your spells:
 
-Spell save DC = 8 + your spellcasting ability modifier
-
-- your Proficiency Bonus
+Spell save DC = 8 + your spellcasting ability modifier + your Proficiency Bonus
 
 ---
 

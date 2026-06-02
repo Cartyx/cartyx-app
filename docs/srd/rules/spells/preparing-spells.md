@@ -5,9 +5,6 @@ spellcasting feature specifies when you can change
 the list and the number of spells you can change, as
 summarized in the Spell Preparation by Class table.
 
-Spell Preparation by Class
-Class
-
 ---
 
 _Adapted from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of
