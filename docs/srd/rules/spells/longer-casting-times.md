@@ -4,6 +4,9 @@ Certain spells—including a spell cast as a Ritual—require more time to cast:
 hours. While you cast a spell with a casting time of
 1 minute or more, you must take the Magic action
 on each of your turns, and you must maintain Concentration (see “Rules Glossary”) while you do so. If
+your Concentration is broken, the spell fails, but you
+don’t expend a spell slot. To cast the spell again, you
+must start over.
 
 ---
 

@@ -24,3 +24,8 @@ Starting at character level 5, you can change your size to Large as a Bonus Acti
 ## Powerful Build
 
 You have Advantage on any ability check you make to end the Grappled condition. You also count as one size larger when determining your carrying capacity.
+
+---
+
+_Adapted from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of
+the Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._

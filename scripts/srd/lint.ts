@@ -71,9 +71,12 @@ async function runCspell(files: string[]): Promise<{ issueCount: number }> {
       { stdio: 'inherit' }
     );
     proc.on('exit', (code) => {
-      // cspell exits 1 if any issues found, 0 if clean. Non-fatal here —
-      // we collect, surface, and return.
-      resolve({ issueCount: code === 0 ? 0 : 1 });
+      // cspell exits 0 when clean, 1 when issues were found, and >1 (or a
+      // signal kill, code null) on execution/config errors — those must fail
+      // the run loudly rather than be downcast to a generic issue.
+      if (code === 0) resolve({ issueCount: 0 });
+      else if (code === 1) resolve({ issueCount: 1 });
+      else reject(new Error(`cspell failed to run (exit code ${code ?? 'null'})`));
     });
     proc.on('error', reject);
   });
@@ -172,7 +175,10 @@ async function runLanguageTool(files: string[]): Promise<{ issueCount: number }>
         }
       }
     } catch (e) {
+      // A failed LT request means the file was NOT checked — count it as an
+      // issue so the run can't silently exit 0 on network/rate-limit errors.
       console.log(`error: ${e instanceof Error ? e.message : e}`);
+      issueCount++;
     }
     // Stay under the anonymous rate limit
     if (files.indexOf(file) < files.length - 1) {

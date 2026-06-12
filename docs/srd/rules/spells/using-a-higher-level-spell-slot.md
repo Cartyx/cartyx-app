@@ -11,18 +11,6 @@ Some spells, such as Magic Missile and Cure
 Wounds, have more powerful effects when cast at a
 higher level, as detailed in a spell’s description.
 
-your Concentration is broken, the spell fails, but you
-don’t expend a spell slot. To cast the spell again, you
-must start over.
-
-Each spell belongs to a school of magic. The schools
-are listed in the Schools of Magic table. These categories help describe spells but have no rules of their
-own, although some other rules refer to them.
-
-A spell’s range indicates how far from the spellcaster the spell’s effect can originate, and the spell’s
-description specifies which part of the effect is limited by the range.
-A range usually takes one of the following forms:
-
 ---
 
 _Adapted from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of

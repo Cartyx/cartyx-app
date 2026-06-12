@@ -37,3 +37,8 @@ You have proficiency in the Insight, Perception, or Survival skill.
 ## Trance
 
 You don't need to sleep, and magic can't put you to sleep. You can finish a Long Rest in 4 hours if you spend those hours in a trancelike meditation, during which you retain consciousness.
+
+---
+
+_Adapted from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of
+the Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._

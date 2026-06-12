@@ -3,11 +3,11 @@
  * Extracts the rules sections we care about from the SRD 5.2.1 PDF into
  * curated Markdown files under `docs/srd/rules/`.
  *
- * Sections (with page ranges read from the SRD TOC):
- *   combat        pages 13–15   (Order of Combat, Movement, Attacks, etc.)
+ * Sections (page ranges mirror PAGED_SECTIONS below):
+ *   exploration   pages 11–12   (Vision, Light, Hiding, Hazards, Travel)
+ *   combat        pages 13–16   (stops at "Damage and Healing" on p.16)
  *   damage        pages 16–18   (Damage & Healing)
- *   exploration   pages 11–13   (Vision, Light, Hiding, Hazards, Travel)
- *   spellcasting  pages 104–107 (Casting Spells, Components, etc.)
+ *   spells        pages 104–106 (Casting Spells, Components, etc.)
  *   conditions    full-doc      (entries tagged `Name [Condition]`)
  *
  * Usage:
@@ -26,7 +26,7 @@ import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'n
 import { dirname, join, resolve } from 'node:path';
 
 const REPO_ROOT = process.cwd();
-const PDF = resolve(REPO_ROOT, process.env.PDF ?? 'docs/sdr-5.2.1');
+const PDF = resolve(REPO_ROOT, process.env.PDF ?? 'docs/srd-5.2.1.pdf');
 const OUT_ROOT = resolve(REPO_ROOT, 'docs/srd/rules');
 
 interface PagedSection {
@@ -529,6 +529,65 @@ function slugify(title: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+// ---------------------------------------------------------------------------
+// Page-105 reading-order repair (spells section)
+// ---------------------------------------------------------------------------
+// p.105's two-column layout defeats pdftotext's reading-order inference: the
+// page is emitted with the top paragraphs of BOTH columns first, so three
+// body paragraphs appear before their own headings and get swept into the
+// subsection open at the page break ("Using a Higher-Level Spell Slot").
+// The SRD 5.2.1 PDF is frozen, so we route each displaced paragraph back to
+// its proper subsection, keyed by its stable opening words:
+//   - "your Concentration is broken…"   → continues "Longer Casting Times"
+//     (whose body otherwise ends mid-sentence at "…while you do so. If")
+//   - "Each spell belongs to a school…" → "School of Magic" (its heading is
+//     dropped by the table-caption filter; recreated here together with the
+//     Schools of Magic table, hand-transcribed because the linearised table
+//     rows are unrecoverable noise)
+//   - "A spell's range indicates…"      → missing intro of "Range"
+const SCHOOLS_OF_MAGIC_TABLE = [
+  '| School | Typical Effects |',
+  '| ------ | --------------- |',
+  '| Abjuration | Prevents or reverses harmful effects |',
+  '| Conjuration | Transports creatures or objects |',
+  '| Divination | Reveals information |',
+  '| Enchantment | Influences minds |',
+  '| Evocation | Channels energy to create effects that are often destructive |',
+  '| Illusion | Deceives the mind or senses |',
+  '| Necromancy | Manipulates life and death |',
+  '| Transmutation | Transforms creatures or objects |',
+].join('\n');
+
+function repairSpellsPage105(subsections: Subsection[]): Subsection[] {
+  const uhlss = subsections.find((s) => s.heading === 'Using a Higher-Level Spell Slot');
+  if (!uhlss) return subsections;
+  const longer = subsections.find((s) => s.heading === 'Longer Casting Times');
+  const range = subsections.find((s) => s.heading === 'Range');
+
+  const kept: string[] = [];
+  let schoolIntro: string | null = null;
+  for (const p of uhlss.content.split(/\n{2,}/)) {
+    if (p.startsWith('your Concentration is broken')) {
+      if (longer) longer.content += '\n' + p;
+    } else if (p.startsWith('Each spell belongs to a school of magic')) {
+      schoolIntro = p;
+    } else if (p.startsWith('A spell’s range indicates')) {
+      if (range) range.content = `${p}\n\n${range.content}`;
+    } else {
+      kept.push(p);
+    }
+  }
+  uhlss.content = kept.join('\n\n');
+
+  if (schoolIntro) {
+    subsections.splice(subsections.indexOf(uhlss) + 1, 0, {
+      heading: 'School of Magic',
+      content: `${schoolIntro}\n\n${SCHOOLS_OF_MAGIC_TABLE}`,
+    });
+  }
+  return subsections;
+}
+
 function writeMd(path: string, title: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `# ${title}\n\n${content}\n${ATTRIBUTION}`, 'utf-8');
@@ -599,7 +658,8 @@ function main(): void {
       continue;
     }
     const raw = extractPages(section.startPage, section.endPage);
-    const subsections = parseSection(raw, section.title, section.stopAtTitle);
+    let subsections = parseSection(raw, section.title, section.stopAtTitle);
+    if (section.slug === 'spells') subsections = repairSpellsPage105(subsections);
     writePagedSection(section, subsections);
   }
 }

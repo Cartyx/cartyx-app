@@ -29,3 +29,8 @@ Intelligence, Wisdom, or Charisma is your spellcasting ability for the spells yo
 ## Otherworldly Presence
 
 You know the _Thaumaturgy_ cantrip. When you cast it with this trait, the spell uses the same spellcasting ability you use for your Fiendish Legacy trait.
+
+---
+
+_Adapted from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of
+the Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._

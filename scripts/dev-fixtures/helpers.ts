@@ -424,10 +424,15 @@ export async function sweepOrphanR2Keys(conn: Connection): Promise<OrphanSweepRe
   // List R2 objects under each tracked prefix.
   let inspected = 0;
   const orphanKeys: string[] = [];
+  // Runaway guard only — at 1000 keys/page this is ~200k keys per prefix,
+  // far beyond anything a dev bucket should hold. If we ever hit it, warn
+  // loudly: keys past the cap were not inspected, so orphans may remain.
+  const MAX_LIST_PAGES = 200;
   for (const prefix of TRACKED_R2_PREFIXES) {
     let continuationToken: string | undefined;
     let pages = 0;
-    while (pages++ < 20) {
+    let truncated = false;
+    while (pages++ < MAX_LIST_PAGES) {
       const resp = await r2.client.send(
         new ListObjectsV2Command({
           Bucket: r2.bucket,
@@ -440,8 +445,15 @@ export async function sweepOrphanR2Keys(conn: Connection): Promise<OrphanSweepRe
         inspected++;
         if (!inUse.has(obj.Key)) orphanKeys.push(obj.Key);
       }
-      if (!resp.IsTruncated) break;
+      truncated = resp.IsTruncated ?? false;
+      if (!truncated) break;
       continuationToken = resp.NextContinuationToken;
+    }
+    if (truncated) {
+      console.warn(
+        `[sweep-r2] WARNING: prefix "${prefix}" still truncated after ${MAX_LIST_PAGES} pages — ` +
+          'remaining keys were NOT inspected and orphans may have been missed.'
+      );
     }
   }
 

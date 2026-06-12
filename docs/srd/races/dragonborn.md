@@ -42,3 +42,8 @@ You have Darkvision with a range of 60 feet.
 ## Draconic Flight
 
 When you reach character level 5, you can channel draconic magic to give yourself temporary flight. As a Bonus Action, you sprout spectral wings on your back that last for 10 minutes or until you retract the wings (no action required) or have the Incapacitated condition. During that time, you have a Fly Speed equal to your Speed. Your wings appear to be made of the same energy as your Breath Weapon. Once you use this trait, you can't use it again until you finish a Long Rest.
+
+---
+
+_Adapted from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of
+the Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._

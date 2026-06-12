@@ -59,4 +59,4 @@ test-results/
 
 # Source content for fixture extraction — not committed; download locally.
 # Used by scripts/srd/extract-rules.ts to populate docs/srd/rules/.
-docs/sdr-5.2.1
+docs/srd-5.2.1.pdf

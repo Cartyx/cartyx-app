@@ -19,3 +19,8 @@ You have Darkvision with a range of 120 feet.
 ## Relentless Endurance
 
 When you are reduced to 0 Hit Points but not killed outright, you can drop to 1 Hit Point instead. Once you use this trait, you can't do so again until you finish a Long Rest.
+
+---
+
+_Adapted from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of
+the Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._

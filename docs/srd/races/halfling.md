@@ -21,3 +21,8 @@ When you roll a 1 on the d20 of a D20 Test, you can reroll the die, and you must
 ## Naturally Stealthy
 
 You can take the Hide action even when you are obscured only by a creature that is at least one size larger than you.
+
+---
+
+_Adapted from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of
+the Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._
