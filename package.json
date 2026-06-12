@@ -70,12 +70,12 @@
     "zod": "^3.24.1"
   },
   "overrides": {
+    "esbuild": "^0.28.1",
     "h3-v2": "npm:h3@2.0.1-rc.19",
     "partykit": {
       "miniflare": {
         "undici": "^6.24.0"
-      },
-      "esbuild": "^0.25.0"
+      }
     }
   },
   "devDependencies": {
