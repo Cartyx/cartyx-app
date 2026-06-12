@@ -545,17 +545,19 @@ function slugify(title: string): string {
 //     Schools of Magic table, hand-transcribed because the linearised table
 //     rows are unrecoverable noise)
 //   - "A spell's range indicates…"      → missing intro of "Range"
+// Column widths match prettier's markdown table formatting so the generated
+// file is stable under the pre-commit format hook.
 const SCHOOLS_OF_MAGIC_TABLE = [
-  '| School | Typical Effects |',
-  '| ------ | --------------- |',
-  '| Abjuration | Prevents or reverses harmful effects |',
-  '| Conjuration | Transports creatures or objects |',
-  '| Divination | Reveals information |',
-  '| Enchantment | Influences minds |',
-  '| Evocation | Channels energy to create effects that are often destructive |',
-  '| Illusion | Deceives the mind or senses |',
-  '| Necromancy | Manipulates life and death |',
-  '| Transmutation | Transforms creatures or objects |',
+  '| School        | Typical Effects                                              |',
+  '| ------------- | ------------------------------------------------------------ |',
+  '| Abjuration    | Prevents or reverses harmful effects                         |',
+  '| Conjuration   | Transports creatures or objects                              |',
+  '| Divination    | Reveals information                                          |',
+  '| Enchantment   | Influences minds                                             |',
+  '| Evocation     | Channels energy to create effects that are often destructive |',
+  '| Illusion      | Deceives the mind or senses                                  |',
+  '| Necromancy    | Manipulates life and death                                   |',
+  '| Transmutation | Transforms creatures or objects                              |',
 ].join('\n');
 
 function repairSpellsPage105(subsections: Subsection[]): Subsection[] {
