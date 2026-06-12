@@ -1,7 +1,6 @@
-# Any
+# Fire Resistance
 
-Most spellcasting monsters don’t change their lists
-of prepared spells, but the GM is free to alter them.
+Anything underwater has Resistance to Fire damage (explained in “Damage and Healing”).
 
 ---
 

@@ -126,6 +126,10 @@ async function checkOneFile(filePath: string): Promise<LtMatch[]> {
     'ENGLISH_WORD_REPEAT_BEGINNING_RULE', // parallel "You can…/You have…" is intentional
     'COMMA_PARENTHESIS_WHITESPACE', // false positives on edge-case markdown
     'DAMAGE_OF_TO', // "1d10 damage of the type X" is standard D&D phrasing
+    // SRD author style: WotC's published text omits these optional commas.
+    // Verified against the source PDF — these are not extraction artefacts.
+    'COMMA_COMPOUND_SENTENCE', // missing comma before "or" in short compounds
+    'SENT_START_CONJUNCTIVE_LINKING_ADVERB_COMMA', // "However you're moving…"
   ].join(',');
   const params = new URLSearchParams({
     text: stripped,

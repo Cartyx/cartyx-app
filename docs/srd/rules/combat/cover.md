@@ -9,8 +9,6 @@ applies; the degrees aren’t added together. For example, if a target is behind
 Cover and a tree trunk that gives Three-Quarters
 Cover, the target has Three-Quarters Cover.
 
-Cover
-
 ---
 
 _Adapted from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of

@@ -11,6 +11,12 @@ of mounts for sale). “Gameplay Toolbox” has rules
 that affect which pace you can choose in certain
 types of terrain.
 
+Each travel pace has a game effect, as defined below.
+Fast. Traveling at a Fast pace imposes Disadvantage on a traveler’s Wisdom (Perception or Survival) and Dexterity (Stealth) checks.
+Normal. Traveling at a Normal pace imposes Disadvantage on Dexterity (Stealth) checks.
+Slow. Traveling at a Slow pace grants Advantage
+on Wisdom (Perception or Survival) checks.
+
 ---
 
 _Adapted from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of

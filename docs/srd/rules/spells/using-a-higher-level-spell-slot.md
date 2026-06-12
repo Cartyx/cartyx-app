@@ -23,13 +23,6 @@ A spell’s range indicates how far from the spellcaster the spell’s effect ca
 description specifies which part of the effect is limited by the range.
 A range usually takes one of the following forms:
 
-School of Magic
-
-Schools of Magic
-School
-
-Typical Effects
-
 ---
 
 _Adapted from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of
