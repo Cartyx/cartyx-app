@@ -1,0 +1,147 @@
+# D&D-specific terminology — additions to the standard spell-check dictionary
+# so cspell doesn't false-flag proper nouns, ability scores, condition names,
+# and other game-system jargon when checking extracted SRD content.
+
+# --- Races / species ---
+Dragonborn
+Drow
+Dwarven
+Dwarves
+Elven
+Elves
+Halfling
+Halflings
+Goliath
+Gnome
+Gnomes
+Tiefling
+Tieflings
+Orcish
+humanoid
+humanoids
+
+# --- Ability scores ---
+Dexterity
+Wisdom
+Charisma
+Constitution
+Intelligence
+
+# --- Skills ---
+Acrobatics
+Athletics
+Arcana
+Deception
+Insight
+Intimidation
+Investigation
+Perception
+Persuasion
+Sleight
+Stealth
+Survival
+
+# --- Combat & action terminology ---
+unarmed
+unarmored
+bludgeoning
+nonmagical
+quarterstaff
+quarterstaves
+spellcasting
+spellcaster
+spellcasters
+multiclass
+multiclassing
+multiattack
+reactionable
+backstab
+disengage
+grapple
+grappler
+grappled
+prone
+incapacitated
+unconscious
+restrained
+petrified
+exhaustion
+darkvision
+truesight
+blindsight
+tremorsense
+
+# --- Conditions ---
+Blinded
+Charmed
+Deafened
+Exhaustion
+Frightened
+Grappled
+Incapacitated
+Invisible
+Paralyzed
+Petrified
+Poisoned
+Prone
+Restrained
+Stunned
+Unconscious
+
+# --- Magic / spell categories ---
+abjuration
+conjuration
+divination
+enchantment
+evocation
+illusion
+necromancy
+transmutation
+cantrips
+cantrip
+ritualistic
+somatic
+verbalspell
+verbalcomponent
+concentration
+
+# --- Saving throws & rolls ---
+disadvantage
+proficiency
+recharge
+unconcentrated
+
+# --- Specific named entities the SRD references ---
+Wizards
+Coast
+Fey
+feywild
+Mordenkainen
+Tasha
+Volo
+Xanathar
+
+# --- Common gameplay nouns ---
+roleplaying
+worldbuilding
+backstory
+backstories
+metagaming
+hitpoints
+hitdie
+hitdice
+classfeature
+subclass
+subclasses
+overcorrected
+
+# --- SRD-specific words ---
+SRD
+OGL
+
+# --- Misc fantasy vocabulary frequent in SRD prose ---
+otherworldly
+underdark
+cliffside
+mountainfolk
+shorthand
