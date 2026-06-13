@@ -132,4 +132,10 @@ export const queryKeys = {
     all: ['cleanup'] as const,
     orphanImages: (campaignId: string) => ['cleanup', 'orphanImages', campaignId] as const,
   },
+  maps: {
+    all: ['maps'] as const,
+    list: (campaignId: string) => ['maps', 'list', campaignId] as const,
+    detail: (campaignId: string, mapId: string) => ['maps', 'detail', campaignId, mapId] as const,
+    active: (campaignId: string) => ['maps', 'active', campaignId] as const,
+  },
 };

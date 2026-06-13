@@ -37,6 +37,14 @@ vi.mock('~/components/wiki/locations/LocationsPanel', () => ({
   ),
 }));
 
+vi.mock('~/components/wiki/maps/MapsPanel', () => ({
+  MapsPanel: ({ onBack }: { onBack: () => void }) => (
+    <div data-testid="maps-panel">
+      <button onClick={onBack}>Back</button>
+    </div>
+  ),
+}));
+
 describe('WikiPanel', () => {
   it('renders the Characters category button', () => {
     render(<WikiPanel />);
@@ -44,15 +52,16 @@ describe('WikiPanel', () => {
     expect(screen.getByRole('button', { name: 'Characters' })).toBeInTheDocument();
   });
 
-  it('shows Characters, Players, Races, Rules, and Locations categories', () => {
+  it('shows Characters, Players, Races, Rules, Locations, and Maps categories', () => {
     render(<WikiPanel />);
 
-    expect(screen.getAllByRole('button')).toHaveLength(5);
+    expect(screen.getAllByRole('button')).toHaveLength(6);
     expect(screen.getByRole('button', { name: 'Characters' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Players' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Races' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Rules' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Locations' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Maps' })).toBeInTheDocument();
   });
 
   it('clicking Characters shows CharactersPanel', async () => {

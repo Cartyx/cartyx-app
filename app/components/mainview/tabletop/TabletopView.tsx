@@ -9,6 +9,11 @@ import {
 } from '~/hooks/useTabletopScreens';
 import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
 import { useTabletopParty } from '~/hooks/useTabletopParty';
+import { useActiveMap, useMapsMutations } from '~/hooks/useMaps';
+import { useTabletopMapParty } from '~/hooks/useTabletopMapParty';
+import { ActiveMapStage } from './ActiveMapStage';
+import { useQueryClient } from '@tanstack/react-query';
+import { queryKeys } from '~/utils/queryKeys';
 import { TabletopTabBar } from './TabletopTabBar';
 import { TabletopCanvas } from './TabletopCanvas';
 import {
@@ -79,6 +84,28 @@ export function TabletopView({
   const { screens, isLoading } = useTabletopScreenList(campaignId);
   const mutations = useTabletopMutations(campaignId);
   const { playerState, updateState } = useTabletopPlayerState(campaignId);
+  const { data: activeMap } = useActiveMap(campaignId);
+  const mapMutations = useMapsMutations(campaignId);
+  const queryClient = useQueryClient();
+
+  // Map party — invalidate `getActiveMap` whenever someone else changes it.
+  // `useMapsMutations.setActiveMap` writes to the DB; the GM client also
+  // broadcasts so other connected clients refetch without polling.
+  const { send: sendMapMessage } = useTabletopMapParty(campaignId, getToken, (msg) => {
+    if (msg.type === 'map:active-changed') {
+      queryClient.invalidateQueries({ queryKey: queryKeys.maps.active(campaignId) });
+    }
+  });
+
+  // When the GM-only setActiveMap mutation succeeds locally, broadcast it.
+  // (The mutation already invalidates the query on the local client.)
+  useEffect(() => {
+    if (mapMutations.setActiveMap.isSuccess) {
+      const variables = mapMutations.setActiveMap.variables;
+      sendMapMessage({ type: 'map:active-changed', mapId: variables ?? null });
+      mapMutations.setActiveMap.reset();
+    }
+  }, [mapMutations.setActiveMap, sendMapMessage]);
 
   const [activeScreenId, setActiveScreenId] = useState<string | null>(null);
   const [badgeScreenIds, setBadgeScreenIds] = useState<Set<string>>(new Set());
@@ -534,7 +561,7 @@ export function TabletopView({
           isDragOver ? 'ring-2 ring-inset ring-blue-500/40 bg-blue-500/[0.03]' : '',
         ].join(' ')}
       >
-        <TabletopCanvas screen={activeScreen} />
+        {activeMap ? <ActiveMapStage map={activeMap} /> : <TabletopCanvas screen={activeScreen} />}
 
         <FloatingWindowManager windows={localWindows} onWindowsChange={handleWindowsChange} />
       </div>
