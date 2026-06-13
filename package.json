@@ -64,7 +64,7 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "vite": "^7.3.1",
-    "zod": "^3.24.1"
+    "zod": "^4.4.3"
   },
   "overrides": {
     "h3-v2": "npm:h3@2.0.1-rc.19",
@@ -113,7 +113,7 @@
     "storybook": "^10.3.5",
     "tailwindcss": "^4.2.2",
     "tsx": "^4.21.0",
-    "typescript": "^5.8.2",
+    "typescript": "^6.0.3",
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.5",
     "y-partyserver": "^2.2.0"

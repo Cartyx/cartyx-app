@@ -21,7 +21,7 @@ export const saveMessageSchema = z.object({
       title: z.string(),
       source: z.string(),
       description: z.string(),
-      properties: z.record(z.string()),
+      properties: z.record(z.string(), z.string()),
     })
     .optional(),
   timestamp: z.number(),

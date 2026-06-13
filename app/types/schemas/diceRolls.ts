@@ -34,7 +34,7 @@ export const saveDiceRollSchema = z.object({
       formula: z.string().optional().default(''),
     })
   ),
-  totalDamages: z.record(z.number()),
+  totalDamages: z.record(z.string(), z.number()),
   rollInfo: z.array(z.tuple([z.string(), z.string()])),
   description: z.string().optional().default(''),
   timestamp: z.number(),
