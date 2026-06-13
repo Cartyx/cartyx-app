@@ -1,0 +1,35 @@
+$schema: https://raw.githubusercontent.com/streetsidesoftware/cspell/main/cspell.schema.json
+version: '0.2'
+
+# Spell-check config scoped to SRD-extracted content. The main app uses ESLint
+# for code lint and prettier for formatting — this is purely for checking the
+# extracted SRD Markdown so we can flag OCR-style typos before using it as
+# test data.
+
+language: en-US
+
+# What to scan
+files:
+  - 'docs/srd/**/*.md'
+
+# Standard dictionaries + our D&D-specific terms
+dictionaries:
+  - en_US
+  - software-terms
+  - dnd-terms
+
+dictionaryDefinitions:
+  - name: dnd-terms
+    path: ./dictionaries/dnd-terms.txt
+    addWords: true
+
+# Don't flag Markdown syntax
+ignoreRegExpList:
+  - '`[^`]+`' # inline code
+  - '```[\s\S]*?```' # fenced code blocks
+  - '\[.*?\]\(.*?\)' # markdown links
+  - '!\[.*?\]\(.*?\)' # markdown images
+
+# Don't flag standard things that are usually false positives in fantasy text
+allowCompoundWords: true
+caseSensitive: false
