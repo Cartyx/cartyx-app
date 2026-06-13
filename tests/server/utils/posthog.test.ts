@@ -2,12 +2,12 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The posthog.ts module statically imports `posthog-node`.
 // We mock `posthog-node` here so that all imports of `~/server/utils/posthog` use the mocked client.
-const mockCapture = vi.fn();
+const mockCapture = vi.fn().mockResolvedValue(undefined);
 const mockShutdown = vi.fn().mockResolvedValue(undefined);
 
 vi.mock('posthog-node', () => ({
   PostHog: vi.fn(function (this: Record<string, unknown>) {
-    this.capture = mockCapture;
+    this.captureImmediate = mockCapture;
     this.shutdown = mockShutdown;
   }),
 }));
@@ -29,7 +29,7 @@ describe('server posthog utilities', () => {
       // Re-import after setting env so lazy init picks it up
       const { serverCaptureException } = await import('~/server/utils/posthog');
       const err = new Error('test error');
-      serverCaptureException(err, 'user_123', { action: 'test' });
+      await serverCaptureException(err, 'user_123', { action: 'test' });
 
       expect(mockCapture).toHaveBeenCalledWith({
         distinctId: 'user_123',
@@ -46,7 +46,7 @@ describe('server posthog utilities', () => {
     it('uses "server" as default distinctId', async () => {
       process.env.POSTHOG_KEY = 'test-key';
       const { serverCaptureException } = await import('~/server/utils/posthog');
-      serverCaptureException(new Error('oops'));
+      await serverCaptureException(new Error('oops'));
 
       expect(mockCapture).toHaveBeenCalledWith(expect.objectContaining({ distinctId: 'server' }));
     });
@@ -54,7 +54,7 @@ describe('server posthog utilities', () => {
     it('converts non-Error values to Error', async () => {
       process.env.POSTHOG_KEY = 'test-key';
       const { serverCaptureException } = await import('~/server/utils/posthog');
-      serverCaptureException('string error');
+      await serverCaptureException('string error');
 
       expect(mockCapture).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -70,7 +70,7 @@ describe('server posthog utilities', () => {
     it('captures a custom event', async () => {
       process.env.POSTHOG_KEY = 'test-key';
       const { serverCaptureEvent } = await import('~/server/utils/posthog');
-      serverCaptureEvent('user_123', 'campaign_created', { name: 'Test' });
+      await serverCaptureEvent('user_123', 'campaign_created', { name: 'Test' });
 
       expect(mockCapture).toHaveBeenCalledWith({
         distinctId: 'user_123',
@@ -84,7 +84,7 @@ describe('server posthog utilities', () => {
     it('does nothing when POSTHOG_KEY is not set', async () => {
       delete process.env.POSTHOG_KEY;
       const { serverCaptureException } = await import('~/server/utils/posthog');
-      serverCaptureException(new Error('should be ignored'));
+      await serverCaptureException(new Error('should be ignored'));
 
       expect(mockCapture).not.toHaveBeenCalled();
     });
@@ -95,7 +95,7 @@ describe('server posthog utilities', () => {
       process.env.POSTHOG_KEY = 'test-key';
       const { serverCaptureException, shutdownPostHog } = await import('~/server/utils/posthog');
       // Initialize the client first
-      serverCaptureException(new Error('init'));
+      await serverCaptureException(new Error('init'));
       await shutdownPostHog();
 
       expect(mockShutdown).toHaveBeenCalled();
