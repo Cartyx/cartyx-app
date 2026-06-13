@@ -56,9 +56,7 @@ export const openWindowSchema = z.object({
   screenId: z.string().trim().min(1),
   campaignId: z.string().trim().min(1),
   collection: z.enum(SUPPORTED_COLLECTIONS, {
-    errorMap: () => ({
-      message: `Unsupported collection. Must be one of: ${SUPPORTED_COLLECTIONS.join(', ')}`,
-    }),
+    error: () => `Unsupported collection. Must be one of: ${SUPPORTED_COLLECTIONS.join(', ')}`,
   }),
   documentId: z.string().trim().min(1),
   x: z.number().nullable().optional(),
@@ -130,9 +128,7 @@ export const addStackItemSchema = z.object({
   campaignId: z.string().trim().min(1),
   stackId: z.string().trim().min(1),
   collection: z.enum(SUPPORTED_COLLECTIONS, {
-    errorMap: () => ({
-      message: `Unsupported collection. Must be one of: ${SUPPORTED_COLLECTIONS.join(', ')}`,
-    }),
+    error: () => `Unsupported collection. Must be one of: ${SUPPORTED_COLLECTIONS.join(', ')}`,
   }),
   documentId: z.string().trim().min(1),
   label: z.string().trim().default(''),

@@ -61,6 +61,20 @@ updates:
       - dependency-name: '@typescript-eslint/parser'
         versions: ['>=9.0.0']
 
+      # --- zod 5 boundary ---
+      # zod 5 will be the next breaking release after 4. The 3→4 migration
+      # (PR #439) renamed errorMap → error and required explicit key schemas
+      # on z.record(); hold at v4 until we're ready to vet the next break.
+      - dependency-name: 'zod'
+        versions: ['>=5.0.0']
+
+      # --- TypeScript 7 boundary ---
+      # TypeScript follows a roughly 6-month major cadence and routinely
+      # ships breaking type-checker changes. Hold at v6 to keep upgrades
+      # an intentional, manually-validated step rather than a surprise PR.
+      - dependency-name: 'typescript'
+        versions: ['>=7.0.0']
+
   - package-ecosystem: 'github-actions'
     directory: '/'
     target-branch: 'dev'

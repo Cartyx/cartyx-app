@@ -4,7 +4,7 @@
   "description": "Cartyx — D&D Campaign Management Platform",
   "type": "module",
   "engines": {
-    "node": "^20.20.0 || >=22.22.0"
+    "node": ">=22.22.0"
   },
   "scripts": {
     "prepare": "node -e \"const fs=require('fs'); if (fs.existsSync('.git')) require('child_process').execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['lefthook', 'install'], { stdio: 'inherit' });\"",
@@ -29,7 +29,10 @@
     "db:verify": "tsx scripts/mongo-admin.ts verify",
     "db:sync": "tsx scripts/mongo-admin.ts sync",
     "dev:clear": "node scripts/run-python.cjs dev_clear.py",
-    "dev:seed": "node scripts/run-python.cjs dev_seed.py"
+    "dev:seed": "node scripts/run-python.cjs dev_seed.py",
+    "fixture": "tsx scripts/dev-fixtures/cli.ts",
+    "srd:lint": "tsx scripts/srd/lint.ts",
+    "srd:extract": "tsx scripts/srd/extract-rules.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1038.0",
@@ -64,15 +67,15 @@
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
     "vite": "^7.3.1",
-    "zod": "^3.24.1"
+    "zod": "^4.4.3"
   },
   "overrides": {
+    "esbuild": "^0.28.1",
     "h3-v2": "npm:h3@2.0.1-rc.19",
     "partykit": {
       "miniflare": {
         "undici": "^6.24.0"
-      },
-      "esbuild": "^0.25.0"
+      }
     }
   },
   "devDependencies": {
@@ -89,7 +92,7 @@
     "@testing-library/jest-dom": "^6.6.3",
     "@testing-library/react": "^16.3.0",
     "@testing-library/user-event": "^14.5.2",
-    "@types/node": "^22.13.10",
+    "@types/node": "^25.9.1",
     "@types/react": "^19.0.10",
     "@types/react-dom": "^19.0.4",
     "@typescript-eslint/eslint-plugin": "^8.58.0",
@@ -98,6 +101,7 @@
     "@vitest/browser-playwright": "^4.1.5",
     "@vitest/coverage-v8": "^4.1.5",
     "babel-plugin-react-compiler": "^1.0.0",
+    "cspell": "^10.0.1",
     "eslint": "^9.20.0",
     "eslint-plugin-jsx-a11y": "^6.10.2",
     "eslint-plugin-react": "^7.37.4",
@@ -113,7 +117,7 @@
     "storybook": "^10.3.5",
     "tailwindcss": "^4.2.2",
     "tsx": "^4.21.0",
-    "typescript": "^5.8.2",
+    "typescript": "^6.0.3",
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.5",
     "y-partyserver": "^2.2.0"

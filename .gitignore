@@ -56,3 +56,7 @@ scripts/__pycache__
 e2e/.auth/
 playwright-report/
 test-results/
+
+# Source content for fixture extraction — not committed; download locally.
+# Used by scripts/srd/extract-rules.ts to populate docs/srd/rules/.
+docs/srd-5.2.1.pdf
