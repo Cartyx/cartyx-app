@@ -114,7 +114,7 @@
     "partykit": "^0.0.115",
     "playwright": "^1.59.1",
     "prettier": "^3.5.3",
-    "storybook": "^10.3.5",
+    "storybook": "^10.4.2",
     "tailwindcss": "^4.2.2",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
