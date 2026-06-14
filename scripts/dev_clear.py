@@ -59,6 +59,17 @@ COLLECTIONS_TO_CLEAR = [
     "rules",
     "gmscreens",
     "tags",
+    # Campaign-scoped entities added since this script's first version.
+    # Keep this in sync with `CAMPAIGN_SCOPED_COLLECTIONS` in
+    # `scripts/dev-fixtures/helpers.ts`.
+    "location",
+    "locationtype",
+    "tabletopscreen",
+    "tabletopplayerstate",
+    "sessionevent",
+    "map",
+    "mapToken",
+    "monsters",
 ]
 
 

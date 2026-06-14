@@ -17,16 +17,140 @@ Safety: refuses to run if NODE_ENV is "production" or MONGODB_URI contains "prod
 """
 
 import os
+import random
 import re
 import secrets
 import sys
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
+from urllib.parse import quote
 
 from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.errors import ConfigurationError
+
+# Sibling modules for reference data — kept out of this file to keep it
+# focused on insertion logic.
+from seed_player_data import PLAYER_EMAILS, PLAYER_IMAGES, random_pc
+from seed_monster_data import build_monster_docs
+
+
+def import_srd_races(db, *, campaign_id, gm_id, now) -> int:
+    """Insert every docs/srd/races/*.md as a Race document for the campaign."""
+    races_dir = REPO_ROOT / "docs" / "srd" / "races"
+    if not races_dir.exists():
+        return 0
+    docs = []
+    for md in sorted(races_dir.glob("*.md")):
+        content = md.read_text(encoding="utf-8")
+        title = md.stem.replace("-", " ").title()
+        docs.append({
+            "title": title,
+            "content": content,
+            "tags": ["srd"],
+            "campaignId": campaign_id,
+            "createdBy": gm_id,
+            "createdAt": now,
+            "updatedAt": now,
+        })
+    if docs:
+        db.races.insert_many(docs)
+    return len(docs)
+
+
+def import_srd_rules(db, *, campaign_id, gm_id, now) -> int:
+    """Insert every docs/srd/rules/**/*.md as a Rule document for the campaign."""
+    rules_root = REPO_ROOT / "docs" / "srd" / "rules"
+    if not rules_root.exists():
+        return 0
+    docs = []
+    for md in sorted(rules_root.rglob("*.md")):
+        content = md.read_text(encoding="utf-8")
+        section = md.parent.name  # e.g. "combat", "spells"
+        title = md.stem.replace("-", " ").title()
+        docs.append({
+            "title": title,
+            "content": content,
+            "tags": ["srd", section],
+            "isPublic": True,
+            "campaignId": campaign_id,
+            "createdBy": gm_id,
+            "createdAt": now,
+            "updatedAt": now,
+        })
+    if docs:
+        db.rules.insert_many(docs)
+    return len(docs)
+
+
+def bulk_npc_specs(rng: random.Random, count: int) -> list[dict]:
+    """Generate `count` NPC stat specs from name pools, for volume testing."""
+    from seed_player_data import (
+        FIRST_NAMES,
+        LAST_NAMES,
+        RACES,
+        CLASSES,
+        BACKSTORIES,
+    )
+    factions = [
+        "Crown Guard", "Thieves' Guild", "Crimson Order", "Driftwood Watch",
+        "Silver Pact", "Iron Brotherhood", "Hollow Court", "Skyforge Clan",
+        "Emerald Conclave", "Stormcaller Circle",
+    ]
+    out = []
+    for _ in range(count):
+        first = rng.choice(FIRST_NAMES)
+        last = rng.choice(LAST_NAMES)
+        out.append({
+            "firstName": first,
+            "lastName": last,
+            "race": rng.choice(RACES),
+            "characterClass": rng.choice(CLASSES),
+            "notes": rng.choice(BACKSTORIES),
+            "faction": rng.choice(factions),
+        })
+    return out
+
+
+def ensure_player_users(db, now) -> list[dict]:
+    """Find-or-create the 4 player User accounts referenced by email.
+
+    New users get role='unknown' and no provider info — they claim those
+    fields on first OAuth login.  Returns the list of user docs (each with
+    `_id` and `email`) in the order defined by PLAYER_EMAILS so the seed's
+    Player insertion can rely on stable ordering.
+    """
+    out = []
+    for email in PLAYER_EMAILS:
+        existing = db.users.find_one({"email": email})
+        if existing:
+            out.append({"_id": existing["_id"], "email": email})
+            continue
+        result = db.users.insert_one({
+            "email": email,
+            "role": "unknown",
+            "firstName": "",
+            "lastName": "",
+            "avatarUrl": "",
+            "campaigns": [],
+            "createdAt": now,
+            "updatedAt": now,
+        })
+        out.append({"_id": result.inserted_id, "email": email})
+    return out
+
+
+def adventurer_avatar(first_name: str, last_name: str) -> str:
+    """Deterministic DiceBear `adventurer` avatar URL from the character name.
+
+    DiceBear is a free CDN that returns an SVG avatar per `seed`. Same seed →
+    same avatar across runs, so swapping the seed system or re-seeding gives
+    the same character the same face. SVGs are tiny (~5 KB), cached at the
+    edge, and render fine through cartyx's <img src=...> token renderer.
+    """
+    seed = quote(f"{first_name} {last_name}".strip())
+    return f"https://api.dicebear.com/9.x/adventurer/svg?seed={seed}"
 
 load_dotenv()
 
@@ -95,6 +219,13 @@ DEFAULT_LOCATION_TYPES = [
 
 CAMPAIGNS = [
     {
+        # The "stock" / comprehensive test campaign — receives the full
+        # bundle of SRD-imported races + rules, several hundred monsters,
+        # and several hundred characters. Designed to exercise list
+        # rendering, search, filtering, and drag-to-token at realistic
+        # scale.  The other two campaigns stay lean for happy-path testing.
+        "stock_test_campaign": True,
+        "bulk_test_campaign": True,
         "name": "The Lost Mines of Phandelver",
         "description": (
             "A classic introductory adventure. The party has been hired to escort a wagon "
@@ -259,6 +390,19 @@ def main() -> None:
     now = datetime.now(timezone.utc)
     campaign_ids = []
 
+    # Find-or-create the four player user accounts up front so each campaign
+    # can reference them by `_id` consistently. New accounts start with
+    # role='unknown' — they'll claim it via OAuth on first login.
+    player_users = ensure_player_users(db, now)
+    print(f"Player accounts: {', '.join(p['email'] for p in player_users)}\n")
+
+    # Asset cursor — advances across campaigns so each of the 12 portraits
+    # is used exactly once over the 3 campaigns × 4 players = 12 player docs.
+    image_cursor = 0
+
+    # Deterministic RNG for repeatable name/class generation.
+    rng = random.Random(20260613)
+
     for defn in CAMPAIGNS:
         # Generate and save placeholder image
         svg = generate_campaign_svg(defn["name"], defn["colors"])
@@ -266,8 +410,13 @@ def main() -> None:
         image_path = save_image(svg, filename)
         print(f"  image  {image_path}")
 
-        # Insert campaign
+        # Insert campaign — start with the GM as the only member, then add
+        # the four player users below.
         invite_code = secrets.token_hex(4)
+        members = [{"userId": gm_id, "role": "gm", "joinedAt": now}]
+        for pu in player_users:
+            members.append({"userId": pu["_id"], "role": "player", "joinedAt": now})
+
         result = db.campaigns.insert_one({
             "gameMasterId": gm_id,
             "name": defn["name"],
@@ -278,13 +427,54 @@ def main() -> None:
             "maxPlayers": defn["maxPlayers"],
             "inviteCode": invite_code,
             "status": "active",
-            "members": [{"userId": gm_id, "role": "gm", "joinedAt": now}],
+            "members": members,
             "createdAt": now,
             "updatedAt": now,
         })
         campaign_id = result.inserted_id
         campaign_ids.append(campaign_id)
         print(f"  campaign  {defn['name']} ({campaign_id})")
+
+        # Insert four players (one per player account), each with a unique
+        # portrait + randomised name/race/class/backstory.
+        for pu in player_users:
+            pc = random_pc(rng)
+            picture = PLAYER_IMAGES[image_cursor % len(PLAYER_IMAGES)]
+            image_cursor += 1
+            db.players.insert_one({
+                "campaignId": campaign_id,
+                # `userId` is required by the unique index
+                # `{campaignId:1, userId:1}` — one player document per user
+                # per campaign.
+                "userId": pu["_id"],
+                "createdBy": pu["_id"],
+                "firstName": pc["firstName"],
+                "lastName": pc["lastName"],
+                "race": pc["race"],
+                "characterClass": pc["characterClass"],
+                "age": rng.randint(18, 80),
+                "gender": "",
+                "location": "",
+                "link": "",
+                "picture": picture,
+                "pictureCrop": None,
+                "description": "",
+                "backstory": pc["backstory"],
+                "gmNotes": "",
+                "color": pc["color"],
+                "eyeColor": "",
+                "hairColor": "",
+                "weight": None,
+                "height": "",
+                "size": "Medium",
+                "appearance": "",
+                "status": {"value": "alive", "changedAt": None, "changedBy": None},
+                "relationships": [],
+                "createdAt": now,
+                "updatedAt": now,
+            })
+            print(f"    player    {pc['firstName']} {pc['lastName']} "
+                  f"({pc['race']} {pc['characterClass']}) — {pu['email']}")
 
         # Insert sessions
         sessions = defn["sessions"]
@@ -349,7 +539,7 @@ def main() -> None:
                 "sessions": [],
                 "campaignId": campaign_id,
                 "createdBy": gm_id,
-                "picture": "",
+                "picture": adventurer_avatar(char["firstName"], char["lastName"]),
                 "pictureCrop": None,
                 "location": "",
                 "link": "",
@@ -359,9 +549,69 @@ def main() -> None:
             })
             print(f"    character  {char['firstName']} {char['lastName']} ({char['race']} {char['characterClass']})")
 
+        # Bulk / stock test campaign — pile in SRD races, rules, hundreds
+        # of monsters (base + variants), and hundreds of NPC characters so
+        # every list page, search, filter, and drag-to-token surface is
+        # exercisable at realistic scale from a fresh seed.
+        if defn.get("bulk_test_campaign"):
+            n_races = import_srd_races(db, campaign_id=campaign_id, gm_id=gm_id, now=now)
+            n_rules = import_srd_rules(db, campaign_id=campaign_id, gm_id=gm_id, now=now)
+            print(f"    SRD races  imported {n_races} from docs/srd/races")
+            print(f"    SRD rules  imported {n_rules} from docs/srd/rules")
+
+            # Bulk NPC characters — 200 generated names/classes/factions,
+            # plus the two named characters already declared on the spec.
+            extra_npcs = bulk_npc_specs(rng, 200)
+            char_docs = [
+                {
+                    "firstName": spec["firstName"],
+                    "lastName": spec["lastName"],
+                    "race": spec["race"],
+                    "characterClass": spec["characterClass"],
+                    "notes": f"{spec['notes']}\n\n_Faction: {spec['faction']}_",
+                    "gmNotes": "",
+                    "tags": ["npc", spec["faction"].lower().replace(" ", "-")],
+                    "isPublic": False,
+                    "sessions": [],
+                    "campaignId": campaign_id,
+                    "createdBy": gm_id,
+                    "picture": adventurer_avatar(spec["firstName"], spec["lastName"]),
+                    "pictureCrop": None,
+                    "location": "",
+                    "link": "",
+                    "age": rng.randint(15, 800),
+                    "createdAt": now,
+                    "updatedAt": now,
+                }
+                for spec in extra_npcs
+            ]
+            if char_docs:
+                db.characters.insert_many(char_docs)
+            print(f"    bulk NPCs  inserted {len(char_docs)} generated characters")
+        elif defn.get("stock_test_campaign"):
+            pass  # legacy path: nothing extra for non-bulk stock campaigns
+
+        if defn.get("stock_test_campaign"):
+            # SRD-style monsters — base set in the stock-only path; for the
+            # bulk campaign, expand each base into multiple variants so the
+            # bestiary spans ~150 stat blocks.
+            with_variants = bool(defn.get("bulk_test_campaign"))
+            monster_docs = build_monster_docs(
+                campaign_id=campaign_id,
+                gm_id=gm_id,
+                now=now,
+                with_variants=with_variants,
+            )
+            if monster_docs:
+                db.monsters.insert_many(monster_docs)
+            print(
+                f"    monsters   imported {len(monster_docs)} stat blocks "
+                f"({'base+variants' if with_variants else 'base only'})"
+            )
+
         print()
 
-    # Update user's campaign list
+    # Update GM user's campaign list.
     db.users.update_one(
         {"_id": gm_id},
         {"$push": {
@@ -373,8 +623,29 @@ def main() -> None:
             },
         }},
     )
-    print(f"Updated GM user with {len(campaign_ids)} campaign references.")
-    print(f"\nDone. 3 test campaigns seeded with sessions, characters, and images.")
+    # Mirror campaign references onto each player user too, so their
+    # campaign list shows them on first login.
+    for pu in player_users:
+        db.users.update_one(
+            {"_id": pu["_id"]},
+            {"$push": {
+                "campaigns": {
+                    "$each": [
+                        {"campaignId": cid, "joinedAt": now, "status": "active"}
+                        for cid in campaign_ids
+                    ],
+                },
+            }},
+        )
+
+    print(
+        f"Updated {1 + len(player_users)} users with "
+        f"{len(campaign_ids)} campaign reference(s) each."
+    )
+    print(
+        f"\nDone. {len(campaign_ids)} test campaigns seeded with sessions, characters, "
+        f"4 players each, and SRD monsters in the stock test campaign."
+    )
 
     client.close()
 

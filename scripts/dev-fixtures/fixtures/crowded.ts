@@ -21,6 +21,17 @@ import type { Fixture, FixtureContext } from '../cli';
 const FIXTURE_NAME = 'crowded';
 const CAMPAIGN_NAME = '[Fixture: crowded] Continental Crisis';
 
+/**
+ * Deterministic DiceBear `adventurer` avatar URL from the character name.
+ * Same seed → same face across runs, so re-seeding keeps recognisable NPCs.
+ * SVGs are tiny and cached at the edge; cartyx's <img>-based token renderer
+ * displays them straight from the CDN with no R2 round-trip.
+ */
+function adventurerAvatar(firstName: string, lastName: string): string {
+  const seed = encodeURIComponent(`${firstName} ${lastName}`.trim());
+  return `https://api.dicebear.com/9.x/adventurer/svg?seed=${seed}`;
+}
+
 // Source SRD content extracted by scripts/srd/extract-rules.ts.
 // If these directories don't exist, the fixture falls back to a tiny inline
 // set so the seeder still works on a fresh checkout that hasn't run extract.
@@ -864,7 +875,7 @@ async function seed(ctx: FixtureContext): Promise<{ campaignIds: ObjectId[] }> {
     age: null,
     location: '',
     link: '',
-    picture: '',
+    picture: adventurerAvatar(spec.firstName, spec.lastName),
     pictureCrop: null,
     notes: `${spec.notes}\n\n_Faction: ${spec.faction}_`,
     gmNotes: '',
