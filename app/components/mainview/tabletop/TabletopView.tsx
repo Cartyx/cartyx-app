@@ -45,6 +45,10 @@ import {
   LocationWindowWrapper,
   EditLocationModalWrapper,
 } from '~/components/wiki/locations/LocationWindowWrapper';
+import {
+  MonsterWindowWrapper,
+  EditMonsterModalWrapper,
+} from '~/components/wiki/monsters/MonsterWindowWrapper';
 import type { TabletopMessage } from '~/types/tabletop';
 import type { ToolType } from '~/components/mainview/ToolBar';
 import type { PingData } from './PingOverlay';
@@ -133,6 +137,7 @@ export function TabletopView({
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
+  const [editingMonsterId, setEditingMonsterId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [localWindows, setLocalWindows] = useState<ManagedWindow[]>([]);
   const localScreenIdRef = useRef<string | null>(null);
@@ -360,6 +365,15 @@ export function TabletopView({
               }}
             />
           );
+        } else if (w.collection === 'monster') {
+          windowContent = (
+            <MonsterWindowWrapper
+              monsterId={w.documentId}
+              campaignId={campaignId}
+              isGM={isGM}
+              onEdit={() => setEditingMonsterId(w.documentId)}
+            />
+          );
         } else {
           windowContent = (
             <div className="p-4 overflow-auto h-full">
@@ -569,6 +583,7 @@ export function TabletopView({
 
       <div
         ref={workspaceRef}
+        data-testid="tabletop-workspace"
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -661,6 +676,13 @@ export function TabletopView({
           campaignId={campaignId}
           locationId={editingLocationId}
           onClose={() => setEditingLocationId(null)}
+        />
+      )}
+      {editingMonsterId !== null && (
+        <EditMonsterModalWrapper
+          campaignId={campaignId}
+          monsterId={editingMonsterId}
+          onClose={() => setEditingMonsterId(null)}
         />
       )}
     </div>
