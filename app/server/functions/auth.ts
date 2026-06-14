@@ -5,6 +5,11 @@ import { revokeToken } from '../utils/oauth';
 import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
 import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import {
+  setRulerColorSchema,
+  DEFAULT_RULER_COLOR,
+  type UserPreferences,
+} from '~/types/schemas/userPreferences';
 
 /** Strip sensitive fields (tokens) before sending session data to the client */
 function toClientUser(user: {
@@ -63,6 +68,56 @@ export const logoutFn = createServerFn({ method: 'POST' }).handler(async () => {
     return { success: false };
   }
 });
+
+/** Read the current user's persisted UI preferences (ruler color, etc.). */
+export const getUserPreferences = createServerFn({ method: 'GET' }).handler(
+  async (): Promise<UserPreferences> => {
+    const fallback: UserPreferences = { rulerColor: DEFAULT_RULER_COLOR };
+    try {
+      const user = await getSession();
+      if (!user) return fallback;
+
+      await connectDB();
+      if (!isDBConnected()) return fallback;
+
+      const stored = await User.findOne({ providerId: user.id })
+        .select('preferences')
+        .lean<{ preferences?: { rulerColor?: string } }>();
+      return {
+        rulerColor: stored?.preferences?.rulerColor || DEFAULT_RULER_COLOR,
+      };
+    } catch (e) {
+      serverCaptureException(e, undefined, { action: 'getUserPreferences' });
+      return fallback;
+    }
+  }
+);
+
+/** Persist the current user's measurement (ruler) line color. */
+export const setRulerColor = createServerFn({ method: 'POST' })
+  .inputValidator(setRulerColorSchema)
+  .handler(async ({ data }): Promise<UserPreferences> => {
+    let userId: string | undefined;
+    try {
+      const user = await getSession();
+      if (!user) throw new Error('Not authenticated');
+      userId = user.id;
+
+      await connectDB();
+      if (!isDBConnected()) throw new Error('Database not available');
+
+      await User.updateOne(
+        { providerId: user.id },
+        { $set: { 'preferences.rulerColor': data.rulerColor } }
+      );
+
+      serverCaptureEvent(user.id, 'ruler_color_updated', { ruler_color: data.rulerColor });
+      return { rulerColor: data.rulerColor };
+    } catch (e) {
+      serverCaptureException(e, userId, { action: 'setRulerColor' });
+      throw e;
+    }
+  });
 
 export const getPartyToken = createServerFn({ method: 'GET' })
   .inputValidator(z.object({ sessionId: z.string().min(1) }))

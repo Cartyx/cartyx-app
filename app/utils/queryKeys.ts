@@ -2,6 +2,10 @@ export const queryKeys = {
   auth: {
     me: ['auth', 'me'] as const,
   },
+  userPreferences: {
+    all: ['userPreferences'] as const,
+    rulerColor: ['userPreferences', 'rulerColor'] as const,
+  },
   campaigns: {
     all: ['campaigns'] as const,
     list: () => ['campaigns', 'list'] as const,

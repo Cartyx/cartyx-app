@@ -21,6 +21,8 @@ import {
 } from '~/hooks/useMapTokens';
 import { MapToken } from './MapToken';
 import { LayersPanel } from './LayersPanel';
+import { RulerSettingsPanel } from './RulerSettingsPanel';
+import { useRulerColor } from '~/hooks/useUserPreferences';
 import {
   tokenLayerId,
   tokenLayerRenderOrder,
@@ -122,12 +124,22 @@ export function ActiveMapStage({
   const [measureEnd, setMeasureEnd] = useState<MeasurePoint | null>(null);
   const [measureCursor, setMeasureCursor] = useState<{ x: number; y: number } | null>(null);
 
-  // Clear the measurement whenever the ruler tool is deselected.
+  // Per-user measurement line color (persisted on the user record).
+  const { color: rulerColor, setColor: setRulerColor } = useRulerColor();
+
+  // The ruler settings popup is shown while the tool is active; closing it
+  // hides just the popup (the ruler stays usable). Re-opens when re-selected.
+  const [rulerPanelOpen, setRulerPanelOpen] = useState(false);
+
+  // Clear the measurement whenever the ruler tool is deselected; (re)open the
+  // settings popup whenever it's selected.
   useEffect(() => {
     if (!rulerActive) {
       setMeasureStart(null);
       setMeasureEnd(null);
       setMeasureCursor(null);
+    } else {
+      setRulerPanelOpen(true);
     }
   }, [rulerActive]);
 
@@ -758,30 +770,56 @@ export function ActiveMapStage({
             data-testid="ruler-line"
             aria-hidden="true"
           >
+            {/* Dark halo underlay so the line reads on any map background. */}
             <line
               x1={measurement.start.x}
               y1={measurement.start.y}
               x2={measurement.end.x}
               y2={measurement.end.y}
-              stroke="#fbbf24"
-              strokeWidth={2}
+              stroke="#000000"
+              strokeOpacity={0.6}
+              strokeWidth={6}
+              strokeLinecap="round"
               strokeDasharray="6 4"
+            />
+            <line
+              x1={measurement.start.x}
+              y1={measurement.start.y}
+              x2={measurement.end.x}
+              y2={measurement.end.y}
+              stroke={rulerColor}
+              strokeWidth={3}
+              strokeLinecap="round"
+              strokeDasharray="6 4"
+              data-testid="ruler-line-stroke"
             />
             <circle
               cx={measurement.start.x}
               cy={measurement.start.y}
-              r={6}
-              fill="#fbbf24"
-              fillOpacity={0.9}
+              r={7}
+              fill={rulerColor}
+              fillOpacity={0.95}
+              stroke="#000000"
+              strokeOpacity={0.7}
+              strokeWidth={2}
               data-testid="ruler-anchor"
             />
-            <circle cx={measurement.end.x} cy={measurement.end.y} r={4} fill="#fbbf24" />
+            <circle
+              cx={measurement.end.x}
+              cy={measurement.end.y}
+              r={5}
+              fill={rulerColor}
+              stroke="#000000"
+              strokeOpacity={0.7}
+              strokeWidth={2}
+            />
           </svg>
           <div
-            className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-black/80 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-300 shadow"
+            className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-md border-2 bg-black/90 px-2.5 py-1 font-mono text-base font-bold text-white shadow-lg"
             style={{
               left: (measurement.start.x + measurement.end.x) / 2,
               top: (measurement.start.y + measurement.end.y) / 2,
+              borderColor: rulerColor,
             }}
             data-testid="ruler-distance"
           >
@@ -909,6 +947,15 @@ export function ActiveMapStage({
           onSelectLayer={setActiveLayer}
           onToggleLayer={toggleLayerVisibility}
           onClose={() => onCloseLayerPanel?.()}
+        />
+      )}
+
+      {/* Measurement settings popup (shown while the ruler tool is active) */}
+      {rulerActive && rulerPanelOpen && (
+        <RulerSettingsPanel
+          color={rulerColor}
+          onChangeColor={setRulerColor}
+          onClose={() => setRulerPanelOpen(false)}
         />
       )}
 
