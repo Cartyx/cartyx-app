@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const TOKEN_SOURCES = ['player', 'character'] as const;
+export const TOKEN_SOURCES = ['player', 'character', 'monster'] as const;
 export type TokenSource = (typeof TOKEN_SOURCES)[number];
 
 export const listMapTokensSchema = z.object({
@@ -15,7 +15,9 @@ export const createMapTokenSchema = z.object({
   sourceDocumentId: z.string().trim().min(1),
   x: z.number().finite(),
   y: z.number().finite(),
-  sizeSquares: z.number().positive().max(20).optional().default(1),
+  // Optional — when omitted the server derives the footprint from the source
+  // entity (monsters scale up by size; players/characters default to 1).
+  sizeSquares: z.number().positive().max(20).optional(),
 });
 
 export const moveMapTokenSchema = z.object({

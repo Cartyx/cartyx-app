@@ -1,4 +1,9 @@
-import { useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
+import {
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type MouseEvent as ReactMouseEvent,
+  type ReactNode,
+} from 'react';
 import { MoreVertical, Eye, EyeOff, Trash2 } from 'lucide-react';
 import type { MapTokenData } from '~/types/mapToken';
 
@@ -11,8 +16,10 @@ interface MapTokenProps {
   canMove: boolean;
   isGM: boolean;
   isSelected: boolean;
-  onSelect: () => void;
+  /** `additive` is true when shift/ctrl/cmd is held (multi-select). */
+  onSelect: (additive: boolean) => void;
   onBeginDrag: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  onContextMenu: (e: ReactMouseEvent<HTMLDivElement>) => void;
   onToggleLabel: () => void;
   onRemove: () => void;
 }
@@ -36,6 +43,7 @@ export function MapToken({
   isSelected,
   onSelect,
   onBeginDrag,
+  onContextMenu,
   onToggleLabel,
   onRemove,
 }: MapTokenProps) {
@@ -51,6 +59,14 @@ export function MapToken({
   const centerDomY = imageOffsetY + token.y * effectiveScale;
 
   const initial = (token.label || '?').trim().charAt(0).toUpperCase() || '?';
+
+  // Players and characters show only their first name on the map to keep
+  // labels compact; the full name stays in the avatar's aria-label/tooltip.
+  // Monster tokens (Phase 3) keep their full multi-word name.
+  const displayLabel =
+    token.sourceCollection === 'player' || token.sourceCollection === 'character'
+      ? token.label.trim().split(/\s+/)[0] || token.label
+      : token.label;
 
   return (
     <div
@@ -72,12 +88,14 @@ export function MapToken({
         onPointerDown={(e) => {
           // Always select on press; if movable, the same press also kicks
           // off a drag. A pure click (no movement) leaves only the selection.
+          // Shift/ctrl/cmd extends the selection (multi-select).
           if (e.button === 0) {
             e.stopPropagation();
-            onSelect();
+            onSelect(e.shiftKey || e.metaKey || e.ctrlKey);
           }
           if (canMove) onBeginDrag(e);
         }}
+        onContextMenu={onContextMenu}
         className={[
           'relative flex items-center justify-center overflow-hidden rounded-full border-[3px] shadow-lg',
           canMove ? 'cursor-grab active:cursor-grabbing' : 'cursor-default',
@@ -141,8 +159,9 @@ export function MapToken({
         <div
           className="pointer-events-none absolute left-1/2 mt-0.5 -translate-x-1/2 whitespace-nowrap rounded bg-black/70 px-1.5 py-0.5 font-sans text-[11px] font-semibold text-white shadow"
           style={{ top: sizeDom }}
+          title={token.label}
         >
-          {token.label}
+          {displayLabel}
         </div>
       )}
 

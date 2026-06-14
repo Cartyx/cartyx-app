@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { captureException } from '~/providers/PostHogProvider';
 import { queryKeys } from '~/utils/queryKeys';
 import type { MapTokenData } from '~/types/mapToken';
+import type { TokenSource } from '~/types/schemas/mapTokens';
 import {
   listMapTokensSchema,
   createMapTokenSchema,
@@ -69,7 +70,7 @@ export function useMapTokenMutations(campaignId: string, mapId: string) {
 
   const create = useMutation({
     mutationFn: async (input: {
-      sourceCollection: 'player' | 'character';
+      sourceCollection: TokenSource;
       sourceDocumentId: string;
       x: number;
       y: number;

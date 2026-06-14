@@ -7,6 +7,7 @@ import { Map as MapModel } from '../db/models/Map';
 import { MapToken } from '../db/models/MapToken';
 import { Player } from '../db/models/Player';
 import { Character } from '../db/models/Character';
+import { Monster } from '../db/models/Monster';
 import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
 import type { MapTokenData } from '~/types/mapToken';
 import type { TokenSource } from '~/types/schemas/mapTokens';
@@ -99,11 +100,32 @@ async function requireCampaignMember(
 // Token hydration — fills label/image/color/owner from the source entity.
 // ---------------------------------------------------------------------------
 
+/** Large creatures occupy more than one grid square. */
+const MONSTER_SIZE_SQUARES: Record<string, number> = {
+  tiny: 1,
+  small: 1,
+  medium: 1,
+  large: 2,
+  huge: 3,
+  gargantuan: 4,
+};
+
+interface HydratedSource {
+  label: string;
+  imageUrl: string;
+  color: string;
+  ownerUserId: string | null;
+  /** Token footprint in grid squares (driven by monster size; 1 otherwise). */
+  sizeSquares: number;
+  /** Default layer: monsters are GM-private; players/characters are public. */
+  hiddenFromPlayers: boolean;
+}
+
 async function hydrateFromSource(
   sourceCollection: TokenSource,
   sourceDocumentId: string,
   campaignId: string
-): Promise<{ label: string; imageUrl: string; color: string; ownerUserId: string | null }> {
+): Promise<HydratedSource> {
   if (sourceCollection === 'player') {
     const p = await Player.findOne({ _id: sourceDocumentId, campaignId }).lean();
     if (!p) throw new Error('Player not found in this campaign');
@@ -119,8 +141,25 @@ async function hydrateFromSource(
       imageUrl: doc.picture ?? '',
       color: doc.color ?? '#3498db',
       ownerUserId: doc.createdBy ? String(doc.createdBy) : null,
+      sizeSquares: 1,
+      hiddenFromPlayers: false, // Public layer.
     };
   }
+
+  if (sourceCollection === 'monster') {
+    const m = await Monster.findOne({ _id: sourceDocumentId, campaignId }).lean();
+    if (!m) throw new Error('Monster not found in this campaign');
+    const doc = m as { name?: string; picture?: string; color?: string; size?: string };
+    return {
+      label: doc.name ?? '',
+      imageUrl: doc.picture ?? '',
+      color: doc.color ?? '#9ca3af',
+      ownerUserId: null,
+      sizeSquares: MONSTER_SIZE_SQUARES[doc.size ?? 'medium'] ?? 1,
+      hiddenFromPlayers: true, // GM-private layer by default.
+    };
+  }
+
   const c = await Character.findOne({ _id: sourceDocumentId, campaignId }).lean();
   if (!c) throw new Error('Character not found in this campaign');
   const doc = c as {
@@ -135,6 +174,8 @@ async function hydrateFromSource(
     color: doc.color ?? '#9ca3af',
     // GM-owned characters: no ownerUserId (only GMs can move them).
     ownerUserId: null,
+    sizeSquares: 1,
+    hiddenFromPlayers: false, // Public layer.
   };
 }
 
@@ -202,10 +243,13 @@ export const createMapToken = createServerFn({ method: 'POST' })
           ownerUserId: hydrated.ownerUserId,
           x,
           y,
-          sizeSquares: data.sizeSquares ?? 1,
+          // Honour an explicit footprint from the caller, else the
+          // size derived from the source entity (monsters scale up).
+          sizeSquares: data.sizeSquares ?? hydrated.sizeSquares,
           color: hydrated.color,
           label: hydrated.label,
           imageUrl: hydrated.imageUrl,
+          hiddenFromPlayers: hydrated.hiddenFromPlayers,
           createdBy: member.userId,
         });
         serverCaptureEvent(sessionUserId, 'map_token_placed', {

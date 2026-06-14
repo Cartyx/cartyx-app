@@ -46,6 +46,7 @@ import {
   EditLocationModalWrapper,
 } from '~/components/wiki/locations/LocationWindowWrapper';
 import type { TabletopMessage } from '~/types/tabletop';
+import type { ToolType } from '~/components/mainview/ToolBar';
 import type { PingData } from './PingOverlay';
 
 // ---------------------------------------------------------------------------
@@ -80,6 +81,9 @@ interface TabletopViewProps {
   currentUserId: string | null;
   getToken: () => Promise<string>;
   sessionId: string | null;
+  /** Active toolbar tool (owned by the play route). */
+  activeTool?: ToolType;
+  onToolChange?: (tool: ToolType) => void;
 }
 
 export function TabletopView({
@@ -88,6 +92,8 @@ export function TabletopView({
   currentUserId,
   getToken,
   sessionId: _sessionId,
+  activeTool,
+  onToolChange,
 }: TabletopViewProps) {
   const { screens, isLoading } = useTabletopScreenList(campaignId);
   const mutations = useTabletopMutations(campaignId);
@@ -577,6 +583,8 @@ export function TabletopView({
             isGM={isGM}
             currentUserId={currentUserId}
             onBroadcast={sendMapMessage}
+            layerPanelOpen={activeTool === 'layer'}
+            onCloseLayerPanel={() => onToolChange?.('pointer')}
           />
         ) : (
           <TabletopCanvas screen={activeScreen} />

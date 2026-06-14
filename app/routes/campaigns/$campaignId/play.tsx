@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { z } from 'zod';
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
@@ -12,6 +12,7 @@ import { MainView } from '~/components/mainview/MainView';
 import { TabletopView } from '~/components/mainview/TabletopView';
 import { GMScreensView } from '~/components/mainview/gmscreens';
 import type { TabId } from '~/components/mainview/TabNavigation';
+import type { ToolType } from '~/components/mainview/ToolBar';
 import { CatchUpWidget } from '~/components/mainview/widgets/CatchUpWidget';
 import { CampaignTimelineWidget } from '~/components/mainview/widgets/CampaignTimelineWidget';
 import { KeyAlliesWidget } from '~/components/mainview/widgets/KeyAlliesWidget';
@@ -66,6 +67,10 @@ function PlayPageContent() {
 
   const { activePlayer, isLoading: isPlayerLoading } = useActivePlayerContext();
 
+  // Toolbar tool is owned here so the Tabletop (a MainView child) can react to
+  // it — e.g. the Layer tool opens the map's Layers panel.
+  const [activeTool, setActiveTool] = useState<ToolType>('pointer');
+
   const activeSession = campaign?.sessions.find((s) => s.status === 'active');
 
   const getTabletopToken = useCallback(async () => {
@@ -99,6 +104,8 @@ function PlayPageContent() {
           showToolbar={effectiveTab === 'tabletop'}
           campaignId={campaignId}
           sessions={campaign?.sessions}
+          activeTool={activeTool}
+          onToolChange={setActiveTool}
         >
           {needsNewPlayer && (
             <div className="mx-4 mt-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center gap-3">
@@ -150,6 +157,8 @@ function PlayPageContent() {
               currentUserId={campaign?.currentUserId ?? null}
               getToken={getTabletopToken}
               sessionId={activeSession?.id ?? null}
+              activeTool={activeTool}
+              onToolChange={setActiveTool}
             />
           </div>
           {campaign?.isGM && (

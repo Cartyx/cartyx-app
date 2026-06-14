@@ -6,8 +6,9 @@ import {
   useState,
   type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
+  type MouseEvent as ReactMouseEvent,
 } from 'react';
-import { ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize2, Grid3x3, Eye, EyeOff } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { MapData } from '~/types/map';
 import type { MapTokenData } from '~/types/mapToken';
@@ -19,6 +20,13 @@ import {
   applyTokenUpdateToCache,
 } from '~/hooks/useMapTokens';
 import { MapToken } from './MapToken';
+import { LayersPanel } from './LayersPanel';
+import {
+  tokenLayerId,
+  tokenLayerRenderOrder,
+  type MapLayerId,
+  type TokenLayerId,
+} from '~/types/mapLayer';
 import type { TabletopMapMessage } from '~/hooks/useTabletopMapParty';
 
 interface Viewport {
@@ -35,6 +43,10 @@ interface ActiveMapStageProps {
   currentUserId: string | null;
   /** Broadcaster for the tabletop-map party. */
   onBroadcast: (msg: TabletopMapMessage) => void;
+  /** Whether the GM's Layers panel (toolbar Layer tool) is open. */
+  layerPanelOpen?: boolean;
+  /** Close the Layers panel (resets the toolbar tool). */
+  onCloseLayerPanel?: () => void;
 }
 
 const MIN_ZOOM = 0.25;
@@ -66,6 +78,8 @@ export function ActiveMapStage({
   isGM,
   currentUserId,
   onBroadcast,
+  layerPanelOpen = false,
+  onCloseLayerPanel,
 }: ActiveMapStageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -77,10 +91,48 @@ export function ActiveMapStage({
   const { data: tokens = [] } = useMapTokens(campaignId, map.id);
   const mutations = useMapTokenMutations(campaignId, map.id);
 
-  // Token selection — click selects, click on background deselects,
-  // Delete/Backspace asks to confirm removal (GM only).
-  const [selectedTokenId, setSelectedTokenId] = useState<string | null>(null);
-  const [tokenPendingDelete, setTokenPendingDelete] = useState<MapTokenData | null>(null);
+  // Grid overlay — initialized from the map's saved preference, toggled
+  // locally from the toolbar. Drawn only for square grids (gridless maps
+  // have no grid; hex rendering is a future addition).
+  const [showGrid, setShowGrid] = useState<boolean>(map.gridOverlay.enabled);
+  const hasGrid = map.scale.gridType === 'square' && map.scale.pixelsPerSquare > 0;
+
+  // Token selection — click selects (shift/cmd-click toggles), background
+  // click deselects, Delete/Backspace confirms removal (GM only), right-click
+  // opens a layer-move menu.
+  const [selectedTokenIds, setSelectedTokenIds] = useState<Set<string>>(() => new Set());
+  const [tokensPendingDelete, setTokensPendingDelete] = useState<MapTokenData[] | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+  // Layers — GM-local working layer + per-layer visibility (GM's own view;
+  // players never gain this panel so it stays empty for them).
+  const [activeLayer, setActiveLayer] = useState<MapLayerId>('public');
+  const [hiddenLayers, setHiddenLayers] = useState<Set<MapLayerId>>(() => new Set());
+
+  const clearSelection = useCallback(() => {
+    setSelectedTokenIds((cur) => (cur.size === 0 ? cur : new Set()));
+    setContextMenu(null);
+  }, []);
+
+  const selectToken = useCallback((id: string, additive: boolean) => {
+    setContextMenu(null);
+    setSelectedTokenIds((cur) => {
+      if (!additive) return new Set([id]);
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const toggleLayerVisibility = useCallback((id: MapLayerId) => {
+    setHiddenLayers((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   // Observe container size.
   useEffect(() => {
@@ -188,8 +240,8 @@ export function ActiveMapStage({
 
   const onPanPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
-    // Background click deselects any selected token.
-    setSelectedTokenId(null);
+    // Background click deselects any selected token + closes the context menu.
+    clearSelection();
     (e.target as Element).setPointerCapture?.(e.pointerId);
     dragRef.current = {
       mode: 'pan',
@@ -310,7 +362,12 @@ export function ActiveMapStage({
     } catch {
       return;
     }
-    if (payload.collection !== 'player' && payload.collection !== 'character') return;
+    if (
+      payload.collection !== 'player' &&
+      payload.collection !== 'character' &&
+      payload.collection !== 'monster'
+    )
+      return;
 
     e.preventDefault();
     e.stopPropagation();
@@ -322,7 +379,7 @@ export function ActiveMapStage({
 
     mutations.create.mutate(
       {
-        sourceCollection: payload.collection,
+        sourceCollection: payload.collection as 'player' | 'character' | 'monster',
         sourceDocumentId: payload.documentId,
         x,
         y,
@@ -368,9 +425,56 @@ export function ActiveMapStage({
           onBroadcast({ type: 'token:removed', mapId: map.id, tokenId: token.id });
         },
       });
-      setSelectedTokenId((cur) => (cur === token.id ? null : cur));
+      setSelectedTokenIds((cur) => {
+        if (!cur.has(token.id)) return cur;
+        const next = new Set(cur);
+        next.delete(token.id);
+        return next;
+      });
     },
     [isGM, qc, campaignId, map.id, mutations.remove, onBroadcast]
+  );
+
+  // Move every selected token to a layer. Public ⇔ GM-private is encoded by
+  // `hiddenFromPlayers`, so the move is a plain token update (optimistic +
+  // broadcast). No-ops for tokens already on the target layer.
+  const moveSelectionToLayer = useCallback(
+    (layer: TokenLayerId) => {
+      if (!isGM) return;
+      const hidden = layer === 'gm-private';
+      for (const id of selectedTokenIds) {
+        const token = tokens.find((t) => t.id === id);
+        if (!token || token.hiddenFromPlayers === hidden) continue;
+        const optimistic: MapTokenData = { ...token, hiddenFromPlayers: hidden };
+        applyTokenUpdateToCache(qc, campaignId, map.id, optimistic);
+        mutations.update.mutate(
+          { tokenId: id, hiddenFromPlayers: hidden },
+          {
+            onSuccess: (res) => {
+              onBroadcast({ type: 'token:updated', mapId: map.id, token: res.token });
+            },
+          }
+        );
+      }
+      setContextMenu(null);
+    },
+    [isGM, selectedTokenIds, tokens, qc, campaignId, map.id, mutations.update, onBroadcast]
+  );
+
+  const handleTokenContextMenu = useCallback(
+    (token: MapTokenData, e: ReactMouseEvent<HTMLDivElement>) => {
+      if (!isGM) return;
+      e.preventDefault();
+      e.stopPropagation();
+      // Right-clicking a token outside the current selection selects just it.
+      setSelectedTokenIds((cur) => (cur.has(token.id) ? cur : new Set([token.id])));
+      const rect = containerRef.current?.getBoundingClientRect();
+      setContextMenu({
+        x: rect ? e.clientX - rect.left : e.clientX,
+        y: rect ? e.clientY - rect.top : e.clientY,
+      });
+    },
+    [isGM]
   );
 
   // Keyboard: Delete/Backspace on a selected token opens confirm; Esc
@@ -387,32 +491,48 @@ export function ActiveMapStage({
           return;
       }
       if (e.key === 'Escape') {
-        if (tokenPendingDelete) {
+        if (contextMenu) {
           e.preventDefault();
-          setTokenPendingDelete(null);
-        } else if (selectedTokenId) {
+          setContextMenu(null);
+        } else if (tokensPendingDelete) {
           e.preventDefault();
-          setSelectedTokenId(null);
+          setTokensPendingDelete(null);
+        } else if (selectedTokenIds.size > 0) {
+          e.preventDefault();
+          clearSelection();
         }
         return;
       }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return;
-      if (tokenPendingDelete) return; // already confirming
-      const id = selectedTokenId;
-      if (!id) return;
-      const token = tokens.find((t) => t.id === id);
-      if (!token) return;
+      if (tokensPendingDelete) return; // already confirming
+      if (selectedTokenIds.size === 0) return;
+      const pending = tokens.filter((t) => selectedTokenIds.has(t.id));
+      if (pending.length === 0) return;
       e.preventDefault();
-      setTokenPendingDelete(token);
+      setTokensPendingDelete(pending);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [isGM, selectedTokenId, tokens, tokenPendingDelete]);
+  }, [isGM, selectedTokenIds, tokens, tokensPendingDelete, contextMenu, clearSelection]);
 
-  const visibleTokens = useMemo(
-    () => (isGM ? tokens : tokens.filter((t) => !t.hiddenFromPlayers)),
-    [tokens, isGM]
-  );
+  const visibleTokens = useMemo(() => {
+    const base = isGM ? tokens : tokens.filter((t) => !t.hiddenFromPlayers);
+    // Hide layers the GM has toggled off (no-op for players: empty set), then
+    // stack by layer so public tokens render above GM-private ones.
+    return base
+      .filter((t) => !hiddenLayers.has(tokenLayerId(t)))
+      .sort((a, b) => tokenLayerRenderOrder(a) - tokenLayerRenderOrder(b));
+  }, [tokens, isGM, hiddenLayers]);
+
+  const tokenCounts = useMemo<Record<TokenLayerId, number>>(() => {
+    let publicCount = 0;
+    let privateCount = 0;
+    for (const t of tokens) {
+      if (t.hiddenFromPlayers) privateCount++;
+      else publicCount++;
+    }
+    return { public: publicCount, 'gm-private': privateCount };
+  }, [tokens]);
 
   const canMoveToken = useCallback(
     (token: MapTokenData) =>
@@ -440,21 +560,40 @@ export function ActiveMapStage({
       data-testid="active-map-stage"
       data-map-id={map.id}
     >
-      <img
-        src={map.imageUrl}
-        alt={map.name}
-        draggable={false}
-        className="pointer-events-none absolute"
-        style={{
-          width: displayedImageWidth,
-          height: displayedImageHeight,
-          maxWidth: 'none',
-          maxHeight: 'none',
-          left: imageOffsetX,
-          top: imageOffsetY,
-          imageRendering: viewport.zoom > 2 ? 'pixelated' : 'auto',
-        }}
-      />
+      {!hiddenLayers.has('map') && (
+        <img
+          src={map.imageUrl}
+          alt={map.name}
+          draggable={false}
+          className="pointer-events-none absolute"
+          style={{
+            width: displayedImageWidth,
+            height: displayedImageHeight,
+            maxWidth: 'none',
+            maxHeight: 'none',
+            left: imageOffsetX,
+            top: imageOffsetY,
+            imageRendering: viewport.zoom > 2 ? 'pixelated' : 'auto',
+          }}
+        />
+      )}
+
+      {/* Grid overlay — aligned to the map's calibrated square size. */}
+      {showGrid && hasGrid && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute"
+          style={{
+            left: imageOffsetX,
+            top: imageOffsetY,
+            width: displayedImageWidth,
+            height: displayedImageHeight,
+            backgroundImage: `linear-gradient(to right, ${map.gridOverlay.color} 1px, transparent 1px), linear-gradient(to bottom, ${map.gridOverlay.color} 1px, transparent 1px)`,
+            backgroundSize: `${map.scale.pixelsPerSquare * effectiveScale}px ${map.scale.pixelsPerSquare * effectiveScale}px`,
+          }}
+          data-testid="map-grid-overlay"
+        />
+      )}
 
       {/* Tokens */}
       {visibleTokens.map((token) => (
@@ -467,16 +606,17 @@ export function ActiveMapStage({
           pixelsPerSquare={map.scale.pixelsPerSquare}
           canMove={canMoveToken(token)}
           isGM={isGM}
-          isSelected={selectedTokenId === token.id}
-          onSelect={() => setSelectedTokenId(token.id)}
+          isSelected={selectedTokenIds.has(token.id)}
+          onSelect={(additive) => selectToken(token.id, additive)}
           onBeginDrag={(e) => beginTokenDrag(token, e)}
+          onContextMenu={(e) => handleTokenContextMenu(token, e)}
           onToggleLabel={() => handleToggleLabel(token)}
           onRemove={() => handleRemove(token)}
         />
       ))}
 
       {/* Delete-confirmation dialog */}
-      {tokenPendingDelete && (
+      {tokensPendingDelete && tokensPendingDelete.length > 0 && (
         <div
           role="presentation"
           onPointerDown={(e) => e.stopPropagation()}
@@ -492,19 +632,21 @@ export function ActiveMapStage({
               id="token-delete-title"
               className="font-sans text-sm font-bold uppercase tracking-widest text-rose-400"
             >
-              Remove token?
+              {tokensPendingDelete.length === 1 ? 'Remove token?' : 'Remove tokens?'}
             </h2>
             <p className="font-sans mt-2 text-xs text-slate-300">
               Remove{' '}
               <span className="font-semibold text-white">
-                {tokenPendingDelete.label || 'this token'}
+                {tokensPendingDelete.length === 1
+                  ? tokensPendingDelete[0].label || 'this token'
+                  : `${tokensPendingDelete.length} tokens`}
               </span>{' '}
               from the map? This cannot be undone.
             </p>
             <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setTokenPendingDelete(null)}
+                onClick={() => setTokensPendingDelete(null)}
                 className="rounded border border-white/10 bg-white/[0.03] px-3 py-1.5 font-sans text-xs font-semibold text-slate-300 hover:bg-white/[0.07]"
               >
                 Cancel
@@ -519,8 +661,8 @@ export function ActiveMapStage({
                   if (el) el.focus();
                 }}
                 onClick={() => {
-                  handleRemove(tokenPendingDelete);
-                  setTokenPendingDelete(null);
+                  for (const t of tokensPendingDelete) handleRemove(t);
+                  setTokensPendingDelete(null);
                 }}
                 className="rounded bg-rose-500 px-3 py-1.5 font-sans text-xs font-semibold text-white hover:bg-rose-400"
               >
@@ -531,8 +673,83 @@ export function ActiveMapStage({
         </div>
       )}
 
+      {/* Token right-click context menu — move selection between token layers. */}
+      {contextMenu && isGM && selectedTokenIds.size > 0 && (
+        <>
+          <button
+            type="button"
+            aria-label="Close menu"
+            className="fixed inset-0 z-40 cursor-default"
+            onPointerDown={(e) => {
+              e.stopPropagation();
+              setContextMenu(null);
+            }}
+          />
+          <div
+            role="menu"
+            onPointerDown={(e) => e.stopPropagation()}
+            className="absolute z-50 w-52 overflow-hidden rounded border border-white/10 bg-[#080A12] shadow-xl"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            <div className="border-b border-white/[0.07] px-3 py-1.5 font-sans text-[10px] uppercase tracking-widest text-slate-500">
+              Move {selectedTokenIds.size} {selectedTokenIds.size === 1 ? 'token' : 'tokens'} to
+            </div>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => moveSelectionToLayer('public')}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left font-sans text-xs text-slate-200 transition-colors hover:bg-white/[0.05]"
+            >
+              <Eye className="h-3.5 w-3.5 text-emerald-400" />
+              Public Tokens
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => moveSelectionToLayer('gm-private')}
+              className="flex w-full items-center gap-2 px-3 py-2 text-left font-sans text-xs text-slate-200 transition-colors hover:bg-white/[0.05]"
+            >
+              <EyeOff className="h-3.5 w-3.5 text-amber-400" />
+              GM-Private Tokens
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Layers panel (GM only, toggled by the toolbar's Layer tool) */}
+      {isGM && layerPanelOpen && (
+        <LayersPanel
+          activeLayer={activeLayer}
+          hiddenLayers={hiddenLayers}
+          tokenCounts={tokenCounts}
+          onSelectLayer={setActiveLayer}
+          onToggleLayer={toggleLayerVisibility}
+          onClose={() => onCloseLayerPanel?.()}
+        />
+      )}
+
       {/* Zoom toolbar */}
       <div className="absolute right-3 top-3 flex items-center gap-1 rounded bg-black/70 p-1 backdrop-blur-sm">
+        {hasGrid && (
+          <>
+            <button
+              type="button"
+              aria-label={showGrid ? 'Hide grid' : 'Show grid'}
+              aria-pressed={showGrid}
+              title={showGrid ? 'Hide grid' : 'Show grid'}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setShowGrid((v) => !v)}
+              className={[
+                'flex h-7 w-7 items-center justify-center rounded transition-colors',
+                showGrid ? 'bg-white/15 text-[#60A5FA]' : 'text-slate-200 hover:bg-white/10',
+              ].join(' ')}
+              data-testid="map-grid-toggle"
+            >
+              <Grid3x3 className="h-3.5 w-3.5" />
+            </button>
+            <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden="true" />
+          </>
+        )}
         <button
           type="button"
           aria-label="Zoom out"

@@ -14,6 +14,9 @@ interface MainViewProps {
   className?: string;
   campaignId?: string;
   sessions?: Array<{ id: string; name: string; number: number; status: string }>;
+  /** Controlled active tool. When omitted, MainView manages it internally. */
+  activeTool?: ToolType;
+  onToolChange?: (tool: ToolType) => void;
 }
 
 export function MainView({
@@ -23,8 +26,13 @@ export function MainView({
   className = '',
   campaignId,
   sessions,
+  activeTool: controlledTool,
+  onToolChange,
 }: MainViewProps) {
-  const [activeTool, setActiveTool] = useState<ToolType>('pointer');
+  // Tool state is controlled when both props are supplied, else internal.
+  const [internalTool, setInternalTool] = useState<ToolType>('pointer');
+  const activeTool = controlledTool ?? internalTool;
+  const setActiveTool = onToolChange ?? setInternalTool;
   const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
   const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false);
   const [inspectorVisible, setInspectorVisible] = useState(true);
