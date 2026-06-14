@@ -16,6 +16,9 @@ interface MapTokenProps {
   canMove: boolean;
   isGM: boolean;
   isSelected: boolean;
+  /** When the ruler tool is active, a click picks this token for measurement. */
+  rulerActive?: boolean;
+  onMeasure?: () => void;
   /** `additive` is true when shift/ctrl/cmd is held (multi-select). */
   onSelect: (additive: boolean) => void;
   onBeginDrag: (e: ReactPointerEvent<HTMLDivElement>) => void;
@@ -41,6 +44,8 @@ export function MapToken({
   canMove,
   isGM,
   isSelected,
+  rulerActive = false,
+  onMeasure,
   onSelect,
   onBeginDrag,
   onContextMenu,
@@ -88,19 +93,29 @@ export function MapToken({
         role="button"
         tabIndex={0}
         onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          // Ruler tool: a click picks this token as a measurement endpoint —
+          // never selects or drags it.
+          if (rulerActive) {
+            e.stopPropagation();
+            onMeasure?.();
+            return;
+          }
           // Always select on press; if movable, the same press also kicks
           // off a drag. A pure click (no movement) leaves only the selection.
           // Shift/ctrl/cmd extends the selection (multi-select).
-          if (e.button === 0) {
-            e.stopPropagation();
-            onSelect(e.shiftKey || e.metaKey || e.ctrlKey);
-          }
+          e.stopPropagation();
+          onSelect(e.shiftKey || e.metaKey || e.ctrlKey);
           if (canMove) onBeginDrag(e);
         }}
         onContextMenu={onContextMenu}
         className={[
           'relative flex items-center justify-center overflow-hidden rounded-full border-[3px] shadow-lg',
-          canMove ? 'cursor-grab active:cursor-grabbing' : 'cursor-default',
+          rulerActive
+            ? 'cursor-crosshair'
+            : canMove
+              ? 'cursor-grab active:cursor-grabbing'
+              : 'cursor-default',
           token.hiddenFromPlayers ? 'opacity-70' : '',
           isSelected
             ? 'ring-4 ring-amber-300/90 ring-offset-2 ring-offset-black/40'

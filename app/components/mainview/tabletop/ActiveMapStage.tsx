@@ -47,7 +47,12 @@ interface ActiveMapStageProps {
   layerPanelOpen?: boolean;
   /** Close the Layers panel (resets the toolbar tool). */
   onCloseLayerPanel?: () => void;
+  /** Whether the measurement (ruler) tool is active. */
+  rulerActive?: boolean;
 }
+
+/** A measurement endpoint: a fixed image-space point, or a live token center. */
+type MeasurePoint = { kind: 'point'; x: number; y: number } | { kind: 'token'; tokenId: string };
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 8;
@@ -80,6 +85,7 @@ export function ActiveMapStage({
   onBroadcast,
   layerPanelOpen = false,
   onCloseLayerPanel,
+  rulerActive = false,
 }: ActiveMapStageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -108,6 +114,39 @@ export function ActiveMapStage({
   // players never gain this panel so it stays empty for them).
   const [activeLayer, setActiveLayer] = useState<MapLayerId>('public');
   const [hiddenLayers, setHiddenLayers] = useState<Set<MapLayerId>>(() => new Set());
+
+  // Measurement (ruler) tool — a single, ephemeral, client-only measurement.
+  // `start` is the anchor; `end` is a fixed second point (token→token); when
+  // there's no fixed end the line follows `cursor` (live). All in image space.
+  const [measureStart, setMeasureStart] = useState<MeasurePoint | null>(null);
+  const [measureEnd, setMeasureEnd] = useState<MeasurePoint | null>(null);
+  const [measureCursor, setMeasureCursor] = useState<{ x: number; y: number } | null>(null);
+
+  // Clear the measurement whenever the ruler tool is deselected.
+  useEffect(() => {
+    if (!rulerActive) {
+      setMeasureStart(null);
+      setMeasureEnd(null);
+      setMeasureCursor(null);
+    }
+  }, [rulerActive]);
+
+  // Picking a token while measuring: lock it as the end if we have a live
+  // start, otherwise begin a fresh measurement from it.
+  const pickTokenForMeasure = useCallback(
+    (token: MapTokenData) => {
+      setMeasureStart((start) => {
+        if (start && !measureEnd) {
+          setMeasureEnd({ kind: 'token', tokenId: token.id });
+          return start;
+        }
+        setMeasureEnd(null);
+        setMeasureCursor({ x: token.x, y: token.y });
+        return { kind: 'token', tokenId: token.id };
+      });
+    },
+    [measureEnd]
+  );
 
   const clearSelection = useCallback(() => {
     setSelectedTokenIds((cur) => (cur.size === 0 ? cur : new Set()));
@@ -240,6 +279,18 @@ export function ActiveMapStage({
 
   const onPanPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
+    // Ruler tool: a background click drops/relocates the measurement anchor
+    // (clicks on tokens are handled by MapToken). No pan/select while measuring.
+    if (rulerActive) {
+      const img = domToImage(e.clientX, e.clientY);
+      if (img) {
+        const p = { x: clamp(img.x, 0, map.imageWidth), y: clamp(img.y, 0, map.imageHeight) };
+        setMeasureStart({ kind: 'point', ...p });
+        setMeasureEnd(null);
+        setMeasureCursor(p);
+      }
+      return;
+    }
     // Background click deselects any selected token + closes the context menu.
     clearSelection();
     (e.target as Element).setPointerCapture?.(e.pointerId);
@@ -273,6 +324,14 @@ export function ActiveMapStage({
   );
 
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    // Ruler tool: the live endpoint follows the cursor until a fixed end is set.
+    if (rulerActive) {
+      if (measureStart && !measureEnd) {
+        const img = domToImage(e.clientX, e.clientY);
+        if (img) setMeasureCursor({ x: img.x, y: img.y });
+      }
+      return;
+    }
     const d = dragRef.current;
     if (d.mode === 'idle') return;
     if (d.mode === 'pan') {
@@ -577,7 +636,44 @@ export function ActiveMapStage({
     [isGM, currentUserId]
   );
 
-  const cursorClass = dragMode === 'pan' ? 'cursor-grabbing' : 'cursor-grab';
+  // Resolve the live measurement to DOM coordinates + a feet distance derived
+  // from the map's calibrated scale (never hard-coded).
+  const measurement = useMemo(() => {
+    if (!rulerActive || !measureStart) return null;
+    const resolve = (p: MeasurePoint): { x: number; y: number } | null => {
+      if (p.kind === 'point') return { x: p.x, y: p.y };
+      const t = tokens.find((tk) => tk.id === p.tokenId);
+      return t ? { x: t.x, y: t.y } : null;
+    };
+    const startImg = resolve(measureStart);
+    const endImg = measureEnd ? resolve(measureEnd) : measureCursor;
+    if (!startImg || !endImg) return null;
+    const pixelDist = Math.hypot(endImg.x - startImg.x, endImg.y - startImg.y);
+    const perSquare = map.scale.pixelsPerSquare || 1;
+    const feet = Math.round((pixelDist / perSquare) * map.scale.feetPerSquare);
+    const toDom = (p: { x: number; y: number }) => ({
+      x: imageOffsetX + p.x * effectiveScale,
+      y: imageOffsetY + p.y * effectiveScale,
+    });
+    return { start: toDom(startImg), end: toDom(endImg), feet };
+  }, [
+    rulerActive,
+    measureStart,
+    measureEnd,
+    measureCursor,
+    tokens,
+    map.scale.pixelsPerSquare,
+    map.scale.feetPerSquare,
+    imageOffsetX,
+    imageOffsetY,
+    effectiveScale,
+  ]);
+
+  const cursorClass = rulerActive
+    ? 'cursor-crosshair'
+    : dragMode === 'pan'
+      ? 'cursor-grabbing'
+      : 'cursor-grab';
 
   return (
     <div
@@ -644,6 +740,8 @@ export function ActiveMapStage({
           canMove={canMoveToken(token)}
           isGM={isGM}
           isSelected={selectedTokenIds.has(token.id)}
+          rulerActive={rulerActive}
+          onMeasure={() => pickTokenForMeasure(token)}
           onSelect={(additive) => selectToken(token.id, additive)}
           onBeginDrag={(e) => beginTokenDrag(token, e)}
           onContextMenu={(e) => handleTokenContextMenu(token, e)}
@@ -651,6 +749,46 @@ export function ActiveMapStage({
           onRemove={() => handleRemove(token)}
         />
       ))}
+
+      {/* Measurement (ruler) overlay — line + endpoints + distance in feet. */}
+      {measurement && (
+        <>
+          <svg
+            className="pointer-events-none absolute inset-0 z-30 h-full w-full"
+            data-testid="ruler-line"
+            aria-hidden="true"
+          >
+            <line
+              x1={measurement.start.x}
+              y1={measurement.start.y}
+              x2={measurement.end.x}
+              y2={measurement.end.y}
+              stroke="#fbbf24"
+              strokeWidth={2}
+              strokeDasharray="6 4"
+            />
+            <circle
+              cx={measurement.start.x}
+              cy={measurement.start.y}
+              r={6}
+              fill="#fbbf24"
+              fillOpacity={0.9}
+              data-testid="ruler-anchor"
+            />
+            <circle cx={measurement.end.x} cy={measurement.end.y} r={4} fill="#fbbf24" />
+          </svg>
+          <div
+            className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded bg-black/80 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-amber-300 shadow"
+            style={{
+              left: (measurement.start.x + measurement.end.x) / 2,
+              top: (measurement.start.y + measurement.end.y) / 2,
+            }}
+            data-testid="ruler-distance"
+          >
+            {measurement.feet} ft
+          </div>
+        </>
+      )}
 
       {/* Delete-confirmation dialog */}
       {tokensPendingDelete && tokensPendingDelete.length > 0 && (

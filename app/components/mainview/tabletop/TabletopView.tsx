@@ -602,6 +602,7 @@ export function TabletopView({
             onBroadcast={sendMapMessage}
             layerPanelOpen={activeTool === 'layer'}
             onCloseLayerPanel={() => onToolChange?.('pointer')}
+            rulerActive={activeTool === 'ruler'}
           />
         ) : (
           <TabletopCanvas screen={activeScreen} />
