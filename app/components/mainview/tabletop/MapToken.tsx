@@ -18,7 +18,7 @@ interface MapTokenProps {
   isSelected: boolean;
   /** When the ruler tool is active, a click picks this token for measurement. */
   rulerActive?: boolean;
-  onMeasure?: () => void;
+  onMeasure?: (shiftKey: boolean) => void;
   /** `additive` is true when shift/ctrl/cmd is held (multi-select). */
   onSelect: (additive: boolean) => void;
   onBeginDrag: (e: ReactPointerEvent<HTMLDivElement>) => void;
@@ -98,7 +98,7 @@ export function MapToken({
           // never selects or drags it.
           if (rulerActive) {
             e.stopPropagation();
-            onMeasure?.();
+            onMeasure?.(e.shiftKey);
             return;
           }
           // Always select on press; if movable, the same press also kicks
