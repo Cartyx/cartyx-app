@@ -28,6 +28,17 @@ export type TabletopMapMessage =
   | { type: 'token:removed'; mapId: string; tokenId: string; byUserId?: string }
   | { type: 'token:updated'; mapId: string; token: MapTokenData; byUserId?: string }
   | { type: 'text:added'; mapId: string; text: MapTextData; byUserId?: string }
+  | {
+      type: 'text:moved';
+      mapId: string;
+      textId: string;
+      x: number;
+      y: number;
+      byUserId?: string;
+      /** True for the final, persisted broadcast after drag-end; false during drag. */
+      final?: boolean;
+    }
+  | { type: 'text:updated'; mapId: string; text: MapTextData; byUserId?: string }
   | { type: 'text:removed'; mapId: string; textId: string; byUserId?: string };
 
 /**

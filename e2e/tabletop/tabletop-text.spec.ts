@@ -301,3 +301,97 @@ test('the show/hide text toggle hides and shows all text', async ({ page }) => {
   await page.getByTestId('map-text-toggle').click();
   await expect(page.getByTestId('map-text').filter({ hasText: 'Toggle me' })).toBeVisible();
 });
+
+test('hovering text highlights it (interactive) while the text tool is active', async ({
+  page,
+}) => {
+  await gotoTabletop(page);
+  await selectTextTool(page);
+  await writeText(page, 0.6, 0.45, 'Hover me');
+
+  const text = page.getByTestId('map-text').filter({ hasText: 'Hover me' });
+  await text.hover();
+  // Interactive affordance: a move cursor (it can be picked up and dragged).
+  await expect(text).toHaveCSS('cursor', 'move');
+});
+
+test('dragging text moves it on the map and persists the new position', async ({ page }) => {
+  await gotoTabletop(page);
+  await selectTextTool(page);
+  await writeText(page, 0.55, 0.4, 'Drag me');
+
+  const text = page.getByTestId('map-text').filter({ hasText: 'Drag me' });
+  await expect(text).toBeVisible();
+
+  const before = (await text.boundingBox())!;
+  const startBefore = await db()
+    .collection('mapText')
+    .findOne({ mapId: new ObjectId(provisioned.mapId), text: 'Drag me' });
+  const x0 = (startBefore as { x?: number } | null)?.x ?? 0;
+  const y0 = (startBefore as { y?: number } | null)?.y ?? 0;
+
+  // Drag from the text's center down-right by a clear delta.
+  const cx = before.x + before.width / 2;
+  const cy = before.y + before.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 160, cy + 110, { steps: 8 });
+  await page.mouse.up();
+
+  // It visibly moved…
+  await expect
+    .poll(async () => (await text.boundingBox())?.x ?? before.x)
+    .toBeGreaterThan(before.x + 40);
+
+  // …and the new position persisted to the DB.
+  await expect
+    .poll(async () => {
+      const doc = await db()
+        .collection('mapText')
+        .findOne({ mapId: new ObjectId(provisioned.mapId), text: 'Drag me' });
+      return (doc as { x?: number } | null)?.x ?? x0;
+    })
+    .toBeGreaterThan(x0 + 1);
+  const after = await db()
+    .collection('mapText')
+    .findOne({ mapId: new ObjectId(provisioned.mapId), text: 'Drag me' });
+  expect((after as { y?: number } | null)?.y ?? y0).toBeGreaterThan(y0 + 1);
+});
+
+test('double-clicking text lets you edit it after it was placed', async ({ page }) => {
+  await gotoTabletop(page);
+  await selectTextTool(page);
+  await writeText(page, 0.6, 0.5, 'Original');
+
+  const original = page.getByTestId('map-text').filter({ hasText: 'Original' });
+  await expect(original).toBeVisible();
+
+  // Double-click opens the editor prefilled with the current text.
+  await original.dblclick();
+  const input = page.getByTestId('map-text-input');
+  await expect(input).toBeVisible();
+  await expect(input).toHaveValue('Original');
+
+  // Replace and commit.
+  await input.fill('Edited text');
+  await input.press('Enter');
+
+  await expect(page.getByTestId('map-text').filter({ hasText: 'Edited text' })).toBeVisible();
+  await expect(page.getByTestId('map-text').filter({ hasText: 'Original' })).toHaveCount(0);
+
+  // Persisted (same doc, updated content — still exactly one text on the map).
+  await expect
+    .poll(async () =>
+      db()
+        .collection('mapText')
+        .countDocuments({ mapId: new ObjectId(provisioned.mapId), text: 'Edited text' })
+    )
+    .toBe(1);
+  await expect
+    .poll(async () =>
+      db()
+        .collection('mapText')
+        .countDocuments({ mapId: new ObjectId(provisioned.mapId) })
+    )
+    .toBe(1);
+});

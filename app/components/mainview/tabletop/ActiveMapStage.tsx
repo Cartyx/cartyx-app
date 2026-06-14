@@ -25,6 +25,8 @@ import {
   useMapTextMutations,
   applyTextAddToCache,
   applyTextRemoveFromCache,
+  applyTextMoveToCache,
+  applyTextUpdateToCache,
 } from '~/hooks/useMapTexts';
 import { MapToken } from './MapToken';
 import { LayersPanel } from './LayersPanel';
@@ -128,7 +130,12 @@ export function ActiveMapStage({
   const [textPanelOpen, setTextPanelOpen] = useState(false);
   // The in-progress text being typed (image-space anchor + value), and the
   // currently selected text (for deletion).
-  const [textDraft, setTextDraft] = useState<{ x: number; y: number } | null>(null);
+  const [textDraft, setTextDraft] = useState<{
+    x: number;
+    y: number;
+    /** Set when editing an existing text (vs. creating a new one). */
+    editingId?: string;
+  } | null>(null);
   const [textDraftValue, setTextDraftValue] = useState('');
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
 
@@ -203,12 +210,27 @@ export function ActiveMapStage({
     setSelectedTextId(null);
   }, []);
 
+  // Open the editor over an existing text (double-click to edit), prefilled.
+  const openTextEdit = useCallback((t: MapTextData) => {
+    draftActiveRef.current = true;
+    setSelectedTextId(null);
+    setTextDraft({ x: t.x, y: t.y, editingId: t.id });
+    setTextDraftValue(t.text);
+  }, []);
+
   // Focus the draft input on the next frame — focusing synchronously during the
   // opening pointerdown gets clobbered by the browser's default mousedown focus
-  // handling, which would immediately blur (and commit-empty) the input.
+  // handling, which would immediately blur (and commit-empty) the input. When
+  // editing existing text, select it all so typing replaces it.
   useEffect(() => {
     if (!textDraft) return;
-    const id = requestAnimationFrame(() => textInputRef.current?.focus());
+    const editing = textDraft.editingId != null;
+    const id = requestAnimationFrame(() => {
+      const el = textInputRef.current;
+      if (!el) return;
+      el.focus();
+      if (editing) el.select();
+    });
     return () => cancelAnimationFrame(id);
   }, [textDraft]);
 
@@ -218,7 +240,15 @@ export function ActiveMapStage({
     setTextDraftValue('');
   }, []);
 
-  // Commit the in-progress text (if non-empty) as a new persisted map text.
+  // A player may modify (move/edit/delete) only their own text; a GM may modify
+  // anyone's. The server enforces this; the client mirrors it for affordances.
+  const canModifyText = useCallback(
+    (t: MapTextData) => isGM || (currentUserId != null && t.createdBy === currentUserId),
+    [isGM, currentUserId]
+  );
+
+  // Commit the in-progress text. Creates a new text, or — when editing — saves
+  // the edited content of an existing one.
   const commitTextDraft = useCallback(
     (rawValue: string) => {
       if (!draftActiveRef.current) return;
@@ -227,7 +257,26 @@ export function ActiveMapStage({
       setTextDraft(null);
       setTextDraftValue('');
       const value = rawValue.trim();
-      if (!draft || !value) return;
+      if (!draft) return;
+
+      if (draft.editingId) {
+        // Empty edit → leave the original unchanged.
+        if (!value) return;
+        const existing = texts.find((t) => t.id === draft.editingId);
+        if (existing) applyTextUpdateToCache(qc, campaignId, map.id, { ...existing, text: value });
+        textMutations.update.mutate(
+          { textId: draft.editingId, text: value },
+          {
+            onSuccess: (res) => {
+              applyTextUpdateToCache(qc, campaignId, map.id, res.text);
+              onBroadcast({ type: 'text:updated', mapId: map.id, text: res.text });
+            },
+          }
+        );
+        return;
+      }
+
+      if (!value) return;
       textMutations.create.mutate(
         { x: draft.x, y: draft.y, text: value, color: textColor, fontSize: textFontSize },
         {
@@ -238,14 +287,18 @@ export function ActiveMapStage({
         }
       );
     },
-    [textDraft, textColor, textFontSize, textMutations.create, qc, campaignId, map.id, onBroadcast]
-  );
-
-  // A player may delete only their own text; a GM may delete anyone's. The
-  // server enforces this; the client mirrors it for the delete affordance.
-  const canDeleteText = useCallback(
-    (t: MapTextData) => isGM || (currentUserId != null && t.createdBy === currentUserId),
-    [isGM, currentUserId]
+    [
+      textDraft,
+      texts,
+      textColor,
+      textFontSize,
+      textMutations.create,
+      textMutations.update,
+      qc,
+      campaignId,
+      map.id,
+      onBroadcast,
+    ]
   );
 
   const removeText = useCallback(
@@ -279,13 +332,13 @@ export function ActiveMapStage({
       if (e.key !== 'Delete' && e.key !== 'Backspace') return;
       if (!selectedTextId) return;
       const t = texts.find((x) => x.id === selectedTextId);
-      if (!t || !canDeleteText(t)) return;
+      if (!t || !canModifyText(t)) return;
       e.preventDefault();
       removeText(t.id);
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedTextId, texts, canDeleteText, removeText]);
+  }, [selectedTextId, texts, canModifyText, removeText]);
 
   // Picking a token while measuring. Shift adds it as a waypoint and keeps the
   // line live; a plain pick with an existing line completes the measurement at
@@ -431,9 +484,19 @@ export function ActiveMapStage({
         startTokenX: number;
         startTokenY: number;
         lastBroadcastAt: number;
+      }
+    | {
+        mode: 'text';
+        textId: string;
+        startClientX: number;
+        startClientY: number;
+        startX: number;
+        startY: number;
+        lastBroadcastAt: number;
+        moved: boolean;
       };
   const dragRef = useRef<DragState>({ mode: 'idle' });
-  const [dragMode, setDragMode] = useState<'idle' | 'pan' | 'token'>('idle');
+  const [dragMode, setDragMode] = useState<'idle' | 'pan' | 'token' | 'text'>('idle');
 
   const onPanPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -500,6 +563,33 @@ export function ActiveMapStage({
     []
   );
 
+  // Begin dragging a text (text tool, own/GM only). A press that doesn't move
+  // is just a selection; movement past a small threshold relocates the text.
+  const beginTextDrag = useCallback(
+    (t: MapTextData, e: ReactPointerEvent<HTMLButtonElement>) => {
+      if (e.button !== 0) return;
+      // Note: no preventDefault — it can suppress the click/dblclick used for
+      // editing. The container's `select-none` already blocks text selection.
+      e.stopPropagation();
+      cancelTextDraft();
+      clearSelection();
+      setSelectedTextId(t.id);
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+      dragRef.current = {
+        mode: 'text',
+        textId: t.id,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        startX: t.x,
+        startY: t.y,
+        lastBroadcastAt: 0,
+        moved: false,
+      };
+      setDragMode('text');
+    },
+    [cancelTextDraft, clearSelection]
+  );
+
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     // Ruler tool: the live endpoint follows the cursor until a fixed end is set.
     if (rulerActive) {
@@ -538,6 +628,18 @@ export function ActiveMapStage({
           y: ny,
         });
       }
+    } else if (d.mode === 'text') {
+      const dxImage = (e.clientX - d.startClientX) / effectiveScale;
+      const dyImage = (e.clientY - d.startClientY) / effectiveScale;
+      const nx = clamp(d.startX + dxImage, 0, map.imageWidth);
+      const ny = clamp(d.startY + dyImage, 0, map.imageHeight);
+      if (Math.abs(dxImage) > 1 || Math.abs(dyImage) > 1) d.moved = true;
+      applyTextMoveToCache(qc, campaignId, map.id, d.textId, nx, ny);
+      const now = Date.now();
+      if (now - d.lastBroadcastAt >= MOVE_BROADCAST_INTERVAL_MS) {
+        d.lastBroadcastAt = now;
+        onBroadcast({ type: 'text:moved', mapId: map.id, textId: d.textId, x: nx, y: ny });
+      }
     }
   };
 
@@ -564,6 +666,28 @@ export function ActiveMapStage({
           },
         }
       );
+    } else if (d.mode === 'text') {
+      if (d.moved) {
+        const dxImage = (e.clientX - d.startClientX) / effectiveScale;
+        const dyImage = (e.clientY - d.startClientY) / effectiveScale;
+        const nx = clamp(d.startX + dxImage, 0, map.imageWidth);
+        const ny = clamp(d.startY + dyImage, 0, map.imageHeight);
+        applyTextMoveToCache(qc, campaignId, map.id, d.textId, nx, ny);
+        textMutations.update.mutate(
+          { textId: d.textId, x: nx, y: ny },
+          {
+            onSuccess: () =>
+              onBroadcast({
+                type: 'text:moved',
+                mapId: map.id,
+                textId: d.textId,
+                x: nx,
+                y: ny,
+                final: true,
+              }),
+          }
+        );
+      }
     }
     dragRef.current = { mode: 'idle' };
     setDragMode('idle');
@@ -876,9 +1000,11 @@ export function ActiveMapStage({
 
   const cursorClass = rulerActive
     ? 'cursor-crosshair'
-    : dragMode === 'pan'
-      ? 'cursor-grabbing'
-      : 'cursor-grab';
+    : textActive
+      ? 'cursor-text'
+      : dragMode === 'pan'
+        ? 'cursor-grabbing'
+        : 'cursor-grab';
 
   return (
     <div
@@ -962,11 +1088,16 @@ export function ActiveMapStage({
         />
       ))}
 
-      {/* Map text layer (shared). Interactive only while the text tool is
-          active; otherwise display-only so it never blocks panning/tokens. */}
+      {/* Map text layer (shared). Interactive (hover-highlight, drag to move,
+          double-click to edit, select + Delete) only while the text tool is
+          active AND the viewer may modify that text; otherwise display-only so
+          it never blocks panning/tokens. The text being edited is hidden behind
+          its editor. */}
       {showText &&
         texts.map((t) => {
+          if (textDraft?.editingId === t.id) return null;
           const selected = selectedTextId === t.id;
+          const interactive = textActive && canModifyText(t);
           return (
             <button
               key={t.id}
@@ -974,15 +1105,20 @@ export function ActiveMapStage({
               data-testid="map-text"
               data-text-id={t.id}
               onPointerDown={(e) => {
-                if (!textActive) return;
+                if (!interactive) return;
+                beginTextDrag(t, e);
+              }}
+              onDoubleClick={(e) => {
+                if (!interactive) return;
                 e.stopPropagation();
-                clearSelection();
-                cancelTextDraft();
-                setSelectedTextId(t.id);
+                e.preventDefault();
+                openTextEdit(t);
               }}
               className={[
                 'absolute z-30 m-0 max-w-[40vw] whitespace-pre-wrap break-words border-0 bg-transparent p-0 text-left font-sans font-semibold leading-tight',
-                textActive ? 'cursor-pointer' : 'pointer-events-none',
+                interactive
+                  ? 'cursor-move outline-offset-2 hover:outline hover:outline-2 hover:outline-[#60A5FA]/70'
+                  : 'pointer-events-none',
                 selected ? 'rounded outline outline-2 outline-offset-2 outline-[#60A5FA]' : '',
               ].join(' ')}
               style={{

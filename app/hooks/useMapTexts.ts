@@ -6,6 +6,7 @@ import type { MapTextData } from '~/types/mapText';
 import {
   listMapTextsSchema,
   createMapTextSchema,
+  updateMapTextSchema,
   deleteMapTextSchema,
 } from '~/types/schemas/mapTexts';
 
@@ -25,6 +26,13 @@ const createMapTextFn = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const { createMapText } = await import('~/server/functions/mapTexts');
     return createMapText({ data });
+  });
+
+const updateMapTextFn = createServerFn({ method: 'POST' })
+  .inputValidator(updateMapTextSchema)
+  .handler(async ({ data }) => {
+    const { updateMapText } = await import('~/server/functions/mapTexts');
+    return updateMapText({ data });
   });
 
 const deleteMapTextFn = createServerFn({ method: 'POST' })
@@ -71,6 +79,21 @@ export function useMapTextMutations(campaignId: string, mapId: string) {
     onError: (e) => captureException(e, { action: 'useMapTextMutations.create' }),
   });
 
+  const update = useMutation({
+    mutationFn: async (input: {
+      textId: string;
+      x?: number;
+      y?: number;
+      text?: string;
+      color?: string;
+      fontSize?: number;
+    }) => {
+      return await updateMapTextFn({ data: { campaignId, mapId, ...input } });
+    },
+    onSuccess: invalidate,
+    onError: (e) => captureException(e, { action: 'useMapTextMutations.update' }),
+  });
+
   const remove = useMutation({
     mutationFn: async (textId: string) => {
       return await deleteMapTextFn({ data: { campaignId, mapId, textId } });
@@ -79,7 +102,7 @@ export function useMapTextMutations(campaignId: string, mapId: string) {
     onError: (e) => captureException(e, { action: 'useMapTextMutations.remove' }),
   });
 
-  return { create, remove };
+  return { create, update, remove };
 }
 
 // ---------------------------------------------------------------------------
@@ -108,5 +131,31 @@ export function applyTextRemoveFromCache(
   qc.setQueryData<MapTextData[]>(queryKeys.mapTexts.list(campaignId, mapId), (prev) => {
     if (!prev) return prev;
     return prev.filter((t) => t.id !== textId);
+  });
+}
+
+export function applyTextMoveToCache(
+  qc: ReturnType<typeof useQueryClient>,
+  campaignId: string,
+  mapId: string,
+  textId: string,
+  x: number,
+  y: number
+) {
+  qc.setQueryData<MapTextData[]>(queryKeys.mapTexts.list(campaignId, mapId), (prev) => {
+    if (!prev) return prev;
+    return prev.map((t) => (t.id === textId ? { ...t, x, y } : t));
+  });
+}
+
+export function applyTextUpdateToCache(
+  qc: ReturnType<typeof useQueryClient>,
+  campaignId: string,
+  mapId: string,
+  text: MapTextData
+) {
+  qc.setQueryData<MapTextData[]>(queryKeys.mapTexts.list(campaignId, mapId), (prev) => {
+    if (!prev) return prev;
+    return prev.map((t) => (t.id === text.id ? text : t));
   });
 }

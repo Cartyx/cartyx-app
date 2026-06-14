@@ -17,7 +17,12 @@ import {
   applyTokenRemoveFromCache,
   applyTokenUpdateToCache,
 } from '~/hooks/useMapTokens';
-import { applyTextAddToCache, applyTextRemoveFromCache } from '~/hooks/useMapTexts';
+import {
+  applyTextAddToCache,
+  applyTextRemoveFromCache,
+  applyTextMoveToCache,
+  applyTextUpdateToCache,
+} from '~/hooks/useMapTexts';
 import { ActiveMapStage } from './ActiveMapStage';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '~/utils/queryKeys';
@@ -129,6 +134,10 @@ export function TabletopView({
       applyTokenUpdateToCache(queryClient, campaignId, msg.mapId, msg.token);
     } else if (msg.type === 'text:added') {
       applyTextAddToCache(queryClient, campaignId, msg.mapId, msg.text);
+    } else if (msg.type === 'text:moved') {
+      applyTextMoveToCache(queryClient, campaignId, msg.mapId, msg.textId, msg.x, msg.y);
+    } else if (msg.type === 'text:updated') {
+      applyTextUpdateToCache(queryClient, campaignId, msg.mapId, msg.text);
     } else if (msg.type === 'text:removed') {
       applyTextRemoveFromCache(queryClient, campaignId, msg.mapId, msg.textId);
     }

@@ -25,6 +25,27 @@ export const createMapTextSchema = z.object({
   fontSize: z.number().int().min(MIN_MAP_TEXT_FONT_SIZE).max(MAX_MAP_TEXT_FONT_SIZE),
 });
 
+export const updateMapTextSchema = z
+  .object({
+    campaignId: z.string().trim().min(1),
+    mapId: z.string().trim().min(1),
+    textId: z.string().trim().min(1),
+    x: z.number().finite().optional(),
+    y: z.number().finite().optional(),
+    text: z.string().trim().min(1, 'Text is required').max(MAX_MAP_TEXT_LENGTH).optional(),
+    color: hexColor.optional(),
+    fontSize: z.number().int().min(MIN_MAP_TEXT_FONT_SIZE).max(MAX_MAP_TEXT_FONT_SIZE).optional(),
+  })
+  .refine(
+    (d) =>
+      d.x !== undefined ||
+      d.y !== undefined ||
+      d.text !== undefined ||
+      d.color !== undefined ||
+      d.fontSize !== undefined,
+    { message: 'At least one field to update (x, y, text, color, fontSize) is required' }
+  );
+
 export const deleteMapTextSchema = z.object({
   campaignId: z.string().trim().min(1),
   mapId: z.string().trim().min(1),

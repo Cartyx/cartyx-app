@@ -10,6 +10,7 @@ import type { MapTextData } from '~/types/mapText';
 import {
   listMapTextsSchema,
   createMapTextSchema,
+  updateMapTextSchema,
   deleteMapTextSchema,
 } from '~/types/schemas/mapTexts';
 
@@ -148,6 +149,56 @@ export const createMapText = createServerFn({ method: 'POST' })
         action: 'createMapText',
         campaignId: data.campaignId,
         mapId: data.mapId,
+      });
+      throw e;
+    }
+  });
+
+/**
+ * Update a text's position and/or content/style. A player may update only
+ * their own text; a GM may update anyone's. Authoritative permission check.
+ */
+export const updateMapText = createServerFn({ method: 'POST' })
+  .inputValidator(updateMapTextSchema)
+  .handler(async ({ data }) => {
+    let sessionUserId: string | undefined;
+    try {
+      const member = await requireCampaignMember(data.campaignId);
+      sessionUserId = member.sessionUserId;
+
+      const text = await MapText.findOne({
+        _id: data.textId,
+        mapId: data.mapId,
+        campaignId: data.campaignId,
+      });
+      if (!text) throw new Error('Text not found');
+
+      const canModify = member.isGM || String(text.createdBy) === member.userId;
+      if (!canModify) throw new Error('Forbidden');
+
+      if (data.x !== undefined || data.y !== undefined) {
+        const map = await MapModel.findOne(
+          { _id: data.mapId, campaignId: data.campaignId },
+          'imageWidth imageHeight'
+        ).lean();
+        const mDoc = (map ?? {}) as { imageWidth?: number; imageHeight?: number };
+        const w = mDoc.imageWidth ?? Number.POSITIVE_INFINITY;
+        const h = mDoc.imageHeight ?? Number.POSITIVE_INFINITY;
+        if (data.x !== undefined) text.x = Math.max(0, Math.min(w, data.x));
+        if (data.y !== undefined) text.y = Math.max(0, Math.min(h, data.y));
+      }
+      if (data.text !== undefined) text.text = data.text;
+      if (data.color !== undefined) text.color = data.color;
+      if (data.fontSize !== undefined) text.fontSize = data.fontSize;
+      text.updatedAt = new Date();
+      await text.save();
+
+      return { text: serializeText(text.toObject() as TextDoc) };
+    } catch (e) {
+      serverCaptureException(e, sessionUserId, {
+        action: 'updateMapText',
+        campaignId: data.campaignId,
+        textId: data.textId,
       });
       throw e;
     }
