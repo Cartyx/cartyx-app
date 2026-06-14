@@ -65,7 +65,7 @@ const {
     ]),
     mapTokenMock: make('MapToken', 'mapToken', [
       [{ mapId: 1 }, {}],
-      [{ mapId: 1, sourceCollection: 1, sourceDocumentId: 1 }, { unique: true }],
+      [{ mapId: 1, sourceCollection: 1, sourceDocumentId: 1, instanceNumber: 1 }, { unique: true }],
     ]),
     monsterMock: make('Monster', 'monsters', [
       [{ campaignId: 1, updatedAt: -1 }, {}],
@@ -185,7 +185,10 @@ describe('inspectIndexes', () => {
     mapTokenMock.listIndexes.mockResolvedValue([
       { key: { _id: 1 } },
       { key: { mapId: 1 } },
-      { key: { mapId: 1, sourceCollection: 1, sourceDocumentId: 1 }, unique: true },
+      {
+        key: { mapId: 1, sourceCollection: 1, sourceDocumentId: 1, instanceNumber: 1 },
+        unique: true,
+      },
     ]);
     monsterMock.listIndexes.mockResolvedValue([
       { key: { _id: 1 } },
@@ -407,7 +410,10 @@ describe('inspectIndexes', () => {
     ]);
     mapTokenMock.listIndexes.mockResolvedValue([
       { key: { _id: 1 } },
-      { key: { mapId: 1, sourceCollection: 1, sourceDocumentId: 1 }, unique: true },
+      {
+        key: { mapId: 1, sourceCollection: 1, sourceDocumentId: 1, instanceNumber: 1 },
+        unique: true,
+      },
       // optional mapId-only index is missing
     ]);
 

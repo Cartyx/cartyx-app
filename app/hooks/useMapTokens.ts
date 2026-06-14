@@ -7,6 +7,7 @@ import type { TokenSource } from '~/types/schemas/mapTokens';
 import {
   listMapTokensSchema,
   createMapTokenSchema,
+  createMapTokensBatchSchema,
   moveMapTokenSchema,
   updateMapTokenSchema,
   deleteMapTokenSchema,
@@ -24,6 +25,13 @@ const createMapTokenFn = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const { createMapToken } = await import('~/server/functions/mapTokens');
     return createMapToken({ data });
+  });
+
+const createMapTokensBatchFn = createServerFn({ method: 'POST' })
+  .inputValidator(createMapTokensBatchSchema)
+  .handler(async ({ data }) => {
+    const { createMapTokensBatch } = await import('~/server/functions/mapTokens');
+    return createMapTokensBatch({ data });
   });
 
 const moveMapTokenFn = createServerFn({ method: 'POST' })
@@ -81,6 +89,16 @@ export function useMapTokenMutations(campaignId: string, mapId: string) {
     onError: (e) => captureException(e, { action: 'useMapTokenMutations.create' }),
   });
 
+  const createBatch = useMutation({
+    mutationFn: async (input: { sourceDocumentId: string; count: number }) => {
+      return await createMapTokensBatchFn({
+        data: { campaignId, mapId, sourceCollection: 'monster', ...input },
+      });
+    },
+    onSuccess: invalidate,
+    onError: (e) => captureException(e, { action: 'useMapTokenMutations.createBatch' }),
+  });
+
   const move = useMutation({
     mutationFn: async (input: { tokenId: string; x: number; y: number }) => {
       return await moveMapTokenFn({ data: { campaignId, mapId, ...input } });
@@ -107,7 +125,7 @@ export function useMapTokenMutations(campaignId: string, mapId: string) {
     onError: (e) => captureException(e, { action: 'useMapTokenMutations.remove' }),
   });
 
-  return { create, move, update, remove };
+  return { create, createBatch, move, update, remove };
 }
 
 /** Optimistic update: apply a move locally without refetching. */

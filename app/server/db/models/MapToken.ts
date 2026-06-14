@@ -24,6 +24,10 @@ const mapTokenSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       required: true,
     },
+    // Per-(map, source entity) instance number for sources that can appear more
+    // than once on a map (monsters: Goblin A, Goblin B …). Unset/null for
+    // players and characters, which remain unique per entity.
+    instanceNumber: { type: Number, default: null },
     // Populated for player-owned tokens so we can gate movement.
     ownerUserId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -54,9 +58,13 @@ const mapTokenSchema = new mongoose.Schema(
 // istanbul ignore next
 if (typeof (mapTokenSchema as { index?: unknown }).index === 'function') {
   mapTokenSchema.index({ mapId: 1 });
-  // Unique: a given source entity may only appear once per map (drop again =
-  // refocus, not duplicate).
-  mapTokenSchema.index({ mapId: 1, sourceCollection: 1, sourceDocumentId: 1 }, { unique: true });
+  // Unique per (map, source entity, instance). Players/characters leave
+  // instanceNumber null → at most one per entity (re-drop refocuses, not
+  // duplicates). Monsters get distinct instance numbers → many per entity.
+  mapTokenSchema.index(
+    { mapId: 1, sourceCollection: 1, sourceDocumentId: 1, instanceNumber: 1 },
+    { unique: true }
+  );
 }
 
 export const MapToken = mongoose.models.MapToken || mongoose.model('MapToken', mapTokenSchema);

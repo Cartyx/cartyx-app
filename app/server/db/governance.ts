@@ -95,7 +95,7 @@ export const INDEX_GOVERNANCE: Record<string, GovernanceEntry[]> = {
   MapToken: [
     { key: { mapId: 1 }, severity: 'optional' },
     {
-      key: { mapId: 1, sourceCollection: 1, sourceDocumentId: 1 },
+      key: { mapId: 1, sourceCollection: 1, sourceDocumentId: 1, instanceNumber: 1 },
       severity: 'critical',
     },
   ],

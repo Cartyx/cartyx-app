@@ -20,6 +20,15 @@ export const createMapTokenSchema = z.object({
   sizeSquares: z.number().positive().max(20).optional(),
 });
 
+/** Place N instances of a monster at random positions (ctrl/cmd-drag). */
+export const createMapTokensBatchSchema = z.object({
+  campaignId: z.string().trim().min(1),
+  mapId: z.string().trim().min(1),
+  sourceCollection: z.literal('monster'),
+  sourceDocumentId: z.string().trim().min(1),
+  count: z.number().int().min(1).max(20),
+});
+
 export const moveMapTokenSchema = z.object({
   campaignId: z.string().trim().min(1),
   mapId: z.string().trim().min(1),

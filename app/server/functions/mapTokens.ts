@@ -14,6 +14,7 @@ import type { TokenSource } from '~/types/schemas/mapTokens';
 import {
   listMapTokensSchema,
   createMapTokenSchema,
+  createMapTokensBatchSchema,
   moveMapTokenSchema,
   updateMapTokenSchema,
   deleteMapTokenSchema,
@@ -33,6 +34,7 @@ type TokenDoc = {
   x?: number;
   y?: number;
   sizeSquares?: number;
+  instanceNumber?: number | null;
   color?: string;
   label?: string;
   imageUrl?: string;
@@ -54,6 +56,7 @@ function serializeToken(t: TokenDoc): MapTokenData {
     x: t.x ?? 0,
     y: t.y ?? 0,
     sizeSquares: t.sizeSquares ?? 1,
+    instanceNumber: typeof t.instanceNumber === 'number' ? t.instanceNumber : null,
     color: t.color ?? '#3498db',
     label: t.label ?? '',
     imageUrl: t.imageUrl ?? '',
@@ -180,6 +183,60 @@ async function hydrateFromSource(
 }
 
 // ---------------------------------------------------------------------------
+// Monster instance numbering — "Goblin A", "Goblin B", … per (map, monster).
+// ---------------------------------------------------------------------------
+
+/** Bijective base-26 label: 1→A, 26→Z, 27→AA, 28→AB, … */
+function instanceLabel(n: number): string {
+  let s = '';
+  let v = n;
+  while (v > 0) {
+    const r = (v - 1) % 26;
+    s = String.fromCharCode(65 + r) + s;
+    v = Math.floor((v - 1) / 26);
+  }
+  return s || 'A';
+}
+
+/**
+ * The `count` lowest positive instance numbers not already used by tokens of
+ * this monster on this map. Reuses numbers freed by deletions so labels stay
+ * compact and collision-free.
+ */
+async function nextInstanceNumbers(
+  mapId: string,
+  sourceDocumentId: string,
+  count: number
+): Promise<number[]> {
+  const existing = await MapToken.find(
+    { mapId, sourceCollection: 'monster', sourceDocumentId },
+    'instanceNumber'
+  ).lean();
+  const used = new Set<number>(
+    existing
+      .map((t) => (t as { instanceNumber?: number | null }).instanceNumber)
+      .filter((n): n is number => typeof n === 'number')
+  );
+  const out: number[] = [];
+  let n = 1;
+  while (out.length < count) {
+    if (!used.has(n)) out.push(n);
+    n += 1;
+  }
+  return out;
+}
+
+function randomPosition(width: number, height: number): { x: number; y: number } {
+  // Keep a margin so tokens don't spawn flush against the edge.
+  const mx = Math.min(width * 0.1, 80);
+  const my = Math.min(height * 0.1, 80);
+  return {
+    x: mx + Math.random() * Math.max(1, width - 2 * mx),
+    y: my + Math.random() * Math.max(1, height - 2 * my),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // listMapTokens (members)
 // ---------------------------------------------------------------------------
 
@@ -234,6 +291,16 @@ export const createMapToken = createServerFn({ method: 'POST' })
         data.campaignId
       );
 
+      // Monsters can appear many times per map, so each instance gets its own
+      // number + letter suffix ("Goblin A"). Players/characters stay unique
+      // (null instanceNumber) and keep their plain label.
+      let instanceNumber: number | null = null;
+      let label = hydrated.label;
+      if (data.sourceCollection === 'monster') {
+        instanceNumber = (await nextInstanceNumbers(data.mapId, data.sourceDocumentId, 1))[0];
+        label = `${hydrated.label} ${instanceLabel(instanceNumber)}`;
+      }
+
       try {
         const doc = await MapToken.create({
           mapId: data.mapId,
@@ -246,8 +313,9 @@ export const createMapToken = createServerFn({ method: 'POST' })
           // Honour an explicit footprint from the caller, else the
           // size derived from the source entity (monsters scale up).
           sizeSquares: data.sizeSquares ?? hydrated.sizeSquares,
+          instanceNumber,
           color: hydrated.color,
-          label: hydrated.label,
+          label,
           imageUrl: hydrated.imageUrl,
           hiddenFromPlayers: hydrated.hiddenFromPlayers,
           createdBy: member.userId,
@@ -275,6 +343,71 @@ export const createMapToken = createServerFn({ method: 'POST' })
     } catch (e) {
       serverCaptureException(e, sessionUserId, {
         action: 'createMapToken',
+        campaignId: data.campaignId,
+        mapId: data.mapId,
+      });
+      throw e;
+    }
+  });
+
+// ---------------------------------------------------------------------------
+// createMapTokensBatch (GM only) — place N monster instances at random spots.
+// ---------------------------------------------------------------------------
+
+export const createMapTokensBatch = createServerFn({ method: 'POST' })
+  .inputValidator(createMapTokensBatchSchema)
+  .handler(async ({ data }) => {
+    let sessionUserId: string | undefined;
+    try {
+      const member = await requireCampaignMember(data.campaignId);
+      sessionUserId = member.sessionUserId;
+      if (!member.isGM) throw new Error('Forbidden');
+
+      const map = await MapModel.findOne({ _id: data.mapId, campaignId: data.campaignId }).lean();
+      if (!map) throw new Error('Map not found');
+      const mDoc = map as { imageWidth?: number; imageHeight?: number };
+      const w = mDoc.imageWidth ?? 0;
+      const h = mDoc.imageHeight ?? 0;
+
+      const hydrated = await hydrateFromSource(
+        data.sourceCollection,
+        data.sourceDocumentId,
+        data.campaignId
+      );
+
+      const numbers = await nextInstanceNumbers(data.mapId, data.sourceDocumentId, data.count);
+      const docs = numbers.map((n) => {
+        const pos = randomPosition(w, h);
+        return {
+          mapId: data.mapId,
+          campaignId: data.campaignId,
+          sourceCollection: data.sourceCollection,
+          sourceDocumentId: data.sourceDocumentId,
+          ownerUserId: hydrated.ownerUserId,
+          x: pos.x,
+          y: pos.y,
+          sizeSquares: hydrated.sizeSquares,
+          instanceNumber: n,
+          color: hydrated.color,
+          label: `${hydrated.label} ${instanceLabel(n)}`,
+          imageUrl: hydrated.imageUrl,
+          hiddenFromPlayers: hydrated.hiddenFromPlayers,
+          createdBy: member.userId,
+        };
+      });
+
+      const created = await MapToken.insertMany(docs);
+      serverCaptureEvent(sessionUserId, 'map_tokens_batch_placed', {
+        campaign_id: data.campaignId,
+        map_id: data.mapId,
+        count: data.count,
+      });
+      return {
+        tokens: created.map((d) => serializeToken((d.toObject?.() ?? d) as TokenDoc)),
+      };
+    } catch (e) {
+      serverCaptureException(e, sessionUserId, {
+        action: 'createMapTokensBatch',
         campaignId: data.campaignId,
         mapId: data.mapId,
       });

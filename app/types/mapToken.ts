@@ -10,6 +10,8 @@ export interface MapTokenData {
   x: number;
   y: number;
   sizeSquares: number;
+  /** Per-(map, entity) instance for multi-placement sources (monsters); else null. */
+  instanceNumber: number | null;
   color: string;
   label: string;
   imageUrl: string;
