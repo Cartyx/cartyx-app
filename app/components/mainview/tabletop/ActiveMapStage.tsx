@@ -336,7 +336,9 @@ export function ActiveMapStage({
   // -------------------------------------------------------------------------
 
   const [isDragOverMap, setIsDragOverMap] = useState(false);
-  // Ctrl/Cmd-drag of a monster → "place how many?" dialog.
+  // Latest Shift state seen during a drag-over (see handleDragOver/handleDrop).
+  const dragShiftRef = useRef(false);
+  // Shift-drag of a monster → "place how many?" dialog.
   const [batchPlacement, setBatchPlacement] = useState<{
     sourceDocumentId: string;
     name: string;
@@ -366,6 +368,9 @@ export function ActiveMapStage({
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'copy';
+    // Track the Shift state from the continuously-firing dragover (the drop
+    // event's modifier flags are unreliable mid-DnD); read it on drop.
+    dragShiftRef.current = e.shiftKey;
     setIsDragOverMap(true);
   };
 
@@ -395,9 +400,11 @@ export function ActiveMapStage({
     e.preventDefault();
     e.stopPropagation();
 
-    // Ctrl/Cmd-dragging a monster opens a "how many?" dialog and scatters that
-    // many instances randomly across the map.
-    if (payload.collection === 'monster' && (e.ctrlKey || e.metaKey)) {
+    // Shift-dragging a monster opens a "how many?" dialog and scatters that
+    // many instances randomly across the map. Shift is used (not Ctrl/Cmd)
+    // because macOS treats Control-drag as a secondary click, so its modifier
+    // never reaches the web drop event.
+    if (payload.collection === 'monster' && (dragShiftRef.current || e.shiftKey)) {
       setBatchPlacement({ sourceDocumentId: payload.documentId, name: payload.title ?? 'monster' });
       return;
     }

@@ -205,7 +205,7 @@ async function dropOnMap(
   page: import('@playwright/test').Page,
   payload: { collection: string; documentId: string; title: string },
   offset: { dx: number; dy: number },
-  opts: { ctrl?: boolean } = {}
+  opts: { shift?: boolean } = {}
 ): Promise<void> {
   await page.evaluate(
     ({ payload, offset, opts }) => {
@@ -224,7 +224,7 @@ async function dropOnMap(
           cancelable: true,
           clientX,
           clientY,
-          ctrlKey: opts.ctrl ?? false,
+          shiftKey: opts.shift ?? false,
         });
         // Chromium's DragEvent constructor ignores the dataTransfer init member,
         // so force it on explicitly — otherwise handleDrop sees a null transfer.
@@ -415,7 +415,7 @@ test('dragging the same monster repeatedly adds letter suffixes (A, B, C), each 
   expect(new Set(ids).size).toBe(3);
 });
 
-test('ctrl-drag opens a 1–20 counter and scatters that many lettered monster tokens', async ({
+test('shift-drag opens a 1–20 counter and scatters that many lettered monster tokens', async ({
   page,
 }) => {
   await openTabletopAsGm(page);
@@ -424,7 +424,7 @@ test('ctrl-drag opens a 1–20 counter and scatters that many lettered monster t
     page,
     { collection: 'monster', documentId: provisioned.monsterIds[0], title: 'E2E Goblin' },
     { dx: 0, dy: 0 },
-    { ctrl: true }
+    { shift: true }
   );
 
   // Dialog appears with a counter starting at 1.
@@ -452,7 +452,7 @@ test('the counter clamps to the 1–20 range', async ({ page }) => {
     page,
     { collection: 'monster', documentId: provisioned.monsterIds[0], title: 'E2E Goblin' },
     { dx: 0, dy: 0 },
-    { ctrl: true }
+    { shift: true }
   );
   await expect(page.getByTestId('monster-batch-dialog')).toBeVisible();
 

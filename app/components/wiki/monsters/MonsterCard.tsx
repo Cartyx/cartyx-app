@@ -64,6 +64,7 @@ export function MonsterCard({ monster, onClick }: MonsterCardProps) {
       }}
       className="flex w-full cursor-grab items-center gap-3 border-b border-white/[0.05] px-4 py-3 text-left transition-colors hover:bg-white/[0.03] active:cursor-grabbing"
       style={{ borderLeftWidth: 4, borderLeftStyle: 'solid', borderLeftColor: monster.color }}
+      title="Drag onto the map to place a token · hold Shift while dropping to place several"
       data-testid="monster-card"
     >
       {/* Avatar */}
