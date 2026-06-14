@@ -21,6 +21,10 @@ import {
   LocationWindowWrapper,
   EditLocationModalWrapper,
 } from '~/components/wiki/locations/LocationWindowWrapper';
+import {
+  MonsterWindowWrapper,
+  EditMonsterModalWrapper,
+} from '~/components/wiki/monsters/MonsterWindowWrapper';
 import { GMScreenDialogs, type DialogState } from './GMScreenDialogs';
 import { ScreenBar } from './ScreenBar';
 import { StackCard } from './StackCard';
@@ -55,6 +59,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
+  const [editingMonsterId, setEditingMonsterId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [flashWindowId, setFlashWindowId] = useState<string | null>(null);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -447,6 +452,15 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
               onOpenLocation={(locId) => handleOpenItem('location', locId)}
             />
           );
+        } else if (w.collection === 'monster') {
+          windowContent = (
+            <MonsterWindowWrapper
+              monsterId={w.documentId}
+              campaignId={campaignId}
+              isGM={isGM}
+              onEdit={() => setEditingMonsterId(w.documentId)}
+            />
+          );
         } else {
           windowContent = (
             <div className="p-4 overflow-auto h-full">
@@ -740,6 +754,13 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
           campaignId={campaignId}
           locationId={editingLocationId}
           onClose={() => setEditingLocationId(null)}
+        />
+      )}
+      {editingMonsterId !== null && (
+        <EditMonsterModalWrapper
+          campaignId={campaignId}
+          monsterId={editingMonsterId}
+          onClose={() => setEditingMonsterId(null)}
         />
       )}
     </div>
