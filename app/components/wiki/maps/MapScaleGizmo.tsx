@@ -123,7 +123,10 @@ export function MapScaleGizmo({
   const clampGizmo = useCallback(
     (g: Gizmo): Gizmo => {
       const minSize = 4;
-      const maxSize = Math.min(imageWidth, imageHeight);
+      // Cap at 2000 to match the server's `updateMapScaleSchema` limit on
+      // `pixelsPerSquare` (which is derived from sizePx) — otherwise resizing
+      // past 2000px on a large image fails validation on save.
+      const maxSize = Math.min(2000, imageWidth, imageHeight);
       const sizePx = Math.max(minSize, Math.min(maxSize, g.sizePx));
       const half = sizePx / 2;
       const centerX = Math.max(half, Math.min(imageWidth - half, g.centerX));

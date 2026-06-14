@@ -96,6 +96,30 @@ function createR2Client(): { client: S3Client; bucket: string } | null {
   };
 }
 
+/**
+ * Best-effort broadcast of a `map:active-changed` event to the `tabletop-map`
+ * PartyKit room so every connected client invalidates/refetches the active map
+ * right away, regardless of which UI triggered the mutation. A party outage
+ * must never fail the DB write, so all errors are swallowed.
+ */
+async function broadcastActiveMapChanged(campaignId: string, mapId: string | null): Promise<void> {
+  const host = process.env.VITE_PUBLIC_PARTYKIT_HOST;
+  if (!host) return;
+  const isLocal = host.startsWith('localhost') || host.startsWith('127.0.0.1');
+  const protocol = isLocal ? 'http' : 'https';
+  // Mirrors `useTabletopMapParty`: party `tabletop-map`, room `tabletop-map-<campaignId>`.
+  const url = `${protocol}://${host}/parties/tabletop-map/tabletop-map-${campaignId}`;
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ type: 'map:active-changed', mapId }),
+    });
+  } catch {
+    // Best-effort only — clients still refetch on focus/refresh.
+  }
+}
+
 async function requireCampaignMember(
   campaignId: string
 ): Promise<{ userId: string; sessionUserId: string; isGM: boolean }> {
@@ -347,6 +371,8 @@ export const deleteMap = createServerFn({ method: 'POST' })
       ) {
         await Campaign.updateOne({ _id: data.campaignId }, { $set: { activeMapId: null } });
         activeCleared = true;
+        // Notify connected clients to stop rendering the now-deleted map.
+        await broadcastActiveMapChanged(data.campaignId, null);
       }
 
       // Best-effort R2 delete.
@@ -409,6 +435,8 @@ export const setActiveMap = createServerFn({ method: 'POST' })
         { _id: data.campaignId },
         { $set: { activeMapId: data.mapId, updatedAt: new Date() } }
       );
+
+      await broadcastActiveMapChanged(data.campaignId, data.mapId);
 
       serverCaptureEvent(sessionUserId, 'map_set_active', {
         campaign_id: data.campaignId,

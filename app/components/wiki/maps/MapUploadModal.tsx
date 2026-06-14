@@ -4,7 +4,6 @@ import {
   useRef,
   useState,
   type DragEvent as ReactDragEvent,
-  type ReactNode,
   type RefObject,
 } from 'react';
 import { createPortal } from 'react-dom';

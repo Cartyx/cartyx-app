@@ -9,7 +9,7 @@ import {
 } from '~/hooks/useTabletopScreens';
 import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
 import { useTabletopParty } from '~/hooks/useTabletopParty';
-import { useActiveMap, useMapsMutations } from '~/hooks/useMaps';
+import { useActiveMap } from '~/hooks/useMaps';
 import { useTabletopMapParty } from '~/hooks/useTabletopMapParty';
 import {
   applyTokenAddToCache,
@@ -94,13 +94,13 @@ export function TabletopView({
   const mutations = useTabletopMutations(campaignId);
   const { playerState, updateState } = useTabletopPlayerState(campaignId);
   const { data: activeMap } = useActiveMap(campaignId);
-  const mapMutations = useMapsMutations(campaignId);
   const queryClient = useQueryClient();
 
   // Map party — keeps every connected client in sync with map/token writes.
-  // `useMapsMutations.setActiveMap` writes to the DB; the GM client also
-  // broadcasts so other clients refetch the active map. Token events apply
-  // optimistic cache updates so remote clients see drags in realtime.
+  // Active-map changes are broadcast server-side by `setActiveMap`/`deleteMap`
+  // (so they fire regardless of which UI triggered the write); this client just
+  // reacts by refetching. Token events apply optimistic cache updates so remote
+  // clients see drags in realtime.
   const { send: sendMapMessage } = useTabletopMapParty(campaignId, getToken, (msg) => {
     if (msg.type === 'map:active-changed') {
       queryClient.invalidateQueries({ queryKey: queryKeys.maps.active(campaignId) });
@@ -116,16 +116,6 @@ export function TabletopView({
       applyTokenUpdateToCache(queryClient, campaignId, msg.mapId, msg.token);
     }
   });
-
-  // When the GM-only setActiveMap mutation succeeds locally, broadcast it.
-  // (The mutation already invalidates the query on the local client.)
-  useEffect(() => {
-    if (mapMutations.setActiveMap.isSuccess) {
-      const variables = mapMutations.setActiveMap.variables;
-      sendMapMessage({ type: 'map:active-changed', mapId: variables ?? null });
-      mapMutations.setActiveMap.reset();
-    }
-  }, [mapMutations.setActiveMap, sendMapMessage]);
 
   const [activeScreenId, setActiveScreenId] = useState<string | null>(null);
   const [badgeScreenIds, setBadgeScreenIds] = useState<Set<string>>(new Set());
