@@ -1,7 +1,7 @@
-import React from 'react'
-import type { Meta, StoryObj } from '@storybook/react-vite'
-import { CampaignCard, type CampaignData } from './CampaignCard'
-import { Toast } from '~/components/Toast'
+import React from 'react';
+import type { Meta, StoryObj } from '@storybook/react-vite';
+import { CampaignCard, type CampaignData } from './CampaignCard';
+import { Toast } from '~/components/Toast';
 
 const baseCampaign: CampaignData = {
   id: 'camp-1',
@@ -24,17 +24,36 @@ const baseCampaign: CampaignData = {
   },
   players: { current: 3, max: 4 },
   partyMembers: [
-    { id: '1', characterName: 'Thalion Swiftarrow', characterClass: 'Ranger', avatar: null, userId: 'u1' },
-    { id: '2', characterName: 'Baldric Ironforge', characterClass: 'Fighter', avatar: null, userId: 'u2' },
-    { id: '3', characterName: 'Lyra Moonwhisper', characterClass: 'Wizard', avatar: null, userId: 'u3' },
+    {
+      id: '1',
+      characterName: 'Thalion Swiftarrow',
+      characterClass: 'Ranger',
+      avatar: null,
+      userId: 'u1',
+    },
+    {
+      id: '2',
+      characterName: 'Baldric Ironforge',
+      characterClass: 'Fighter',
+      avatar: null,
+      userId: 'u2',
+    },
+    {
+      id: '3',
+      characterName: 'Lyra Moonwhisper',
+      characterClass: 'Wizard',
+      avatar: null,
+      userId: 'u3',
+    },
   ],
   nextSession: { day: 'Friday', time: '19:00' },
   sessions: [],
   isOwner: true,
   isGM: true,
   isMember: true,
+  currentUserId: 'user-1',
   scheduleText: 'Weekly · Friday · at 7:00 PM · CST',
-}
+};
 
 const meta: Meta<typeof CampaignCard> = {
   title: 'Campaign/CampaignCard',
@@ -48,13 +67,13 @@ const meta: Meta<typeof CampaignCard> = {
       </div>
     ),
   ],
-}
-export default meta
-type Story = StoryObj<typeof meta>
+};
+export default meta;
+type Story = StoryObj<typeof meta>;
 
 export const Default: Story = {
   args: { campaign: baseCampaign },
-}
+};
 
 export const AsPlayer: Story = {
   args: {
@@ -64,7 +83,7 @@ export const AsPlayer: Story = {
       inviteCode: '',
     },
   },
-}
+};
 
 export const Paused: Story = {
   args: {
@@ -75,19 +94,19 @@ export const Paused: Story = {
       schedule: { frequency: null, dayOfWeek: null, time: null, timezone: null },
     },
   },
-}
+};
 
 export const NoDescription: Story = {
   args: {
     campaign: { ...baseCampaign, description: '' },
   },
-}
+};
 
 export const NoLinks: Story = {
   args: {
     campaign: { ...baseCampaign, links: [] },
   },
-}
+};
 
 export const FullParty: Story = {
   args: {
@@ -95,15 +114,39 @@ export const FullParty: Story = {
       ...baseCampaign,
       maxPlayers: 4,
       partyMembers: [
-        { id: '1', characterName: 'Thalion Swiftarrow', characterClass: 'Ranger', avatar: null, userId: 'u1' },
-        { id: '2', characterName: 'Baldric Ironforge', characterClass: 'Fighter', avatar: null, userId: 'u2' },
-        { id: '3', characterName: 'Lyra Moonwhisper', characterClass: 'Wizard', avatar: null, userId: 'u3' },
-        { id: '4', characterName: 'Grax the Unbroken', characterClass: 'Barbarian', avatar: null, userId: 'u4' },
+        {
+          id: '1',
+          characterName: 'Thalion Swiftarrow',
+          characterClass: 'Ranger',
+          avatar: null,
+          userId: 'u1',
+        },
+        {
+          id: '2',
+          characterName: 'Baldric Ironforge',
+          characterClass: 'Fighter',
+          avatar: null,
+          userId: 'u2',
+        },
+        {
+          id: '3',
+          characterName: 'Lyra Moonwhisper',
+          characterClass: 'Wizard',
+          avatar: null,
+          userId: 'u3',
+        },
+        {
+          id: '4',
+          characterName: 'Grax the Unbroken',
+          characterClass: 'Barbarian',
+          avatar: null,
+          userId: 'u4',
+        },
       ],
       players: { current: 4, max: 4 },
     },
   },
-}
+};
 
 export const MaxPlayers: Story = {
   args: {
@@ -120,4 +163,4 @@ export const MaxPlayers: Story = {
       players: { current: 10, max: 10 },
     },
   },
-}
+};

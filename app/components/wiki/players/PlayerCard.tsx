@@ -1,4 +1,5 @@
 import type { PlayerListItem } from '~/types/player';
+import { setTokenDragImage } from '~/utils/setTokenDragImage';
 
 interface PlayerCardProps {
   player: PlayerListItem;
@@ -35,6 +36,11 @@ export function PlayerCard({ player, onClick }: PlayerCardProps) {
           })
         );
         e.dataTransfer.effectAllowed = 'copy';
+        setTokenDragImage(e, {
+          pictureUrl: player.picture,
+          initial: player.firstName,
+          color: player.color,
+        });
         e.currentTarget.style.opacity = '0.4';
       }}
       onDragEnd={(e) => {

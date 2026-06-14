@@ -113,24 +113,51 @@ describe('TabletopView', () => {
   });
 
   it('renders the tabletop view with correct test id', () => {
-    render(<TabletopView campaignId="c1" isGM={true} getToken={mockGetToken} sessionId={null} />, {
-      wrapper: Wrapper,
-    });
+    render(
+      <TabletopView
+        campaignId="c1"
+        isGM={true}
+        currentUserId={null}
+        getToken={mockGetToken}
+        sessionId={null}
+      />,
+      {
+        wrapper: Wrapper,
+      }
+    );
     expect(screen.getByTestId('tabletop-view')).toBeInTheDocument();
   });
 
   it('renders loading state when screens are loading', () => {
     listResult = { screens: [], isLoading: true, error: null };
-    render(<TabletopView campaignId="c1" isGM={true} getToken={mockGetToken} sessionId={null} />, {
-      wrapper: Wrapper,
-    });
+    render(
+      <TabletopView
+        campaignId="c1"
+        isGM={true}
+        currentUserId={null}
+        getToken={mockGetToken}
+        sessionId={null}
+      />,
+      {
+        wrapper: Wrapper,
+      }
+    );
     expect(screen.getByText('Loading tabletop...')).toBeInTheDocument();
   });
 
   it('renders the tab bar and canvas when loaded', () => {
-    render(<TabletopView campaignId="c1" isGM={true} getToken={mockGetToken} sessionId={null} />, {
-      wrapper: Wrapper,
-    });
+    render(
+      <TabletopView
+        campaignId="c1"
+        isGM={true}
+        currentUserId={null}
+        getToken={mockGetToken}
+        sessionId={null}
+      />,
+      {
+        wrapper: Wrapper,
+      }
+    );
     expect(screen.getByTestId('tabletop-tab-bar')).toBeInTheDocument();
     expect(screen.getByTestId('tabletop-canvas')).toBeInTheDocument();
   });

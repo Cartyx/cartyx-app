@@ -147,6 +147,7 @@ function PlayPageContent() {
             <TabletopView
               campaignId={campaignId}
               isGM={campaign?.isGM ?? false}
+              currentUserId={campaign?.currentUserId ?? null}
               getToken={getTabletopToken}
               sessionId={activeSession?.id ?? null}
             />

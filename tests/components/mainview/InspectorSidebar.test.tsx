@@ -34,6 +34,13 @@ vi.mock('~/utils/featureFlags', () => ({
   }),
 }));
 
+// WikiPanel internally uses tanstack-router's useParams + the campaign hook
+// to decide whether to show the GM-only Monsters category. Mock it out so
+// these tests don't need a router context.
+vi.mock('~/components/wiki/WikiPanel', () => ({
+  WikiPanel: () => <div data-testid="wiki-panel" />,
+}));
+
 vi.mock('~/components/mainview/NotesPanel', () => ({
   NotesPanel: () => (
     <div data-testid="notes-panel">
@@ -123,7 +130,7 @@ describe('InspectorSidebar', () => {
     render(<InspectorSidebar />);
     await user.click(screen.getByTestId('inspector-tab-wiki'));
     expect(screen.getByTestId('inspector-panel')).toContainElement(
-      screen.getByRole('button', { name: 'Characters' })
+      screen.getByTestId('wiki-panel')
     );
   });
 
@@ -284,7 +291,7 @@ describe('InspectorSidebar', () => {
       await user.click(screen.getByTestId('inspector-tab-wiki'));
       expect(screen.getByTestId('inspector-tab-wiki')).toHaveAttribute('aria-selected', 'true');
       expect(screen.getByTestId('inspector-panel')).toContainElement(
-        screen.getByRole('button', { name: 'Characters' })
+        screen.getByTestId('wiki-panel')
       );
 
       // Simulate PostHog toggling the wiki flag off
@@ -315,7 +322,7 @@ describe('InspectorSidebar', () => {
       // It should now restore wiki as the active tab
       expect(screen.getByTestId('inspector-tab-wiki')).toHaveAttribute('aria-selected', 'true');
       expect(screen.getByTestId('inspector-panel')).toContainElement(
-        screen.getByRole('button', { name: 'Characters' })
+        screen.getByTestId('wiki-panel')
       );
     });
   });

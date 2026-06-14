@@ -138,4 +138,31 @@ export const queryKeys = {
     detail: (campaignId: string, mapId: string) => ['maps', 'detail', campaignId, mapId] as const,
     active: (campaignId: string) => ['maps', 'active', campaignId] as const,
   },
+  mapTokens: {
+    all: ['mapTokens'] as const,
+    list: (campaignId: string, mapId: string) => ['mapTokens', 'list', campaignId, mapId] as const,
+  },
+  monsters: {
+    all: ['monsters'] as const,
+    list: (
+      campaignId: string,
+      search?: string,
+      tags?: string[],
+      sessionId?: string,
+      minCr?: number,
+      maxCr?: number
+    ) =>
+      [
+        'monsters',
+        'list',
+        campaignId,
+        search ?? '',
+        tags ?? [],
+        sessionId ?? '',
+        minCr ?? null,
+        maxCr ?? null,
+      ] as const,
+    detail: (campaignId: string, monsterId: string) =>
+      ['monsters', 'detail', campaignId, monsterId] as const,
+  },
 };

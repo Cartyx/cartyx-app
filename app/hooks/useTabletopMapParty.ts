@@ -1,19 +1,25 @@
 import { useCallback, useRef } from 'react';
 import usePartySocket from 'partysocket/react';
+import type { MapTokenData } from '~/types/mapToken';
 
 const PARTYKIT_HOST = import.meta.env.VITE_PUBLIC_PARTYKIT_HOST ?? 'localhost:1999';
 
-/**
- * Message shape sent on the `tabletop-map` party channel.
- *
- * Phase 1 only emits `map:active-changed`. Phase 2 will add token events
- * (`token:added`, `token:moved`, `token:removed`, `token:updated`).
- */
-export type TabletopMapMessage = {
-  type: 'map:active-changed';
-  mapId: string | null;
-  byUserId?: string;
-};
+/** Message shape sent on the `tabletop-map` party channel. */
+export type TabletopMapMessage =
+  | { type: 'map:active-changed'; mapId: string | null; byUserId?: string }
+  | { type: 'token:added'; mapId: string; token: MapTokenData; byUserId?: string }
+  | {
+      type: 'token:moved';
+      mapId: string;
+      tokenId: string;
+      x: number;
+      y: number;
+      byUserId?: string;
+      /** True for the final, persisted broadcast after drag-end; false during drag. */
+      final?: boolean;
+    }
+  | { type: 'token:removed'; mapId: string; tokenId: string; byUserId?: string }
+  | { type: 'token:updated'; mapId: string; token: MapTokenData; byUserId?: string };
 
 /**
  * useTabletopMapParty — subscribes to the campaign's map party channel

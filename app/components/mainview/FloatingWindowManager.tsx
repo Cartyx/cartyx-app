@@ -93,7 +93,11 @@ export function FloatingWindowManager({
   };
 
   return (
-    <div className={`relative h-full w-full overflow-hidden ${className}`}>
+    // pointer-events:none on the wrapper so empty space between windows
+    // doesn't intercept clicks/scrolls aimed at content below (e.g. the
+    // active map). Each FloatingWindow re-enables pointer events on its
+    // own bounds.
+    <div className={`pointer-events-none relative h-full w-full overflow-hidden ${className}`}>
       {activeWindows.map((window) => (
         <FloatingWindow
           key={window.id}

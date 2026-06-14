@@ -103,6 +103,7 @@ function serializeCampaign(
           (m: { userId: unknown; role?: string }) => String(m.userId) === gmId && m.role === 'gm'
         )),
     isMember,
+    currentUserId: gmId ?? null,
     scheduleText: buildScheduleText(schedule),
   };
 }

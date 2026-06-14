@@ -1,0 +1,60 @@
+import mongoose from 'mongoose';
+
+const mapTokenSchema = new mongoose.Schema(
+  {
+    mapId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Map',
+      required: true,
+    },
+    // Denormalised for cheap auth checks (avoids a Map lookup per write).
+    campaignId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Campaign',
+      required: true,
+    },
+    sourceCollection: {
+      type: String,
+      enum: ['player', 'character'],
+      required: true,
+    },
+    sourceDocumentId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+    },
+    // Populated for player-owned tokens so we can gate movement.
+    ownerUserId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+    },
+    // Position in MAP-LOCAL pixel coordinates (the image's native pixel space).
+    x: { type: Number, required: true },
+    y: { type: Number, required: true },
+    sizeSquares: { type: Number, default: 1 },
+    color: { type: String, default: '#3498db' },
+    label: { type: String, default: '' },
+    imageUrl: { type: String, default: '' },
+    labelVisible: { type: Boolean, default: true },
+    hiddenFromPlayers: { type: Boolean, default: false },
+    zIndex: { type: Number, default: 0 },
+    createdBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User',
+      required: true,
+    },
+    createdAt: { type: Date, default: Date.now },
+    updatedAt: { type: Date, default: Date.now },
+  },
+  { collection: 'mapToken' }
+);
+
+// istanbul ignore next
+if (typeof (mapTokenSchema as { index?: unknown }).index === 'function') {
+  mapTokenSchema.index({ mapId: 1 });
+  // Unique: a given source entity may only appear once per map (drop again =
+  // refocus, not duplicate).
+  mapTokenSchema.index({ mapId: 1, sourceCollection: 1, sourceDocumentId: 1 }, { unique: true });
+}
+
+export const MapToken = mongoose.models.MapToken || mongoose.model('MapToken', mapTokenSchema);

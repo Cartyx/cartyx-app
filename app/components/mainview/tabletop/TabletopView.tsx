@@ -11,6 +11,12 @@ import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
 import { useTabletopParty } from '~/hooks/useTabletopParty';
 import { useActiveMap, useMapsMutations } from '~/hooks/useMaps';
 import { useTabletopMapParty } from '~/hooks/useTabletopMapParty';
+import {
+  applyTokenAddToCache,
+  applyTokenMoveToCache,
+  applyTokenRemoveFromCache,
+  applyTokenUpdateToCache,
+} from '~/hooks/useMapTokens';
 import { ActiveMapStage } from './ActiveMapStage';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '~/utils/queryKeys';
@@ -40,6 +46,7 @@ import {
   EditLocationModalWrapper,
 } from '~/components/wiki/locations/LocationWindowWrapper';
 import type { TabletopMessage } from '~/types/tabletop';
+import type { TabletopMapMessage } from '~/hooks/useTabletopMapParty';
 import type { PingData } from './PingOverlay';
 
 // ---------------------------------------------------------------------------
@@ -71,6 +78,7 @@ function toFloatingState(state: string): FloatingWindowState {
 interface TabletopViewProps {
   campaignId: string;
   isGM: boolean;
+  currentUserId: string | null;
   getToken: () => Promise<string>;
   sessionId: string | null;
 }
@@ -78,6 +86,7 @@ interface TabletopViewProps {
 export function TabletopView({
   campaignId,
   isGM,
+  currentUserId,
   getToken,
   sessionId: _sessionId,
 }: TabletopViewProps) {
@@ -88,12 +97,23 @@ export function TabletopView({
   const mapMutations = useMapsMutations(campaignId);
   const queryClient = useQueryClient();
 
-  // Map party — invalidate `getActiveMap` whenever someone else changes it.
+  // Map party — keeps every connected client in sync with map/token writes.
   // `useMapsMutations.setActiveMap` writes to the DB; the GM client also
-  // broadcasts so other connected clients refetch without polling.
+  // broadcasts so other clients refetch the active map. Token events apply
+  // optimistic cache updates so remote clients see drags in realtime.
   const { send: sendMapMessage } = useTabletopMapParty(campaignId, getToken, (msg) => {
     if (msg.type === 'map:active-changed') {
       queryClient.invalidateQueries({ queryKey: queryKeys.maps.active(campaignId) });
+      return;
+    }
+    if (msg.type === 'token:added') {
+      applyTokenAddToCache(queryClient, campaignId, msg.mapId, msg.token);
+    } else if (msg.type === 'token:moved') {
+      applyTokenMoveToCache(queryClient, campaignId, msg.mapId, msg.tokenId, msg.x, msg.y);
+    } else if (msg.type === 'token:removed') {
+      applyTokenRemoveFromCache(queryClient, campaignId, msg.mapId, msg.tokenId);
+    } else if (msg.type === 'token:updated') {
+      applyTokenUpdateToCache(queryClient, campaignId, msg.mapId, msg.token);
     }
   });
 
@@ -561,7 +581,17 @@ export function TabletopView({
           isDragOver ? 'ring-2 ring-inset ring-blue-500/40 bg-blue-500/[0.03]' : '',
         ].join(' ')}
       >
-        {activeMap ? <ActiveMapStage map={activeMap} /> : <TabletopCanvas screen={activeScreen} />}
+        {activeMap ? (
+          <ActiveMapStage
+            map={activeMap}
+            campaignId={campaignId}
+            isGM={isGM}
+            currentUserId={currentUserId}
+            onBroadcast={sendMapMessage}
+          />
+        ) : (
+          <TabletopCanvas screen={activeScreen} />
+        )}
 
         <FloatingWindowManager windows={localWindows} onWindowsChange={handleWindowsChange} />
       </div>

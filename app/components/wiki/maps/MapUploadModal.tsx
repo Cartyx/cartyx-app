@@ -73,6 +73,16 @@ export function MapUploadModal({ isOpen, onClose, campaignId }: MapUploadModalPr
     }
   }, [isOpen]);
 
+  // Esc closes the modal (now that the backdrop click is disabled).
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onClose]);
+
   // Build a local object URL for the preview while we wait for R2.
   useEffect(() => {
     if (!file) {
@@ -174,12 +184,13 @@ export function MapUploadModal({ isOpen, onClose, campaignId }: MapUploadModalPr
   if (!isOpen) return null;
 
   return createPortal(
+    // Backdrop is intentionally NOT click-to-dismiss. A drag that begins
+    // inside the scale gizmo and releases on the backdrop would otherwise
+    // close the modal mid-edit. The header X, footer Cancel, and Esc are
+    // the supported dismiss paths.
     <div
       role="presentation"
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-2 sm:p-4 backdrop-blur-sm"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
     >
       <div
         role="dialog"

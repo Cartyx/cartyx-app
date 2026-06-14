@@ -336,7 +336,11 @@ export function FloatingWindow({
         }
       }}
       className={[
-        'rounded-lg border border-white/[0.07] bg-[#0D1117] overflow-hidden shadow-2xl shadow-black/60 outline-none',
+        // pointer-events-auto re-enables interaction inside the window,
+        // since FloatingWindowManager sets pointer-events:none on its
+        // wrapper to let underlying content (active map) receive events
+        // in the gaps between windows.
+        'pointer-events-auto rounded-lg border border-white/[0.07] bg-[#0D1117] overflow-hidden shadow-2xl shadow-black/60 outline-none',
         isMaximized ? 'absolute inset-0' : 'absolute left-0 top-0',
         className,
       ].join(' ')}
