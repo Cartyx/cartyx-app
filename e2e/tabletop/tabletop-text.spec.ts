@@ -198,9 +198,43 @@ test('selecting the text tool opens a settings popup with size + color', async (
   await expect(panel.getByTestId('text-size-24')).toHaveAttribute('aria-pressed', 'true');
   await expect(panel.getByRole('button', { name: 'Select color #e74c3c' })).toBeVisible();
 
-  // Dismiss without leaving the tool.
-  await page.getByRole('button', { name: 'Close text settings' }).click();
-  await expect(panel).toBeHidden();
+  // The panel has no close affordance — it stays open while the tool is active.
+  await expect(page.getByRole('button', { name: 'Close text settings' })).toHaveCount(0);
+});
+
+test('the settings panel stays open while writing, moving, and editing text', async ({ page }) => {
+  await gotoTabletop(page);
+  await selectTextTool(page);
+
+  const panel = page.getByTestId('text-settings-panel');
+  await expect(panel).toBeVisible();
+
+  // …after writing text.
+  await writeText(page, 0.55, 0.4, 'Sticky panel');
+  const text = page.getByTestId('map-text').filter({ hasText: 'Sticky panel' });
+  await expect(text).toBeVisible();
+  await expect(panel).toBeVisible();
+
+  // …after moving text (the reported regression).
+  const b = (await text.boundingBox())!;
+  const cx = b.x + b.width / 2;
+  const cy = b.y + b.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 140, cy + 90, { steps: 8 });
+  await page.mouse.up();
+  await expect(text).toBeVisible();
+  await expect(panel).toBeVisible();
+  // The size/color controls are still usable.
+  await expect(panel.getByTestId('text-size-36')).toBeVisible();
+  await expect(panel.getByRole('button', { name: 'Select color #2ecc71' })).toBeVisible();
+
+  // …after entering edit mode and committing.
+  await text.dblclick();
+  await expect(page.getByTestId('map-text-input')).toBeVisible();
+  await expect(panel).toBeVisible();
+  await page.getByTestId('map-text-input').press('Enter');
+  await expect(panel).toBeVisible();
 });
 
 test('writing text shows it on the map and it persists across a reload', async ({ page }) => {

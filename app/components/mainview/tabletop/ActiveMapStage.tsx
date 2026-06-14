@@ -127,7 +127,6 @@ export function ActiveMapStage({
   // Text-tool settings (the brush) — local to this client.
   const [textColor, setTextColor] = useState('#fbbf24');
   const [textFontSize, setTextFontSize] = useState(16);
-  const [textPanelOpen, setTextPanelOpen] = useState(false);
   // The in-progress text being typed (image-space anchor + value), and the
   // currently selected text (for deletion).
   const [textDraft, setTextDraft] = useState<{
@@ -190,16 +189,14 @@ export function ActiveMapStage({
   const draftActiveRef = useRef(false);
   const textInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Clear text editing/selection when the text tool is deselected; open the
-  // settings popup when it's selected.
+  // Clear text editing/selection when the text tool is deselected. (The
+  // settings panel is always shown while the tool is active — see render.)
   useEffect(() => {
     if (!textActive) {
       draftActiveRef.current = false;
       setTextDraft(null);
       setTextDraftValue('');
       setSelectedTextId(null);
-    } else {
-      setTextPanelOpen(true);
     }
   }, [textActive]);
 
@@ -1389,14 +1386,14 @@ export function ActiveMapStage({
         />
       )}
 
-      {/* Text settings popup (shown while the text tool is active) */}
-      {textActive && textPanelOpen && (
+      {/* Text settings popup — always open while the text tool is active, so the
+          size/color controls are available whenever text can be written/edited. */}
+      {textActive && (
         <TextSettingsPanel
           color={textColor}
           onChangeColor={setTextColor}
           fontSize={textFontSize}
           onChangeFontSize={setTextFontSize}
-          onClose={() => setTextPanelOpen(false)}
         />
       )}
 
