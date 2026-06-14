@@ -101,6 +101,7 @@ export function CharacterCard({ character, onClick }: CharacterCardProps) {
           <img
             src={character.picture}
             alt={fullName}
+            loading="lazy"
             className="w-full h-full object-cover"
             style={character.pictureCrop ? getCropStyle(character.pictureCrop) : undefined}
           />

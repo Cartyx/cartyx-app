@@ -8,12 +8,19 @@ extract-monsters phase; this is the smaller test set seeded into the
 "stock" campaign.
 """
 
-from urllib.parse import quote
+import hashlib
 
 
 def _avatar(name: str) -> str:
-    """DiceBear `bottts` for monsters — deterministic, no R2 round-trip."""
-    return f"https://api.dicebear.com/9.x/bottts/svg?seed={quote(name)}"
+    """Local generated avatar path for a monster.
+
+    The PNG is rendered by `scripts/gen_seed_avatars.mjs` (`npm run
+    dev:gen-avatars`); the seed only records the deterministic path. The hash
+    MUST match that script: sha1("monster:{name}")[:16]. Local files avoid
+    DiceBear's CDN rate limit and work offline.
+    """
+    digest = hashlib.sha1(f"monster:{name}".encode("utf-8")).hexdigest()[:16]
+    return f"/uploads/seed-avatars/monster/{digest}.png"
 
 
 def _ability(score: int, save: int = 0) -> dict:

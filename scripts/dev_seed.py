@@ -16,15 +16,16 @@ Prerequisites:
 Safety: refuses to run if NODE_ENV is "production" or MONGODB_URI contains "prod".
 """
 
+import hashlib
 import os
 import random
 import re
 import secrets
+import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
-from urllib.parse import quote
 
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -141,16 +142,23 @@ def ensure_player_users(db, now) -> list[dict]:
     return out
 
 
-def adventurer_avatar(first_name: str, last_name: str) -> str:
-    """Deterministic DiceBear `adventurer` avatar URL from the character name.
+def local_avatar_path(kind: str, name: str) -> str:
+    """Deterministic served path for a generated local avatar.
 
-    DiceBear is a free CDN that returns an SVG avatar per `seed`. Same seed →
-    same avatar across runs, so swapping the seed system or re-seeding gives
-    the same character the same face. SVGs are tiny (~5 KB), cached at the
-    edge, and render fine through cartyx's <img src=...> token renderer.
+    The PNG itself is produced by `scripts/gen_seed_avatars.mjs` (run via
+    `npm run dev:gen-avatars`) — Python has no SVG rasteriser, so the seed only
+    records the path and the Node generator renders the identicon there. The
+    hash MUST stay in sync with that script: sha1("{kind}:{name}")[:16].
+    Local files avoid DiceBear's CDN rate limit (which 429s the burst of ~350
+    avatar requests the wiki fires on load) and work offline.
     """
-    seed = quote(f"{first_name} {last_name}".strip())
-    return f"https://api.dicebear.com/9.x/adventurer/svg?seed={seed}"
+    digest = hashlib.sha1(f"{kind}:{name}".encode("utf-8")).hexdigest()[:16]
+    return f"/uploads/seed-avatars/{kind}/{digest}.png"
+
+
+def adventurer_avatar(first_name: str, last_name: str) -> str:
+    """Local generated avatar path for a character (see local_avatar_path)."""
+    return local_avatar_path("character", f"{first_name} {last_name}".strip())
 
 load_dotenv()
 
@@ -202,6 +210,29 @@ def save_image(svg_content: str, filename: str) -> str:
     uploads_dir.mkdir(parents=True, exist_ok=True)
     (uploads_dir / filename).write_text(svg_content, encoding="utf-8")
     return f"/uploads/campaigns/{filename}"
+
+
+def copy_player_portraits() -> None:
+    """Publish the 12 committed player portraits so the URLs the player docs
+    reference (`/uploads/seed-players/playerN.jpg`, see PLAYER_IMAGES) actually
+    resolve. The source files live in `assets/` (not web-served); Vite only
+    serves `public/` at the site root, so each portrait is copied into
+    `public/uploads/seed-players/`. Idempotent — overwrites on every seed."""
+    src_dir = REPO_ROOT / "assets"
+    dst_dir = REPO_ROOT / "public" / "uploads" / "seed-players"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    missing = []
+    for i in range(1, 13):
+        src = src_dir / f"player{i}.jpg"
+        if not src.exists():
+            missing.append(src.name)
+            continue
+        shutil.copyfile(src, dst_dir / f"player{i}.jpg")
+        copied += 1
+    print(f"Player portraits: copied {copied}/12 → public/uploads/seed-players/")
+    if missing:
+        print(f"  WARNING missing portrait sources: {', '.join(missing)}")
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +426,10 @@ def main() -> None:
     # role='unknown' — they'll claim it via OAuth on first login.
     player_users = ensure_player_users(db, now)
     print(f"Player accounts: {', '.join(p['email'] for p in player_users)}\n")
+
+    # Publish the committed portraits to the web-served path the player docs
+    # reference, so portrait URLs resolve instead of 404ing to a letter avatar.
+    copy_player_portraits()
 
     # Asset cursor — advances across campaigns so each of the 12 portraits
     # is used exactly once over the 3 campaigns × 4 players = 12 player docs.

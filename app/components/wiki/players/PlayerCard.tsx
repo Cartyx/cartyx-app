@@ -71,7 +71,12 @@ export function PlayerCard({ player, onClick }: PlayerCardProps) {
         style={player.picture ? undefined : { backgroundColor: player.color }}
       >
         {player.picture ? (
-          <img src={player.picture} alt={fullName} className="w-full h-full object-cover" />
+          <img
+            src={player.picture}
+            alt={fullName}
+            loading="lazy"
+            className="w-full h-full object-cover"
+          />
         ) : (
           <span className="text-sm text-white font-semibold">{initials}</span>
         )}

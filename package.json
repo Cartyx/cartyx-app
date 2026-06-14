@@ -29,7 +29,9 @@
     "db:verify": "tsx scripts/mongo-admin.ts verify",
     "db:sync": "tsx scripts/mongo-admin.ts sync",
     "dev:clear": "node scripts/run-python.cjs dev_clear.py",
-    "dev:seed": "node scripts/run-python.cjs dev_seed.py",
+    "dev:seed": "node scripts/run-python.cjs dev_seed.py && node scripts/gen_seed_avatars.mjs",
+    "dev:repair-images": "node scripts/run-python.cjs repair_seed_images.py && node scripts/gen_seed_avatars.mjs",
+    "dev:gen-avatars": "node scripts/gen_seed_avatars.mjs",
     "fixture": "tsx scripts/dev-fixtures/cli.ts",
     "srd:lint": "tsx scripts/srd/lint.ts",
     "srd:extract": "tsx scripts/srd/extract-rules.ts"
@@ -81,6 +83,7 @@
   "devDependencies": {
     "@chromatic-com/storybook": "^5.1.1",
     "@playwright/test": "^1.59.1",
+    "@resvg/resvg-js": "^2.6.2",
     "@storybook/addon-a11y": "^10.3.5",
     "@storybook/addon-docs": "^10.3.5",
     "@storybook/addon-onboarding": "^10.3.5",

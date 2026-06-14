@@ -72,7 +72,12 @@ export function MonsterCard({ monster, onClick }: MonsterCardProps) {
         style={monster.picture ? undefined : { backgroundColor: monster.color }}
       >
         {monster.picture ? (
-          <img src={monster.picture} alt={monster.name} className="h-full w-full object-cover" />
+          <img
+            src={monster.picture}
+            alt={monster.name}
+            loading="lazy"
+            className="h-full w-full object-cover"
+          />
         ) : (
           <Skull className="h-5 w-5 text-white" />
         )}
