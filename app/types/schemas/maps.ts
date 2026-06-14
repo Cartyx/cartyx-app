@@ -56,5 +56,12 @@ export const deleteMapSchema = z.object({
 
 export const setActiveMapSchema = z.object({
   campaignId: z.string().trim().min(1),
+  // The tab (TabletopScreen) to set the map on — active map is per-tab.
+  screenId: z.string().trim().min(1),
   mapId: z.string().trim().min(1).nullable(),
+});
+
+export const getActiveMapSchema = z.object({
+  campaignId: z.string().trim().min(1),
+  screenId: z.string().trim().min(1),
 });

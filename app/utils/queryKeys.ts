@@ -136,7 +136,11 @@ export const queryKeys = {
     all: ['maps'] as const,
     list: (campaignId: string) => ['maps', 'list', campaignId] as const,
     detail: (campaignId: string, mapId: string) => ['maps', 'detail', campaignId, mapId] as const,
-    active: (campaignId: string) => ['maps', 'active', campaignId] as const,
+    // Active map is per-tab (screen). The campaignId-only `activeAll` prefix
+    // invalidates every tab's active-map query at once.
+    active: (campaignId: string, screenId: string) =>
+      ['maps', 'active', campaignId, screenId] as const,
+    activeAll: (campaignId: string) => ['maps', 'active', campaignId] as const,
   },
   mapTokens: {
     all: ['mapTokens'] as const,

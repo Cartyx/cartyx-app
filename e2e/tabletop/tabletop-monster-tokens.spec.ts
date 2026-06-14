@@ -169,9 +169,27 @@ async function provision(db: Db): Promise<Provisioned> {
     updatedAt: now,
   });
   const mapId = mapRes.insertedId;
-  await db
-    .collection('campaigns')
-    .updateOne({ _id: campaignId }, { $set: { activeMapId: mapId, updatedAt: now } });
+
+  // Active map is per-tab — create a tabletop screen with this map active so
+  // the tabletop renders it (the campaign no longer carries activeMapId).
+  await db.collection('tabletopscreen').deleteMany({ campaignId });
+  await db.collection('tabletopscreen').insertOne({
+    campaignId,
+    name: 'Map',
+    tabOrder: 0,
+    createdBy: gm._id,
+    mode: 'grid',
+    gridStyle: 'dark',
+    gridSize: 50,
+    gridVisible: true,
+    gridScale: 5,
+    locationId: null,
+    battleMapImage: null,
+    activeMapId: mapId,
+    windows: [],
+    createdAt: now,
+    updatedAt: now,
+  });
 
   // Clear any stale tokens for this map.
   await db.collection('mapToken').deleteMany({ mapId });
@@ -256,6 +274,7 @@ test.afterAll(async () => {
     const db = process.env.MONGODB_DB ? client.db(process.env.MONGODB_DB) : client.db();
     const cid = new ObjectId(provisioned.campaignId);
     await db.collection('mapToken').deleteMany({ mapId: new ObjectId(provisioned.mapId) });
+    await db.collection('tabletopscreen').deleteMany({ campaignId: cid });
     await db.collection('map').deleteMany({ campaignId: cid });
     await db.collection('monsters').deleteMany({ campaignId: cid });
     await db.collection('campaigns').deleteMany({ _id: cid });

@@ -98,7 +98,9 @@ export function TabletopView({
   const { screens, isLoading } = useTabletopScreenList(campaignId);
   const mutations = useTabletopMutations(campaignId);
   const { playerState, updateState } = useTabletopPlayerState(campaignId);
-  const { data: activeMap } = useActiveMap(campaignId);
+  const [activeScreenId, setActiveScreenId] = useState<string | null>(null);
+  // Active map is per-tab — render the active map of the tab being viewed.
+  const { data: activeMap } = useActiveMap(campaignId, activeScreenId);
   const queryClient = useQueryClient();
 
   // Map party — keeps every connected client in sync with map/token writes.
@@ -108,7 +110,8 @@ export function TabletopView({
   // clients see drags in realtime.
   const { send: sendMapMessage } = useTabletopMapParty(campaignId, getToken, (msg) => {
     if (msg.type === 'map:active-changed') {
-      queryClient.invalidateQueries({ queryKey: queryKeys.maps.active(campaignId) });
+      // Invalidate every tab's active-map query (cheap; only the visible tab refetches).
+      queryClient.invalidateQueries({ queryKey: queryKeys.maps.activeAll(campaignId) });
       return;
     }
     if (msg.type === 'token:added') {
@@ -122,7 +125,6 @@ export function TabletopView({
     }
   });
 
-  const [activeScreenId, setActiveScreenId] = useState<string | null>(null);
   const [badgeScreenIds, setBadgeScreenIds] = useState<Set<string>>(new Set());
   const [_pings, setPings] = useState<PingData[]>([]);
   const [dialog, setDialog] = useState<DialogState>({ type: 'none' });

@@ -11,6 +11,7 @@ import {
   updateMapSchema,
   deleteMapSchema,
   setActiveMapSchema,
+  getActiveMapSchema,
 } from '~/types/schemas/maps';
 
 // ---------------------------------------------------------------------------
@@ -32,7 +33,7 @@ const getMapFn = createServerFn({ method: 'GET' })
   });
 
 const getActiveMapFn = createServerFn({ method: 'GET' })
-  .inputValidator(listMapsSchema)
+  .inputValidator(getActiveMapSchema)
   .handler(async ({ data }) => {
     const { getActiveMap } = await import('~/server/functions/maps');
     return getActiveMap({ data });
@@ -99,12 +100,15 @@ export function useMap(campaignId: string | null | undefined, mapId: string | nu
   });
 }
 
-export function useActiveMap(campaignId: string | null | undefined) {
+export function useActiveMap(
+  campaignId: string | null | undefined,
+  screenId: string | null | undefined
+) {
   return useQuery({
-    queryKey: queryKeys.maps.active(campaignId ?? ''),
-    enabled: Boolean(campaignId),
+    queryKey: queryKeys.maps.active(campaignId ?? '', screenId ?? ''),
+    enabled: Boolean(campaignId && screenId),
     queryFn: async (): Promise<MapData | null> => {
-      const res = await getActiveMapFn({ data: { campaignId: campaignId! } });
+      const res = await getActiveMapFn({ data: { campaignId: campaignId!, screenId: screenId! } });
       return res.map;
     },
   });
@@ -115,7 +119,7 @@ export function useMapsMutations(campaignId: string) {
 
   const invalidateLists = () => {
     qc.invalidateQueries({ queryKey: queryKeys.maps.list(campaignId) });
-    qc.invalidateQueries({ queryKey: queryKeys.maps.active(campaignId) });
+    qc.invalidateQueries({ queryKey: queryKeys.maps.activeAll(campaignId) });
   };
 
   const createMap = useMutation({
@@ -162,11 +166,11 @@ export function useMapsMutations(campaignId: string) {
   });
 
   const setActiveMap = useMutation({
-    mutationFn: async (mapId: string | null) => {
-      return await setActiveMapFn({ data: { campaignId, mapId } });
+    mutationFn: async (input: { screenId: string; mapId: string | null }) => {
+      return await setActiveMapFn({ data: { campaignId, ...input } });
     },
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.maps.active(campaignId) });
+      qc.invalidateQueries({ queryKey: queryKeys.maps.activeAll(campaignId) });
     },
     onError: (e) => captureException(e, { action: 'useMapsMutations.setActiveMap' }),
   });

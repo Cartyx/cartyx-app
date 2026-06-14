@@ -5,6 +5,7 @@ import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
 import { Campaign } from '../db/models/Campaign';
 import { Map as MapModel } from '../db/models/Map';
+import { TabletopScreen } from '../db/models/TabletopScreen';
 import { Location } from '../db/models/Location';
 import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
 import type { MapData, MapListItem, MapScale, MapGridOverlay } from '~/types/map';
@@ -16,6 +17,7 @@ import {
   updateMapSchema,
   deleteMapSchema,
   setActiveMapSchema,
+  getActiveMapSchema,
 } from '~/types/schemas/maps';
 
 // ---------------------------------------------------------------------------
@@ -102,7 +104,11 @@ function createR2Client(): { client: S3Client; bucket: string } | null {
  * right away, regardless of which UI triggered the mutation. A party outage
  * must never fail the DB write, so all errors are swallowed.
  */
-async function broadcastActiveMapChanged(campaignId: string, mapId: string | null): Promise<void> {
+async function broadcastActiveMapChanged(
+  campaignId: string,
+  mapId: string | null,
+  screenId: string | null
+): Promise<void> {
   const host = process.env.VITE_PUBLIC_PARTYKIT_HOST;
   if (!host) return;
   const isLocal = host.startsWith('localhost') || host.startsWith('127.0.0.1');
@@ -113,7 +119,7 @@ async function broadcastActiveMapChanged(campaignId: string, mapId: string | nul
     await fetch(url, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ type: 'map:active-changed', mapId }),
+      body: JSON.stringify({ type: 'map:active-changed', mapId, screenId }),
     });
   } catch {
     // Best-effort only — clients still refetch on focus/refresh.
@@ -361,18 +367,16 @@ export const deleteMap = createServerFn({ method: 'POST' })
 
       await MapModel.deleteOne({ _id: data.id, campaignId: data.campaignId });
 
-      // If this map was active, clear it.
-      let activeCleared = false;
-      const campaign = await Campaign.findById(data.campaignId, 'activeMapId').lean();
-      if (
-        campaign &&
-        (campaign as { activeMapId?: unknown }).activeMapId &&
-        String((campaign as { activeMapId?: unknown }).activeMapId) === data.id
-      ) {
-        await Campaign.updateOne({ _id: data.campaignId }, { $set: { activeMapId: null } });
-        activeCleared = true;
+      // Clear this map from any tab that had it active.
+      const cleared = await TabletopScreen.updateMany(
+        { campaignId: data.campaignId, activeMapId: data.id },
+        { $set: { activeMapId: null } }
+      );
+      const activeCleared = cleared.modifiedCount > 0;
+      if (activeCleared) {
         // Notify connected clients to stop rendering the now-deleted map.
-        await broadcastActiveMapChanged(data.campaignId, null);
+        // screenId null → clients invalidate the active-map query for any tab.
+        await broadcastActiveMapChanged(data.campaignId, null, null);
       }
 
       // Best-effort R2 delete.
@@ -431,19 +435,22 @@ export const setActiveMap = createServerFn({ method: 'POST' })
         if (!exists) throw new Error('Map not found');
       }
 
-      await Campaign.updateOne(
-        { _id: data.campaignId },
+      // Active map is per-tab: set it on the target screen, not the campaign.
+      const res = await TabletopScreen.updateOne(
+        { _id: data.screenId, campaignId: data.campaignId },
         { $set: { activeMapId: data.mapId, updatedAt: new Date() } }
       );
+      if (res.matchedCount === 0) throw new Error('Tab not found');
 
-      await broadcastActiveMapChanged(data.campaignId, data.mapId);
+      await broadcastActiveMapChanged(data.campaignId, data.mapId, data.screenId);
 
       serverCaptureEvent(sessionUserId, 'map_set_active', {
         campaign_id: data.campaignId,
+        screen_id: data.screenId,
         map_id: data.mapId,
       });
 
-      return { success: true, activeMapId: data.mapId };
+      return { success: true, screenId: data.screenId, activeMapId: data.mapId };
     } catch (e) {
       serverCaptureException(e, sessionUserId, {
         action: 'setActiveMap',
@@ -454,19 +461,22 @@ export const setActiveMap = createServerFn({ method: 'POST' })
   });
 
 // ---------------------------------------------------------------------------
-// getActiveMap (read) — convenience for the tabletop view.
+// getActiveMap (read) — the active map for a specific tab (screen).
 // ---------------------------------------------------------------------------
 
 export const getActiveMap = createServerFn({ method: 'GET' })
-  .inputValidator(listMapsSchema)
+  .inputValidator(getActiveMapSchema)
   .handler(async ({ data }) => {
     let sessionUserId: string | undefined;
     try {
       const member = await requireCampaignMember(data.campaignId);
       sessionUserId = member.sessionUserId;
 
-      const campaign = await Campaign.findById(data.campaignId, 'activeMapId').lean();
-      const activeMapId = (campaign as { activeMapId?: unknown } | null)?.activeMapId;
+      const screen = await TabletopScreen.findOne(
+        { _id: data.screenId, campaignId: data.campaignId },
+        'activeMapId'
+      ).lean();
+      const activeMapId = (screen as { activeMapId?: unknown } | null)?.activeMapId;
       if (!activeMapId) return { map: null };
 
       const doc = await MapModel.findOne({

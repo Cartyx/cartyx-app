@@ -37,17 +37,24 @@ export default class TabletopMapParty implements Party.Server {
     } catch {
       return new Response('Bad JSON', { status: 400 });
     }
-    // Only the one Phase 1 server→party message is accepted here:
-    // `{ type: 'map:active-changed', mapId: string | null }`. Token events
-    // travel peer-to-peer over the socket (onMessage), not this endpoint.
+    // Only the one server→party message is accepted here:
+    // `{ type: 'map:active-changed', mapId: string|null, screenId: string|null }`.
+    // Token events travel peer-to-peer over the socket (onMessage), not here.
     if (!body || typeof body !== 'object') {
       return new Response('Bad payload', { status: 400 });
     }
-    const { type, mapId } = body as { type?: unknown; mapId?: unknown };
+    const { type, mapId, screenId } = body as {
+      type?: unknown;
+      mapId?: unknown;
+      screenId?: unknown;
+    };
     if (type !== 'map:active-changed' || !(typeof mapId === 'string' || mapId === null)) {
       return new Response('Bad payload', { status: 400 });
     }
-    this.room.broadcast(JSON.stringify({ type, mapId }));
+    if (!(typeof screenId === 'string' || screenId === null || screenId === undefined)) {
+      return new Response('Bad payload', { status: 400 });
+    }
+    this.room.broadcast(JSON.stringify({ type, mapId, screenId: screenId ?? null }));
     return new Response('ok');
   }
 

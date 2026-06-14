@@ -5,6 +5,7 @@ import { WikiCategoryHeader } from '~/components/wiki/shared/WikiCategoryHeader'
 import { PixelButton } from '~/components/PixelButton';
 import { useCampaign } from '~/hooks/useCampaigns';
 import { useMapsList, useActiveMap, useMapsMutations } from '~/hooks/useMaps';
+import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
 import { MapCard } from './MapCard';
 import { MapUploadModal } from './MapUploadModal';
 import type { MapListItem } from '~/types/map';
@@ -18,8 +19,12 @@ export function MapsPanel({ onBack }: MapsPanelProps) {
   const { campaign } = useCampaign(campaignId);
   const isGM = campaign?.isGM ?? false;
 
+  // Active map is per-tab — operate on the tab the GM is currently viewing.
+  const { playerState } = useTabletopPlayerState(campaignId);
+  const currentScreenId = playerState?.activeScreenId ?? null;
+
   const { data: maps = [], isLoading, error } = useMapsList(campaignId);
-  const { data: activeMap } = useActiveMap(campaignId);
+  const { data: activeMap } = useActiveMap(campaignId, currentScreenId);
   const { setActiveMap, deleteMap } = useMapsMutations(campaignId);
 
   const [search, setSearch] = useState('');
@@ -32,8 +37,12 @@ export function MapsPanel({ onBack }: MapsPanelProps) {
   }, [maps, search]);
 
   const handleSetActive = (m: MapListItem) => {
+    if (!currentScreenId) {
+      // No tab is open yet — nothing to activate the map onto.
+      return;
+    }
     const next = activeMap?.id === m.id ? null : m.id;
-    setActiveMap.mutate(next);
+    setActiveMap.mutate({ screenId: currentScreenId, mapId: next });
   };
 
   const handleDelete = (m: MapListItem) => {

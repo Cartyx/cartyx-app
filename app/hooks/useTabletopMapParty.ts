@@ -6,7 +6,13 @@ const PARTYKIT_HOST = import.meta.env.VITE_PUBLIC_PARTYKIT_HOST ?? 'localhost:19
 
 /** Message shape sent on the `tabletop-map` party channel. */
 export type TabletopMapMessage =
-  | { type: 'map:active-changed'; mapId: string | null; byUserId?: string }
+  | {
+      type: 'map:active-changed';
+      mapId: string | null;
+      /** Tab the change applies to; null = unknown/any (e.g. on map delete). */
+      screenId?: string | null;
+      byUserId?: string;
+    }
   | { type: 'token:added'; mapId: string; token: MapTokenData; byUserId?: string }
   | {
       type: 'token:moved';
