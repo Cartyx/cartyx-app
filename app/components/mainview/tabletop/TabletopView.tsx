@@ -17,6 +17,7 @@ import {
   applyTokenRemoveFromCache,
   applyTokenUpdateToCache,
 } from '~/hooks/useMapTokens';
+import { applyTextAddToCache, applyTextRemoveFromCache } from '~/hooks/useMapTexts';
 import { ActiveMapStage } from './ActiveMapStage';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '~/utils/queryKeys';
@@ -126,6 +127,10 @@ export function TabletopView({
       applyTokenRemoveFromCache(queryClient, campaignId, msg.mapId, msg.tokenId);
     } else if (msg.type === 'token:updated') {
       applyTokenUpdateToCache(queryClient, campaignId, msg.mapId, msg.token);
+    } else if (msg.type === 'text:added') {
+      applyTextAddToCache(queryClient, campaignId, msg.mapId, msg.text);
+    } else if (msg.type === 'text:removed') {
+      applyTextRemoveFromCache(queryClient, campaignId, msg.mapId, msg.textId);
     }
   });
 
@@ -603,6 +608,7 @@ export function TabletopView({
             layerPanelOpen={activeTool === 'layer'}
             onCloseLayerPanel={() => onToolChange?.('pointer')}
             rulerActive={activeTool === 'ruler'}
+            textActive={activeTool === 'text'}
           />
         ) : (
           <TabletopCanvas screen={activeScreen} />

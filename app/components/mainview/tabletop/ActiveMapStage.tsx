@@ -8,10 +8,11 @@ import {
   type PointerEvent as ReactPointerEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
-import { ZoomIn, ZoomOut, Maximize2, Grid3x3, Eye, EyeOff } from 'lucide-react';
+import { ZoomIn, ZoomOut, Maximize2, Grid3x3, Eye, EyeOff, Type } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { MapData } from '~/types/map';
 import type { MapTokenData } from '~/types/mapToken';
+import type { MapTextData } from '~/types/mapText';
 import {
   useMapTokens,
   useMapTokenMutations,
@@ -19,9 +20,16 @@ import {
   applyTokenRemoveFromCache,
   applyTokenUpdateToCache,
 } from '~/hooks/useMapTokens';
+import {
+  useMapTexts,
+  useMapTextMutations,
+  applyTextAddToCache,
+  applyTextRemoveFromCache,
+} from '~/hooks/useMapTexts';
 import { MapToken } from './MapToken';
 import { LayersPanel } from './LayersPanel';
 import { RulerSettingsPanel } from './RulerSettingsPanel';
+import { TextSettingsPanel } from './TextSettingsPanel';
 import { useRulerColor } from '~/hooks/useUserPreferences';
 import {
   tokenLayerId,
@@ -51,6 +59,8 @@ interface ActiveMapStageProps {
   onCloseLayerPanel?: () => void;
   /** Whether the measurement (ruler) tool is active. */
   rulerActive?: boolean;
+  /** Whether the text tool is active (click to write, click text to select). */
+  textActive?: boolean;
 }
 
 /** A measurement endpoint: a fixed image-space point, or a live token center. */
@@ -88,6 +98,7 @@ export function ActiveMapStage({
   layerPanelOpen = false,
   onCloseLayerPanel,
   rulerActive = false,
+  textActive = false,
 }: ActiveMapStageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -104,6 +115,22 @@ export function ActiveMapStage({
   // have no grid; hex rendering is a future addition).
   const [showGrid, setShowGrid] = useState<boolean>(map.gridOverlay.enabled);
   const hasGrid = map.scale.gridType === 'square' && map.scale.pixelsPerSquare > 0;
+
+  // Map text (freeform labels) — shared, persisted, multiplayer. Any member can
+  // write; deletion is gated to the author or a GM (enforced server-side).
+  const { data: texts = [] } = useMapTexts(campaignId, map.id);
+  const textMutations = useMapTextMutations(campaignId, map.id);
+  // Local view toggle (per-viewer declutter), like the grid toggle.
+  const [showText, setShowText] = useState(true);
+  // Text-tool settings (the brush) — local to this client.
+  const [textColor, setTextColor] = useState('#fbbf24');
+  const [textFontSize, setTextFontSize] = useState(16);
+  const [textPanelOpen, setTextPanelOpen] = useState(false);
+  // The in-progress text being typed (image-space anchor + value), and the
+  // currently selected text (for deletion).
+  const [textDraft, setTextDraft] = useState<{ x: number; y: number } | null>(null);
+  const [textDraftValue, setTextDraftValue] = useState('');
+  const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
 
   // Token selection — click selects (shift/cmd-click toggles), background
   // click deselects, Delete/Backspace confirms removal (GM only), right-click
@@ -150,6 +177,115 @@ export function ActiveMapStage({
     setMeasurePoints([]);
     setMeasureCursor(null);
   }, []);
+
+  // --- Text tool ----------------------------------------------------------
+  // Guards against a double-commit (Enter then unmount-blur) of the same draft.
+  const draftActiveRef = useRef(false);
+  const textInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Clear text editing/selection when the text tool is deselected; open the
+  // settings popup when it's selected.
+  useEffect(() => {
+    if (!textActive) {
+      draftActiveRef.current = false;
+      setTextDraft(null);
+      setTextDraftValue('');
+      setSelectedTextId(null);
+    } else {
+      setTextPanelOpen(true);
+    }
+  }, [textActive]);
+
+  const openTextDraft = useCallback((p: { x: number; y: number }) => {
+    draftActiveRef.current = true;
+    setTextDraft(p);
+    setTextDraftValue('');
+    setSelectedTextId(null);
+  }, []);
+
+  // Focus the draft input on the next frame — focusing synchronously during the
+  // opening pointerdown gets clobbered by the browser's default mousedown focus
+  // handling, which would immediately blur (and commit-empty) the input.
+  useEffect(() => {
+    if (!textDraft) return;
+    const id = requestAnimationFrame(() => textInputRef.current?.focus());
+    return () => cancelAnimationFrame(id);
+  }, [textDraft]);
+
+  const cancelTextDraft = useCallback(() => {
+    draftActiveRef.current = false;
+    setTextDraft(null);
+    setTextDraftValue('');
+  }, []);
+
+  // Commit the in-progress text (if non-empty) as a new persisted map text.
+  const commitTextDraft = useCallback(
+    (rawValue: string) => {
+      if (!draftActiveRef.current) return;
+      draftActiveRef.current = false;
+      const draft = textDraft;
+      setTextDraft(null);
+      setTextDraftValue('');
+      const value = rawValue.trim();
+      if (!draft || !value) return;
+      textMutations.create.mutate(
+        { x: draft.x, y: draft.y, text: value, color: textColor, fontSize: textFontSize },
+        {
+          onSuccess: (res) => {
+            applyTextAddToCache(qc, campaignId, map.id, res.text);
+            onBroadcast({ type: 'text:added', mapId: map.id, text: res.text });
+          },
+        }
+      );
+    },
+    [textDraft, textColor, textFontSize, textMutations.create, qc, campaignId, map.id, onBroadcast]
+  );
+
+  // A player may delete only their own text; a GM may delete anyone's. The
+  // server enforces this; the client mirrors it for the delete affordance.
+  const canDeleteText = useCallback(
+    (t: MapTextData) => isGM || (currentUserId != null && t.createdBy === currentUserId),
+    [isGM, currentUserId]
+  );
+
+  const removeText = useCallback(
+    (textId: string) => {
+      applyTextRemoveFromCache(qc, campaignId, map.id, textId);
+      textMutations.remove.mutate(textId, {
+        onSuccess: () => onBroadcast({ type: 'text:removed', mapId: map.id, textId }),
+      });
+      setSelectedTextId((cur) => (cur === textId ? null : cur));
+    },
+    [qc, campaignId, map.id, textMutations.remove, onBroadcast]
+  );
+
+  // Keyboard: Delete/Backspace removes the selected text (permission-gated);
+  // Esc clears the selection. Not GM-gated — players can delete their own text.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tgt = e.target as HTMLElement | null;
+      if (tgt) {
+        const tag = tgt.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tgt.isContentEditable)
+          return;
+      }
+      if (e.key === 'Escape') {
+        if (selectedTextId) {
+          e.preventDefault();
+          setSelectedTextId(null);
+        }
+        return;
+      }
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (!selectedTextId) return;
+      const t = texts.find((x) => x.id === selectedTextId);
+      if (!t || !canDeleteText(t)) return;
+      e.preventDefault();
+      removeText(t.id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedTextId, texts, canDeleteText, removeText]);
 
   // Picking a token while measuring. Shift adds it as a waypoint and keeps the
   // line live; a plain pick with an existing line completes the measurement at
@@ -318,6 +454,17 @@ export function ActiveMapStage({
           setMeasureCursor(p);
           return [{ kind: 'point', ...p }];
         });
+      }
+      return;
+    }
+    // Text tool: a background click writes text. If a draft is already open,
+    // this click just commits it (via the input's blur) and opens nothing new;
+    // clicking an existing text (handled there) selects it instead.
+    if (textActive) {
+      if (textDraft) return;
+      const img = domToImage(e.clientX, e.clientY);
+      if (img) {
+        openTextDraft({ x: clamp(img.x, 0, map.imageWidth), y: clamp(img.y, 0, map.imageHeight) });
       }
       return;
     }
@@ -815,6 +962,74 @@ export function ActiveMapStage({
         />
       ))}
 
+      {/* Map text layer (shared). Interactive only while the text tool is
+          active; otherwise display-only so it never blocks panning/tokens. */}
+      {showText &&
+        texts.map((t) => {
+          const selected = selectedTextId === t.id;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              data-testid="map-text"
+              data-text-id={t.id}
+              onPointerDown={(e) => {
+                if (!textActive) return;
+                e.stopPropagation();
+                clearSelection();
+                cancelTextDraft();
+                setSelectedTextId(t.id);
+              }}
+              className={[
+                'absolute z-30 m-0 max-w-[40vw] whitespace-pre-wrap break-words border-0 bg-transparent p-0 text-left font-sans font-semibold leading-tight',
+                textActive ? 'cursor-pointer' : 'pointer-events-none',
+                selected ? 'rounded outline outline-2 outline-offset-2 outline-[#60A5FA]' : '',
+              ].join(' ')}
+              style={{
+                left: imageOffsetX + t.x * effectiveScale,
+                top: imageOffsetY + t.y * effectiveScale,
+                color: t.color,
+                fontSize: t.fontSize * effectiveScale,
+                textShadow:
+                  '0 1px 2px rgba(0,0,0,0.9), 0 -1px 2px rgba(0,0,0,0.9), 1px 0 2px rgba(0,0,0,0.9), -1px 0 2px rgba(0,0,0,0.9)',
+              }}
+            >
+              {t.text}
+            </button>
+          );
+        })}
+
+      {/* In-progress text editor (text tool). */}
+      {textActive && textDraft && (
+        <input
+          ref={textInputRef}
+          data-testid="map-text-input"
+          value={textDraftValue}
+          onChange={(e) => setTextDraftValue(e.target.value)}
+          onPointerDown={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              commitTextDraft(textDraftValue);
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              cancelTextDraft();
+            }
+          }}
+          onBlur={(e) => commitTextDraft(e.currentTarget.value)}
+          placeholder="Type…"
+          className="absolute z-40 rounded border border-[#60A5FA] bg-black/70 px-1 font-sans font-semibold outline-none"
+          style={{
+            left: imageOffsetX + textDraft.x * effectiveScale,
+            top: imageOffsetY + textDraft.y * effectiveScale,
+            color: textColor,
+            fontSize: textFontSize * effectiveScale,
+            minWidth: 90,
+          }}
+        />
+      )}
+
       {/* Measurement (ruler) overlay — polyline + endpoints + per-segment feet. */}
       {measurement && (
         <>
@@ -1038,8 +1253,35 @@ export function ActiveMapStage({
         />
       )}
 
+      {/* Text settings popup (shown while the text tool is active) */}
+      {textActive && textPanelOpen && (
+        <TextSettingsPanel
+          color={textColor}
+          onChangeColor={setTextColor}
+          fontSize={textFontSize}
+          onChangeFontSize={setTextFontSize}
+          onClose={() => setTextPanelOpen(false)}
+        />
+      )}
+
       {/* Zoom toolbar */}
       <div className="absolute right-3 top-3 flex items-center gap-1 rounded bg-black/70 p-1 backdrop-blur-sm">
+        <button
+          type="button"
+          aria-label={showText ? 'Hide text' : 'Show text'}
+          aria-pressed={showText}
+          title={showText ? 'Hide text' : 'Show text'}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => setShowText((v) => !v)}
+          className={[
+            'flex h-7 w-7 items-center justify-center rounded transition-colors',
+            showText ? 'bg-white/15 text-[#60A5FA]' : 'text-slate-200 hover:bg-white/10',
+          ].join(' ')}
+          data-testid="map-text-toggle"
+        >
+          <Type className="h-3.5 w-3.5" />
+        </button>
+        <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden="true" />
         {hasGrid && (
           <>
             <button
