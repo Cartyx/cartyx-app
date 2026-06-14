@@ -46,7 +46,6 @@ import {
   EditLocationModalWrapper,
 } from '~/components/wiki/locations/LocationWindowWrapper';
 import type { TabletopMessage } from '~/types/tabletop';
-import type { TabletopMapMessage } from '~/hooks/useTabletopMapParty';
 import type { PingData } from './PingOverlay';
 
 // ---------------------------------------------------------------------------
