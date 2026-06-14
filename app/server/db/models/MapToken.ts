@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import { TOKEN_SOURCES } from '~/types/schemas/mapTokens';
 
 const mapTokenSchema = new mongoose.Schema(
   {
@@ -15,7 +16,8 @@ const mapTokenSchema = new mongoose.Schema(
     },
     sourceCollection: {
       type: String,
-      enum: ['player', 'character'],
+      // Derived from the shared schema so the model and Zod validator can't drift.
+      enum: [...TOKEN_SOURCES],
       required: true,
     },
     sourceDocumentId: {

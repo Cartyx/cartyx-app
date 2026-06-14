@@ -80,6 +80,8 @@ export function MapToken({
       }}
       data-testid="map-token"
       data-token-id={token.id}
+      data-source={token.sourceCollection}
+      data-layer={token.hiddenFromPlayers ? 'gm-private' : 'public'}
     >
       {/* Avatar */}
       <div
