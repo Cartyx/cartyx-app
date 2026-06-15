@@ -3,6 +3,7 @@ import { getSession } from '../session';
 import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
 import { Campaign } from '../db/models/Campaign';
+import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { Rule } from '../db/models/Rule';
 import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
 import { normalizeTags } from '../utils/helpers';
@@ -61,37 +62,6 @@ function serializeRuleListItem(r: {
     createdAt: r.createdAt instanceof Date ? r.createdAt.toISOString() : '',
     updatedAt: r.updatedAt instanceof Date ? r.updatedAt.toISOString() : '',
   };
-}
-
-/**
- * Verify the authenticated user is a member of the given campaign.
- * Returns the DB user ID string, session user ID, and whether the user is the GM.
- */
-async function requireCampaignMember(
-  campaignId: string
-): Promise<{ userId: string; sessionUserId: string; isGM: boolean }> {
-  const user = await getSession();
-  if (!user) throw new Error('Not authenticated');
-
-  await connectDB();
-  if (!isDBConnected()) throw new Error('Database not available');
-
-  const dbUser = await User.findOne({ providerId: user.id });
-  if (!dbUser) throw new Error('User not found');
-
-  const campaign = await Campaign.findById(campaignId);
-  if (!campaign) throw new Error('Campaign not found');
-
-  const userId = String(dbUser._id);
-  const members = campaign.members ?? [];
-  const member = members.find(
-    (m: { userId: unknown; role?: string }) => String(m.userId) === userId
-  );
-  const isGM = String(campaign.gameMasterId) === userId || member?.role === 'gm';
-  const isMember = !!member || isGM;
-  if (!isMember) throw new Error('Forbidden');
-
-  return { userId, sessionUserId: user.id, isGM };
 }
 
 /**
