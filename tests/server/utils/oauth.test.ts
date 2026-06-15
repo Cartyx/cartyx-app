@@ -40,6 +40,164 @@ function mockFindOneReturning(value: unknown) {
   });
 }
 
+describe('PKCE: generateCodeVerifier / deriveCodeChallenge', () => {
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  it('generates a URL-safe (base64url) verifier of the expected length, unique per call', async () => {
+    const { generateCodeVerifier } = await import('~/server/utils/oauth');
+    const a = generateCodeVerifier();
+    const b = generateCodeVerifier();
+
+    // base64url charset only: A-Z a-z 0-9 - _ (no +, /, or = padding)
+    expect(a).toMatch(/^[A-Za-z0-9_-]+$/);
+    // 32 random bytes -> 43-char base64url string (within RFC 7636's 43-128).
+    expect(a).toHaveLength(43);
+    expect(b).toHaveLength(43);
+    // Cryptographically random => different each call.
+    expect(a).not.toBe(b);
+  });
+
+  it('derives code_challenge = base64url(sha256(verifier)) for S256', async () => {
+    const { deriveCodeChallenge } = await import('~/server/utils/oauth');
+    const { createHash } = await import('node:crypto');
+
+    const verifier = 'test-verifier-fixed-value';
+    const expected = createHash('sha256').update(verifier).digest('base64url');
+
+    const challenge = deriveCodeChallenge(verifier);
+    expect(challenge).toBe(expected);
+    // SHA-256 -> 32 bytes -> 43-char base64url, URL-safe charset, no padding.
+    expect(challenge).toMatch(/^[A-Za-z0-9_-]+$/);
+    expect(challenge).toHaveLength(43);
+    expect(challenge).not.toContain('=');
+  });
+
+  it('RFC 7636 vector: known verifier maps to the known challenge', async () => {
+    const { deriveCodeChallenge } = await import('~/server/utils/oauth');
+    // From RFC 7636 Appendix B.
+    const verifier = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+    expect(deriveCodeChallenge(verifier)).toBe('E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM');
+  });
+});
+
+describe('PKCE: authorize URLs include code_challenge + S256', () => {
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.BASE_URL = 'https://example.com';
+    process.env.GOOGLE_CLIENT_ID = 'g-client';
+    process.env.GITHUB_CLIENT_ID = 'gh-client';
+    process.env.APPLE_CLIENT_ID = 'apple-client';
+  });
+
+  it('Google authorize URL includes code_challenge and S256 when challenge provided', async () => {
+    const { buildGoogleOAuthUrl } = await import('~/server/utils/oauth');
+    const url = buildGoogleOAuthUrl('state-1', 'challenge-abc');
+    expect(url).toContain('code_challenge=challenge-abc');
+    expect(url).toContain('code_challenge_method=S256');
+    expect(url).toContain('state=state-1');
+  });
+
+  it('GitHub authorize URL includes code_challenge and S256 when challenge provided', async () => {
+    const { buildGithubOAuthUrl } = await import('~/server/utils/oauth');
+    const url = buildGithubOAuthUrl('state-2', 'challenge-def');
+    expect(url).toContain('code_challenge=challenge-def');
+    expect(url).toContain('code_challenge_method=S256');
+  });
+
+  it('Apple authorize URL includes code_challenge and S256 when challenge provided', async () => {
+    const { buildAppleOAuthUrl } = await import('~/server/utils/oauth');
+    const url = buildAppleOAuthUrl('state-3', 'challenge-ghi');
+    expect(url).toContain('code_challenge=challenge-ghi');
+    expect(url).toContain('code_challenge_method=S256');
+  });
+
+  it('omits code_challenge params when no challenge is provided (behavior-preserving)', async () => {
+    const { buildGoogleOAuthUrl, buildGithubOAuthUrl, buildAppleOAuthUrl } =
+      await import('~/server/utils/oauth');
+    for (const url of [
+      buildGoogleOAuthUrl('s'),
+      buildGithubOAuthUrl('s'),
+      buildAppleOAuthUrl('s'),
+    ]) {
+      expect(url).not.toContain('code_challenge');
+      expect(url).not.toContain('S256');
+    }
+  });
+});
+
+describe('PKCE: token exchange includes code_verifier', () => {
+  const originalFetchLocal = globalThis.fetch;
+
+  beforeEach(() => {
+    vi.resetModules();
+    process.env.BASE_URL = 'https://example.com';
+    process.env.GOOGLE_CLIENT_ID = 'g-client';
+    process.env.GOOGLE_CLIENT_SECRET = 'g-secret';
+    process.env.GITHUB_CLIENT_ID = 'gh-client';
+    process.env.GITHUB_CLIENT_SECRET = 'gh-secret';
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetchLocal;
+  });
+
+  it('Google token exchange request body includes code_verifier', async () => {
+    const fetchMock = vi
+      .fn()
+      // token endpoint
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ access_token: 'g-access' }) })
+      // userinfo endpoint
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: '42', name: 'X', email: 'x@y.z' }),
+      });
+    globalThis.fetch = fetchMock;
+
+    const { exchangeGoogleCode } = await import('~/server/utils/oauth');
+    await exchangeGoogleCode('the-code', 'verifier-123');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, { body: URLSearchParams }];
+    const body = init.body.toString();
+    expect(body).toContain('code_verifier=verifier-123');
+    expect(body).toContain('code=the-code');
+  });
+
+  it('GitHub token exchange request body includes code_verifier', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ access_token: 'gh-access' }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ id: 7, name: 'X', email: 'x@y.z', avatar_url: null }),
+      });
+    globalThis.fetch = fetchMock;
+
+    const { exchangeGithubCode } = await import('~/server/utils/oauth');
+    await exchangeGithubCode('gh-code', 'verifier-456');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, { body: string }];
+    const body = JSON.parse(init.body) as { code_verifier?: string; code?: string };
+    expect(body.code_verifier).toBe('verifier-456');
+    expect(body.code).toBe('gh-code');
+  });
+
+  it('exchange omits code_verifier when none is supplied (behavior-preserving)', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ access_token: 'g-access' }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ id: '42' }) });
+    globalThis.fetch = fetchMock;
+
+    const { exchangeGoogleCode } = await import('~/server/utils/oauth');
+    await exchangeGoogleCode('the-code');
+
+    const [, init] = fetchMock.mock.calls[0] as [string, { body: URLSearchParams }];
+    expect(init.body.toString()).not.toContain('code_verifier');
+  });
+});
+
 describe('upsertUser', () => {
   beforeEach(() => {
     vi.resetModules();

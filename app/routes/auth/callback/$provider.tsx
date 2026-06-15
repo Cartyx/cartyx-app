@@ -21,9 +21,12 @@ const handleCallback = createServerFn({ method: 'GET' })
     async ({ data }): Promise<{ redirectTo: string; redirectSearch?: Record<string, string> }> => {
       const { provider, code, state } = data;
 
-      // Verify CSRF state token
+      // Verify CSRF state token and retrieve the PKCE verifier. Both were set at
+      // authorize time with the same lifetime; consume (delete) both here.
       const storedState = getCookie('oauth_state');
+      const codeVerifier = getCookie('oauth_code_verifier');
       deleteCookie('oauth_state', { path: '/' });
+      deleteCookie('oauth_code_verifier', { path: '/' });
 
       if (!storedState || storedState !== state) {
         await serverCaptureException(new Error('CSRF state mismatch'), undefined, {
@@ -37,11 +40,11 @@ const handleCallback = createServerFn({ method: 'GET' })
       try {
         let profile;
         if (provider === 'google') {
-          profile = await exchangeGoogleCode(code);
+          profile = await exchangeGoogleCode(code, codeVerifier);
         } else if (provider === 'github') {
-          profile = await exchangeGithubCode(code);
+          profile = await exchangeGithubCode(code, codeVerifier);
         } else if (provider === 'apple') {
-          profile = await exchangeAppleCode(code);
+          profile = await exchangeAppleCode(code, codeVerifier);
         } else {
           throw new Error(`Unsupported provider: ${provider}`);
         }
