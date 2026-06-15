@@ -275,4 +275,30 @@ describe('revokeToken (reads from encrypted server-side store)', () => {
       provider: 'google',
     });
   });
+
+  it('does not throw and captures exception when the stored token cannot be decrypted (e.g. rotated SESSION_SECRET)', async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock;
+    // A well-formed encrypted token whose ciphertext/auth tag have been tampered
+    // with: the GCM auth check fails at decrypt time, so decryptToken throws.
+    // This simulates the stored ciphertext no longer being decryptable (e.g. the
+    // SESSION_SECRET was rotated since the token was persisted).
+    const valid = await storedToken('google-access-xyz');
+    const tampered = { ...valid, ciphertext: Buffer.from('garbage-ciphertext').toString('base64') };
+    mockFindOneReturning({ oauthTokens: { accessToken: tampered } });
+
+    const { revokeToken } = await import('~/server/utils/oauth');
+    // Logout must proceed gracefully: revokeToken must not throw to its caller.
+    await expect(revokeToken(sessionUser('google', 'google_123'))).resolves.toBeUndefined();
+
+    // Decryption failed before any provider call or token clear could happen.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockUpdateOne).not.toHaveBeenCalled();
+    // The decrypt failure is captured rather than crashing.
+    expect(mockServerCaptureException).toHaveBeenCalledTimes(1);
+    expect(mockServerCaptureException).toHaveBeenCalledWith(expect.any(Error), 'google_123', {
+      action: 'revokeToken',
+      provider: 'google',
+    });
+  });
 });
