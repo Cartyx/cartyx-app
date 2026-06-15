@@ -112,9 +112,9 @@ const MOVE_BROADCAST_INTERVAL_MS = 1000 / MOVE_BROADCAST_HZ;
  *   - Drag token (GM or owner) → move that token
  *   - Drop player/character from a wiki list → create a token
  *
- * Realtime: token writes go through mutations + a peer broadcast on the
- * tabletop-map party. The parent's inbound message handler invokes the
- * functions exposed via `inboundRef` to apply remote changes optimistically.
+ * Realtime: token/text/drawing writes go through mutations + a peer broadcast
+ * on the tabletop-map party (via `onBroadcast`). Inbound remote changes are
+ * applied to the query cache by the parent's handler in TabletopView.
  */
 export function ActiveMapStage({
   map,
@@ -1165,10 +1165,23 @@ export function ActiveMapStage({
       const geom = movedGeometry(d, offX, offY);
       const moved = { ...existing, ...geom };
       applyDrawingUpdateToCache(qc, campaignId, map.id, moved);
-      const now = Date.now();
-      if (now - d.lastBroadcastAt >= MOVE_BROADCAST_INTERVAL_MS) {
-        d.lastBroadcastAt = now;
-        onBroadcast({ type: 'drawing:updated', mapId: map.id, drawing: moved });
+      // Live broadcast: only a rect/ellipse's small bounding box during the drag
+      // (a pencil's translated point list would be a large per-frame payload, so
+      // pencils sync only on the final commit in onPointerUp).
+      if (d.kind !== 'pencil') {
+        const now = Date.now();
+        if (now - d.lastBroadcastAt >= MOVE_BROADCAST_INTERVAL_MS) {
+          d.lastBroadcastAt = now;
+          onBroadcast({
+            type: 'drawing:moved',
+            mapId: map.id,
+            drawingId: d.drawingId,
+            x: moved.x,
+            y: moved.y,
+            width: moved.width,
+            height: moved.height,
+          });
+        }
       }
     }
   };
@@ -2442,6 +2455,7 @@ function eraserHits(
   d: {
     kind: 'pencil' | 'rect' | 'ellipse';
     strokeWidth: number;
+    filled: boolean;
     points: number[];
     x: number;
     y: number;
@@ -2452,8 +2466,8 @@ function eraserHits(
   cy: number,
   radius: number
 ): boolean {
+  const r = radius + d.strokeWidth / 2;
   if (d.kind === 'pencil') {
-    const r = radius + d.strokeWidth / 2;
     if (d.points.length === 2) return Math.hypot(cx - d.points[0]!, cy - d.points[1]!) <= r;
     for (let i = 0; i + 3 < d.points.length; i += 2) {
       if (
@@ -2464,12 +2478,30 @@ function eraserHits(
     }
     return false;
   }
-  return (
-    cx >= d.x - radius &&
-    cx <= d.x + d.width + radius &&
-    cy >= d.y - radius &&
-    cy <= d.y + d.height + radius
-  );
+  if (d.kind === 'rect') {
+    const inOuter =
+      cx >= d.x - r && cx <= d.x + d.width + r && cy >= d.y - r && cy <= d.y + d.height + r;
+    if (!inOuter) return false;
+    if (d.filled) return true;
+    // Outline rectangle: the hollow interior must NOT erase.
+    const inInner =
+      cx > d.x + r && cx < d.x + d.width - r && cy > d.y + r && cy < d.y + d.height - r;
+    return !inInner;
+  }
+  // Ellipse — use the ellipse equation, not its bounding box.
+  const rx = d.width / 2;
+  const ry = d.height / 2;
+  const ecx = d.x + rx;
+  const ecy = d.y + ry;
+  if (rx <= 0 || ry <= 0) return Math.hypot(cx - ecx, cy - ecy) <= r;
+  const outer = ((cx - ecx) / (rx + r)) ** 2 + ((cy - ecy) / (ry + r)) ** 2;
+  if (outer > 1) return false; // outside the (inflated) ellipse
+  if (d.filled) return true;
+  const innerRx = rx - r;
+  const innerRy = ry - r;
+  if (innerRx <= 0 || innerRy <= 0) return true; // thin ellipse — band covers it
+  const inner = ((cx - ecx) / innerRx) ** 2 + ((cy - ecy) / innerRy) ** 2;
+  return inner >= 1; // near the outline band, not the hollow interior
 }
 
 /** New geometry while resizing a drawing from its corner handle. */
@@ -2493,8 +2525,11 @@ function resizedGeometry(
   const newW = Math.max(MIN_DRAW_SIZE, d.bw + dxImage);
   const newH = Math.max(MIN_DRAW_SIZE, d.bh + dyImage);
   if (d.kind === 'pencil') {
-    const sx = d.bw > 0 ? newW / d.bw : 1;
-    const sy = d.bh > 0 ? newH / d.bh : 1;
+    // Only scale an axis whose original extent is meaningfully large; a near-1D
+    // stroke (e.g. a perfectly horizontal line, bh≈0) would otherwise explode by
+    // a huge factor on the first drag pixel, so leave that axis unscaled.
+    const sx = d.bw >= MIN_DRAW_SIZE ? newW / d.bw : 1;
+    const sy = d.bh >= MIN_DRAW_SIZE ? newH / d.bh : 1;
     const points = d.startPoints.map((v, i) =>
       i % 2 === 0 ? d.bx + (v - d.bx) * sx : d.by + (v - d.by) * sy
     );

@@ -305,6 +305,71 @@ test('the eraser removes a drawn stroke (DOM + DB)', async ({ page }) => {
   await expect.poll(() => countDrawings()).toBe(0);
 });
 
+test('the eraser does not erase through an outline shape’s hollow center', async ({ page }) => {
+  await gotoTabletop(page);
+  await selectDrawingTool(page);
+  const panel = page.getByTestId('drawing-settings-panel');
+  // An outline (not filled) square.
+  await panel.getByTestId('draw-shape-square').click();
+  await dragPath(page, [
+    [0.35, 0.35],
+    [0.65, 0.65],
+  ]);
+  await expect.poll(() => countDrawings({ kind: 'rect' })).toBe(1);
+
+  // Dragging the eraser through the hollow interior must NOT erase it.
+  await panel.getByTestId('draw-shape-eraser').click();
+  await panel.getByTestId('draw-size-8').click();
+  await dragPath(page, [
+    [0.45, 0.5],
+    [0.55, 0.5],
+  ]);
+  await page.waitForTimeout(200);
+  await expect(page.getByTestId('map-drawing')).toHaveCount(1);
+  await expect.poll(() => countDrawings({ kind: 'rect' })).toBe(1);
+
+  // Dragging the eraser across an actual edge DOES erase it.
+  await dragPath(page, [
+    [0.3, 0.35],
+    [0.7, 0.35],
+  ]);
+  await expect(page.getByTestId('map-drawing')).toHaveCount(0);
+  await expect.poll(() => countDrawings()).toBe(0);
+});
+
+test('the eraser size is independent of the pen line size', async ({ page }) => {
+  await gotoTabletop(page);
+  await selectDrawingTool(page);
+  const panel = page.getByTestId('drawing-settings-panel');
+
+  // Pen (square) line size = 16.
+  await panel.getByTestId('draw-shape-square').click();
+  await panel.getByTestId('draw-size-16').click();
+  await expect(panel.getByTestId('draw-size-16')).toHaveAttribute('aria-pressed', 'true');
+
+  // Switch to the eraser and pick a different size.
+  await panel.getByTestId('draw-shape-eraser').click();
+  await panel.getByTestId('draw-size-32').click();
+  await expect(panel.getByTestId('draw-size-32')).toHaveAttribute('aria-pressed', 'true');
+
+  // Back to the pen — its line size is still 16 (the eraser change didn't touch it).
+  await panel.getByTestId('draw-shape-square').click();
+  await expect(panel.getByTestId('draw-size-16')).toHaveAttribute('aria-pressed', 'true');
+  await dragPath(page, [
+    [0.4, 0.4],
+    [0.6, 0.6],
+  ]);
+  await expect
+    .poll(async () => {
+      const doc = await drawings().findOne({
+        mapId: new ObjectId(provisioned.mapId),
+        kind: 'rect',
+      });
+      return (doc as { strokeWidth?: number } | null)?.strokeWidth ?? 0;
+    })
+    .toBe(16);
+});
+
 test('square outline draws in the chosen color and persists', async ({ page }) => {
   await gotoTabletop(page);
   await selectDrawingTool(page);

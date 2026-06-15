@@ -26,6 +26,7 @@ import {
 import {
   applyDrawingAddToCache,
   applyDrawingUpdateToCache,
+  applyDrawingGeomToCache,
   applyDrawingRemoveFromCache,
   applyDrawingsClearToCache,
 } from '~/hooks/useMapDrawings';
@@ -150,6 +151,13 @@ export function TabletopView({
       applyDrawingAddToCache(queryClient, campaignId, msg.mapId, msg.drawing);
     } else if (msg.type === 'drawing:updated') {
       applyDrawingUpdateToCache(queryClient, campaignId, msg.mapId, msg.drawing);
+    } else if (msg.type === 'drawing:moved') {
+      applyDrawingGeomToCache(queryClient, campaignId, msg.mapId, msg.drawingId, {
+        x: msg.x,
+        y: msg.y,
+        width: msg.width,
+        height: msg.height,
+      });
     } else if (msg.type === 'drawing:removed') {
       applyDrawingRemoveFromCache(queryClient, campaignId, msg.mapId, msg.drawingId);
     } else if (msg.type === 'drawing:cleared') {

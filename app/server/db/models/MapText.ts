@@ -37,7 +37,8 @@ const mapTextSchema = new mongoose.Schema(
 
 // istanbul ignore next
 if (typeof (mapTextSchema as { index?: unknown }).index === 'function') {
-  mapTextSchema.index({ mapId: 1 });
+  // Queries always filter by (mapId, campaignId), so index the compound shape.
+  mapTextSchema.index({ mapId: 1, campaignId: 1 });
 }
 
 export const MapText = mongoose.models.MapText || mongoose.model('MapText', mapTextSchema);

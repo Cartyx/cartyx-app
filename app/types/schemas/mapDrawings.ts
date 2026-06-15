@@ -54,7 +54,13 @@ export const updateMapDrawingSchema = z
     color: hexColor.optional(),
     strokeWidth: strokeWidth.optional(),
     filled: z.boolean().optional(),
-    points: points.optional(),
+    // When present (pencil resize/move), points must stay a valid even-length
+    // [x,y,…] list with at least two points — same invariant as create.
+    points: points
+      .refine((p) => p.length >= 4 && p.length % 2 === 0, {
+        message: 'points must be an even-length array with at least 2 points',
+      })
+      .optional(),
     x: z.number().finite().optional(),
     y: z.number().finite().optional(),
     width: z.number().finite().optional(),

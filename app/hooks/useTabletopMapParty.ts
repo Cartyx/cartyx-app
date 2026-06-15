@@ -13,38 +13,47 @@ export type TabletopMapMessage =
       mapId: string | null;
       /** Tab the change applies to; null = unknown/any (e.g. on map delete). */
       screenId?: string | null;
-      byUserId?: string;
     }
-  | { type: 'token:added'; mapId: string; token: MapTokenData; byUserId?: string }
+  | { type: 'token:added'; mapId: string; token: MapTokenData }
   | {
       type: 'token:moved';
       mapId: string;
       tokenId: string;
       x: number;
       y: number;
-      byUserId?: string;
       /** True for the final, persisted broadcast after drag-end; false during drag. */
       final?: boolean;
     }
-  | { type: 'token:removed'; mapId: string; tokenId: string; byUserId?: string }
-  | { type: 'token:updated'; mapId: string; token: MapTokenData; byUserId?: string }
-  | { type: 'text:added'; mapId: string; text: MapTextData; byUserId?: string }
+  | { type: 'token:removed'; mapId: string; tokenId: string }
+  | { type: 'token:updated'; mapId: string; token: MapTokenData }
+  | { type: 'text:added'; mapId: string; text: MapTextData }
   | {
       type: 'text:moved';
       mapId: string;
       textId: string;
       x: number;
       y: number;
-      byUserId?: string;
       /** True for the final, persisted broadcast after drag-end; false during drag. */
       final?: boolean;
     }
-  | { type: 'text:updated'; mapId: string; text: MapTextData; byUserId?: string }
-  | { type: 'text:removed'; mapId: string; textId: string; byUserId?: string }
-  | { type: 'drawing:added'; mapId: string; drawing: MapDrawingData; byUserId?: string }
-  | { type: 'drawing:updated'; mapId: string; drawing: MapDrawingData; byUserId?: string }
-  | { type: 'drawing:removed'; mapId: string; drawingId: string; byUserId?: string }
-  | { type: 'drawing:cleared'; mapId: string; byUserId?: string };
+  | { type: 'text:updated'; mapId: string; text: MapTextData }
+  | { type: 'text:removed'; mapId: string; textId: string }
+  | { type: 'drawing:added'; mapId: string; drawing: MapDrawingData }
+  | { type: 'drawing:updated'; mapId: string; drawing: MapDrawingData }
+  // Lightweight live-move (in-drag) update: only the bounding box, so a pencil's
+  // full point list isn't re-broadcast every frame. The final commit sends the
+  // authoritative `drawing:updated`.
+  | {
+      type: 'drawing:moved';
+      mapId: string;
+      drawingId: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }
+  | { type: 'drawing:removed'; mapId: string; drawingId: string }
+  | { type: 'drawing:cleared'; mapId: string };
 
 /**
  * useTabletopMapParty — subscribes to the campaign's map party channel

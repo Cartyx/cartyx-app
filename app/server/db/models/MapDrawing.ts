@@ -46,7 +46,8 @@ const mapDrawingSchema = new mongoose.Schema(
 
 // istanbul ignore next
 if (typeof (mapDrawingSchema as { index?: unknown }).index === 'function') {
-  mapDrawingSchema.index({ mapId: 1 });
+  // Queries always filter by (mapId, campaignId), so index the compound shape.
+  mapDrawingSchema.index({ mapId: 1, campaignId: 1 });
 }
 
 export const MapDrawing =

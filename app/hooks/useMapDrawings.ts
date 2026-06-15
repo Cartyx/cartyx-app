@@ -94,39 +94,43 @@ export interface UpdateDrawingInput {
 
 export function useMapDrawingMutations(campaignId: string, mapId: string) {
   const qc = useQueryClient();
+  // Resync from the server only on error — every successful call site already
+  // applies the authoritative response (or the optimistic change) to the cache
+  // via the apply* helpers, so a blanket invalidate would refetch the whole list
+  // mid-drag and race the optimistic geometry writes.
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: queryKeys.mapDrawings.list(campaignId, mapId) });
+  const onError = (action: string) => (e: unknown) => {
+    captureException(e, { action });
+    invalidate();
+  };
 
   const create = useMutation({
     mutationFn: async (input: CreateDrawingInput) => {
       return await createMapDrawingFn({ data: { campaignId, mapId, ...input } });
     },
-    onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapDrawingMutations.create' }),
+    onError: onError('useMapDrawingMutations.create'),
   });
 
   const update = useMutation({
     mutationFn: async (input: UpdateDrawingInput) => {
       return await updateMapDrawingFn({ data: { campaignId, mapId, ...input } });
     },
-    onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapDrawingMutations.update' }),
+    onError: onError('useMapDrawingMutations.update'),
   });
 
   const remove = useMutation({
     mutationFn: async (drawingId: string) => {
       return await deleteMapDrawingFn({ data: { campaignId, mapId, drawingId } });
     },
-    onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapDrawingMutations.remove' }),
+    onError: onError('useMapDrawingMutations.remove'),
   });
 
   const clear = useMutation({
     mutationFn: async () => {
       return await clearMapDrawingsFn({ data: { campaignId, mapId } });
     },
-    onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapDrawingMutations.clear' }),
+    onError: onError('useMapDrawingMutations.clear'),
   });
 
   return { create, update, remove, clear };
@@ -179,4 +183,22 @@ export function applyDrawingsClearToCache(
   mapId: string
 ) {
   qc.setQueryData<MapDrawingData[]>(queryKeys.mapDrawings.list(campaignId, mapId), () => []);
+}
+
+/**
+ * Patch only the geometry of one cached drawing — used for lightweight live-move
+ * broadcasts (the in-drag path), which carry just the bounding box rather than
+ * the whole object (a pencil's full point list can be large).
+ */
+export function applyDrawingGeomToCache(
+  qc: ReturnType<typeof useQueryClient>,
+  campaignId: string,
+  mapId: string,
+  drawingId: string,
+  geom: Partial<Pick<MapDrawingData, 'x' | 'y' | 'width' | 'height' | 'points'>>
+) {
+  qc.setQueryData<MapDrawingData[]>(queryKeys.mapDrawings.list(campaignId, mapId), (prev) => {
+    if (!prev) return prev;
+    return prev.map((d) => (d.id === drawingId ? { ...d, ...geom } : d));
+  });
 }
