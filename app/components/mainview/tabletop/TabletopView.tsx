@@ -10,29 +10,8 @@ import {
 import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
 import { useTabletopParty } from '~/hooks/useTabletopParty';
 import { useActiveMap } from '~/hooks/useMaps';
-import { useTabletopMapParty } from '~/hooks/useTabletopMapParty';
-import {
-  applyTokenAddToCache,
-  applyTokenMoveToCache,
-  applyTokenRemoveFromCache,
-  applyTokenUpdateToCache,
-} from '~/hooks/useMapTokens';
-import {
-  applyTextAddToCache,
-  applyTextRemoveFromCache,
-  applyTextMoveToCache,
-  applyTextUpdateToCache,
-} from '~/hooks/useMapTexts';
-import {
-  applyDrawingAddToCache,
-  applyDrawingUpdateToCache,
-  applyDrawingGeomToCache,
-  applyDrawingRemoveFromCache,
-  applyDrawingsClearToCache,
-} from '~/hooks/useMapDrawings';
+import { useTabletopMapSync } from '~/hooks/useTabletopMapSync';
 import { ActiveMapStage } from './ActiveMapStage';
-import { useQueryClient } from '@tanstack/react-query';
-import { queryKeys } from '~/utils/queryKeys';
 import { TabletopTabBar } from './TabletopTabBar';
 import { TabletopCanvas } from './TabletopCanvas';
 import {
@@ -118,52 +97,11 @@ export function TabletopView({
   const [activeScreenId, setActiveScreenId] = useState<string | null>(null);
   // Active map is per-tab — render the active map of the tab being viewed.
   const { data: activeMap } = useActiveMap(campaignId, activeScreenId);
-  const queryClient = useQueryClient();
 
-  // Map party — keeps every connected client in sync with map/token writes.
-  // Active-map changes are broadcast server-side by `setActiveMap`/`deleteMap`
-  // (so they fire regardless of which UI triggered the write); this client just
-  // reacts by refetching. Token events apply optimistic cache updates so remote
-  // clients see drags in realtime.
-  const { send: sendMapMessage } = useTabletopMapParty(campaignId, getToken, (msg) => {
-    if (msg.type === 'map:active-changed') {
-      // Invalidate every tab's active-map query (cheap; only the visible tab refetches).
-      queryClient.invalidateQueries({ queryKey: queryKeys.maps.activeAll(campaignId) });
-      return;
-    }
-    if (msg.type === 'token:added') {
-      applyTokenAddToCache(queryClient, campaignId, msg.mapId, msg.token);
-    } else if (msg.type === 'token:moved') {
-      applyTokenMoveToCache(queryClient, campaignId, msg.mapId, msg.tokenId, msg.x, msg.y);
-    } else if (msg.type === 'token:removed') {
-      applyTokenRemoveFromCache(queryClient, campaignId, msg.mapId, msg.tokenId);
-    } else if (msg.type === 'token:updated') {
-      applyTokenUpdateToCache(queryClient, campaignId, msg.mapId, msg.token);
-    } else if (msg.type === 'text:added') {
-      applyTextAddToCache(queryClient, campaignId, msg.mapId, msg.text);
-    } else if (msg.type === 'text:moved') {
-      applyTextMoveToCache(queryClient, campaignId, msg.mapId, msg.textId, msg.x, msg.y);
-    } else if (msg.type === 'text:updated') {
-      applyTextUpdateToCache(queryClient, campaignId, msg.mapId, msg.text);
-    } else if (msg.type === 'text:removed') {
-      applyTextRemoveFromCache(queryClient, campaignId, msg.mapId, msg.textId);
-    } else if (msg.type === 'drawing:added') {
-      applyDrawingAddToCache(queryClient, campaignId, msg.mapId, msg.drawing);
-    } else if (msg.type === 'drawing:updated') {
-      applyDrawingUpdateToCache(queryClient, campaignId, msg.mapId, msg.drawing);
-    } else if (msg.type === 'drawing:moved') {
-      applyDrawingGeomToCache(queryClient, campaignId, msg.mapId, msg.drawingId, {
-        x: msg.x,
-        y: msg.y,
-        width: msg.width,
-        height: msg.height,
-      });
-    } else if (msg.type === 'drawing:removed') {
-      applyDrawingRemoveFromCache(queryClient, campaignId, msg.mapId, msg.drawingId);
-    } else if (msg.type === 'drawing:cleared') {
-      applyDrawingsClearToCache(queryClient, campaignId, msg.mapId);
-    }
-  });
+  // Map party — keeps every connected client in sync with map/token/text/drawing
+  // writes by applying inbound messages to the query cache. Returns `send` for
+  // broadcasting this client's local changes.
+  const sendMapMessage = useTabletopMapSync(campaignId, getToken);
 
   const [badgeScreenIds, setBadgeScreenIds] = useState<Set<string>>(new Set());
   const [_pings, setPings] = useState<PingData[]>([]);
