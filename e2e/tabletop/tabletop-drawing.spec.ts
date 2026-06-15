@@ -495,6 +495,44 @@ test('the pointer tool selects a shape; the handle resizes it and Delete removes
   await expect.poll(() => countDrawings()).toBe(0);
 });
 
+test('a drawing is keyboard accessible (named, focus-selects, arrow-nudges, Delete)', async ({
+  page,
+}) => {
+  await gotoTabletop(page);
+  await selectDrawingTool(page);
+  await page.getByTestId('drawing-settings-panel').getByTestId('draw-shape-square').click();
+  await dragPath(page, [
+    [0.4, 0.4],
+    [0.55, 0.55],
+  ]);
+  await expect.poll(() => countDrawings({ kind: 'rect' })).toBe(1);
+
+  const xOf = async () => {
+    const doc = await drawings().findOne({ mapId: new ObjectId(provisioned.mapId), kind: 'rect' });
+    return (doc as { x?: number } | null)?.x ?? 0;
+  };
+  const before = await xOf();
+
+  // Pointer tool → the shape exposes an accessible name and is focusable.
+  await page.getByTestId('tool-pointer').click();
+  const rect = page.getByTestId('map-drawing');
+  await expect(rect).toHaveAttribute('role', 'img');
+  await expect(rect).toHaveAttribute('aria-label', 'Rectangle drawing');
+
+  // Keyboard-focusing it selects it (the bounding box appears) — no mouse needed.
+  await rect.focus();
+  await expect(page.getByTestId('drawing-selection')).toBeVisible();
+
+  // Arrow key nudges it right and persists the new position.
+  await page.keyboard.press('ArrowRight');
+  await expect.poll(xOf).toBeGreaterThan(before);
+
+  // Delete removes the selected drawing (keyboard-only path).
+  await page.keyboard.press('Delete');
+  await expect(page.getByTestId('map-drawing')).toHaveCount(0);
+  await expect.poll(() => countDrawings()).toBe(0);
+});
+
 test('the pointer tool can drag a selected shape to a new spot', async ({ page }) => {
   await gotoTabletop(page);
   await selectDrawingTool(page);

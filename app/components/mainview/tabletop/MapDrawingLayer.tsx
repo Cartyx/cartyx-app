@@ -1,6 +1,16 @@
-import type { PointerEvent as ReactPointerEvent } from 'react';
+import type { PointerEvent as ReactPointerEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { MapDrawingData } from '~/types/mapDrawing';
 import { drawingBBox } from './ActiveMapStage.geometry';
+
+/** Keyboard nudge step in map-local pixels (Shift = larger). */
+const NUDGE_STEP = 10;
+const NUDGE_STEP_LARGE = 50;
+
+const KIND_LABEL: Record<'pencil' | 'rect' | 'ellipse', string> = {
+  pencil: 'Freehand drawing',
+  rect: 'Rectangle drawing',
+  ellipse: 'Ellipse drawing',
+};
 
 /** Minimal geometry a drawing element needs to render (committed or live preview). */
 interface RenderableDrawing {
@@ -34,6 +44,10 @@ interface MapDrawingLayerProps {
   canModify: (d: MapDrawingData) => boolean;
   onBeginMove: (id: string, e: ReactPointerEvent<SVGElement>) => void;
   onBeginResize: (d: MapDrawingData, e: ReactPointerEvent<HTMLButtonElement>) => void;
+  /** Select a drawing (keyboard focus selects it so Delete/resize apply). */
+  onSelect: (id: string) => void;
+  /** Move a drawing by a keyboard nudge (map-local px). */
+  onNudge: (id: string, dx: number, dy: number) => void;
 }
 
 /**
@@ -56,6 +70,8 @@ export function MapDrawingLayer({
   canModify,
   onBeginMove,
   onBeginResize,
+  onSelect,
+  onNudge,
 }: MapDrawingLayerProps) {
   const renderDrawing = (
     d: RenderableDrawing,
@@ -68,6 +84,35 @@ export function MapDrawingLayer({
     // Own/GM drawings can be dragged in the pointer tool → a move cursor.
     const movable =
       opts.interactive && (isGM || (currentUserId != null && d.createdBy === currentUserId));
+    // Keyboard a11y (pointer tool only): the shape is focusable + labelled;
+    // focusing it selects it (so Delete + the resize handle apply), and arrow
+    // keys nudge a movable shape. Mouse interaction is unchanged.
+    const a11y =
+      opts.interactive && !opts.isPreview
+        ? {
+            tabIndex: 0,
+            role: 'img',
+            'aria-label': KIND_LABEL[d.kind],
+            onFocus: () => {
+              if (d.id) onSelect(d.id);
+            },
+            onKeyDown: (e: ReactKeyboardEvent<SVGElement>) => {
+              if (!movable || !d.id) return;
+              const step = e.shiftKey ? NUDGE_STEP_LARGE : NUDGE_STEP;
+              let dx = 0;
+              let dy = 0;
+              if (e.key === 'ArrowLeft') dx = -step;
+              else if (e.key === 'ArrowRight') dx = step;
+              else if (e.key === 'ArrowUp') dy = -step;
+              else if (e.key === 'ArrowDown') dy = step;
+              else return;
+              e.preventDefault();
+              e.stopPropagation();
+              onNudge(d.id, dx, dy);
+            },
+          }
+        : // Display-only / preview shapes are decorative to assistive tech.
+          { 'aria-hidden': true };
     const common = {
       'data-testid': opts.isPreview ? undefined : 'map-drawing',
       'data-drawing-id': d.id,
@@ -79,6 +124,7 @@ export function MapDrawingLayer({
           }
         : undefined,
       style: { pointerEvents, cursor: movable ? 'move' : 'pointer' } as const,
+      ...a11y,
     };
     if (d.kind === 'pencil') {
       const pts: string[] = [];
@@ -96,6 +142,7 @@ export function MapDrawingLayer({
         <g key={d.id ?? 'preview'}>
           {opts.interactive && (
             <polyline
+              aria-hidden="true"
               points={points}
               fill="none"
               stroke="transparent"
@@ -111,6 +158,7 @@ export function MapDrawingLayer({
             data-drawing-id={common['data-drawing-id']}
             data-drawing-kind={common['data-drawing-kind']}
             data-filled={common['data-filled']}
+            {...a11y}
             points={points}
             fill="none"
             stroke={d.color}
@@ -178,7 +226,8 @@ export function MapDrawingLayer({
         <svg
           className="pointer-events-none absolute inset-0 z-20 h-full w-full"
           data-testid="map-drawing-layer"
-          aria-hidden="true"
+          role="group"
+          aria-label="Map drawings"
         >
           {drawings.map((d) => renderDrawing(d, { interactive: pointerActive }))}
           {preview && renderDrawing(preview, { interactive: false, isPreview: true })}

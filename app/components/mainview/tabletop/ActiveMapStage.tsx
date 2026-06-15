@@ -827,6 +827,53 @@ export function ActiveMapStage({
     [drawings, canModifyDrawing, clearSelection]
   );
 
+  // Keyboard nudge of a drawing (arrow keys). Mirrors the pointer-move commit:
+  // translate by (dx,dy) map-local px clamped in-bounds, persist + broadcast.
+  const nudgeDrawing = useCallback(
+    (drawingId: string, dx: number, dy: number) => {
+      const dr = drawings.find((x) => x.id === drawingId);
+      if (!dr || !canModifyDrawing(dr)) return;
+      const bbox = drawingBBox(dr);
+      const offX = clamp(dx, -bbox.x, map.imageWidth - bbox.width - bbox.x);
+      const offY = clamp(dy, -bbox.y, map.imageHeight - bbox.height - bbox.y);
+      if (offX === 0 && offY === 0) return;
+      const geom = movedGeometry(
+        {
+          kind: dr.kind,
+          startPoints: dr.points,
+          startX: dr.x,
+          startY: dr.y,
+          bw: dr.width,
+          bh: dr.height,
+        },
+        offX,
+        offY
+      );
+      applyDrawingUpdateToCache(qc, campaignId, map.id, { ...dr, ...geom });
+      const update =
+        dr.kind === 'pencil'
+          ? { drawingId, points: geom.points }
+          : { drawingId, x: geom.x, y: geom.y };
+      drawingMutations.update.mutate(update, {
+        onSuccess: (res) => {
+          applyDrawingUpdateToCache(qc, campaignId, map.id, res.drawing);
+          onBroadcast({ type: 'drawing:updated', mapId: map.id, drawing: res.drawing });
+        },
+      });
+    },
+    [
+      drawings,
+      canModifyDrawing,
+      map.imageWidth,
+      map.imageHeight,
+      qc,
+      campaignId,
+      map.id,
+      drawingMutations.update,
+      onBroadcast,
+    ]
+  );
+
   // Clamp a panel position so the whole panel stays inside the workspace,
   // using its real measured size (its height varies with content).
   const clampPanelPos = useCallback(
@@ -1307,6 +1354,8 @@ export function ActiveMapStage({
         canModify={canModifyDrawing}
         onBeginMove={beginDrawingMove}
         onBeginResize={beginDrawingResize}
+        onSelect={setSelectedDrawingId}
+        onNudge={nudgeDrawing}
       />
 
       {/* Tokens */}
