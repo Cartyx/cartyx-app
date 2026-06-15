@@ -1,18 +1,47 @@
 import type * as Party from 'partykit/server';
+import { jwtVerify } from 'jose';
 
 /**
- * Tabletop Map party — broadcast channel for the live tabletop map state.
+ * Tabletop Map party — broadcast channel for the live tabletop map state
+ * (active-map changes, plus peer-relayed token/text/drawing events).
  *
- * Phase 1: only `map:active-changed` is emitted (by the server function
- * `setActiveMap` posting through the HTTP party API). Clients react by
- * refetching the active map. Phase 2 adds `token:*` events.
- *
- * Mirrors the simple-relay shape of `party/tabletop.ts`. Auth is deferred
- * to match the existing tabletop party; a future hardening pass should add
- * `onBeforeConnect` JWT verification like `party/index.ts`.
+ * Connections are authenticated in `onBeforeConnect` (JWT minted by
+ * `createPartyToken`) and bound to their campaign room, mirroring
+ * `party/index.ts`, so an unauthenticated or cross-campaign client cannot join
+ * and inject broadcast events. Persistence remains server-function authoritative.
  */
 export default class TabletopMapParty implements Party.Server {
   constructor(readonly room: Party.Room) {}
+
+  static async onBeforeConnect(request: Party.Request, lobby: Party.Lobby) {
+    const token = new URL(request.url).searchParams.get('token');
+    if (!token) return new Response('Unauthorized', { status: 401 });
+
+    const sessionSecret = lobby.env.SESSION_SECRET;
+    if (typeof sessionSecret !== 'string' || sessionSecret.trim() === '') {
+      return new Response('Unauthorized', { status: 401 });
+    }
+
+    try {
+      const { payload } = await jwtVerify(token, new TextEncoder().encode(sessionSecret), {
+        algorithms: ['HS256'],
+      });
+      const userId = typeof payload.sub === 'string' ? payload.sub.trim() : '';
+      if (!userId) return new Response('Unauthorized', { status: 401 });
+
+      // The token's sessionId is the campaign id; the room is
+      // `tabletop-map-<campaignId>`. Bind the connection to its campaign so a
+      // member of one campaign can't snoop another's map room.
+      const campaignId = typeof payload.sessionId === 'string' ? payload.sessionId : '';
+      const roomId = new URL(request.url).pathname.split('/').pop() ?? '';
+      if (campaignId && roomId && !roomId.endsWith(campaignId)) {
+        return new Response('Forbidden', { status: 403 });
+      }
+      return request;
+    } catch {
+      return new Response('Unauthorized', { status: 401 });
+    }
+  }
 
   onConnect(conn: Party.Connection) {
     console.info(`[TabletopMap] ${conn.id} connected to room ${this.room.id}`);
