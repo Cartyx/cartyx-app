@@ -49,6 +49,8 @@ import {
 import { MapToken } from './MapToken';
 import { LayersPanel } from './LayersPanel';
 import { RulerSettingsPanel } from './RulerSettingsPanel';
+import { useRulerTool } from './useRulerTool';
+import { RulerOverlay } from './RulerOverlay';
 import { TextSettingsPanel } from './TextSettingsPanel';
 import { DrawingSettingsPanel, type DrawShape } from './DrawingSettingsPanel';
 import { MonsterBatchDialog } from './MonsterBatchDialog';
@@ -63,7 +65,6 @@ import {
   resizedGeometry,
   movedGeometry,
 } from './ActiveMapStage.geometry';
-import { useRulerColor } from '~/hooks/useUserPreferences';
 import {
   tokenLayerId,
   tokenLayerRenderOrder,
@@ -99,9 +100,6 @@ interface ActiveMapStageProps {
   /** Whether the pointer tool is active (select/resize/delete drawings). */
   pointerActive?: boolean;
 }
-
-/** A measurement endpoint: a fixed image-space point, or a live token center. */
-type MeasurePoint = { kind: 'point'; x: number; y: number } | { kind: 'token'; tokenId: string };
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 8;
@@ -222,40 +220,6 @@ export function ActiveMapStage({
   // players never gain this panel so it stays empty for them).
   const [activeLayer, setActiveLayer] = useState<MapLayerId>('public');
   const [hiddenLayers, setHiddenLayers] = useState<Set<MapLayerId>>(() => new Set());
-
-  // Measurement (ruler) tool — a client-only polyline measurement. `points`
-  // are the committed vertices (fixed map points or live token centers). When
-  // `cursor` is non-null the in-progress segment runs from the last committed
-  // point to the cursor (live); a completed token→token measurement freezes it
-  // to null. Shift+click adds a waypoint; a plain click (re)starts a single
-  // anchor; double-click clears everything. All coordinates are image space.
-  const [measurePoints, setMeasurePoints] = useState<MeasurePoint[]>([]);
-  const [measureCursor, setMeasureCursor] = useState<{ x: number; y: number } | null>(null);
-
-  // Per-user measurement line color (persisted on the user record).
-  const { color: rulerColor, setColor: setRulerColor } = useRulerColor();
-
-  // The ruler settings popup is shown while the tool is active; closing it
-  // hides just the popup (the ruler stays usable). Re-opens when re-selected.
-  const [rulerPanelOpen, setRulerPanelOpen] = useState(false);
-
-  // Clear the measurement whenever the ruler tool is deselected; (re)open the
-  // settings popup whenever it's selected.
-  useEffect(() => {
-    if (!rulerActive) {
-      setMeasurePoints([]);
-      setMeasureCursor(null);
-    } else {
-      setRulerPanelOpen(true);
-    }
-  }, [rulerActive]);
-
-  // Reset the whole measurement — the tool stops drawing until the next click.
-  // Bound to a double-click on the stage.
-  const resetMeasurement = useCallback(() => {
-    setMeasurePoints([]);
-    setMeasureCursor(null);
-  }, []);
 
   // --- Text tool ----------------------------------------------------------
   // Guards against a double-commit (Enter then unmount-blur) of the same draft.
@@ -505,25 +469,6 @@ export function ActiveMapStage({
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedTextId, texts, canModifyText, removeText]);
 
-  // Picking a token while measuring. Shift adds it as a waypoint and keeps the
-  // line live; a plain pick with an existing line completes the measurement at
-  // the token (token→token, frozen); with no line yet it begins a fresh one.
-  const pickTokenForMeasure = useCallback((token: MapTokenData, shiftKey: boolean) => {
-    const tp: MeasurePoint = { kind: 'token', tokenId: token.id };
-    setMeasurePoints((pts) => {
-      if (pts.length === 0) {
-        setMeasureCursor({ x: token.x, y: token.y });
-        return [tp];
-      }
-      if (shiftKey) {
-        setMeasureCursor({ x: token.x, y: token.y });
-        return [...pts, tp];
-      }
-      setMeasureCursor(null);
-      return [...pts, tp];
-    });
-  }, []);
-
   const clearSelection = useCallback(() => {
     setSelectedTokenIds((cur) => (cur.size === 0 ? cur : new Set()));
     setContextMenu(null);
@@ -593,6 +538,22 @@ export function ActiveMapStage({
     },
     [effectiveScale, imageOffsetX, imageOffsetY]
   );
+
+  // Measurement (ruler) tool — client-only polyline measurement. Owns its own
+  // state + handlers; it short-circuits the stage pointer handlers below and
+  // never touches the dragRef.
+  const ruler = useRulerTool({
+    rulerActive,
+    tokens,
+    domToImage,
+    imageOffsetX,
+    imageOffsetY,
+    effectiveScale,
+    pixelsPerSquare: map.scale.pixelsPerSquare,
+    feetPerSquare: map.scale.feetPerSquare,
+    imageWidth: map.imageWidth,
+    imageHeight: map.imageHeight,
+  });
 
   // -------------------------------------------------------------------------
   // Zoom + pan
@@ -736,21 +697,7 @@ export function ActiveMapStage({
     // Ruler tool: a background click drops/relocates the measurement anchor
     // (clicks on tokens are handled by MapToken). No pan/select while measuring.
     if (rulerActive) {
-      const img = domToImage(e.clientX, e.clientY);
-      if (img) {
-        const p = { x: clamp(img.x, 0, map.imageWidth), y: clamp(img.y, 0, map.imageHeight) };
-        const shift = e.shiftKey;
-        setMeasurePoints((pts) => {
-          // Shift+click appends a waypoint and keeps drawing; a plain click
-          // starts (or restarts) a single-anchor measurement.
-          if (shift && pts.length > 0) {
-            setMeasureCursor(p);
-            return [...pts, { kind: 'point', ...p }];
-          }
-          setMeasureCursor(p);
-          return [{ kind: 'point', ...p }];
-        });
-      }
+      ruler.onBackgroundPointerDown(e);
       return;
     }
     // Text tool: a background click writes text. If a draft is already open,
@@ -1056,12 +1003,7 @@ export function ActiveMapStage({
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     // Ruler tool: the live endpoint follows the cursor until a fixed end is set.
     if (rulerActive) {
-      // The live endpoint follows the cursor while a segment is open (cursor
-      // non-null); a completed token→token measurement is frozen (cursor null).
-      if (measurePoints.length > 0 && measureCursor !== null) {
-        const img = domToImage(e.clientX, e.clientY);
-        if (img) setMeasureCursor({ x: img.x, y: img.y });
-      }
+      ruler.onPointerMove(e);
       return;
     }
     const d = dragRef.current;
@@ -1505,65 +1447,6 @@ export function ActiveMapStage({
     [isGM, currentUserId]
   );
 
-  // Resolve the polyline measurement to DOM coordinates. Each segment carries
-  // its own feet distance derived from the map's calibrated scale (never
-  // hard-coded). The live cursor, when set, is the final (open) vertex.
-  const measurement = useMemo(() => {
-    if (!rulerActive || measurePoints.length === 0) return null;
-    const resolve = (p: MeasurePoint): { x: number; y: number } | null => {
-      if (p.kind === 'point') return { x: p.x, y: p.y };
-      const t = tokens.find((tk) => tk.id === p.tokenId);
-      return t ? { x: t.x, y: t.y } : null;
-    };
-    const committedImg = measurePoints
-      .map(resolve)
-      .filter((p): p is { x: number; y: number } => p !== null);
-    if (committedImg.length === 0) return null;
-
-    const toDom = (p: { x: number; y: number }) => ({
-      x: imageOffsetX + p.x * effectiveScale,
-      y: imageOffsetY + p.y * effectiveScale,
-    });
-    const committed = committedImg.map(toDom);
-    // The full vertex list adds the live cursor as the last point when open.
-    const imgVerts = measureCursor ? [...committedImg, measureCursor] : committedImg;
-    const domVerts = imgVerts.map(toDom);
-
-    const perSquare = map.scale.pixelsPerSquare || 1;
-    const segments = [];
-    for (let i = 0; i < imgVerts.length - 1; i++) {
-      const a = imgVerts[i]!;
-      const b = imgVerts[i + 1]!;
-      const pixelDist = Math.hypot(b.x - a.x, b.y - a.y);
-      const feet = Math.round((pixelDist / perSquare) * map.scale.feetPerSquare);
-      const da = domVerts[i]!;
-      const db = domVerts[i + 1]!;
-      segments.push({
-        a: da,
-        b: db,
-        feet,
-        mid: { x: (da.x + db.x) / 2, y: (da.y + db.y) / 2 },
-      });
-    }
-    return {
-      // Anchor (first committed vertex) and the intermediate waypoints.
-      anchor: committed[0]!,
-      waypoints: committed.slice(1),
-      end: domVerts[domVerts.length - 1]!,
-      segments,
-    };
-  }, [
-    rulerActive,
-    measurePoints,
-    measureCursor,
-    tokens,
-    map.scale.pixelsPerSquare,
-    map.scale.feetPerSquare,
-    imageOffsetX,
-    imageOffsetY,
-    effectiveScale,
-  ]);
-
   const cursorClass =
     rulerActive || drawingActive
       ? 'cursor-crosshair'
@@ -1727,7 +1610,7 @@ export function ActiveMapStage({
         // drawing until the next click (also clears a multi-point polyline).
         if (!rulerActive) return;
         e.preventDefault();
-        resetMeasurement();
+        ruler.resetMeasurement();
       }}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
@@ -1834,7 +1717,7 @@ export function ActiveMapStage({
           isGM={isGM}
           isSelected={selectedTokenIds.has(token.id)}
           rulerActive={rulerActive}
-          onMeasure={(shiftKey) => pickTokenForMeasure(token, shiftKey)}
+          onMeasure={(shiftKey) => ruler.pickTokenForMeasure(token, shiftKey)}
           onSelect={(additive) => selectToken(token.id, additive)}
           onBeginDrag={(e) => beginTokenDrag(token, e)}
           onContextMenu={(e) => handleTokenContextMenu(token, e)}
@@ -1922,95 +1805,8 @@ export function ActiveMapStage({
       )}
 
       {/* Measurement (ruler) overlay — polyline + endpoints + per-segment feet. */}
-      {measurement && (
-        <>
-          <svg
-            className="pointer-events-none absolute inset-0 z-30 h-full w-full"
-            data-testid="ruler-line"
-            aria-hidden="true"
-          >
-            {measurement.segments.map((seg) => {
-              const key = `${seg.a.x},${seg.a.y}-${seg.b.x},${seg.b.y}`;
-              return (
-                <g key={key}>
-                  {/* Dark halo underlay so the line reads on any map background. */}
-                  <line
-                    x1={seg.a.x}
-                    y1={seg.a.y}
-                    x2={seg.b.x}
-                    y2={seg.b.y}
-                    stroke="#000000"
-                    strokeOpacity={0.6}
-                    strokeWidth={6}
-                    strokeLinecap="round"
-                    strokeDasharray="6 4"
-                  />
-                  <line
-                    x1={seg.a.x}
-                    y1={seg.a.y}
-                    x2={seg.b.x}
-                    y2={seg.b.y}
-                    stroke={rulerColor}
-                    strokeWidth={3}
-                    strokeLinecap="round"
-                    strokeDasharray="6 4"
-                    data-testid="ruler-line-stroke"
-                  />
-                </g>
-              );
-            })}
-            {/* Intermediate waypoints. */}
-            {measurement.waypoints.map((wp) => (
-              <circle
-                key={`${wp.x},${wp.y}`}
-                cx={wp.x}
-                cy={wp.y}
-                r={5}
-                fill={rulerColor}
-                stroke="#000000"
-                strokeOpacity={0.7}
-                strokeWidth={2}
-                data-testid="ruler-waypoint"
-              />
-            ))}
-            {/* Live / final endpoint. */}
-            <circle
-              cx={measurement.end.x}
-              cy={measurement.end.y}
-              r={5}
-              fill={rulerColor}
-              stroke="#000000"
-              strokeOpacity={0.7}
-              strokeWidth={2}
-            />
-            {/* Anchor (drawn last so it sits above an overlapping waypoint). */}
-            <circle
-              cx={measurement.anchor.x}
-              cy={measurement.anchor.y}
-              r={7}
-              fill={rulerColor}
-              fillOpacity={0.95}
-              stroke="#000000"
-              strokeOpacity={0.7}
-              strokeWidth={2}
-              data-testid="ruler-anchor"
-            />
-          </svg>
-          {measurement.segments.map((seg) => (
-            <div
-              key={`${seg.mid.x},${seg.mid.y}`}
-              className="pointer-events-none absolute z-30 -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded-md border-2 bg-black/90 px-2.5 py-1 font-mono text-base font-bold text-white shadow-lg"
-              style={{
-                left: seg.mid.x,
-                top: seg.mid.y,
-                borderColor: rulerColor,
-              }}
-              data-testid="ruler-distance"
-            >
-              {seg.feet} ft
-            </div>
-          ))}
-        </>
+      {ruler.measurement && (
+        <RulerOverlay measurement={ruler.measurement} rulerColor={ruler.rulerColor} />
       )}
 
       {/* Delete-confirmation dialog */}
@@ -2099,11 +1895,11 @@ export function ActiveMapStage({
       )}
 
       {/* Measurement settings popup (shown while the ruler tool is active) */}
-      {rulerActive && rulerPanelOpen && (
+      {rulerActive && ruler.rulerPanelOpen && (
         <RulerSettingsPanel
-          color={rulerColor}
-          onChangeColor={setRulerColor}
-          onClose={() => setRulerPanelOpen(false)}
+          color={ruler.rulerColor}
+          onChangeColor={ruler.setRulerColor}
+          onClose={() => ruler.setRulerPanelOpen(false)}
         />
       )}
 
