@@ -574,6 +574,41 @@ test('the show/hide-drawings toggle hides and shows the layer', async ({ page })
   await expect(page.getByTestId('map-drawing')).toHaveCount(1);
 });
 
+test('the Layers panel eye toggle hides and shows the Spell FX / Drawing layer', async ({
+  page,
+}) => {
+  await gotoTabletop(page);
+  await selectDrawingTool(page);
+  await page.getByTestId('drawing-settings-panel').getByTestId('draw-shape-square').click();
+  await dragPath(page, [
+    [0.4, 0.4],
+    [0.6, 0.6],
+  ]);
+  await expect(page.getByTestId('map-drawing')).toHaveCount(1);
+  await expect.poll(() => countDrawings()).toBe(1);
+
+  // Open the GM Layers panel and hide the Spell FX / Drawing layer via its eye.
+  await page.getByTestId('tool-layer').click();
+  const panel = page.getByTestId('layers-panel');
+  await expect(panel).toBeVisible();
+  const eye = panel.getByTestId('layer-visibility-spell-fx');
+  await expect(eye).toHaveAttribute('aria-pressed', 'true'); // currently visible
+  await eye.click();
+  await expect(eye).toHaveAttribute('aria-pressed', 'false'); // now hidden
+
+  // The whole drawing layer is hidden (not just one shape) — but nothing is
+  // deleted: it's a per-viewer visibility toggle.
+  await expect(page.getByTestId('map-drawing')).toHaveCount(0);
+  await expect(page.getByTestId('map-drawing-layer')).toHaveCount(0);
+  await expect.poll(() => countDrawings()).toBe(1);
+
+  // Toggling the eye back shows the layer + drawings again.
+  await eye.click();
+  await expect(eye).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('map-drawing-layer')).toHaveCount(1);
+  await expect(page.getByTestId('map-drawing')).toHaveCount(1);
+});
+
 test('the GM clear-all button empties the map', async ({ page }) => {
   await gotoTabletop(page);
   await selectDrawingTool(page);

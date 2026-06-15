@@ -1625,10 +1625,15 @@ export function ActiveMapStage({
           ? 'cursor-grabbing'
           : 'cursor-grab';
 
+  // Drawings are visible only when both the per-viewer zoom-toolbar toggle is on
+  // AND the GM hasn't hidden the Spell FX / Drawing layer in the Layers panel
+  // (same `hiddenLayers` mechanism as the map image + token layers).
+  const drawingsVisible = showDrawings && !hiddenLayers.has('spell-fx');
+
   // The selected drawing (pointer tool) + its DOM bounding box, for the
   // selection outline + corner resize handle.
   const selectedDrawing =
-    pointerActive && selectedDrawingId
+    drawingsVisible && pointerActive && selectedDrawingId
       ? (drawings.find((d) => d.id === selectedDrawingId) ?? null)
       : null;
   const selectionBox = selectedDrawing
@@ -1821,7 +1826,7 @@ export function ActiveMapStage({
           while the pointer tool is active (for selection), so tokens are never
           blocked. New strokes are drawn on the stage background (drawing tool)
           and erasing is hit-tested against geometry. */}
-      {showDrawings && (
+      {drawingsVisible && (
         <svg
           className="pointer-events-none absolute inset-0 z-20 h-full w-full"
           data-testid="map-drawing-layer"
