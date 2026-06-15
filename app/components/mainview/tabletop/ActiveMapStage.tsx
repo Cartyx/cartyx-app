@@ -127,9 +127,11 @@ export function ActiveMapStage({
   // Text-tool settings (the brush) — local to this client.
   const [textColor, setTextColor] = useState('#fbbf24');
   const [textFontSize, setTextFontSize] = useState(16);
-  // Draggable position of the settings panel (workspace px), clamped on drag so
-  // it can't be lost behind the toolbar / off-screen.
+  // Draggable position of the settings panel (workspace px), clamped on drag
+  // AND on workspace resize so it can never be lost behind the toolbar /
+  // off-screen (where the stage's overflow-hidden would clip it away).
   const [textPanelPos, setTextPanelPos] = useState({ x: 12, y: 12 });
+  const textPanelRef = useRef<HTMLDivElement | null>(null);
   // The in-progress text being typed (image-space anchor + value), and the
   // currently selected text (for deletion).
   const [textDraft, setTextDraft] = useState<{
@@ -629,6 +631,30 @@ export function ActiveMapStage({
     [textPanelPos]
   );
 
+  // Clamp a panel position so the whole panel stays inside the workspace,
+  // using its real measured size (its height varies with content).
+  const clampPanelPos = useCallback(
+    (pos: { x: number; y: number }) => {
+      const pw = textPanelRef.current?.offsetWidth ?? 240;
+      const ph = textPanelRef.current?.offsetHeight ?? 240;
+      const maxX = Math.max(0, containerSize.width - pw);
+      const maxY = Math.max(0, containerSize.height - ph);
+      return { x: clamp(pos.x, 0, maxX), y: clamp(pos.y, 0, maxY) };
+    },
+    [containerSize.width, containerSize.height]
+  );
+
+  // Keep the panel on-screen when the workspace resizes (inspector toggles,
+  // window resize, etc.) — otherwise a panel dragged toward an edge would be
+  // clipped away and look "lost".
+  useEffect(() => {
+    if (!textActive) return;
+    setTextPanelPos((pos) => {
+      const c = clampPanelPos(pos);
+      return c.x === pos.x && c.y === pos.y ? pos : c;
+    });
+  }, [textActive, containerSize.width, containerSize.height, clampPanelPos]);
+
   // Update both the brush and (if a text is selected) that text on the map, so
   // changing size/color visibly resizes/recolors the selected text. Persists +
   // broadcasts. The server is the authority on whether the change is allowed.
@@ -739,14 +765,13 @@ export function ActiveMapStage({
         onBroadcast({ type: 'text:moved', mapId: map.id, textId: d.textId, x: nx, y: ny });
       }
     } else if (d.mode === 'panel') {
-      // Clamp within the workspace so the panel can't be lost off-screen.
-      const PANEL_W = 240;
-      const HANDLE_H = 44;
-      const maxX = Math.max(0, containerSize.width - PANEL_W);
-      const maxY = Math.max(0, containerSize.height - HANDLE_H);
-      const nx = clamp(d.startX + (e.clientX - d.startClientX), 0, maxX);
-      const ny = clamp(d.startY + (e.clientY - d.startClientY), 0, maxY);
-      setTextPanelPos({ x: nx, y: ny });
+      // Clamp within the workspace so the panel stays fully visible.
+      setTextPanelPos(
+        clampPanelPos({
+          x: d.startX + (e.clientX - d.startClientX),
+          y: d.startY + (e.clientY - d.startClientY),
+        })
+      );
     }
   };
 
@@ -1506,6 +1531,7 @@ export function ActiveMapStage({
           onChangeFontSize={applyTextFontSize}
           position={textPanelPos}
           onHeaderPointerDown={beginPanelDrag}
+          rootRef={textPanelRef}
         />
       )}
 

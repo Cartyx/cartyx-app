@@ -1,4 +1,4 @@
-import type { PointerEvent as ReactPointerEvent } from 'react';
+import type { PointerEvent as ReactPointerEvent, RefObject } from 'react';
 import { Type, GripVertical } from 'lucide-react';
 import { ColorPicker } from '~/components/shared/ColorPicker';
 import { MIN_MAP_TEXT_FONT_SIZE, MAX_MAP_TEXT_FONT_SIZE } from '~/types/schemas/mapTexts';
@@ -17,6 +17,8 @@ interface TextSettingsPanelProps {
   position: { x: number; y: number };
   /** Begin dragging the panel by its header. */
   onHeaderPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void;
+  /** Ref to the root element, used by the parent to measure + clamp it. */
+  rootRef: RefObject<HTMLDivElement | null>;
 }
 
 /**
@@ -32,9 +34,11 @@ export function TextSettingsPanel({
   onChangeFontSize,
   position,
   onHeaderPointerDown,
+  rootRef,
 }: TextSettingsPanelProps) {
   return (
     <div
+      ref={rootRef}
       onPointerDown={(e) => e.stopPropagation()}
       className="absolute z-40 w-60 overflow-hidden rounded-lg border border-white/10 bg-[#0D1117]/95 shadow-2xl backdrop-blur-sm"
       style={{ left: position.x, top: position.y }}

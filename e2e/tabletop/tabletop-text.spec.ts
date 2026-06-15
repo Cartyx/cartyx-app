@@ -269,6 +269,41 @@ test('the settings panel can be dragged and stays within the workspace', async (
   await expect(panel).toBeVisible();
 });
 
+test('the panel stays visible after the workspace shrinks (it is not lost)', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 820 });
+  await gotoTabletop(page);
+  await selectTextTool(page);
+
+  const panel = page.getByTestId('text-settings-panel');
+  const header = page.getByTestId('text-settings-panel-header');
+
+  // Drag the panel toward the bottom-right edge of the (large) workspace.
+  const stage0 = (await page.getByTestId('active-map-stage').boundingBox())!;
+  const h = (await header.boundingBox())!;
+  await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(stage0.x + stage0.width - 80, stage0.y + stage0.height - 80, { steps: 8 });
+  await page.mouse.up();
+
+  // Shrink the viewport (≈ opening the inspector / resizing the window).
+  await page.setViewportSize({ width: 760, height: 560 });
+  await page.waitForTimeout(300);
+
+  // The panel re-clamps fully inside the smaller workspace — still visible.
+  const stage1 = (await page.getByTestId('active-map-stage').boundingBox())!;
+  await expect(panel).toBeVisible();
+  const p = (await panel.boundingBox())!;
+  expect(p.x).toBeGreaterThanOrEqual(stage1.x - 1);
+  expect(p.y).toBeGreaterThanOrEqual(stage1.y - 1);
+  expect(p.x + p.width).toBeLessThanOrEqual(stage1.x + stage1.width + 1);
+  expect(p.y + p.height).toBeLessThanOrEqual(stage1.y + stage1.height + 1);
+
+  // …and its controls are still usable.
+  await expect(panel.getByTestId('text-size-72')).toBeVisible();
+  await panel.getByTestId('text-size-72').click();
+  await expect(panel.getByTestId('text-size-72')).toHaveAttribute('aria-pressed', 'true');
+});
+
 test('changing the font size resizes the selected text on the map', async ({ page }) => {
   await gotoTabletop(page);
   await selectTextTool(page);
@@ -279,7 +314,9 @@ test('changing the font size resizes the selected text on the map', async ({ pag
   const fontPx = async () => parseFloat(await text.evaluate((el) => getComputedStyle(el).fontSize));
   const before = await fontPx();
 
-  // Select the text, then bump the size via a preset.
+  // Reproduce the reported flow: deselect, then re-select with the text tool,
+  // then bump the size via a preset — it must apply to the placed text.
+  await page.keyboard.press('Escape');
   await text.click();
   await page.getByTestId('text-settings-panel').getByTestId('text-size-96').click();
 
