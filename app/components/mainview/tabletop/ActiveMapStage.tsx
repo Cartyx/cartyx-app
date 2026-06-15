@@ -127,6 +127,9 @@ export function ActiveMapStage({
   // Text-tool settings (the brush) — local to this client.
   const [textColor, setTextColor] = useState('#fbbf24');
   const [textFontSize, setTextFontSize] = useState(16);
+  // Draggable position of the settings panel (workspace px), clamped on drag so
+  // it can't be lost behind the toolbar / off-screen.
+  const [textPanelPos, setTextPanelPos] = useState({ x: 12, y: 12 });
   // The in-progress text being typed (image-space anchor + value), and the
   // currently selected text (for deletion).
   const [textDraft, setTextDraft] = useState<{
@@ -208,9 +211,13 @@ export function ActiveMapStage({
   }, []);
 
   // Open the editor over an existing text (double-click to edit), prefilled.
+  // Sync the brush to the text so the editor renders at its size/color and a
+  // size/color change made while editing applies to it on commit.
   const openTextEdit = useCallback((t: MapTextData) => {
     draftActiveRef.current = true;
     setSelectedTextId(null);
+    setTextColor(t.color);
+    setTextFontSize(t.fontSize);
     setTextDraft({ x: t.x, y: t.y, editingId: t.id });
     setTextDraftValue(t.text);
   }, []);
@@ -260,9 +267,15 @@ export function ActiveMapStage({
         // Empty edit → leave the original unchanged.
         if (!value) return;
         const existing = texts.find((t) => t.id === draft.editingId);
-        if (existing) applyTextUpdateToCache(qc, campaignId, map.id, { ...existing, text: value });
+        if (existing)
+          applyTextUpdateToCache(qc, campaignId, map.id, {
+            ...existing,
+            text: value,
+            color: textColor,
+            fontSize: textFontSize,
+          });
         textMutations.update.mutate(
-          { textId: draft.editingId, text: value },
+          { textId: draft.editingId, text: value, color: textColor, fontSize: textFontSize },
           {
             onSuccess: (res) => {
               applyTextUpdateToCache(qc, campaignId, map.id, res.text);
@@ -491,9 +504,16 @@ export function ActiveMapStage({
         startY: number;
         lastBroadcastAt: number;
         moved: boolean;
+      }
+    | {
+        mode: 'panel';
+        startClientX: number;
+        startClientY: number;
+        startX: number;
+        startY: number;
       };
   const dragRef = useRef<DragState>({ mode: 'idle' });
-  const [dragMode, setDragMode] = useState<'idle' | 'pan' | 'token' | 'text'>('idle');
+  const [dragMode, setDragMode] = useState<'idle' | 'pan' | 'token' | 'text' | 'panel'>('idle');
 
   const onPanPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -571,6 +591,10 @@ export function ActiveMapStage({
       cancelTextDraft();
       clearSelection();
       setSelectedTextId(t.id);
+      // Sync the panel (brush) to the selected text so its size/color show and
+      // any change made while it's selected applies to it.
+      setTextColor(t.color);
+      setTextFontSize(t.fontSize);
       (e.target as Element).setPointerCapture?.(e.pointerId);
       dragRef.current = {
         mode: 'text',
@@ -585,6 +609,83 @@ export function ActiveMapStage({
       setDragMode('text');
     },
     [cancelTextDraft, clearSelection]
+  );
+
+  // Begin dragging the settings panel by its header (clamped on move).
+  const beginPanelDrag = useCallback(
+    (e: ReactPointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return;
+      e.stopPropagation();
+      (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+      dragRef.current = {
+        mode: 'panel',
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        startX: textPanelPos.x,
+        startY: textPanelPos.y,
+      };
+      setDragMode('panel');
+    },
+    [textPanelPos]
+  );
+
+  // Update both the brush and (if a text is selected) that text on the map, so
+  // changing size/color visibly resizes/recolors the selected text. Persists +
+  // broadcasts. The server is the authority on whether the change is allowed.
+  const applyTextColor = useCallback(
+    (next: string) => {
+      setTextColor(next);
+      const t = selectedTextId ? texts.find((x) => x.id === selectedTextId) : undefined;
+      if (!t || !canModifyText(t)) return;
+      applyTextUpdateToCache(qc, campaignId, map.id, { ...t, color: next });
+      textMutations.update.mutate(
+        { textId: t.id, color: next },
+        {
+          onSuccess: (res) => {
+            applyTextUpdateToCache(qc, campaignId, map.id, res.text);
+            onBroadcast({ type: 'text:updated', mapId: map.id, text: res.text });
+          },
+        }
+      );
+    },
+    [
+      selectedTextId,
+      texts,
+      canModifyText,
+      qc,
+      campaignId,
+      map.id,
+      textMutations.update,
+      onBroadcast,
+    ]
+  );
+
+  const applyTextFontSize = useCallback(
+    (next: number) => {
+      setTextFontSize(next);
+      const t = selectedTextId ? texts.find((x) => x.id === selectedTextId) : undefined;
+      if (!t || !canModifyText(t)) return;
+      applyTextUpdateToCache(qc, campaignId, map.id, { ...t, fontSize: next });
+      textMutations.update.mutate(
+        { textId: t.id, fontSize: next },
+        {
+          onSuccess: (res) => {
+            applyTextUpdateToCache(qc, campaignId, map.id, res.text);
+            onBroadcast({ type: 'text:updated', mapId: map.id, text: res.text });
+          },
+        }
+      );
+    },
+    [
+      selectedTextId,
+      texts,
+      canModifyText,
+      qc,
+      campaignId,
+      map.id,
+      textMutations.update,
+      onBroadcast,
+    ]
   );
 
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -637,6 +738,15 @@ export function ActiveMapStage({
         d.lastBroadcastAt = now;
         onBroadcast({ type: 'text:moved', mapId: map.id, textId: d.textId, x: nx, y: ny });
       }
+    } else if (d.mode === 'panel') {
+      // Clamp within the workspace so the panel can't be lost off-screen.
+      const PANEL_W = 240;
+      const HANDLE_H = 44;
+      const maxX = Math.max(0, containerSize.width - PANEL_W);
+      const maxY = Math.max(0, containerSize.height - HANDLE_H);
+      const nx = clamp(d.startX + (e.clientX - d.startClientX), 0, maxX);
+      const ny = clamp(d.startY + (e.clientY - d.startClientY), 0, maxY);
+      setTextPanelPos({ x: nx, y: ny });
     }
   };
 
@@ -1391,9 +1501,11 @@ export function ActiveMapStage({
       {textActive && (
         <TextSettingsPanel
           color={textColor}
-          onChangeColor={setTextColor}
+          onChangeColor={applyTextColor}
           fontSize={textFontSize}
-          onChangeFontSize={setTextFontSize}
+          onChangeFontSize={applyTextFontSize}
+          position={textPanelPos}
+          onHeaderPointerDown={beginPanelDrag}
         />
       )}
 

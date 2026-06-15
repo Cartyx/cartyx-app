@@ -8,7 +8,8 @@ const hexColor = z
 
 export const MAX_MAP_TEXT_LENGTH = 500;
 export const MIN_MAP_TEXT_FONT_SIZE = 8;
-export const MAX_MAP_TEXT_FONT_SIZE = 200;
+// Generous upper bound so large / zoomed-out maps can use big labels.
+export const MAX_MAP_TEXT_FONT_SIZE = 400;
 
 export const listMapTextsSchema = z.object({
   campaignId: z.string().trim().min(1),

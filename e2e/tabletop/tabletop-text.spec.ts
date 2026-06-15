@@ -237,6 +237,86 @@ test('the settings panel stays open while writing, moving, and editing text', as
   await expect(panel).toBeVisible();
 });
 
+test('the settings panel can be dragged and stays within the workspace', async ({ page }) => {
+  await gotoTabletop(page);
+  await selectTextTool(page);
+
+  const panel = page.getByTestId('text-settings-panel');
+  const header = page.getByTestId('text-settings-panel-header');
+  const stage = (await page.getByTestId('active-map-stage').boundingBox())!;
+  const before = (await panel.boundingBox())!;
+
+  // Drag the header down-right — the panel follows.
+  const dragBy = async (dx: number, dy: number) => {
+    const h = (await header.boundingBox())!;
+    await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(h.x + h.width / 2 + dx, h.y + h.height / 2 + dy, { steps: 8 });
+    await page.mouse.up();
+  };
+
+  await dragBy(180, 140);
+  const moved = (await panel.boundingBox())!;
+  expect(moved.x).toBeGreaterThan(before.x + 80);
+  expect(moved.y).toBeGreaterThan(before.y + 60);
+
+  // Drag far past the top-left — it clamps inside the workspace, never lost.
+  await dragBy(-3000, -3000);
+  const clamped = (await panel.boundingBox())!;
+  expect(clamped.x).toBeGreaterThanOrEqual(stage.x - 1);
+  expect(clamped.y).toBeGreaterThanOrEqual(stage.y - 1);
+  expect(clamped.x + clamped.width).toBeLessThanOrEqual(stage.x + stage.width + 1);
+  await expect(panel).toBeVisible();
+});
+
+test('changing the font size resizes the selected text on the map', async ({ page }) => {
+  await gotoTabletop(page);
+  await selectTextTool(page);
+  await writeText(page, 0.55, 0.45, 'Resize me');
+
+  const text = page.getByTestId('map-text').filter({ hasText: 'Resize me' });
+  await expect(text).toBeVisible();
+  const fontPx = async () => parseFloat(await text.evaluate((el) => getComputedStyle(el).fontSize));
+  const before = await fontPx();
+
+  // Select the text, then bump the size via a preset.
+  await text.click();
+  await page.getByTestId('text-settings-panel').getByTestId('text-size-96').click();
+
+  // The on-map text grows, and the new size is persisted.
+  await expect.poll(fontPx).toBeGreaterThan(before);
+  await expect
+    .poll(async () => {
+      const doc = await db()
+        .collection('mapText')
+        .findOne({ mapId: new ObjectId(provisioned.mapId), text: 'Resize me' });
+      return (doc as { fontSize?: number } | null)?.fontSize ?? 0;
+    })
+    .toBe(96);
+});
+
+test('font sizes larger than 48 are allowed for large maps', async ({ page }) => {
+  await gotoTabletop(page);
+  await selectTextTool(page);
+  await writeText(page, 0.6, 0.5, 'Big label');
+
+  const text = page.getByTestId('map-text').filter({ hasText: 'Big label' });
+  await expect(text).toBeVisible();
+  await text.click();
+
+  // Use the exact-size input to set a value well above the old 48 cap.
+  await page.getByTestId('text-settings-panel').getByTestId('text-size-input').fill('200');
+
+  await expect
+    .poll(async () => {
+      const doc = await db()
+        .collection('mapText')
+        .findOne({ mapId: new ObjectId(provisioned.mapId), text: 'Big label' });
+      return (doc as { fontSize?: number } | null)?.fontSize ?? 0;
+    })
+    .toBe(200);
+});
+
 test('writing text shows it on the map and it persists across a reload', async ({ page }) => {
   await gotoTabletop(page);
   await selectTextTool(page);
