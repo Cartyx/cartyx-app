@@ -106,6 +106,7 @@ function PlayPageContent() {
           sessions={campaign?.sessions}
           activeTool={activeTool}
           onToolChange={setActiveTool}
+          isGM={campaign?.isGM ?? false}
         >
           {needsNewPlayer && (
             <div className="mx-4 mt-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center gap-3">

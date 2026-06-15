@@ -142,7 +142,10 @@ async function requireCampaignMember(
 // Server functions
 // ---------------------------------------------------------------------------
 
-/** List every drawing on a map. All members see all drawings (they're shared). */
+/**
+ * List every drawing on a map. Drawings are GM-only — players never see them —
+ * so a non-GM member gets an empty list (authoritative server-side gate).
+ */
 export const listMapDrawings = createServerFn({ method: 'GET' })
   .inputValidator(listMapDrawingsSchema)
   .handler(async ({ data }) => {
@@ -150,6 +153,7 @@ export const listMapDrawings = createServerFn({ method: 'GET' })
     try {
       const member = await requireCampaignMember(data.campaignId);
       sessionUserId = member.sessionUserId;
+      if (!member.isGM) return { drawings: [] };
 
       const docs = await MapDrawing.find({ mapId: data.mapId, campaignId: data.campaignId })
         .sort({ createdAt: 1 })
@@ -165,7 +169,7 @@ export const listMapDrawings = createServerFn({ method: 'GET' })
     }
   });
 
-/** Create a drawing on a map. Any member (player or GM) may draw. */
+/** Create a drawing on a map. GM-only (drawings are GM-only annotations). */
 export const createMapDrawing = createServerFn({ method: 'POST' })
   .inputValidator(createMapDrawingSchema)
   .handler(async ({ data }) => {
@@ -173,6 +177,7 @@ export const createMapDrawing = createServerFn({ method: 'POST' })
     try {
       const member = await requireCampaignMember(data.campaignId);
       sessionUserId = member.sessionUserId;
+      if (!member.isGM) throw new Error('Forbidden');
 
       const bounds = await mapBounds(data.mapId, data.campaignId);
       if (!bounds) throw new Error('Map not found');
@@ -232,10 +237,7 @@ export const createMapDrawing = createServerFn({ method: 'POST' })
     }
   });
 
-/**
- * Update a drawing's geometry/style. A player may update only their own
- * drawing; a GM may update anyone's. Authoritative permission check.
- */
+/** Update a drawing's geometry/style. GM-only. Authoritative permission check. */
 export const updateMapDrawing = createServerFn({ method: 'POST' })
   .inputValidator(updateMapDrawingSchema)
   .handler(async ({ data }) => {
@@ -243,6 +245,7 @@ export const updateMapDrawing = createServerFn({ method: 'POST' })
     try {
       const member = await requireCampaignMember(data.campaignId);
       sessionUserId = member.sessionUserId;
+      if (!member.isGM) throw new Error('Forbidden');
 
       const drawing = await MapDrawing.findOne({
         _id: data.drawingId,
@@ -250,9 +253,6 @@ export const updateMapDrawing = createServerFn({ method: 'POST' })
         campaignId: data.campaignId,
       });
       if (!drawing) throw new Error('Drawing not found');
-
-      const canModify = member.isGM || String(drawing.createdBy) === member.userId;
-      if (!canModify) throw new Error('Forbidden');
 
       if (data.color !== undefined) drawing.color = data.color;
       if (data.strokeWidth !== undefined) drawing.strokeWidth = data.strokeWidth;
@@ -305,10 +305,7 @@ export const updateMapDrawing = createServerFn({ method: 'POST' })
     }
   });
 
-/**
- * Delete a drawing. A player may delete only their own drawing; a GM may
- * delete anyone's. This permission check is the authoritative one.
- */
+/** Delete a drawing. GM-only. This permission check is the authoritative one. */
 export const deleteMapDrawing = createServerFn({ method: 'POST' })
   .inputValidator(deleteMapDrawingSchema)
   .handler(async ({ data }) => {
@@ -316,6 +313,7 @@ export const deleteMapDrawing = createServerFn({ method: 'POST' })
     try {
       const member = await requireCampaignMember(data.campaignId);
       sessionUserId = member.sessionUserId;
+      if (!member.isGM) throw new Error('Forbidden');
 
       const drawing = await MapDrawing.findOne({
         _id: data.drawingId,
@@ -323,9 +321,6 @@ export const deleteMapDrawing = createServerFn({ method: 'POST' })
         campaignId: data.campaignId,
       });
       if (!drawing) throw new Error('Drawing not found');
-
-      const canDelete = member.isGM || String(drawing.createdBy) === member.userId;
-      if (!canDelete) throw new Error('Forbidden');
 
       await MapDrawing.deleteOne({ _id: data.drawingId });
       return { success: true };

@@ -181,6 +181,9 @@ export function ActiveMapStage({
   const [drawShape, setDrawShape] = useState<DrawShape>('pencil');
   const [drawColor, setDrawColor] = useState('#e74c3c');
   const [drawStrokeWidth, setDrawStrokeWidth] = useState(4);
+  // Eraser radius is independent of the pen line width, so switching tools
+  // never silently changes your pen size.
+  const [drawEraserSize, setDrawEraserSize] = useState(16);
   const [drawFilled, setDrawFilled] = useState(false);
   // Selected drawing (pointer tool) + the GM "clear all" confirm.
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
@@ -342,7 +345,7 @@ export function ActiveMapStage({
   // removed at most once.
   const eraseAt = useCallback(
     (ix: number, iy: number, erased: Set<string>) => {
-      const radius = drawStrokeWidth;
+      const radius = drawEraserSize;
       for (const dr of drawings) {
         if (erased.has(dr.id)) continue;
         if (!canModifyDrawing(dr)) continue;
@@ -352,7 +355,7 @@ export function ActiveMapStage({
         }
       }
     },
-    [drawings, drawStrokeWidth, canModifyDrawing, removeDrawing]
+    [drawings, drawEraserSize, canModifyDrawing, removeDrawing]
   );
 
   const clearAllDrawings = useCallback(() => {
@@ -1630,7 +1633,10 @@ export function ActiveMapStage({
   // hasn't hidden that layer in the Layers panel (same `hiddenLayers` mechanism
   // as the map image + token layers).
   const spellFxHidden = hiddenLayers.has('spell-fx');
-  const drawingsVisible = showDrawings && !spellFxHidden;
+  // Drawings are GM-only, so the whole drawing layer is gated on isGM as well as
+  // the per-viewer toggle + the Layers-panel layer visibility. Text is shared,
+  // so it only depends on its own toggle + the layer visibility.
+  const drawingsVisible = isGM && showDrawings && !spellFxHidden;
   const textVisible = showText && !spellFxHidden;
 
   // The selected drawing (pointer tool) + its DOM bounding box, for the
@@ -2214,8 +2220,8 @@ export function ActiveMapStage({
           onChangeShape={setDrawShape}
           color={drawColor}
           onChangeColor={setDrawColor}
-          strokeWidth={drawStrokeWidth}
-          onChangeStrokeWidth={setDrawStrokeWidth}
+          strokeWidth={drawShape === 'eraser' ? drawEraserSize : drawStrokeWidth}
+          onChangeStrokeWidth={drawShape === 'eraser' ? setDrawEraserSize : setDrawStrokeWidth}
           filled={drawFilled}
           onToggleFilled={() => setDrawFilled((v) => !v)}
           position={panelPos}
@@ -2288,34 +2294,37 @@ export function ActiveMapStage({
         >
           <Type className="h-3.5 w-3.5" />
         </button>
-        <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden="true" />
-        <button
-          type="button"
-          aria-label={showDrawings ? 'Hide drawings' : 'Show drawings'}
-          aria-pressed={showDrawings}
-          title={showDrawings ? 'Hide drawings' : 'Show drawings'}
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={() => setShowDrawings((v) => !v)}
-          className={[
-            'flex h-7 w-7 items-center justify-center rounded transition-colors',
-            showDrawings ? 'bg-white/15 text-[#60A5FA]' : 'text-slate-200 hover:bg-white/10',
-          ].join(' ')}
-          data-testid="map-drawings-toggle"
-        >
-          <Pencil className="h-3.5 w-3.5" />
-        </button>
+        {/* Drawings are GM-only — players never see the drawing controls. */}
         {isGM && (
-          <button
-            type="button"
-            aria-label="Clear all drawings"
-            title="Clear all drawings"
-            onPointerDown={(e) => e.stopPropagation()}
-            onClick={() => setDrawingsPendingClear(true)}
-            className="flex h-7 w-7 items-center justify-center rounded text-slate-200 transition-colors hover:bg-rose-500/20 hover:text-rose-300"
-            data-testid="map-clear-drawings"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
+          <>
+            <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden="true" />
+            <button
+              type="button"
+              aria-label={showDrawings ? 'Hide drawings' : 'Show drawings'}
+              aria-pressed={showDrawings}
+              title={showDrawings ? 'Hide drawings' : 'Show drawings'}
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setShowDrawings((v) => !v)}
+              className={[
+                'flex h-7 w-7 items-center justify-center rounded transition-colors',
+                showDrawings ? 'bg-white/15 text-[#60A5FA]' : 'text-slate-200 hover:bg-white/10',
+              ].join(' ')}
+              data-testid="map-drawings-toggle"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              aria-label="Clear all drawings"
+              title="Clear all drawings"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={() => setDrawingsPendingClear(true)}
+              className="flex h-7 w-7 items-center justify-center rounded text-slate-200 transition-colors hover:bg-rose-500/20 hover:text-rose-300"
+              data-testid="map-clear-drawings"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+            </button>
+          </>
         )}
         <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden="true" />
         {hasGrid && (

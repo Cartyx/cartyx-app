@@ -33,7 +33,7 @@ const WIKI_CATEGORIES: WikiCategory[] = [
   { id: 'races', label: 'Races', icon: Dna },
   { id: 'rules', label: 'Rules', icon: ScrollText },
   { id: 'locations', label: 'Locations', icon: MapPin },
-  { id: 'maps', label: 'Maps', icon: MapIcon },
+  { id: 'maps', label: 'Maps', icon: MapIcon, gmOnly: true },
   { id: 'monsters', label: 'Monsters', icon: Skull, gmOnly: true },
 ];
 
@@ -79,7 +79,7 @@ export function WikiPanel() {
         <RulesPanel onBack={() => setSelectedCategory(null)} />
       ) : selectedCategory === 'locations' ? (
         <LocationsPanel onBack={() => setSelectedCategory(null)} />
-      ) : selectedCategory === 'maps' ? (
+      ) : selectedCategory === 'maps' && isGM ? (
         <MapsPanel onBack={() => setSelectedCategory(null)} />
       ) : selectedCategory === 'monsters' && isGM ? (
         <MonstersPanel onBack={() => setSelectedCategory(null)} />

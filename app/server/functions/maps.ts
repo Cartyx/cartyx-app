@@ -164,6 +164,9 @@ export const listMaps = createServerFn({ method: 'GET' })
     try {
       const member = await requireCampaignMember(data.campaignId);
       sessionUserId = member.sessionUserId;
+      // The map listing is GM-only. Players reach the active map via
+      // getActiveMap, never the management list.
+      if (!member.isGM) throw new Error('Forbidden');
 
       const docs = await MapModel.find({ campaignId: data.campaignId })
         .sort({ updatedAt: -1 })

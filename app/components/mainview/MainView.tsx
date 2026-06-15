@@ -17,6 +17,8 @@ interface MainViewProps {
   /** Controlled active tool. When omitted, MainView manages it internally. */
   activeTool?: ToolType;
   onToolChange?: (tool: ToolType) => void;
+  /** Whether the viewer is a GM (gates GM-only toolbar tools). */
+  isGM?: boolean;
 }
 
 export function MainView({
@@ -28,6 +30,7 @@ export function MainView({
   sessions,
   activeTool: controlledTool,
   onToolChange,
+  isGM = false,
 }: MainViewProps) {
   // Tool state is controlled when both props are supplied, else internal.
   const [internalTool, setInternalTool] = useState<ToolType>('pointer');
@@ -84,6 +87,7 @@ export function MainView({
               onToolChange={setActiveTool}
               collapsed={toolbarCollapsed}
               onToggleCollapse={() => setToolbarCollapsed((c) => !c)}
+              isGM={isGM}
             />
           </div>
         )}
