@@ -1,11 +1,9 @@
 import {
   useCallback,
   useEffect,
-  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
-  type MouseEvent as ReactMouseEvent,
 } from 'react';
 import {
   ZoomIn,
@@ -23,13 +21,7 @@ import type { MapData } from '~/types/map';
 import type { MapTokenData } from '~/types/mapToken';
 import type { MapTextData } from '~/types/mapText';
 import type { MapDrawingData } from '~/types/mapDrawing';
-import {
-  useMapTokens,
-  useMapTokenMutations,
-  applyTokenMoveToCache,
-  applyTokenRemoveFromCache,
-  applyTokenUpdateToCache,
-} from '~/hooks/useMapTokens';
+import { useMapTokens, useMapTokenMutations, applyTokenMoveToCache } from '~/hooks/useMapTokens';
 import {
   useMapTexts,
   useMapTextMutations,
@@ -54,6 +46,7 @@ import { RulerOverlay } from './RulerOverlay';
 import { useViewport, type Viewport } from './useViewport';
 import { MapDrawingLayer } from './MapDrawingLayer';
 import { MapTextLayer } from './MapTextLayer';
+import { useTokenInteractions } from './useTokenInteractions';
 import { TextSettingsPanel } from './TextSettingsPanel';
 import { DrawingSettingsPanel, type DrawShape } from './DrawingSettingsPanel';
 import { MonsterBatchDialog } from './MonsterBatchDialog';
@@ -68,12 +61,7 @@ import {
   resizedGeometry,
   movedGeometry,
 } from './ActiveMapStage.geometry';
-import {
-  tokenLayerId,
-  tokenLayerRenderOrder,
-  type MapLayerId,
-  type TokenLayerId,
-} from '~/types/mapLayer';
+import type { MapLayerId } from '~/types/mapLayer';
 import type { TabletopMapMessage } from '~/hooks/useTabletopMapParty';
 
 interface ActiveMapStageProps {
@@ -213,17 +201,40 @@ export function ActiveMapStage({
     height: number;
   } | null>(null);
 
-  // Token selection — click selects (shift/cmd-click toggles), background
-  // click deselects, Delete/Backspace confirms removal (GM only), right-click
-  // opens a layer-move menu.
-  const [selectedTokenIds, setSelectedTokenIds] = useState<Set<string>>(() => new Set());
-  const [tokensPendingDelete, setTokensPendingDelete] = useState<MapTokenData[] | null>(null);
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
-
   // Layers — GM-local working layer + per-layer visibility (GM's own view;
   // players never gain this panel so it stays empty for them).
   const [activeLayer, setActiveLayer] = useState<MapLayerId>('public');
   const [hiddenLayers, setHiddenLayers] = useState<Set<MapLayerId>>(() => new Set());
+
+  // Token selection / removal / layer-move / context menu + the visible-token
+  // derivations. Token *dragging* stays in this component (shares the dragRef).
+  const {
+    selectedTokenIds,
+    clearSelection,
+    selectToken,
+    tokensPendingDelete,
+    setTokensPendingDelete,
+    contextMenu,
+    setContextMenu,
+    handleToggleLabel,
+    handleRemove,
+    moveSelectionToLayer,
+    handleTokenContextMenu,
+    visibleTokens,
+    tokenCounts,
+    canMoveToken,
+  } = useTokenInteractions({
+    isGM,
+    currentUserId,
+    tokens,
+    hiddenLayers,
+    containerRef,
+    qc,
+    campaignId,
+    mapId: map.id,
+    mutations,
+    onBroadcast,
+  });
 
   // --- Text tool ----------------------------------------------------------
   // Guards against a double-commit (Enter then unmount-blur) of the same draft.
@@ -472,28 +483,6 @@ export function ActiveMapStage({
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedTextId, texts, canModifyText, removeText]);
-
-  const clearSelection = useCallback(() => {
-    setSelectedTokenIds((cur) => (cur.size === 0 ? cur : new Set()));
-    setContextMenu(null);
-  }, []);
-
-  const selectToken = useCallback((id: string, additive: boolean) => {
-    setContextMenu(null);
-    setSelectedTokenIds((cur) => {
-      if (additive) {
-        const next = new Set(cur);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        return next;
-      }
-      // A plain press on a token that is already part of a multi-selection keeps
-      // the whole selection, so the press can drag the group together (GM). Any
-      // other plain press selects just that token.
-      if (cur.has(id) && cur.size > 1) return cur;
-      return new Set([id]);
-    });
-  }, []);
 
   const toggleLayerVisibility = useCallback((id: MapLayerId) => {
     setHiddenLayers((cur) => {
@@ -1221,152 +1210,6 @@ export function ActiveMapStage({
     mutations,
     onBroadcast,
   });
-
-  // -------------------------------------------------------------------------
-  // Token actions (GM only) — handled inline by passing callbacks.
-  // -------------------------------------------------------------------------
-
-  const handleToggleLabel = useCallback(
-    (token: MapTokenData) => {
-      if (!isGM) return;
-      const nextVisible = !token.labelVisible;
-      const optimistic: MapTokenData = { ...token, labelVisible: nextVisible };
-      applyTokenUpdateToCache(qc, campaignId, map.id, optimistic);
-      mutations.update.mutate(
-        { tokenId: token.id, labelVisible: nextVisible },
-        {
-          onSuccess: (res) => {
-            onBroadcast({ type: 'token:updated', mapId: map.id, token: res.token });
-          },
-        }
-      );
-    },
-    [isGM, qc, campaignId, map.id, mutations.update, onBroadcast]
-  );
-
-  const handleRemove = useCallback(
-    (token: MapTokenData) => {
-      if (!isGM) return;
-      applyTokenRemoveFromCache(qc, campaignId, map.id, token.id);
-      mutations.remove.mutate(token.id, {
-        onSuccess: () => {
-          onBroadcast({ type: 'token:removed', mapId: map.id, tokenId: token.id });
-        },
-      });
-      setSelectedTokenIds((cur) => {
-        if (!cur.has(token.id)) return cur;
-        const next = new Set(cur);
-        next.delete(token.id);
-        return next;
-      });
-    },
-    [isGM, qc, campaignId, map.id, mutations.remove, onBroadcast]
-  );
-
-  // Move every selected token to a layer. Public ⇔ GM-private is encoded by
-  // `hiddenFromPlayers`, so the move is a plain token update (optimistic +
-  // broadcast). No-ops for tokens already on the target layer.
-  const moveSelectionToLayer = useCallback(
-    (layer: TokenLayerId) => {
-      if (!isGM) return;
-      const hidden = layer === 'gm-private';
-      for (const id of selectedTokenIds) {
-        const token = tokens.find((t) => t.id === id);
-        if (!token || token.hiddenFromPlayers === hidden) continue;
-        const optimistic: MapTokenData = { ...token, hiddenFromPlayers: hidden };
-        applyTokenUpdateToCache(qc, campaignId, map.id, optimistic);
-        mutations.update.mutate(
-          { tokenId: id, hiddenFromPlayers: hidden },
-          {
-            onSuccess: (res) => {
-              onBroadcast({ type: 'token:updated', mapId: map.id, token: res.token });
-            },
-          }
-        );
-      }
-      setContextMenu(null);
-    },
-    [isGM, selectedTokenIds, tokens, qc, campaignId, map.id, mutations.update, onBroadcast]
-  );
-
-  const handleTokenContextMenu = useCallback(
-    (token: MapTokenData, e: ReactMouseEvent<HTMLDivElement>) => {
-      if (!isGM) return;
-      e.preventDefault();
-      e.stopPropagation();
-      // Right-clicking a token outside the current selection selects just it.
-      setSelectedTokenIds((cur) => (cur.has(token.id) ? cur : new Set([token.id])));
-      const rect = containerRef.current?.getBoundingClientRect();
-      setContextMenu({
-        x: rect ? e.clientX - rect.left : e.clientX,
-        y: rect ? e.clientY - rect.top : e.clientY,
-      });
-    },
-    [isGM, containerRef]
-  );
-
-  // Keyboard: Delete/Backspace on a selected token opens confirm; Esc
-  // dismisses the confirm or clears the selection.
-  // GM-only: players can move their own tokens but can't delete them.
-  useEffect(() => {
-    if (!isGM) return;
-    const onKey = (e: KeyboardEvent) => {
-      // Skip when typing in an input/textarea/contenteditable.
-      const tgt = e.target as HTMLElement | null;
-      if (tgt) {
-        const tag = tgt.tagName;
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tgt.isContentEditable)
-          return;
-      }
-      if (e.key === 'Escape') {
-        if (contextMenu) {
-          e.preventDefault();
-          setContextMenu(null);
-        } else if (tokensPendingDelete) {
-          e.preventDefault();
-          setTokensPendingDelete(null);
-        } else if (selectedTokenIds.size > 0) {
-          e.preventDefault();
-          clearSelection();
-        }
-        return;
-      }
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
-      if (tokensPendingDelete) return; // already confirming
-      if (selectedTokenIds.size === 0) return;
-      const pending = tokens.filter((t) => selectedTokenIds.has(t.id));
-      if (pending.length === 0) return;
-      e.preventDefault();
-      setTokensPendingDelete(pending);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isGM, selectedTokenIds, tokens, tokensPendingDelete, contextMenu, clearSelection]);
-
-  const visibleTokens = useMemo(() => {
-    const base = isGM ? tokens : tokens.filter((t) => !t.hiddenFromPlayers);
-    // Hide layers the GM has toggled off (no-op for players: empty set), then
-    // stack by layer so public tokens render above GM-private ones.
-    return base
-      .filter((t) => !hiddenLayers.has(tokenLayerId(t)))
-      .sort((a, b) => tokenLayerRenderOrder(a) - tokenLayerRenderOrder(b));
-  }, [tokens, isGM, hiddenLayers]);
-
-  const tokenCounts = useMemo<Record<TokenLayerId, number>>(() => {
-    let publicCount = 0;
-    let privateCount = 0;
-    for (const t of tokens) {
-      if (t.hiddenFromPlayers) privateCount++;
-      else publicCount++;
-    }
-    return { public: publicCount, 'gm-private': privateCount };
-  }, [tokens]);
-
-  const canMoveToken = useCallback(
-    (token: MapTokenData) =>
-      isGM || (token.ownerUserId != null && token.ownerUserId === currentUserId),
-    [isGM, currentUserId]
-  );
 
   const cursorClass =
     rulerActive || drawingActive
