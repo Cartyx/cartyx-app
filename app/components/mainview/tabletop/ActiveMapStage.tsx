@@ -1625,10 +1625,13 @@ export function ActiveMapStage({
           ? 'cursor-grabbing'
           : 'cursor-grab';
 
-  // Drawings are visible only when both the per-viewer zoom-toolbar toggle is on
-  // AND the GM hasn't hidden the Spell FX / Drawing layer in the Layers panel
-  // (same `hiddenLayers` mechanism as the map image + token layers).
-  const drawingsVisible = showDrawings && !hiddenLayers.has('spell-fx');
+  // Text + drawings both live on the Spell FX / Drawing layer, so each is
+  // visible only when its own per-viewer zoom-toolbar toggle is on AND the GM
+  // hasn't hidden that layer in the Layers panel (same `hiddenLayers` mechanism
+  // as the map image + token layers).
+  const spellFxHidden = hiddenLayers.has('spell-fx');
+  const drawingsVisible = showDrawings && !spellFxHidden;
+  const textVisible = showText && !spellFxHidden;
 
   // The selected drawing (pointer tool) + its DOM bounding box, for the
   // selection outline + corner resize handle.
@@ -1894,7 +1897,7 @@ export function ActiveMapStage({
           active AND the viewer may modify that text; otherwise display-only so
           it never blocks panning/tokens. The text being edited is hidden behind
           its editor. */}
-      {showText &&
+      {textVisible &&
         texts.map((t) => {
           if (textDraft?.editingId === t.id) return null;
           const selected = selectedTextId === t.id;

@@ -453,6 +453,38 @@ test('the show/hide text toggle hides and shows all text', async ({ page }) => {
   await expect(page.getByTestId('map-text').filter({ hasText: 'Toggle me' })).toBeVisible();
 });
 
+test('hiding the Spell FX / Drawing layer also hides text', async ({ page }) => {
+  await gotoTabletop(page);
+  await selectTextTool(page);
+  await writeText(page, 0.6, 0.4, 'Layer hide');
+  await expect(page.getByTestId('map-text').filter({ hasText: 'Layer hide' })).toBeVisible();
+
+  // Open the GM Layers panel and hide the Spell FX / Drawing layer (text lives
+  // on that layer too, so it must hide along with drawings).
+  await page.getByTestId('tool-layer').click();
+  const panel = page.getByTestId('layers-panel');
+  await expect(panel).toBeVisible();
+  const eye = panel.getByTestId('layer-visibility-spell-fx');
+  await expect(eye).toHaveAttribute('aria-pressed', 'true'); // currently visible
+  await eye.click();
+  await expect(eye).toHaveAttribute('aria-pressed', 'false'); // now hidden
+
+  // Text is hidden by the layer toggle — but not deleted (per-viewer visibility).
+  await expect(page.getByTestId('map-text')).toHaveCount(0);
+  await expect
+    .poll(async () =>
+      db()
+        .collection('mapText')
+        .countDocuments({ mapId: new ObjectId(provisioned.mapId), text: 'Layer hide' })
+    )
+    .toBe(1);
+
+  // Toggling it back shows the text again.
+  await eye.click();
+  await expect(eye).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('map-text').filter({ hasText: 'Layer hide' })).toBeVisible();
+});
+
 test('hovering text highlights it (interactive) while the text tool is active', async ({
   page,
 }) => {
