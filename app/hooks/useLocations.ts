@@ -1,8 +1,9 @@
 import { createServerFn } from '@tanstack/react-start';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import type { LocationData, LocationListItem } from '~/types/location';
-import { captureException } from '~/providers/PostHogProvider';
 import { queryKeys } from '~/utils/queryKeys';
+import { extractErrorMessage } from '~/utils/errors';
+import { createMutationHook } from '~/hooks/createMutationHook';
 import {
   listLocationsSchema,
   getLocationSchema,
@@ -105,7 +106,7 @@ export function useLocations(campaignId: string, filters?: ListLocationsFilters)
   return {
     locations: locations as LocationListItem[],
     isLoading,
-    error: error instanceof Error ? error.message : error ? String(error) : null,
+    error: extractErrorMessage(error),
   };
 }
 
@@ -123,7 +124,7 @@ export function useLocation(id: string, campaignId: string) {
   return {
     location: location as LocationData | null,
     isLoading,
-    error: error instanceof Error ? error.message : error ? String(error) : null,
+    error: extractErrorMessage(error),
   };
 }
 
@@ -138,41 +139,18 @@ interface CreateLocationInput {
   tags?: string[];
 }
 
-export function useCreateLocation() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: CreateLocationInput) => createLocationFn({ data: input }),
-    onSuccess: (_data, { campaignId }) => {
-      queryClient.invalidateQueries({
-        queryKey: ['locations', 'list', campaignId],
-        exact: false,
-      });
-      queryClient.invalidateQueries({ queryKey: queryKeys.tags.list(campaignId) });
-    },
-    onError: (e) => {
-      captureException(e, { action: 'createLocation' });
-    },
-  });
-
-  const create = async (input: CreateLocationInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    create,
-    isLoading: mutation.isPending,
-    error:
-      mutation.error instanceof Error
-        ? mutation.error.message
-        : mutation.error
-          ? String(mutation.error)
-          : null,
-  };
-}
+export const useCreateLocation = createMutationHook({
+  actionName: 'create',
+  mutationFn: async (input: CreateLocationInput) => createLocationFn({ data: input }),
+  onSuccess: (queryClient, _data, { campaignId }) => {
+    queryClient.invalidateQueries({
+      queryKey: ['locations', 'list', campaignId],
+      exact: false,
+    });
+    queryClient.invalidateQueries({ queryKey: queryKeys.tags.list(campaignId) });
+  },
+  errorContext: () => ({ action: 'createLocation' }),
+});
 
 interface UpdateLocationInput {
   id: string;
@@ -186,93 +164,47 @@ interface UpdateLocationInput {
   tags?: string[];
 }
 
-export function useUpdateLocation() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: UpdateLocationInput) => updateLocationFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: ['locations', 'list', variables.campaignId],
-        exact: false,
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.locations.detail(variables.id, variables.campaignId),
-      });
-      queryClient.invalidateQueries({ queryKey: queryKeys.tags.list(variables.campaignId) });
-      // Refresh GM screen / tabletop windows that may display this location
-      queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.tabletop.all });
-    },
-    onError: (e, variables) => {
-      captureException(e, { action: 'updateLocation', locationId: variables.id });
-    },
-  });
-
-  const update = async (input: UpdateLocationInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    update,
-    isLoading: mutation.isPending,
-    error:
-      mutation.error instanceof Error
-        ? mutation.error.message
-        : mutation.error
-          ? String(mutation.error)
-          : null,
-  };
-}
+export const useUpdateLocation = createMutationHook({
+  actionName: 'update',
+  mutationFn: async (input: UpdateLocationInput) => updateLocationFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: ['locations', 'list', variables.campaignId],
+      exact: false,
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.locations.detail(variables.id, variables.campaignId),
+    });
+    queryClient.invalidateQueries({ queryKey: queryKeys.tags.list(variables.campaignId) });
+    // Refresh GM screen / tabletop windows that may display this location
+    queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.tabletop.all });
+  },
+  errorContext: (variables) => ({ action: 'updateLocation', locationId: variables.id }),
+});
 
 interface DeleteLocationInput {
   id: string;
   campaignId: string;
 }
 
-export function useDeleteLocation() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: DeleteLocationInput) => deleteLocationFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: ['locations', 'list', variables.campaignId],
-        exact: false,
-      });
-      queryClient.removeQueries({
-        queryKey: queryKeys.locations.detail(variables.id, variables.campaignId),
-      });
-      // Refresh GM screen / tabletop windows — server removes refs for deleted locations
-      queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.tabletop.all });
-    },
-    onError: (e, variables) => {
-      captureException(e, { action: 'deleteLocation', locationId: variables.id });
-    },
-  });
-
-  const remove = async (input: DeleteLocationInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    remove,
-    isLoading: mutation.isPending,
-    error:
-      mutation.error instanceof Error
-        ? mutation.error.message
-        : mutation.error
-          ? String(mutation.error)
-          : null,
-  };
-}
+export const useDeleteLocation = createMutationHook({
+  actionName: 'remove',
+  mutationFn: async (input: DeleteLocationInput) => deleteLocationFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: ['locations', 'list', variables.campaignId],
+      exact: false,
+    });
+    queryClient.removeQueries({
+      queryKey: queryKeys.locations.detail(variables.id, variables.campaignId),
+    });
+    // Refresh GM screen / tabletop windows — server removes refs for deleted locations
+    queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.tabletop.all });
+  },
+  errorContext: (variables) => ({ action: 'deleteLocation', locationId: variables.id }),
+});
 
 // ---------------------------------------------------------------------------
 // Image hooks
@@ -286,41 +218,18 @@ interface AddLocationImageInput {
   title: string;
 }
 
-export function useAddLocationImage() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: AddLocationImageInput) => addLocationImageFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.locations.detail(variables.id, variables.campaignId),
-      });
-      queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.tabletop.all });
-    },
-    onError: (e, variables) => {
-      captureException(e, { action: 'addLocationImage', locationId: variables.id });
-    },
-  });
-
-  const addImage = async (input: AddLocationImageInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    addImage,
-    isLoading: mutation.isPending,
-    error:
-      mutation.error instanceof Error
-        ? mutation.error.message
-        : mutation.error
-          ? String(mutation.error)
-          : null,
-  };
-}
+export const useAddLocationImage = createMutationHook({
+  actionName: 'addImage',
+  mutationFn: async (input: AddLocationImageInput) => addLocationImageFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.locations.detail(variables.id, variables.campaignId),
+    });
+    queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.tabletop.all });
+  },
+  errorContext: (variables) => ({ action: 'addLocationImage', locationId: variables.id }),
+});
 
 interface DeleteLocationImageInput {
   id: string;
@@ -328,38 +237,15 @@ interface DeleteLocationImageInput {
   imageKey: string;
 }
 
-export function useDeleteLocationImage() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: DeleteLocationImageInput) => deleteLocationImageFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.locations.detail(variables.id, variables.campaignId),
-      });
-      queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
-      queryClient.invalidateQueries({ queryKey: queryKeys.tabletop.all });
-    },
-    onError: (e, variables) => {
-      captureException(e, { action: 'deleteLocationImage', locationId: variables.id });
-    },
-  });
-
-  const deleteImage = async (input: DeleteLocationImageInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    deleteImage,
-    isLoading: mutation.isPending,
-    error:
-      mutation.error instanceof Error
-        ? mutation.error.message
-        : mutation.error
-          ? String(mutation.error)
-          : null,
-  };
-}
+export const useDeleteLocationImage = createMutationHook({
+  actionName: 'deleteImage',
+  mutationFn: async (input: DeleteLocationImageInput) => deleteLocationImageFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.locations.detail(variables.id, variables.campaignId),
+    });
+    queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
+    queryClient.invalidateQueries({ queryKey: queryKeys.tabletop.all });
+  },
+  errorContext: (variables) => ({ action: 'deleteLocationImage', locationId: variables.id }),
+});

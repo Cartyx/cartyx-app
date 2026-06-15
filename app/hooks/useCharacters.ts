@@ -1,8 +1,9 @@
 import { createServerFn } from '@tanstack/react-start';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import type { CharacterData, CharacterListItem } from '~/types/character';
-import { captureException } from '~/providers/PostHogProvider';
 import { queryKeys } from '~/utils/queryKeys';
+import { extractErrorMessage } from '~/utils/errors';
+import { createMutationHook } from '~/hooks/createMutationHook';
 import {
   listCharactersSchema,
   getCharacterSchema,
@@ -122,7 +123,7 @@ export function useCharacters(campaignId: string, filters?: ListCharactersFilter
   return {
     characters: characters as CharacterListItem[],
     isLoading,
-    error: error instanceof Error ? error.message : error ? String(error) : null,
+    error: extractErrorMessage(error),
   };
 }
 
@@ -140,7 +141,7 @@ export function useCharacter(id: string, campaignId: string) {
   return {
     character: character as CharacterData | null,
     isLoading,
-    error: error instanceof Error ? error.message : error ? String(error) : null,
+    error: extractErrorMessage(error),
   };
 }
 
@@ -163,38 +164,15 @@ interface CreateCharacterInput {
   sessions?: string[];
 }
 
-export function useCreateCharacter() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: CreateCharacterInput) => createCharacterFn({ data: input }),
-    onSuccess: (_data, { campaignId }) => {
-      queryClient.invalidateQueries({ queryKey: ['characters', 'list', campaignId], exact: false });
-      queryClient.invalidateQueries({ queryKey: queryKeys.tags.list(campaignId) });
-    },
-    onError: (e) => {
-      captureException(e, { action: 'createCharacter' });
-    },
-  });
-
-  const create = async (input: CreateCharacterInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    create,
-    isLoading: mutation.isPending,
-    error:
-      mutation.error instanceof Error
-        ? mutation.error.message
-        : mutation.error
-          ? String(mutation.error)
-          : null,
-  };
-}
+export const useCreateCharacter = createMutationHook({
+  actionName: 'create',
+  mutationFn: async (input: CreateCharacterInput) => createCharacterFn({ data: input }),
+  onSuccess: (queryClient, _data, { campaignId }) => {
+    queryClient.invalidateQueries({ queryKey: ['characters', 'list', campaignId], exact: false });
+    queryClient.invalidateQueries({ queryKey: queryKeys.tags.list(campaignId) });
+  },
+  errorContext: () => ({ action: 'createCharacter' }),
+});
 
 interface UpdateCharacterInput {
   id: string;
@@ -216,91 +194,45 @@ interface UpdateCharacterInput {
   sessions?: string[];
 }
 
-export function useUpdateCharacter() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: UpdateCharacterInput) => updateCharacterFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: ['characters', 'list', variables.campaignId],
-        exact: false,
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.characters.detail(variables.id, variables.campaignId),
-      });
-      queryClient.invalidateQueries({ queryKey: queryKeys.tags.list(variables.campaignId) });
-      // Refresh GM screen windows that may display this character's content
-      queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
-    },
-    onError: (e, variables) => {
-      captureException(e, { action: 'updateCharacter', characterId: variables.id });
-    },
-  });
-
-  const update = async (input: UpdateCharacterInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    update,
-    isLoading: mutation.isPending,
-    error:
-      mutation.error instanceof Error
-        ? mutation.error.message
-        : mutation.error
-          ? String(mutation.error)
-          : null,
-  };
-}
+export const useUpdateCharacter = createMutationHook({
+  actionName: 'update',
+  mutationFn: async (input: UpdateCharacterInput) => updateCharacterFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: ['characters', 'list', variables.campaignId],
+      exact: false,
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.characters.detail(variables.id, variables.campaignId),
+    });
+    queryClient.invalidateQueries({ queryKey: queryKeys.tags.list(variables.campaignId) });
+    // Refresh GM screen windows that may display this character's content
+    queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
+  },
+  errorContext: (variables) => ({ action: 'updateCharacter', characterId: variables.id }),
+});
 
 interface DeleteCharacterInput {
   id: string;
   campaignId: string;
 }
 
-export function useDeleteCharacter() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: DeleteCharacterInput) => deleteCharacterFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: ['characters', 'list', variables.campaignId],
-        exact: false,
-      });
-      queryClient.removeQueries({
-        queryKey: queryKeys.characters.detail(variables.id, variables.campaignId),
-      });
-      // Refresh GM screen windows — server removes refs for deleted characters
-      queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
-    },
-    onError: (e, variables) => {
-      captureException(e, { action: 'deleteCharacter', characterId: variables.id });
-    },
-  });
-
-  const remove = async (input: DeleteCharacterInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    remove,
-    isLoading: mutation.isPending,
-    error:
-      mutation.error instanceof Error
-        ? mutation.error.message
-        : mutation.error
-          ? String(mutation.error)
-          : null,
-  };
-}
+export const useDeleteCharacter = createMutationHook({
+  actionName: 'remove',
+  mutationFn: async (input: DeleteCharacterInput) => deleteCharacterFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: ['characters', 'list', variables.campaignId],
+      exact: false,
+    });
+    queryClient.removeQueries({
+      queryKey: queryKeys.characters.detail(variables.id, variables.campaignId),
+    });
+    // Refresh GM screen windows — server removes refs for deleted characters
+    queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
+  },
+  errorContext: (variables) => ({ action: 'deleteCharacter', characterId: variables.id }),
+});
 
 // ---------------------------------------------------------------------------
 // useUpdateCharacterStatus
@@ -312,44 +244,20 @@ interface UpdateCharacterStatusInput {
   value: 'alive' | 'deceased';
 }
 
-export function useUpdateCharacterStatus() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: UpdateCharacterStatusInput) =>
-      updateCharacterStatusFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: ['characters', 'list', variables.campaignId],
-        exact: false,
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.characters.detail(variables.id, variables.campaignId),
-      });
-    },
-    onError: (e, variables) => {
-      captureException(e, { action: 'updateCharacterStatus', characterId: variables.id });
-    },
-  });
-
-  const updateStatus = async (input: UpdateCharacterStatusInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    updateStatus,
-    isLoading: mutation.isPending,
-    error:
-      mutation.error instanceof Error
-        ? mutation.error.message
-        : mutation.error
-          ? String(mutation.error)
-          : null,
-  };
-}
+export const useUpdateCharacterStatus = createMutationHook({
+  actionName: 'updateStatus',
+  mutationFn: async (input: UpdateCharacterStatusInput) => updateCharacterStatusFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: ['characters', 'list', variables.campaignId],
+      exact: false,
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.characters.detail(variables.id, variables.campaignId),
+    });
+  },
+  errorContext: (variables) => ({ action: 'updateCharacterStatus', characterId: variables.id }),
+});
 
 // ---------------------------------------------------------------------------
 // useAddCharacterRelationship
@@ -364,50 +272,27 @@ interface AddCharacterRelationshipInput {
   isPublic?: boolean;
 }
 
-export function useAddCharacterRelationship() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: AddCharacterRelationshipInput) =>
-      addCharacterRelationshipFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: ['characters', 'list', variables.campaignId],
-        exact: false,
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.characters.detail(variables.characterId, variables.campaignId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.characters.detail(variables.targetCharacterId, variables.campaignId),
-      });
-    },
-    onError: (e, variables) => {
-      captureException(e, {
-        action: 'addCharacterRelationship',
-        characterId: variables.characterId,
-      });
-    },
-  });
-
-  const addRelationship = async (input: AddCharacterRelationshipInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    addRelationship,
-    isLoading: mutation.isPending,
-    error:
-      mutation.error instanceof Error
-        ? mutation.error.message
-        : mutation.error
-          ? String(mutation.error)
-          : null,
-  };
-}
+export const useAddCharacterRelationship = createMutationHook({
+  actionName: 'addRelationship',
+  mutationFn: async (input: AddCharacterRelationshipInput) =>
+    addCharacterRelationshipFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: ['characters', 'list', variables.campaignId],
+      exact: false,
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.characters.detail(variables.characterId, variables.campaignId),
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.characters.detail(variables.targetCharacterId, variables.campaignId),
+    });
+  },
+  errorContext: (variables) => ({
+    action: 'addCharacterRelationship',
+    characterId: variables.characterId,
+  }),
+});
 
 // ---------------------------------------------------------------------------
 // useUpdateCharacterRelationship
@@ -422,50 +307,27 @@ interface UpdateCharacterRelationshipInput {
   isPublic?: boolean;
 }
 
-export function useUpdateCharacterRelationship() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: UpdateCharacterRelationshipInput) =>
-      updateCharacterRelationshipFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: ['characters', 'list', variables.campaignId],
-        exact: false,
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.characters.detail(variables.characterId, variables.campaignId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.characters.detail(variables.targetCharacterId, variables.campaignId),
-      });
-    },
-    onError: (e, variables) => {
-      captureException(e, {
-        action: 'updateCharacterRelationship',
-        characterId: variables.characterId,
-      });
-    },
-  });
-
-  const updateRelationship = async (input: UpdateCharacterRelationshipInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    updateRelationship,
-    isLoading: mutation.isPending,
-    error:
-      mutation.error instanceof Error
-        ? mutation.error.message
-        : mutation.error
-          ? String(mutation.error)
-          : null,
-  };
-}
+export const useUpdateCharacterRelationship = createMutationHook({
+  actionName: 'updateRelationship',
+  mutationFn: async (input: UpdateCharacterRelationshipInput) =>
+    updateCharacterRelationshipFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: ['characters', 'list', variables.campaignId],
+      exact: false,
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.characters.detail(variables.characterId, variables.campaignId),
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.characters.detail(variables.targetCharacterId, variables.campaignId),
+    });
+  },
+  errorContext: (variables) => ({
+    action: 'updateCharacterRelationship',
+    characterId: variables.characterId,
+  }),
+});
 
 // ---------------------------------------------------------------------------
 // useRemoveCharacterRelationship
@@ -477,47 +339,24 @@ interface RemoveCharacterRelationshipInput {
   targetCharacterId: string;
 }
 
-export function useRemoveCharacterRelationship() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: RemoveCharacterRelationshipInput) =>
-      removeCharacterRelationshipFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: ['characters', 'list', variables.campaignId],
-        exact: false,
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.characters.detail(variables.characterId, variables.campaignId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.characters.detail(variables.targetCharacterId, variables.campaignId),
-      });
-    },
-    onError: (e, variables) => {
-      captureException(e, {
-        action: 'removeCharacterRelationship',
-        characterId: variables.characterId,
-      });
-    },
-  });
-
-  const removeRelationship = async (input: RemoveCharacterRelationshipInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    removeRelationship,
-    isLoading: mutation.isPending,
-    error:
-      mutation.error instanceof Error
-        ? mutation.error.message
-        : mutation.error
-          ? String(mutation.error)
-          : null,
-  };
-}
+export const useRemoveCharacterRelationship = createMutationHook({
+  actionName: 'removeRelationship',
+  mutationFn: async (input: RemoveCharacterRelationshipInput) =>
+    removeCharacterRelationshipFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: ['characters', 'list', variables.campaignId],
+      exact: false,
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.characters.detail(variables.characterId, variables.campaignId),
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.characters.detail(variables.targetCharacterId, variables.campaignId),
+    });
+  },
+  errorContext: (variables) => ({
+    action: 'removeCharacterRelationship',
+    characterId: variables.characterId,
+  }),
+});

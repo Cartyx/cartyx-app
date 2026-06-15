@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useId, useCallback } from 'react';
+import React, { useState, useId, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { FormInput } from '~/components/FormInput';
@@ -9,6 +9,7 @@ import { ImageCropInput } from '~/components/wiki/characters/ImageCropInput';
 import { usePlayer, useUpdatePlayer, useDeletePlayer } from '~/hooks/usePlayers';
 import { useCampaign } from '~/hooks/useCampaigns';
 import { useRaces } from '~/hooks/useRaces';
+import { useModalForm } from '~/hooks/useModalForm';
 import type { PictureCrop } from '~/types/character';
 import { uploadToR2 } from '~/utils/uploadToR2';
 import { compressImage } from '~/utils/compressImage';
@@ -59,72 +60,7 @@ export function PlayerModal({ campaignId, playerId, onClose }: PlayerModalProps)
   const [backstory, setBackstory] = useState('');
   const [gmNotes, setGmNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
-  const [hasSubmitted, setHasSubmitted] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-
-  // Close on Escape key
-  useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [onClose]);
-
-  // Reset form when playerId changes
-  useEffect(() => {
-    setFirstName('');
-    setLastName('');
-    setRace('');
-    setCharacterClass('');
-    setAge('');
-    setGender('');
-    setLocation('');
-    setLink('');
-    setPicture('');
-    setPictureCrop(null);
-    setColor('');
-    setEyeColor('');
-    setHairColor('');
-    setWeight('');
-    setHeight('');
-    setSize('');
-    setDescription('');
-    setAppearance('');
-    setBackstory('');
-    setGmNotes('');
-    setError(null);
-    setFieldErrors({});
-    setHasSubmitted(false);
-    setShowDeleteConfirm(false);
-  }, [playerId]);
-
-  // Populate form once the fetched player resolves in edit mode
-  useEffect(() => {
-    if (isEdit && existingPlayer) {
-      setFirstName(existingPlayer.firstName);
-      setLastName(existingPlayer.lastName);
-      setRace(existingPlayer.race);
-      setCharacterClass(existingPlayer.characterClass);
-      setAge(existingPlayer.age != null ? String(existingPlayer.age) : '');
-      setGender(existingPlayer.gender);
-      setLocation(existingPlayer.location);
-      setLink(existingPlayer.link);
-      setPicture(existingPlayer.picture);
-      setPictureCrop(existingPlayer.pictureCrop);
-      setColor(existingPlayer.color);
-      setEyeColor(existingPlayer.eyeColor);
-      setHairColor(existingPlayer.hairColor);
-      setWeight(existingPlayer.weight != null ? String(existingPlayer.weight) : '');
-      setHeight(existingPlayer.height);
-      setSize(existingPlayer.size);
-      setDescription(existingPlayer.description);
-      setAppearance(existingPlayer.appearance);
-      setBackstory(existingPlayer.backstory);
-      setGmNotes(existingPlayer.gmNotes);
-    }
-  }, [isEdit, existingPlayer]);
 
   const validate = useCallback((): FieldErrors => {
     const errors: FieldErrors = {};
@@ -136,9 +72,63 @@ export function PlayerModal({ campaignId, playerId, onClose }: PlayerModalProps)
     return errors;
   }, [firstName, lastName, link]);
 
-  useEffect(() => {
-    if (hasSubmitted) setFieldErrors(validate());
-  }, [hasSubmitted, validate]);
+  // PlayerModal is mounted only while open (the parent renders it conditionally),
+  // so `isOpen` is effectively always true: the Escape listener stays active for
+  // the modal's lifetime and reset keys only off `playerId`.
+  const { fieldErrors, runValidation } = useModalForm({
+    isOpen: true,
+    onClose,
+    recordId: playerId,
+    isEdit,
+    record: existingPlayer,
+    reset: () => {
+      setFirstName('');
+      setLastName('');
+      setRace('');
+      setCharacterClass('');
+      setAge('');
+      setGender('');
+      setLocation('');
+      setLink('');
+      setPicture('');
+      setPictureCrop(null);
+      setColor('');
+      setEyeColor('');
+      setHairColor('');
+      setWeight('');
+      setHeight('');
+      setSize('');
+      setDescription('');
+      setAppearance('');
+      setBackstory('');
+      setGmNotes('');
+      setError(null);
+      setShowDeleteConfirm(false);
+    },
+    populate: (p) => {
+      setFirstName(p.firstName);
+      setLastName(p.lastName);
+      setRace(p.race);
+      setCharacterClass(p.characterClass);
+      setAge(p.age != null ? String(p.age) : '');
+      setGender(p.gender);
+      setLocation(p.location);
+      setLink(p.link);
+      setPicture(p.picture);
+      setPictureCrop(p.pictureCrop);
+      setColor(p.color);
+      setEyeColor(p.eyeColor);
+      setHairColor(p.hairColor);
+      setWeight(p.weight != null ? String(p.weight) : '');
+      setHeight(p.height);
+      setSize(p.size);
+      setDescription(p.description);
+      setAppearance(p.appearance);
+      setBackstory(p.backstory);
+      setGmNotes(p.gmNotes);
+    },
+    validate,
+  });
 
   const handleUpload = useCallback(async (file: File): Promise<string> => {
     const compressed = await compressImage(file);
@@ -148,11 +138,9 @@ export function PlayerModal({ campaignId, playerId, onClose }: PlayerModalProps)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setHasSubmitted(true);
     setError(null);
 
-    const errors = validate();
-    setFieldErrors(errors);
+    const errors = runValidation();
     if (Object.keys(errors).length > 0) return;
 
     const parsedAge = age.trim() ? parseInt(age, 10) : 0;

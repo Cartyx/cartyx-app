@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback, useId } from 'react';
+import React, { useState, useMemo, useCallback, useId } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Globe, Lock } from 'lucide-react';
 import { FormInput } from '~/components/FormInput';
@@ -16,6 +16,7 @@ import {
 } from '~/hooks/useCharacters';
 import { useRaces } from '~/hooks/useRaces';
 import { useCampaign } from '~/hooks/useCampaigns';
+import { useModalForm } from '~/hooks/useModalForm';
 import { ShowOnTabletopButton } from '~/components/wiki/shared/ShowOnTabletopButton';
 import type { CampaignData } from '~/types/campaign';
 import type { PictureCrop } from '~/types/character';
@@ -73,63 +74,62 @@ export function CharacterModal({
   const [tags, setTags] = useState<string[]>([]);
   const [isPublic, setIsPublic] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
-  const [hasSubmitted, setHasSubmitted] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
-  // Close on Escape key — only active when modal is open to avoid interfering with other dialogs
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [isOpen, onClose]);
-
-  // Reset form when opening — clears stale values from a previous character
-  useEffect(() => {
-    setFirstName('');
-    setLastName('');
-    setRace('');
-    setCharacterClass('');
-    setAge('');
-    setLocation('');
-    setLink('');
-    setPicture('');
-    setPictureCrop(null);
-    setSessionId('');
-    setSelectedSessions([]);
-    setNotes('');
-    setGmNotes('');
-    setTags([]);
-    setIsPublic(false);
-    setError(null);
-    setFieldErrors({});
-    setHasSubmitted(false);
-    setShowDeleteConfirm(false);
-  }, [characterId, isOpen]);
-
-  // Populate form once the fetched character resolves in edit mode
-  useEffect(() => {
-    if (isEdit && existingCharacter) {
-      setFirstName(existingCharacter.firstName);
-      setLastName(existingCharacter.lastName);
-      setRace(existingCharacter.race);
-      setCharacterClass(existingCharacter.characterClass);
-      setAge(existingCharacter.age != null ? String(existingCharacter.age) : '');
-      setLocation(existingCharacter.location);
-      setLink(existingCharacter.link);
-      setPicture(existingCharacter.picture);
-      setPictureCrop(existingCharacter.pictureCrop);
-      setSessionId(existingCharacter.sessionId ?? '');
-      setSelectedSessions(existingCharacter.sessions);
-      setNotes(existingCharacter.notes);
-      setGmNotes(existingCharacter.gmNotes);
-      setTags(existingCharacter.tags);
-      setIsPublic(existingCharacter.isPublic);
+  const validate = useCallback((): FieldErrors => {
+    const errors: FieldErrors = {};
+    if (!firstName.trim()) errors.firstName = 'First name is required';
+    if (!lastName.trim()) errors.lastName = 'Last name is required';
+    if (link.trim() && !/^https?:\/\/.+/.test(link.trim())) {
+      errors.link = 'Must be a valid HTTP or HTTPS URL';
     }
-  }, [isEdit, existingCharacter]);
+    return errors;
+  }, [firstName, lastName, link]);
+
+  const { fieldErrors, runValidation } = useModalForm({
+    isOpen,
+    onClose,
+    recordId: characterId,
+    isEdit,
+    record: existingCharacter,
+    reset: () => {
+      setFirstName('');
+      setLastName('');
+      setRace('');
+      setCharacterClass('');
+      setAge('');
+      setLocation('');
+      setLink('');
+      setPicture('');
+      setPictureCrop(null);
+      setSessionId('');
+      setSelectedSessions([]);
+      setNotes('');
+      setGmNotes('');
+      setTags([]);
+      setIsPublic(false);
+      setError(null);
+      setShowDeleteConfirm(false);
+    },
+    populate: (c) => {
+      setFirstName(c.firstName);
+      setLastName(c.lastName);
+      setRace(c.race);
+      setCharacterClass(c.characterClass);
+      setAge(c.age != null ? String(c.age) : '');
+      setLocation(c.location);
+      setLink(c.link);
+      setPicture(c.picture);
+      setPictureCrop(c.pictureCrop);
+      setSessionId(c.sessionId ?? '');
+      setSelectedSessions(c.sessions);
+      setNotes(c.notes);
+      setGmNotes(c.gmNotes);
+      setTags(c.tags);
+      setIsPublic(c.isPublic);
+    },
+    validate,
+  });
 
   const sessionOptions = useMemo(
     () => [
@@ -142,20 +142,6 @@ export function CharacterModal({
     [sessions]
   );
 
-  const validate = useCallback((): FieldErrors => {
-    const errors: FieldErrors = {};
-    if (!firstName.trim()) errors.firstName = 'First name is required';
-    if (!lastName.trim()) errors.lastName = 'Last name is required';
-    if (link.trim() && !/^https?:\/\/.+/.test(link.trim())) {
-      errors.link = 'Must be a valid HTTP or HTTPS URL';
-    }
-    return errors;
-  }, [firstName, lastName, link]);
-
-  useEffect(() => {
-    if (hasSubmitted) setFieldErrors(validate());
-  }, [hasSubmitted, validate]);
-
   const handleUpload = useCallback(async (file: File): Promise<string> => {
     const compressed = await compressImage(file);
     const { publicUrl } = await uploadToR2(compressed, 'uploads/characters');
@@ -164,11 +150,9 @@ export function CharacterModal({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setHasSubmitted(true);
     setError(null);
 
-    const errors = validate();
-    setFieldErrors(errors);
+    const errors = runValidation();
     if (Object.keys(errors).length > 0) return;
 
     const parsedAge = age.trim() ? parseInt(age, 10) : null;

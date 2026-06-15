@@ -1,8 +1,9 @@
 import { createServerFn } from '@tanstack/react-start';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import type { PlayerData, PlayerListItem } from '~/types/player';
-import { captureException } from '~/providers/PostHogProvider';
 import { queryKeys } from '~/utils/queryKeys';
+import { extractErrorMessage } from '~/utils/errors';
+import { createMutationHook } from '~/hooks/createMutationHook';
 import {
   listPlayersSchema,
   getPlayerSchema,
@@ -15,16 +16,6 @@ import {
   completeJoinWizardSchema,
 } from '~/types/schemas/players';
 import { z } from 'zod';
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function extractErrorMessage(error: unknown): string | null {
-  if (!error) return null;
-  if (error instanceof Error) return error.message;
-  return String(error);
-}
 
 // ---------------------------------------------------------------------------
 // Server function wrappers — dynamic imports keep Mongoose server-only.
@@ -205,84 +196,48 @@ interface UpdatePlayerInput {
   appearance?: string;
 }
 
-export function useUpdatePlayer() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: UpdatePlayerInput) => updatePlayerFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: ['players', 'list', variables.campaignId],
-        exact: false,
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.players.detail(variables.id, variables.campaignId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.players.active(variables.campaignId),
-      });
-      queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
-    },
-    onError: (e, variables) => {
-      captureException(e, { action: 'updatePlayer', playerId: variables.id });
-    },
-  });
-
-  const update = async (input: UpdatePlayerInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    update,
-    isLoading: mutation.isPending,
-    error: extractErrorMessage(mutation.error),
-  };
-}
+export const useUpdatePlayer = createMutationHook({
+  actionName: 'update',
+  mutationFn: async (input: UpdatePlayerInput) => updatePlayerFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: ['players', 'list', variables.campaignId],
+      exact: false,
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.players.detail(variables.id, variables.campaignId),
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.players.active(variables.campaignId),
+    });
+    queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
+  },
+  errorContext: (variables) => ({ action: 'updatePlayer', playerId: variables.id }),
+});
 
 interface DeletePlayerInput {
   id: string;
   campaignId: string;
 }
 
-export function useDeletePlayer() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: DeletePlayerInput) => deletePlayerFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: ['players', 'list', variables.campaignId],
-        exact: false,
-      });
-      queryClient.removeQueries({
-        queryKey: queryKeys.players.detail(variables.id, variables.campaignId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.players.active(variables.campaignId),
-      });
-      queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
-    },
-    onError: (e, variables) => {
-      captureException(e, { action: 'deletePlayer', playerId: variables.id });
-    },
-  });
-
-  const remove = async (input: DeletePlayerInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    remove,
-    isLoading: mutation.isPending,
-    error: extractErrorMessage(mutation.error),
-  };
-}
+export const useDeletePlayer = createMutationHook({
+  actionName: 'remove',
+  mutationFn: async (input: DeletePlayerInput) => deletePlayerFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: ['players', 'list', variables.campaignId],
+      exact: false,
+    });
+    queryClient.removeQueries({
+      queryKey: queryKeys.players.detail(variables.id, variables.campaignId),
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.players.active(variables.campaignId),
+    });
+    queryClient.invalidateQueries({ queryKey: queryKeys.gmscreens.all });
+  },
+  errorContext: (variables) => ({ action: 'deletePlayer', playerId: variables.id }),
+});
 
 interface UpdatePlayerStatusInput {
   id: string;
@@ -290,41 +245,23 @@ interface UpdatePlayerStatusInput {
   value: 'alive' | 'deceased';
 }
 
-export function useUpdatePlayerStatus() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: UpdatePlayerStatusInput) => updatePlayerStatusFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: ['players', 'list', variables.campaignId],
-        exact: false,
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.players.detail(variables.id, variables.campaignId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.players.active(variables.campaignId),
-      });
-    },
-    onError: (e, variables) => {
-      captureException(e, { action: 'updatePlayerStatus', playerId: variables.id });
-    },
-  });
-
-  const updateStatus = async (input: UpdatePlayerStatusInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    updateStatus,
-    isLoading: mutation.isPending,
-    error: extractErrorMessage(mutation.error),
-  };
-}
+export const useUpdatePlayerStatus = createMutationHook({
+  actionName: 'updateStatus',
+  mutationFn: async (input: UpdatePlayerStatusInput) => updatePlayerStatusFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: ['players', 'list', variables.campaignId],
+      exact: false,
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.players.detail(variables.id, variables.campaignId),
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.players.active(variables.campaignId),
+    });
+  },
+  errorContext: (variables) => ({ action: 'updatePlayerStatus', playerId: variables.id }),
+});
 
 interface AddPlayerRelationshipInput {
   playerId: string;
@@ -334,41 +271,22 @@ interface AddPlayerRelationshipInput {
   isPublic?: boolean;
 }
 
-export function useAddPlayerRelationship() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: AddPlayerRelationshipInput) =>
-      addPlayerRelationshipFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.players.detail(variables.playerId, variables.campaignId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.players.active(variables.campaignId),
-      });
-    },
-    onError: (e, variables) => {
-      captureException(e, {
-        action: 'addPlayerRelationship',
-        playerId: variables.playerId,
-      });
-    },
-  });
-
-  const addRelationship = async (input: AddPlayerRelationshipInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    addRelationship,
-    isLoading: mutation.isPending,
-    error: extractErrorMessage(mutation.error),
-  };
-}
+export const useAddPlayerRelationship = createMutationHook({
+  actionName: 'addRelationship',
+  mutationFn: async (input: AddPlayerRelationshipInput) => addPlayerRelationshipFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.players.detail(variables.playerId, variables.campaignId),
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.players.active(variables.campaignId),
+    });
+  },
+  errorContext: (variables) => ({
+    action: 'addPlayerRelationship',
+    playerId: variables.playerId,
+  }),
+});
 
 interface UpdatePlayerRelationshipInput {
   playerId: string;
@@ -378,41 +296,23 @@ interface UpdatePlayerRelationshipInput {
   isPublic?: boolean;
 }
 
-export function useUpdatePlayerRelationship() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: UpdatePlayerRelationshipInput) =>
-      updatePlayerRelationshipFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.players.detail(variables.playerId, variables.campaignId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.players.active(variables.campaignId),
-      });
-    },
-    onError: (e, variables) => {
-      captureException(e, {
-        action: 'updatePlayerRelationship',
-        playerId: variables.playerId,
-      });
-    },
-  });
-
-  const updateRelationship = async (input: UpdatePlayerRelationshipInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    updateRelationship,
-    isLoading: mutation.isPending,
-    error: extractErrorMessage(mutation.error),
-  };
-}
+export const useUpdatePlayerRelationship = createMutationHook({
+  actionName: 'updateRelationship',
+  mutationFn: async (input: UpdatePlayerRelationshipInput) =>
+    updatePlayerRelationshipFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.players.detail(variables.playerId, variables.campaignId),
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.players.active(variables.campaignId),
+    });
+  },
+  errorContext: (variables) => ({
+    action: 'updatePlayerRelationship',
+    playerId: variables.playerId,
+  }),
+});
 
 interface RemovePlayerRelationshipInput {
   playerId: string;
@@ -420,68 +320,33 @@ interface RemovePlayerRelationshipInput {
   characterId: string;
 }
 
-export function useRemovePlayerRelationship() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: RemovePlayerRelationshipInput) =>
-      removePlayerRelationshipFn({ data: input }),
-    onSuccess: (_data, variables) => {
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.players.detail(variables.playerId, variables.campaignId),
-      });
-      queryClient.invalidateQueries({
-        queryKey: queryKeys.players.active(variables.campaignId),
-      });
-    },
-    onError: (e, variables) => {
-      captureException(e, {
-        action: 'removePlayerRelationship',
-        playerId: variables.playerId,
-      });
-    },
-  });
-
-  const removeRelationship = async (input: RemovePlayerRelationshipInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    removeRelationship,
-    isLoading: mutation.isPending,
-    error: extractErrorMessage(mutation.error),
-  };
-}
+export const useRemovePlayerRelationship = createMutationHook({
+  actionName: 'removeRelationship',
+  mutationFn: async (input: RemovePlayerRelationshipInput) =>
+    removePlayerRelationshipFn({ data: input }),
+  onSuccess: (queryClient, _data, variables) => {
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.players.detail(variables.playerId, variables.campaignId),
+    });
+    queryClient.invalidateQueries({
+      queryKey: queryKeys.players.active(variables.campaignId),
+    });
+  },
+  errorContext: (variables) => ({
+    action: 'removePlayerRelationship',
+    playerId: variables.playerId,
+  }),
+});
 
 interface ValidateInviteCodeInput {
   inviteCode: string;
 }
 
-export function useValidateInviteCode() {
-  const mutation = useMutation({
-    mutationFn: async (input: ValidateInviteCodeInput) => validateInviteCodeFn({ data: input }),
-    onError: (e) => {
-      captureException(e, { action: 'validateInviteCode' });
-    },
-  });
-
-  const validate = async (input: ValidateInviteCodeInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    validate,
-    isLoading: mutation.isPending,
-    error: extractErrorMessage(mutation.error),
-  };
-}
+export const useValidateInviteCode = createMutationHook({
+  actionName: 'validate',
+  mutationFn: async (input: ValidateInviteCodeInput) => validateInviteCodeFn({ data: input }),
+  errorContext: () => ({ action: 'validateInviteCode' }),
+});
 
 interface CompleteJoinWizardInput {
   campaignId: string;
@@ -527,29 +392,11 @@ interface CompleteJoinWizardInput {
   }>;
 }
 
-export function useCompleteJoinWizard() {
-  const queryClient = useQueryClient();
-  const mutation = useMutation({
-    mutationFn: async (input: CompleteJoinWizardInput) => completeJoinWizardFn({ data: input }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.campaigns.list() });
-    },
-    onError: (e) => {
-      captureException(e, { action: 'completeJoinWizard' });
-    },
-  });
-
-  const complete = async (input: CompleteJoinWizardInput) => {
-    try {
-      return await mutation.mutateAsync(input);
-    } catch {
-      return null;
-    }
-  };
-
-  return {
-    complete,
-    isLoading: mutation.isPending,
-    error: extractErrorMessage(mutation.error),
-  };
-}
+export const useCompleteJoinWizard = createMutationHook({
+  actionName: 'complete',
+  mutationFn: async (input: CompleteJoinWizardInput) => completeJoinWizardFn({ data: input }),
+  onSuccess: (queryClient) => {
+    queryClient.invalidateQueries({ queryKey: queryKeys.campaigns.list() });
+  },
+  errorContext: () => ({ action: 'completeJoinWizard' }),
+});

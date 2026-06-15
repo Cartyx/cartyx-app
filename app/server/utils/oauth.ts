@@ -1,8 +1,10 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
 import type { SessionUser } from '../session';
 import { providerConfigured } from './helpers';
 import { serverCaptureException } from './posthog';
+import { encryptToken, decryptToken } from './tokenCrypto';
 
 export { providerConfigured };
 
@@ -23,7 +25,23 @@ function requireBaseUrl(): string {
   return url;
 }
 
-export function buildGoogleOAuthUrl(state?: string): string {
+/**
+ * Generate a PKCE code_verifier: a high-entropy, URL-safe random string.
+ * 32 random bytes -> 43-char base64url string (well within RFC 7636's 43-128).
+ */
+export function generateCodeVerifier(): string {
+  return randomBytes(32).toString('base64url');
+}
+
+/**
+ * Derive the PKCE code_challenge for the S256 method:
+ *   code_challenge = BASE64URL(SHA256(ASCII(code_verifier)))
+ */
+export function deriveCodeChallenge(verifier: string): string {
+  return createHash('sha256').update(verifier).digest('base64url');
+}
+
+export function buildGoogleOAuthUrl(state?: string, codeChallenge?: string): string {
   const baseUrl = requireBaseUrl();
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID!,
@@ -33,22 +51,24 @@ export function buildGoogleOAuthUrl(state?: string): string {
     access_type: 'offline',
     prompt: 'consent',
     ...(state && { state }),
+    ...(codeChallenge && { code_challenge: codeChallenge, code_challenge_method: 'S256' }),
   });
   return `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
 }
 
-export function buildGithubOAuthUrl(state?: string): string {
+export function buildGithubOAuthUrl(state?: string, codeChallenge?: string): string {
   const baseUrl = requireBaseUrl();
   const params = new URLSearchParams({
     client_id: process.env.GITHUB_CLIENT_ID!,
     redirect_uri: `${baseUrl}/auth/callback/github`,
     scope: 'user:email',
     ...(state && { state }),
+    ...(codeChallenge && { code_challenge: codeChallenge, code_challenge_method: 'S256' }),
   });
   return `https://github.com/login/oauth/authorize?${params}`;
 }
 
-export function buildAppleOAuthUrl(state?: string): string {
+export function buildAppleOAuthUrl(state?: string, codeChallenge?: string): string {
   const baseUrl = requireBaseUrl();
   const params = new URLSearchParams({
     client_id: process.env.APPLE_CLIENT_ID!,
@@ -57,11 +77,15 @@ export function buildAppleOAuthUrl(state?: string): string {
     scope: 'name email',
     response_mode: 'query',
     ...(state && { state }),
+    ...(codeChallenge && { code_challenge: codeChallenge, code_challenge_method: 'S256' }),
   });
   return `https://appleid.apple.com/auth/authorize?${params}`;
 }
 
-export async function exchangeAppleCode(code: string): Promise<OAuthProfile> {
+export async function exchangeAppleCode(
+  code: string,
+  codeVerifier?: string
+): Promise<OAuthProfile> {
   const { APPLE_CLIENT_ID, APPLE_TEAM_ID, APPLE_KEY_ID, APPLE_PRIVATE_KEY_PATH } = process.env;
   const appleBaseUrl = requireBaseUrl();
   if (!APPLE_CLIENT_ID || !APPLE_TEAM_ID || !APPLE_KEY_ID || !APPLE_PRIVATE_KEY_PATH) {
@@ -93,6 +117,7 @@ export async function exchangeAppleCode(code: string): Promise<OAuthProfile> {
       code,
       grant_type: 'authorization_code',
       redirect_uri: `${appleBaseUrl}/auth/callback/apple`,
+      ...(codeVerifier && { code_verifier: codeVerifier }),
     }),
   });
 
@@ -140,7 +165,10 @@ export async function exchangeAppleCode(code: string): Promise<OAuthProfile> {
   };
 }
 
-export async function exchangeGoogleCode(code: string): Promise<OAuthProfile> {
+export async function exchangeGoogleCode(
+  code: string,
+  codeVerifier?: string
+): Promise<OAuthProfile> {
   const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -150,6 +178,7 @@ export async function exchangeGoogleCode(code: string): Promise<OAuthProfile> {
       client_secret: process.env.GOOGLE_CLIENT_SECRET!,
       redirect_uri: `${requireBaseUrl()}/auth/callback/google`,
       grant_type: 'authorization_code',
+      ...(codeVerifier && { code_verifier: codeVerifier }),
     }),
   });
   if (!tokenRes.ok) {
@@ -215,7 +244,10 @@ export async function exchangeGoogleCode(code: string): Promise<OAuthProfile> {
   };
 }
 
-export async function exchangeGithubCode(code: string): Promise<OAuthProfile> {
+export async function exchangeGithubCode(
+  code: string,
+  codeVerifier?: string
+): Promise<OAuthProfile> {
   const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
@@ -224,6 +256,7 @@ export async function exchangeGithubCode(code: string): Promise<OAuthProfile> {
       client_secret: process.env.GITHUB_CLIENT_SECRET!,
       code,
       redirect_uri: `${requireBaseUrl()}/auth/callback/github`,
+      ...(codeVerifier && { code_verifier: codeVerifier }),
     }),
   });
   if (!tokenRes.ok) {
@@ -298,13 +331,40 @@ export async function exchangeGithubCode(code: string): Promise<OAuthProfile> {
   };
 }
 
+/** Build the SessionUser identity claims, never including provider tokens. */
+function toSessionUser(profile: OAuthProfile, role: string, stored?: UserDoc | null): SessionUser {
+  return {
+    id: profile.id,
+    provider: profile.provider,
+    email: profile.email ?? stored?.email ?? null,
+    name: profile.name ?? (`${stored?.firstName ?? ''} ${stored?.lastName ?? ''}`.trim() || null),
+    avatar: profile.avatar ?? stored?.avatarUrl ?? null,
+    role,
+    tokenIssuedAt: profile.tokenIssuedAt,
+  };
+}
+
+interface UserDoc {
+  email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  avatarUrl?: string | null;
+  role?: string;
+}
+
 export async function upsertUser(profile: OAuthProfile): Promise<SessionUser> {
   await connectDB();
-  if (!isDBConnected()) return { ...profile, role: 'unknown' };
+  if (!isDBConnected()) return toSessionUser(profile, 'unknown');
 
   try {
     const nameParts = (profile.name ?? '').split(' ');
-    const stored = await User.findOneAndUpdate(
+    // Encrypt provider tokens for at-rest storage. They never travel in the
+    // session cookie; they're read back (decrypted) only at logout to revoke.
+    const oauthTokens = {
+      accessToken: profile.accessToken ? encryptToken(profile.accessToken) : null,
+      refreshToken: profile.refreshToken ? encryptToken(profile.refreshToken) : null,
+    };
+    const stored = (await User.findOneAndUpdate(
       { providerId: profile.id },
       {
         $set: {
@@ -316,33 +376,62 @@ export async function upsertUser(profile: OAuthProfile): Promise<SessionUser> {
             lastName: nameParts.slice(1).join(' ') ?? '',
           }),
           ...(profile.avatar && { avatarUrl: profile.avatar }),
+          oauthTokens,
           lastLoginAt: new Date(),
         },
         $setOnInsert: { createdAt: new Date(), role: 'unknown' },
       },
       { upsert: true, returnDocument: 'after', new: true }
-    );
-    return {
-      ...profile,
-      email: profile.email ?? stored?.email ?? null,
-      name: profile.name ?? (`${stored?.firstName ?? ''} ${stored?.lastName ?? ''}`.trim() || null),
-      avatar: profile.avatar ?? stored?.avatarUrl ?? null,
-      role: stored?.role ?? 'unknown',
-    };
+    )) as UserDoc | null;
+    return toSessionUser(profile, stored?.role ?? 'unknown', stored);
   } catch (e) {
     serverCaptureException(e, profile.id, { action: 'upsertUser', provider: profile.provider });
-    return { ...profile, role: 'unknown' };
+    return toSessionUser(profile, 'unknown');
   }
 }
 
+interface EncryptedTokenField {
+  ciphertext?: string;
+  iv?: string;
+  authTag?: string;
+}
+
+/**
+ * Revoke the provider grant for the given session user.
+ *
+ * The provider access token is no longer carried in the session cookie; it is
+ * loaded (encrypted) from the User document, decrypted, and used to call the
+ * provider's revoke/delete endpoint. Revocation is best-effort: the stored
+ * tokens are cleared once the attempt is made (regardless of the provider's
+ * HTTP response), so a token the provider has already rejected can't linger
+ * and fail again on the next logout. Preserves the original
+ * early-return-when-no-token behavior and per-provider routing (Google revoke,
+ * GitHub token delete; Apple has no revoke path).
+ */
 export async function revokeToken(user: SessionUser): Promise<void> {
-  if (!user.accessToken) return;
   try {
+    await connectDB();
+    if (!isDBConnected()) return;
+
+    // Tokens are select:false, so they must be explicitly selected.
+    const stored = (await User.findOne({ providerId: user.id }).select('+oauthTokens').lean()) as {
+      oauthTokens?: { accessToken?: EncryptedTokenField | null };
+    } | null;
+
+    const enc = stored?.oauthTokens?.accessToken;
+    if (!enc || !enc.ciphertext || !enc.iv || !enc.authTag) return;
+
+    const accessToken = decryptToken({
+      ciphertext: enc.ciphertext,
+      iv: enc.iv,
+      authTag: enc.authTag,
+    });
+
     if (user.provider === 'google') {
-      await fetch(
-        `https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(user.accessToken)}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-      );
+      await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(accessToken)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
     } else if (
       user.provider === 'github' &&
       process.env.GITHUB_CLIENT_ID &&
@@ -358,9 +447,12 @@ export async function revokeToken(user: SessionUser): Promise<void> {
           Accept: 'application/vnd.github+json',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ access_token: user.accessToken }),
+        body: JSON.stringify({ access_token: accessToken }),
       });
     }
+
+    // Clear the stored tokens once we've attempted revocation.
+    await User.updateOne({ providerId: user.id }, { $unset: { oauthTokens: '' } });
   } catch (e) {
     serverCaptureException(e, user.id, { action: 'revokeToken', provider: user.provider });
   }
