@@ -2,6 +2,7 @@ import { useCallback, useRef } from 'react';
 import usePartySocket from 'partysocket/react';
 import type { MapTokenData } from '~/types/mapToken';
 import type { MapTextData } from '~/types/mapText';
+import type { MapDrawingData } from '~/types/mapDrawing';
 
 const PARTYKIT_HOST = import.meta.env.VITE_PUBLIC_PARTYKIT_HOST ?? 'localhost:1999';
 
@@ -39,7 +40,11 @@ export type TabletopMapMessage =
       final?: boolean;
     }
   | { type: 'text:updated'; mapId: string; text: MapTextData; byUserId?: string }
-  | { type: 'text:removed'; mapId: string; textId: string; byUserId?: string };
+  | { type: 'text:removed'; mapId: string; textId: string; byUserId?: string }
+  | { type: 'drawing:added'; mapId: string; drawing: MapDrawingData; byUserId?: string }
+  | { type: 'drawing:updated'; mapId: string; drawing: MapDrawingData; byUserId?: string }
+  | { type: 'drawing:removed'; mapId: string; drawingId: string; byUserId?: string }
+  | { type: 'drawing:cleared'; mapId: string; byUserId?: string };
 
 /**
  * useTabletopMapParty — subscribes to the campaign's map party channel

@@ -8,11 +8,22 @@ import {
   type PointerEvent as ReactPointerEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
-import { ZoomIn, ZoomOut, Maximize2, Grid3x3, Eye, EyeOff, Type } from 'lucide-react';
+import {
+  ZoomIn,
+  ZoomOut,
+  Maximize2,
+  Grid3x3,
+  Eye,
+  EyeOff,
+  Type,
+  Pencil,
+  Trash2,
+} from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import type { MapData } from '~/types/map';
 import type { MapTokenData } from '~/types/mapToken';
 import type { MapTextData } from '~/types/mapText';
+import type { MapDrawingData } from '~/types/mapDrawing';
 import {
   useMapTokens,
   useMapTokenMutations,
@@ -28,10 +39,20 @@ import {
   applyTextMoveToCache,
   applyTextUpdateToCache,
 } from '~/hooks/useMapTexts';
+import {
+  useMapDrawings,
+  useMapDrawingMutations,
+  applyDrawingAddToCache,
+  applyDrawingUpdateToCache,
+  applyDrawingRemoveFromCache,
+  applyDrawingsClearToCache,
+} from '~/hooks/useMapDrawings';
 import { MapToken } from './MapToken';
 import { LayersPanel } from './LayersPanel';
 import { RulerSettingsPanel } from './RulerSettingsPanel';
 import { TextSettingsPanel } from './TextSettingsPanel';
+import { DrawingSettingsPanel, type DrawShape } from './DrawingSettingsPanel';
+import { MAX_DRAWING_POINT_VALUES } from '~/types/schemas/mapDrawings';
 import { useRulerColor } from '~/hooks/useUserPreferences';
 import {
   tokenLayerId,
@@ -63,6 +84,10 @@ interface ActiveMapStageProps {
   rulerActive?: boolean;
   /** Whether the text tool is active (click to write, click text to select). */
   textActive?: boolean;
+  /** Whether the drawing tool is active (draw shapes / erase on the map). */
+  drawingActive?: boolean;
+  /** Whether the pointer tool is active (select/resize/delete drawings). */
+  pointerActive?: boolean;
 }
 
 /** A measurement endpoint: a fixed image-space point, or a live token center. */
@@ -101,6 +126,8 @@ export function ActiveMapStage({
   onCloseLayerPanel,
   rulerActive = false,
   textActive = false,
+  drawingActive = false,
+  pointerActive = false,
 }: ActiveMapStageProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -129,9 +156,10 @@ export function ActiveMapStage({
   const [textFontSize, setTextFontSize] = useState(16);
   // Draggable position of the settings panel (workspace px), clamped on drag
   // AND on workspace resize so it can never be lost behind the toolbar /
-  // off-screen (where the stage's overflow-hidden would clip it away).
-  const [textPanelPos, setTextPanelPos] = useState({ x: 12, y: 12 });
-  const textPanelRef = useRef<HTMLDivElement | null>(null);
+  // off-screen (where the stage's overflow-hidden would clip it away). Shared
+  // by the text + drawing tools (only one panel is shown at a time).
+  const [panelPos, setPanelPos] = useState({ x: 12, y: 12 });
+  const panelRef = useRef<HTMLDivElement | null>(null);
   // The in-progress text being typed (image-space anchor + value), and the
   // currently selected text (for deletion).
   const [textDraft, setTextDraft] = useState<{
@@ -142,6 +170,33 @@ export function ActiveMapStage({
   } | null>(null);
   const [textDraftValue, setTextDraftValue] = useState('');
   const [selectedTextId, setSelectedTextId] = useState<string | null>(null);
+
+  // Map drawings (freeform shapes) — shared, persisted, multiplayer. Any member
+  // can draw; modification (resize/delete) is gated to the author or a GM
+  // (enforced server-side). Local view toggle declutters per-viewer.
+  const { data: drawings = [] } = useMapDrawings(campaignId, map.id);
+  const drawingMutations = useMapDrawingMutations(campaignId, map.id);
+  const [showDrawings, setShowDrawings] = useState(true);
+  // Drawing-tool brush settings (local to this client).
+  const [drawShape, setDrawShape] = useState<DrawShape>('pencil');
+  const [drawColor, setDrawColor] = useState('#e74c3c');
+  const [drawStrokeWidth, setDrawStrokeWidth] = useState(4);
+  const [drawFilled, setDrawFilled] = useState(false);
+  // Selected drawing (pointer tool) + the GM "clear all" confirm.
+  const [selectedDrawingId, setSelectedDrawingId] = useState<string | null>(null);
+  const [drawingsPendingClear, setDrawingsPendingClear] = useState(false);
+  // Live in-progress geometry while drawing (rendered as a preview overlay).
+  const [drawPreview, setDrawPreview] = useState<{
+    kind: 'pencil' | 'rect' | 'ellipse';
+    color: string;
+    strokeWidth: number;
+    filled: boolean;
+    points: number[];
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
 
   // Token selection — click selects (shift/cmd-click toggles), background
   // click deselects, Delete/Backspace confirms removal (GM only), right-click
@@ -252,6 +307,91 @@ export function ActiveMapStage({
     (t: MapTextData) => isGM || (currentUserId != null && t.createdBy === currentUserId),
     [isGM, currentUserId]
   );
+
+  // --- Drawing tool -------------------------------------------------------
+  // A player may modify (resize/delete) only their own drawing; a GM may modify
+  // anyone's. The server enforces this; the client mirrors it for affordances.
+  const canModifyDrawing = useCallback(
+    (d: MapDrawingData) => isGM || (currentUserId != null && d.createdBy === currentUserId),
+    [isGM, currentUserId]
+  );
+
+  // Clear the drawing preview + selection when the drawing tool is deselected.
+  useEffect(() => {
+    if (!drawingActive) setDrawPreview(null);
+  }, [drawingActive]);
+
+  // Selection lives in the pointer tool; clear it when leaving the pointer tool.
+  useEffect(() => {
+    if (!pointerActive) setSelectedDrawingId(null);
+  }, [pointerActive]);
+
+  const removeDrawing = useCallback(
+    (drawingId: string) => {
+      applyDrawingRemoveFromCache(qc, campaignId, map.id, drawingId);
+      drawingMutations.remove.mutate(drawingId, {
+        onSuccess: () => onBroadcast({ type: 'drawing:removed', mapId: map.id, drawingId }),
+      });
+      setSelectedDrawingId((cur) => (cur === drawingId ? null : cur));
+    },
+    [qc, campaignId, map.id, drawingMutations.remove, onBroadcast]
+  );
+
+  // Whole-stroke erase: delete every modifiable drawing within (eraser size) of
+  // the cursor. `erased` tracks ids removed during the current drag so each is
+  // removed at most once.
+  const eraseAt = useCallback(
+    (ix: number, iy: number, erased: Set<string>) => {
+      const radius = drawStrokeWidth;
+      for (const dr of drawings) {
+        if (erased.has(dr.id)) continue;
+        if (!canModifyDrawing(dr)) continue;
+        if (eraserHits(dr, ix, iy, radius)) {
+          erased.add(dr.id);
+          removeDrawing(dr.id);
+        }
+      }
+    },
+    [drawings, drawStrokeWidth, canModifyDrawing, removeDrawing]
+  );
+
+  const clearAllDrawings = useCallback(() => {
+    if (!isGM) return;
+    applyDrawingsClearToCache(qc, campaignId, map.id);
+    setSelectedDrawingId(null);
+    drawingMutations.clear.mutate(undefined, {
+      onSuccess: () => onBroadcast({ type: 'drawing:cleared', mapId: map.id }),
+    });
+    setDrawingsPendingClear(false);
+  }, [isGM, qc, campaignId, map.id, drawingMutations.clear, onBroadcast]);
+
+  // Keyboard: Delete/Backspace removes the selected drawing (permission-gated);
+  // Esc clears the selection. Not GM-gated — players can delete their own.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tgt = e.target as HTMLElement | null;
+      if (tgt) {
+        const tag = tgt.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tgt.isContentEditable)
+          return;
+      }
+      if (e.key === 'Escape') {
+        if (selectedDrawingId) {
+          e.preventDefault();
+          setSelectedDrawingId(null);
+        }
+        return;
+      }
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (!selectedDrawingId) return;
+      const d = drawings.find((x) => x.id === selectedDrawingId);
+      if (!d || !canModifyDrawing(d)) return;
+      e.preventDefault();
+      removeDrawing(d.id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedDrawingId, drawings, canModifyDrawing, removeDrawing]);
 
   // Commit the in-progress text. Creates a new text, or — when editing — saves
   // the edited content of an existing one.
@@ -513,9 +653,42 @@ export function ActiveMapStage({
         startClientY: number;
         startX: number;
         startY: number;
+      }
+    | {
+        mode: 'draw';
+        kind: 'pencil';
+        /** Flattened map-local points captured so far. */
+        points: number[];
+        lastX: number;
+        lastY: number;
+      }
+    | {
+        mode: 'draw';
+        kind: 'rect' | 'ellipse';
+        startX: number;
+        startY: number;
+        curX: number;
+        curY: number;
+      }
+    | { mode: 'erase'; erased: Set<string> }
+    | {
+        mode: 'resize';
+        drawingId: string;
+        kind: 'pencil' | 'rect' | 'ellipse';
+        startClientX: number;
+        startClientY: number;
+        /** Original bounding box (map-local pixels). */
+        bx: number;
+        by: number;
+        bw: number;
+        bh: number;
+        /** Original pencil points, for proportional scaling. */
+        startPoints: number[];
       };
   const dragRef = useRef<DragState>({ mode: 'idle' });
-  const [dragMode, setDragMode] = useState<'idle' | 'pan' | 'token' | 'text' | 'panel'>('idle');
+  const [dragMode, setDragMode] = useState<
+    'idle' | 'pan' | 'token' | 'text' | 'panel' | 'draw' | 'erase' | 'resize'
+  >('idle');
 
   const onPanPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
@@ -550,7 +723,54 @@ export function ActiveMapStage({
       }
       return;
     }
-    // Background click deselects any selected token + closes the context menu.
+    // Drawing tool: a press on the map begins a stroke / shape / erase.
+    if (drawingActive) {
+      const img = domToImage(e.clientX, e.clientY);
+      if (!img) return;
+      const ix = clamp(img.x, 0, map.imageWidth);
+      const iy = clamp(img.y, 0, map.imageHeight);
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+      if (drawShape === 'eraser') {
+        const erased = new Set<string>();
+        dragRef.current = { mode: 'erase', erased };
+        setDragMode('erase');
+        eraseAt(ix, iy, erased);
+        return;
+      }
+      if (drawShape === 'pencil') {
+        dragRef.current = { mode: 'draw', kind: 'pencil', points: [ix, iy], lastX: ix, lastY: iy };
+        setDrawPreview({
+          kind: 'pencil',
+          color: drawColor,
+          strokeWidth: drawStrokeWidth,
+          filled: false,
+          points: [ix, iy],
+          x: 0,
+          y: 0,
+          width: 0,
+          height: 0,
+        });
+        setDragMode('draw');
+        return;
+      }
+      const kind = drawShape === 'square' ? 'rect' : 'ellipse';
+      dragRef.current = { mode: 'draw', kind, startX: ix, startY: iy, curX: ix, curY: iy };
+      setDrawPreview({
+        kind,
+        color: drawColor,
+        strokeWidth: drawStrokeWidth,
+        filled: drawFilled,
+        points: [],
+        x: ix,
+        y: iy,
+        width: 0,
+        height: 0,
+      });
+      setDragMode('draw');
+      return;
+    }
+    // Background click deselects any selected token/drawing + closes menus.
+    setSelectedDrawingId(null);
     clearSelection();
     (e.target as Element).setPointerCapture?.(e.pointerId);
     dragRef.current = {
@@ -623,20 +843,46 @@ export function ActiveMapStage({
         mode: 'panel',
         startClientX: e.clientX,
         startClientY: e.clientY,
-        startX: textPanelPos.x,
-        startY: textPanelPos.y,
+        startX: panelPos.x,
+        startY: panelPos.y,
       };
       setDragMode('panel');
     },
-    [textPanelPos]
+    [panelPos]
+  );
+
+  // Begin resizing the selected drawing from its corner handle (own/GM only).
+  const beginDrawingResize = useCallback(
+    (d: MapDrawingData, e: ReactPointerEvent<HTMLButtonElement>) => {
+      if (e.button !== 0) return;
+      if (!canModifyDrawing(d)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const bbox = drawingBBox(d);
+      (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+      dragRef.current = {
+        mode: 'resize',
+        drawingId: d.id,
+        kind: d.kind,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        bx: bbox.x,
+        by: bbox.y,
+        bw: bbox.width,
+        bh: bbox.height,
+        startPoints: d.kind === 'pencil' ? [...d.points] : [],
+      };
+      setDragMode('resize');
+    },
+    [canModifyDrawing]
   );
 
   // Clamp a panel position so the whole panel stays inside the workspace,
   // using its real measured size (its height varies with content).
   const clampPanelPos = useCallback(
     (pos: { x: number; y: number }) => {
-      const pw = textPanelRef.current?.offsetWidth ?? 240;
-      const ph = textPanelRef.current?.offsetHeight ?? 240;
+      const pw = panelRef.current?.offsetWidth ?? 240;
+      const ph = panelRef.current?.offsetHeight ?? 240;
       const maxX = Math.max(0, containerSize.width - pw);
       const maxY = Math.max(0, containerSize.height - ph);
       return { x: clamp(pos.x, 0, maxX), y: clamp(pos.y, 0, maxY) };
@@ -648,12 +894,12 @@ export function ActiveMapStage({
   // window resize, etc.) — otherwise a panel dragged toward an edge would be
   // clipped away and look "lost".
   useEffect(() => {
-    if (!textActive) return;
-    setTextPanelPos((pos) => {
+    if (!textActive && !drawingActive) return;
+    setPanelPos((pos) => {
       const c = clampPanelPos(pos);
       return c.x === pos.x && c.y === pos.y ? pos : c;
     });
-  }, [textActive, containerSize.width, containerSize.height, clampPanelPos]);
+  }, [textActive, drawingActive, containerSize.width, containerSize.height, clampPanelPos]);
 
   // Update both the brush and (if a text is selected) that text on the map, so
   // changing size/color visibly resizes/recolors the selected text. Persists +
@@ -766,12 +1012,64 @@ export function ActiveMapStage({
       }
     } else if (d.mode === 'panel') {
       // Clamp within the workspace so the panel stays fully visible.
-      setTextPanelPos(
+      setPanelPos(
         clampPanelPos({
           x: d.startX + (e.clientX - d.startClientX),
           y: d.startY + (e.clientY - d.startClientY),
         })
       );
+    } else if (d.mode === 'draw' && d.kind === 'pencil') {
+      const img = domToImage(e.clientX, e.clientY);
+      if (!img) return;
+      const ix = clamp(img.x, 0, map.imageWidth);
+      const iy = clamp(img.y, 0, map.imageHeight);
+      // Throttle capture (only on meaningful movement) and cap the point count.
+      if (
+        Math.hypot(ix - d.lastX, iy - d.lastY) >= 2 &&
+        d.points.length < MAX_DRAWING_POINT_VALUES
+      ) {
+        d.points.push(ix, iy);
+        d.lastX = ix;
+        d.lastY = iy;
+        setDrawPreview((prev) => (prev ? { ...prev, points: [...d.points] } : prev));
+      }
+    } else if (d.mode === 'draw') {
+      // rect / ellipse — the drag sets the bounding box.
+      const img = domToImage(e.clientX, e.clientY);
+      if (!img) return;
+      d.curX = clamp(img.x, 0, map.imageWidth);
+      d.curY = clamp(img.y, 0, map.imageHeight);
+      setDrawPreview((prev) =>
+        prev
+          ? {
+              ...prev,
+              x: Math.min(d.startX, d.curX),
+              y: Math.min(d.startY, d.curY),
+              width: Math.abs(d.curX - d.startX),
+              height: Math.abs(d.curY - d.startY),
+            }
+          : prev
+      );
+    } else if (d.mode === 'erase') {
+      const img = domToImage(e.clientX, e.clientY);
+      if (img) eraseAt(clamp(img.x, 0, map.imageWidth), clamp(img.y, 0, map.imageHeight), d.erased);
+    } else if (d.mode === 'resize') {
+      const existing = drawings.find((x) => x.id === d.drawingId);
+      if (!existing) return;
+      const { points, x, y, width, height } = resizedGeometry(
+        d,
+        e.clientX,
+        e.clientY,
+        effectiveScale
+      );
+      applyDrawingUpdateToCache(qc, campaignId, map.id, {
+        ...existing,
+        points,
+        x,
+        y,
+        width,
+        height,
+      });
     }
   };
 
@@ -820,6 +1118,72 @@ export function ActiveMapStage({
           }
         );
       }
+    } else if (d.mode === 'draw' && d.kind === 'pencil') {
+      const pts = d.points;
+      setDrawPreview(null);
+      if (pts.length >= 4) {
+        drawingMutations.create.mutate(
+          {
+            kind: 'pencil',
+            color: drawColor,
+            strokeWidth: drawStrokeWidth,
+            filled: false,
+            points: pts,
+          },
+          {
+            onSuccess: (res) => {
+              applyDrawingAddToCache(qc, campaignId, map.id, res.drawing);
+              onBroadcast({ type: 'drawing:added', mapId: map.id, drawing: res.drawing });
+            },
+          }
+        );
+      }
+    } else if (d.mode === 'draw') {
+      const x = Math.min(d.startX, d.curX);
+      const y = Math.min(d.startY, d.curY);
+      const width = Math.abs(d.curX - d.startX);
+      const height = Math.abs(d.curY - d.startY);
+      setDrawPreview(null);
+      if (width >= MIN_DRAW_SIZE && height >= MIN_DRAW_SIZE) {
+        drawingMutations.create.mutate(
+          {
+            kind: d.kind,
+            color: drawColor,
+            strokeWidth: drawStrokeWidth,
+            filled: drawFilled,
+            x,
+            y,
+            width,
+            height,
+          },
+          {
+            onSuccess: (res) => {
+              applyDrawingAddToCache(qc, campaignId, map.id, res.drawing);
+              onBroadcast({ type: 'drawing:added', mapId: map.id, drawing: res.drawing });
+            },
+          }
+        );
+      }
+    } else if (d.mode === 'resize') {
+      const existing = drawings.find((x) => x.id === d.drawingId);
+      const geom = resizedGeometry(d, e.clientX, e.clientY, effectiveScale);
+      if (existing) applyDrawingUpdateToCache(qc, campaignId, map.id, { ...existing, ...geom });
+      const update =
+        d.kind === 'pencil'
+          ? { drawingId: d.drawingId, points: geom.points }
+          : {
+              drawingId: d.drawingId,
+              x: geom.x,
+              y: geom.y,
+              width: geom.width,
+              height: geom.height,
+            };
+      drawingMutations.update.mutate(update, {
+        onSuccess: (res) => {
+          applyDrawingUpdateToCache(qc, campaignId, map.id, res.drawing);
+          onBroadcast({ type: 'drawing:updated', mapId: map.id, drawing: res.drawing });
+        },
+      });
     }
     dragRef.current = { mode: 'idle' };
     setDragMode('idle');
@@ -1130,13 +1494,120 @@ export function ActiveMapStage({
     effectiveScale,
   ]);
 
-  const cursorClass = rulerActive
-    ? 'cursor-crosshair'
-    : textActive
-      ? 'cursor-text'
-      : dragMode === 'pan'
-        ? 'cursor-grabbing'
-        : 'cursor-grab';
+  const cursorClass =
+    rulerActive || drawingActive
+      ? 'cursor-crosshair'
+      : textActive
+        ? 'cursor-text'
+        : dragMode === 'pan'
+          ? 'cursor-grabbing'
+          : 'cursor-grab';
+
+  // The selected drawing (pointer tool) + its DOM bounding box, for the
+  // selection outline + corner resize handle.
+  const selectedDrawing =
+    pointerActive && selectedDrawingId
+      ? (drawings.find((d) => d.id === selectedDrawingId) ?? null)
+      : null;
+  const selectionBox = selectedDrawing
+    ? (() => {
+        const b = drawingBBox(selectedDrawing);
+        return {
+          left: imageOffsetX + b.x * effectiveScale,
+          top: imageOffsetY + b.y * effectiveScale,
+          width: b.width * effectiveScale,
+          height: b.height * effectiveScale,
+        };
+      })()
+    : null;
+
+  // Render one drawing (committed or live preview) as an SVG element. Geometry
+  // is map-local; convert to DOM here at *effectiveScale.
+  const renderDrawing = (
+    d: {
+      id?: string;
+      kind: 'pencil' | 'rect' | 'ellipse';
+      color: string;
+      strokeWidth: number;
+      filled: boolean;
+      points: number[];
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    },
+    opts: { interactive: boolean; isPreview?: boolean }
+  ) => {
+    const sw = Math.max(1, d.strokeWidth * effectiveScale);
+    const fill = d.filled ? d.color : 'none';
+    const stroke = d.filled ? 'none' : d.color;
+    const pointerEvents = opts.interactive ? (d.kind === 'pencil' ? 'stroke' : 'all') : 'none';
+    const common = {
+      'data-testid': opts.isPreview ? undefined : 'map-drawing',
+      'data-drawing-id': d.id,
+      'data-drawing-kind': d.kind,
+      'data-filled': String(d.filled),
+      onPointerDown: opts.interactive
+        ? (e: ReactPointerEvent<SVGElement>) => {
+            e.stopPropagation();
+            if (d.id) setSelectedDrawingId(d.id);
+          }
+        : undefined,
+      style: { pointerEvents } as const,
+    };
+    if (d.kind === 'pencil') {
+      const pts: string[] = [];
+      for (let i = 0; i + 1 < d.points.length; i += 2) {
+        pts.push(
+          `${imageOffsetX + d.points[i]! * effectiveScale},${imageOffsetY + d.points[i + 1]! * effectiveScale}`
+        );
+      }
+      return (
+        <polyline
+          key={d.id ?? 'preview'}
+          {...common}
+          points={pts.join(' ')}
+          fill="none"
+          stroke={d.color}
+          strokeWidth={sw}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      );
+    }
+    const dx = imageOffsetX + d.x * effectiveScale;
+    const dy = imageOffsetY + d.y * effectiveScale;
+    const dw = d.width * effectiveScale;
+    const dh = d.height * effectiveScale;
+    if (d.kind === 'rect') {
+      return (
+        <rect
+          key={d.id ?? 'preview'}
+          {...common}
+          x={dx}
+          y={dy}
+          width={dw}
+          height={dh}
+          fill={fill}
+          stroke={stroke}
+          strokeWidth={sw}
+        />
+      );
+    }
+    return (
+      <ellipse
+        key={d.id ?? 'preview'}
+        {...common}
+        cx={dx + dw / 2}
+        cy={dy + dh / 2}
+        rx={dw / 2}
+        ry={dh / 2}
+        fill={fill}
+        stroke={stroke}
+        strokeWidth={sw}
+      />
+    );
+  };
 
   return (
     <div
@@ -1196,6 +1667,52 @@ export function ActiveMapStage({
           }}
           data-testid="map-grid-overlay"
         />
+      )}
+
+      {/* Drawing layer (shared). One SVG overlay above the map/grid. The SVG
+          itself never captures events; individual shapes are interactive only
+          while the pointer tool is active (for selection), so tokens are never
+          blocked. New strokes are drawn on the stage background (drawing tool)
+          and erasing is hit-tested against geometry. */}
+      {showDrawings && (
+        <svg
+          className="pointer-events-none absolute inset-0 z-20 h-full w-full"
+          data-testid="map-drawing-layer"
+          aria-hidden="true"
+        >
+          {drawings.map((d) => renderDrawing(d, { interactive: pointerActive }))}
+          {drawPreview && renderDrawing(drawPreview, { interactive: false, isPreview: true })}
+        </svg>
+      )}
+
+      {/* Selected drawing — bounding box + corner resize handle (own/GM only). */}
+      {selectedDrawing && selectionBox && (
+        <>
+          <div
+            aria-hidden="true"
+            data-testid="drawing-selection"
+            className="pointer-events-none absolute z-30 rounded-sm outline outline-2 outline-offset-2 outline-[#60A5FA]"
+            style={{
+              left: selectionBox.left,
+              top: selectionBox.top,
+              width: selectionBox.width,
+              height: selectionBox.height,
+            }}
+          />
+          {canModifyDrawing(selectedDrawing) && (
+            <button
+              type="button"
+              aria-label="Resize drawing"
+              data-testid="drawing-resize-handle"
+              onPointerDown={(e) => beginDrawingResize(selectedDrawing, e)}
+              className="absolute z-40 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize rounded-sm border border-white bg-[#60A5FA]"
+              style={{
+                left: selectionBox.left + selectionBox.width,
+                top: selectionBox.top + selectionBox.height,
+              }}
+            />
+          )}
+        </>
       )}
 
       {/* Tokens */}
@@ -1529,10 +2046,74 @@ export function ActiveMapStage({
           onChangeColor={applyTextColor}
           fontSize={textFontSize}
           onChangeFontSize={applyTextFontSize}
-          position={textPanelPos}
+          position={panelPos}
           onHeaderPointerDown={beginPanelDrag}
-          rootRef={textPanelRef}
+          rootRef={panelRef}
         />
+      )}
+
+      {/* Drawing settings popup — always open while the drawing tool is active. */}
+      {drawingActive && (
+        <DrawingSettingsPanel
+          shape={drawShape}
+          onChangeShape={setDrawShape}
+          color={drawColor}
+          onChangeColor={setDrawColor}
+          strokeWidth={drawStrokeWidth}
+          onChangeStrokeWidth={setDrawStrokeWidth}
+          filled={drawFilled}
+          onToggleFilled={() => setDrawFilled((v) => !v)}
+          position={panelPos}
+          onHeaderPointerDown={beginPanelDrag}
+          rootRef={panelRef}
+        />
+      )}
+
+      {/* GM "clear all drawings" confirmation dialog. */}
+      {drawingsPendingClear && (
+        <div
+          role="presentation"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+          className="absolute inset-0 z-30 flex items-center justify-center bg-black/60"
+        >
+          <div
+            role="alertdialog"
+            aria-labelledby="drawings-clear-title"
+            className="w-full max-w-sm rounded-lg border border-white/10 bg-[#0D1117] p-4 shadow-2xl"
+          >
+            <h2
+              id="drawings-clear-title"
+              className="font-sans text-sm font-bold uppercase tracking-widest text-rose-400"
+            >
+              Clear all drawings?
+            </h2>
+            <p className="font-sans mt-2 text-xs text-slate-300">
+              Remove <span className="font-semibold text-white">every drawing</span> on this map?
+              This cannot be undone.
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setDrawingsPendingClear(false)}
+                className="rounded border border-white/10 bg-white/[0.03] px-3 py-1.5 font-sans text-xs font-semibold text-slate-300 hover:bg-white/[0.07]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                ref={(el) => {
+                  if (el) el.focus();
+                }}
+                onClick={clearAllDrawings}
+                data-testid="map-clear-drawings-confirm"
+                className="rounded bg-rose-500 px-3 py-1.5 font-sans text-xs font-semibold text-white hover:bg-rose-400"
+              >
+                Clear all
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Zoom toolbar */}
@@ -1552,6 +2133,35 @@ export function ActiveMapStage({
         >
           <Type className="h-3.5 w-3.5" />
         </button>
+        <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden="true" />
+        <button
+          type="button"
+          aria-label={showDrawings ? 'Hide drawings' : 'Show drawings'}
+          aria-pressed={showDrawings}
+          title={showDrawings ? 'Hide drawings' : 'Show drawings'}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => setShowDrawings((v) => !v)}
+          className={[
+            'flex h-7 w-7 items-center justify-center rounded transition-colors',
+            showDrawings ? 'bg-white/15 text-[#60A5FA]' : 'text-slate-200 hover:bg-white/10',
+          ].join(' ')}
+          data-testid="map-drawings-toggle"
+        >
+          <Pencil className="h-3.5 w-3.5" />
+        </button>
+        {isGM && (
+          <button
+            type="button"
+            aria-label="Clear all drawings"
+            title="Clear all drawings"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => setDrawingsPendingClear(true)}
+            className="flex h-7 w-7 items-center justify-center rounded text-slate-200 transition-colors hover:bg-rose-500/20 hover:text-rose-300"
+            data-testid="map-clear-drawings"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
         <span className="mx-0.5 h-4 w-px bg-white/15" aria-hidden="true" />
         {hasGrid && (
           <>
@@ -1614,6 +2224,119 @@ export function ActiveMapStage({
 
 function clamp(v: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, v));
+}
+
+/** Minimum committed size for a rect/ellipse / resize (map-local pixels). */
+const MIN_DRAW_SIZE = 2;
+
+/** Axis-aligned bounding box of a drawing, in map-local pixels. */
+function drawingBBox(d: {
+  kind: 'pencil' | 'rect' | 'ellipse';
+  points: number[];
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}): { x: number; y: number; width: number; height: number } {
+  if (d.kind !== 'pencil') return { x: d.x, y: d.y, width: d.width, height: d.height };
+  if (d.points.length < 2) return { x: 0, y: 0, width: 0, height: 0 };
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  for (let i = 0; i + 1 < d.points.length; i += 2) {
+    const x = d.points[i]!;
+    const y = d.points[i + 1]!;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+}
+
+/** Shortest distance from point (px,py) to the segment a→b. */
+function distToSegment(
+  px: number,
+  py: number,
+  ax: number,
+  ay: number,
+  bx: number,
+  by: number
+): number {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const lenSq = dx * dx + dy * dy;
+  if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / lenSq;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/** Whether the eraser at (cx,cy) with the given radius touches a drawing. */
+function eraserHits(
+  d: {
+    kind: 'pencil' | 'rect' | 'ellipse';
+    strokeWidth: number;
+    points: number[];
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  },
+  cx: number,
+  cy: number,
+  radius: number
+): boolean {
+  if (d.kind === 'pencil') {
+    const r = radius + d.strokeWidth / 2;
+    if (d.points.length === 2) return Math.hypot(cx - d.points[0]!, cy - d.points[1]!) <= r;
+    for (let i = 0; i + 3 < d.points.length; i += 2) {
+      if (
+        distToSegment(cx, cy, d.points[i]!, d.points[i + 1]!, d.points[i + 2]!, d.points[i + 3]!) <=
+        r
+      )
+        return true;
+    }
+    return false;
+  }
+  return (
+    cx >= d.x - radius &&
+    cx <= d.x + d.width + radius &&
+    cy >= d.y - radius &&
+    cy <= d.y + d.height + radius
+  );
+}
+
+/** New geometry while resizing a drawing from its corner handle. */
+function resizedGeometry(
+  d: {
+    kind: 'pencil' | 'rect' | 'ellipse';
+    startClientX: number;
+    startClientY: number;
+    bx: number;
+    by: number;
+    bw: number;
+    bh: number;
+    startPoints: number[];
+  },
+  clientX: number,
+  clientY: number,
+  effectiveScale: number
+): { points: number[]; x: number; y: number; width: number; height: number } {
+  const dxImage = (clientX - d.startClientX) / effectiveScale;
+  const dyImage = (clientY - d.startClientY) / effectiveScale;
+  const newW = Math.max(MIN_DRAW_SIZE, d.bw + dxImage);
+  const newH = Math.max(MIN_DRAW_SIZE, d.bh + dyImage);
+  if (d.kind === 'pencil') {
+    const sx = d.bw > 0 ? newW / d.bw : 1;
+    const sy = d.bh > 0 ? newH / d.bh : 1;
+    const points = d.startPoints.map((v, i) =>
+      i % 2 === 0 ? d.bx + (v - d.bx) * sx : d.by + (v - d.by) * sy
+    );
+    return { points, x: 0, y: 0, width: 0, height: 0 };
+  }
+  return { points: [], x: d.bx, y: d.by, width: newW, height: newH };
 }
 
 const BATCH_MIN = 1;

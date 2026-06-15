@@ -23,6 +23,12 @@ import {
   applyTextMoveToCache,
   applyTextUpdateToCache,
 } from '~/hooks/useMapTexts';
+import {
+  applyDrawingAddToCache,
+  applyDrawingUpdateToCache,
+  applyDrawingRemoveFromCache,
+  applyDrawingsClearToCache,
+} from '~/hooks/useMapDrawings';
 import { ActiveMapStage } from './ActiveMapStage';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '~/utils/queryKeys';
@@ -140,6 +146,14 @@ export function TabletopView({
       applyTextUpdateToCache(queryClient, campaignId, msg.mapId, msg.text);
     } else if (msg.type === 'text:removed') {
       applyTextRemoveFromCache(queryClient, campaignId, msg.mapId, msg.textId);
+    } else if (msg.type === 'drawing:added') {
+      applyDrawingAddToCache(queryClient, campaignId, msg.mapId, msg.drawing);
+    } else if (msg.type === 'drawing:updated') {
+      applyDrawingUpdateToCache(queryClient, campaignId, msg.mapId, msg.drawing);
+    } else if (msg.type === 'drawing:removed') {
+      applyDrawingRemoveFromCache(queryClient, campaignId, msg.mapId, msg.drawingId);
+    } else if (msg.type === 'drawing:cleared') {
+      applyDrawingsClearToCache(queryClient, campaignId, msg.mapId);
     }
   });
 
@@ -618,6 +632,8 @@ export function TabletopView({
             onCloseLayerPanel={() => onToolChange?.('pointer')}
             rulerActive={activeTool === 'ruler'}
             textActive={activeTool === 'text'}
+            drawingActive={activeTool === 'drawing'}
+            pointerActive={activeTool === 'pointer'}
           />
         ) : (
           <TabletopCanvas screen={activeScreen} />
