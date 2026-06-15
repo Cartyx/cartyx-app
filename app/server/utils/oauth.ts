@@ -3,6 +3,7 @@ import { User } from '../db/models/User';
 import type { SessionUser } from '../session';
 import { providerConfigured } from './helpers';
 import { serverCaptureException } from './posthog';
+import { encryptToken, decryptToken } from './tokenCrypto';
 
 export { providerConfigured };
 
@@ -298,13 +299,40 @@ export async function exchangeGithubCode(code: string): Promise<OAuthProfile> {
   };
 }
 
+/** Build the SessionUser identity claims, never including provider tokens. */
+function toSessionUser(profile: OAuthProfile, role: string, stored?: UserDoc | null): SessionUser {
+  return {
+    id: profile.id,
+    provider: profile.provider,
+    email: profile.email ?? stored?.email ?? null,
+    name: profile.name ?? (`${stored?.firstName ?? ''} ${stored?.lastName ?? ''}`.trim() || null),
+    avatar: profile.avatar ?? stored?.avatarUrl ?? null,
+    role,
+    tokenIssuedAt: profile.tokenIssuedAt,
+  };
+}
+
+interface UserDoc {
+  email?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
+  avatarUrl?: string | null;
+  role?: string;
+}
+
 export async function upsertUser(profile: OAuthProfile): Promise<SessionUser> {
   await connectDB();
-  if (!isDBConnected()) return { ...profile, role: 'unknown' };
+  if (!isDBConnected()) return toSessionUser(profile, 'unknown');
 
   try {
     const nameParts = (profile.name ?? '').split(' ');
-    const stored = await User.findOneAndUpdate(
+    // Encrypt provider tokens for at-rest storage. They never travel in the
+    // session cookie; they're read back (decrypted) only at logout to revoke.
+    const oauthTokens = {
+      accessToken: profile.accessToken ? encryptToken(profile.accessToken) : null,
+      refreshToken: profile.refreshToken ? encryptToken(profile.refreshToken) : null,
+    };
+    const stored = (await User.findOneAndUpdate(
       { providerId: profile.id },
       {
         $set: {
@@ -316,33 +344,60 @@ export async function upsertUser(profile: OAuthProfile): Promise<SessionUser> {
             lastName: nameParts.slice(1).join(' ') ?? '',
           }),
           ...(profile.avatar && { avatarUrl: profile.avatar }),
+          oauthTokens,
           lastLoginAt: new Date(),
         },
         $setOnInsert: { createdAt: new Date(), role: 'unknown' },
       },
       { upsert: true, returnDocument: 'after', new: true }
-    );
-    return {
-      ...profile,
-      email: profile.email ?? stored?.email ?? null,
-      name: profile.name ?? (`${stored?.firstName ?? ''} ${stored?.lastName ?? ''}`.trim() || null),
-      avatar: profile.avatar ?? stored?.avatarUrl ?? null,
-      role: stored?.role ?? 'unknown',
-    };
+    )) as UserDoc | null;
+    return toSessionUser(profile, stored?.role ?? 'unknown', stored);
   } catch (e) {
     serverCaptureException(e, profile.id, { action: 'upsertUser', provider: profile.provider });
-    return { ...profile, role: 'unknown' };
+    return toSessionUser(profile, 'unknown');
   }
 }
 
+interface EncryptedTokenField {
+  ciphertext?: string;
+  iv?: string;
+  authTag?: string;
+}
+
+/**
+ * Revoke the provider grant for the given session user.
+ *
+ * The provider access token is no longer carried in the session cookie; it is
+ * loaded (encrypted) from the User document, decrypted, and used to call the
+ * provider's revoke/delete endpoint. After a successful attempt the stored
+ * tokens are cleared. Preserves the original early-return-when-no-token
+ * behavior and per-provider routing (Google revoke, GitHub token delete; Apple
+ * has no revoke path).
+ */
 export async function revokeToken(user: SessionUser): Promise<void> {
-  if (!user.accessToken) return;
   try {
+    await connectDB();
+    if (!isDBConnected()) return;
+
+    // Tokens are select:false, so they must be explicitly selected.
+    const stored = (await User.findOne({ providerId: user.id }).select('+oauthTokens').lean()) as {
+      oauthTokens?: { accessToken?: EncryptedTokenField | null };
+    } | null;
+
+    const enc = stored?.oauthTokens?.accessToken;
+    if (!enc || !enc.ciphertext || !enc.iv || !enc.authTag) return;
+
+    const accessToken = decryptToken({
+      ciphertext: enc.ciphertext,
+      iv: enc.iv,
+      authTag: enc.authTag,
+    });
+
     if (user.provider === 'google') {
-      await fetch(
-        `https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(user.accessToken)}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-      );
+      await fetch(`https://oauth2.googleapis.com/revoke?token=${encodeURIComponent(accessToken)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      });
     } else if (
       user.provider === 'github' &&
       process.env.GITHUB_CLIENT_ID &&
@@ -358,9 +413,12 @@ export async function revokeToken(user: SessionUser): Promise<void> {
           Accept: 'application/vnd.github+json',
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ access_token: user.accessToken }),
+        body: JSON.stringify({ access_token: accessToken }),
       });
     }
+
+    // Clear the stored tokens once we've attempted revocation.
+    await User.updateOne({ providerId: user.id }, { $unset: { oauthTokens: '' } });
   } catch (e) {
     serverCaptureException(e, user.id, { action: 'revokeToken', provider: user.provider });
   }
