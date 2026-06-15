@@ -52,6 +52,7 @@ import { RulerSettingsPanel } from './RulerSettingsPanel';
 import { useRulerTool } from './useRulerTool';
 import { RulerOverlay } from './RulerOverlay';
 import { useViewport, type Viewport } from './useViewport';
+import { MapDrawingLayer } from './MapDrawingLayer';
 import { TextSettingsPanel } from './TextSettingsPanel';
 import { DrawingSettingsPanel, type DrawShape } from './DrawingSettingsPanel';
 import { MonsterBatchDialog } from './MonsterBatchDialog';
@@ -1386,137 +1387,6 @@ export function ActiveMapStage({
   const drawingsVisible = isGM && showDrawings && !spellFxHidden;
   const textVisible = showText && !spellFxHidden;
 
-  // The selected drawing (pointer tool) + its DOM bounding box, for the
-  // selection outline + corner resize handle.
-  const selectedDrawing =
-    drawingsVisible && pointerActive && selectedDrawingId
-      ? (drawings.find((d) => d.id === selectedDrawingId) ?? null)
-      : null;
-  const selectionBox = selectedDrawing
-    ? (() => {
-        const b = drawingBBox(selectedDrawing);
-        return {
-          left: imageOffsetX + b.x * effectiveScale,
-          top: imageOffsetY + b.y * effectiveScale,
-          width: b.width * effectiveScale,
-          height: b.height * effectiveScale,
-        };
-      })()
-    : null;
-
-  // Render one drawing (committed or live preview) as an SVG element. Geometry
-  // is map-local; convert to DOM here at *effectiveScale.
-  const renderDrawing = (
-    d: {
-      id?: string;
-      kind: 'pencil' | 'rect' | 'ellipse';
-      color: string;
-      strokeWidth: number;
-      filled: boolean;
-      points: number[];
-      x: number;
-      y: number;
-      width: number;
-      height: number;
-      createdBy?: string;
-    },
-    opts: { interactive: boolean; isPreview?: boolean }
-  ) => {
-    const sw = Math.max(1, d.strokeWidth * effectiveScale);
-    const fill = d.filled ? d.color : 'none';
-    const stroke = d.filled ? 'none' : d.color;
-    const pointerEvents = opts.interactive ? (d.kind === 'pencil' ? 'stroke' : 'all') : 'none';
-    // Own/GM drawings can be dragged in the pointer tool → a move cursor.
-    const movable =
-      opts.interactive && (isGM || (currentUserId != null && d.createdBy === currentUserId));
-    const common = {
-      'data-testid': opts.isPreview ? undefined : 'map-drawing',
-      'data-drawing-id': d.id,
-      'data-drawing-kind': d.kind,
-      'data-filled': String(d.filled),
-      onPointerDown: opts.interactive
-        ? (e: ReactPointerEvent<SVGElement>) => {
-            if (d.id) beginDrawingMove(d.id, e);
-          }
-        : undefined,
-      style: { pointerEvents, cursor: movable ? 'move' : 'pointer' } as const,
-    };
-    if (d.kind === 'pencil') {
-      const pts: string[] = [];
-      for (let i = 0; i + 1 < d.points.length; i += 2) {
-        pts.push(
-          `${imageOffsetX + d.points[i]! * effectiveScale},${imageOffsetY + d.points[i + 1]! * effectiveScale}`
-        );
-      }
-      const points = pts.join(' ');
-      // A thin line is hard to grab, so when interactive we lay a wider,
-      // transparent hit-area polyline under the visible one and put the
-      // interaction there; the visible polyline carries the testid + data attrs.
-      const hitWidth = Math.max(sw, 16);
-      return (
-        <g key={d.id ?? 'preview'}>
-          {opts.interactive && (
-            <polyline
-              points={points}
-              fill="none"
-              stroke="transparent"
-              strokeWidth={hitWidth}
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              onPointerDown={common.onPointerDown}
-              style={{ pointerEvents: 'stroke', cursor: common.style.cursor }}
-            />
-          )}
-          <polyline
-            data-testid={common['data-testid']}
-            data-drawing-id={common['data-drawing-id']}
-            data-drawing-kind={common['data-drawing-kind']}
-            data-filled={common['data-filled']}
-            points={points}
-            fill="none"
-            stroke={d.color}
-            strokeWidth={sw}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{ pointerEvents: 'none' }}
-          />
-        </g>
-      );
-    }
-    const dx = imageOffsetX + d.x * effectiveScale;
-    const dy = imageOffsetY + d.y * effectiveScale;
-    const dw = d.width * effectiveScale;
-    const dh = d.height * effectiveScale;
-    if (d.kind === 'rect') {
-      return (
-        <rect
-          key={d.id ?? 'preview'}
-          {...common}
-          x={dx}
-          y={dy}
-          width={dw}
-          height={dh}
-          fill={fill}
-          stroke={stroke}
-          strokeWidth={sw}
-        />
-      );
-    }
-    return (
-      <ellipse
-        key={d.id ?? 'preview'}
-        {...common}
-        cx={dx + dw / 2}
-        cy={dy + dh / 2}
-        rx={dw / 2}
-        ry={dh / 2}
-        fill={fill}
-        stroke={stroke}
-        strokeWidth={sw}
-      />
-    );
-  };
-
   return (
     <div
       ref={containerRef}
@@ -1577,51 +1447,23 @@ export function ActiveMapStage({
         />
       )}
 
-      {/* Drawing layer (shared). One SVG overlay above the map/grid. The SVG
-          itself never captures events; individual shapes are interactive only
-          while the pointer tool is active (for selection), so tokens are never
-          blocked. New strokes are drawn on the stage background (drawing tool)
-          and erasing is hit-tested against geometry. */}
-      {drawingsVisible && (
-        <svg
-          className="pointer-events-none absolute inset-0 z-20 h-full w-full"
-          data-testid="map-drawing-layer"
-          aria-hidden="true"
-        >
-          {drawings.map((d) => renderDrawing(d, { interactive: pointerActive }))}
-          {drawPreview && renderDrawing(drawPreview, { interactive: false, isPreview: true })}
-        </svg>
-      )}
-
-      {/* Selected drawing — bounding box + corner resize handle (own/GM only). */}
-      {selectedDrawing && selectionBox && (
-        <>
-          <div
-            aria-hidden="true"
-            data-testid="drawing-selection"
-            className="pointer-events-none absolute z-30 rounded-sm outline outline-2 outline-offset-2 outline-[#60A5FA]"
-            style={{
-              left: selectionBox.left,
-              top: selectionBox.top,
-              width: selectionBox.width,
-              height: selectionBox.height,
-            }}
-          />
-          {canModifyDrawing(selectedDrawing) && (
-            <button
-              type="button"
-              aria-label="Resize drawing"
-              data-testid="drawing-resize-handle"
-              onPointerDown={(e) => beginDrawingResize(selectedDrawing, e)}
-              className="absolute z-40 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize rounded-sm border border-white bg-[#60A5FA]"
-              style={{
-                left: selectionBox.left + selectionBox.width,
-                top: selectionBox.top + selectionBox.height,
-              }}
-            />
-          )}
-        </>
-      )}
+      {/* Drawing layer (shared) — one SVG overlay above the map/grid, plus the
+          selected drawing's bounding box + corner resize handle. */}
+      <MapDrawingLayer
+        visible={drawingsVisible}
+        drawings={drawings}
+        preview={drawPreview}
+        pointerActive={pointerActive}
+        isGM={isGM}
+        currentUserId={currentUserId}
+        effectiveScale={effectiveScale}
+        imageOffsetX={imageOffsetX}
+        imageOffsetY={imageOffsetY}
+        selectedDrawingId={selectedDrawingId}
+        canModify={canModifyDrawing}
+        onBeginMove={beginDrawingMove}
+        onBeginResize={beginDrawingResize}
+      />
 
       {/* Tokens */}
       {visibleTokens.map((token) => (
