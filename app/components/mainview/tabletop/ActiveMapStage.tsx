@@ -53,6 +53,7 @@ import { useRulerTool } from './useRulerTool';
 import { RulerOverlay } from './RulerOverlay';
 import { useViewport, type Viewport } from './useViewport';
 import { MapDrawingLayer } from './MapDrawingLayer';
+import { MapTextLayer } from './MapTextLayer';
 import { TextSettingsPanel } from './TextSettingsPanel';
 import { DrawingSettingsPanel, type DrawShape } from './DrawingSettingsPanel';
 import { MonsterBatchDialog } from './MonsterBatchDialog';
@@ -1487,83 +1488,27 @@ export function ActiveMapStage({
         />
       ))}
 
-      {/* Map text layer (shared). Interactive (hover-highlight, drag to move,
-          double-click to edit, select + Delete) only while the text tool is
-          active AND the viewer may modify that text; otherwise display-only so
-          it never blocks panning/tokens. The text being edited is hidden behind
-          its editor. */}
-      {textVisible &&
-        texts.map((t) => {
-          if (textDraft?.editingId === t.id) return null;
-          const selected = selectedTextId === t.id;
-          const interactive = textActive && canModifyText(t);
-          return (
-            <button
-              key={t.id}
-              type="button"
-              data-testid="map-text"
-              data-text-id={t.id}
-              onPointerDown={(e) => {
-                if (!interactive) return;
-                beginTextDrag(t, e);
-              }}
-              onDoubleClick={(e) => {
-                if (!interactive) return;
-                e.stopPropagation();
-                e.preventDefault();
-                openTextEdit(t);
-              }}
-              className={[
-                'absolute z-30 m-0 max-w-[40vw] whitespace-pre-wrap break-words border-0 bg-transparent p-0 text-left font-sans font-semibold leading-tight',
-                interactive
-                  ? 'cursor-move outline-offset-2 hover:outline hover:outline-2 hover:outline-[#60A5FA]/70'
-                  : 'pointer-events-none',
-                selected ? 'rounded outline outline-2 outline-offset-2 outline-[#60A5FA]' : '',
-              ].join(' ')}
-              style={{
-                left: imageOffsetX + t.x * effectiveScale,
-                top: imageOffsetY + t.y * effectiveScale,
-                color: t.color,
-                fontSize: t.fontSize * effectiveScale,
-                textShadow:
-                  '0 1px 2px rgba(0,0,0,0.9), 0 -1px 2px rgba(0,0,0,0.9), 1px 0 2px rgba(0,0,0,0.9), -1px 0 2px rgba(0,0,0,0.9)',
-              }}
-            >
-              {t.text}
-            </button>
-          );
-        })}
-
-      {/* In-progress text editor (text tool). */}
-      {textActive && textDraft && (
-        <input
-          ref={textInputRef}
-          data-testid="map-text-input"
-          value={textDraftValue}
-          onChange={(e) => setTextDraftValue(e.target.value)}
-          onPointerDown={(e) => e.stopPropagation()}
-          onKeyDown={(e) => {
-            e.stopPropagation();
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              commitTextDraft(textDraftValue);
-            } else if (e.key === 'Escape') {
-              e.preventDefault();
-              cancelTextDraft();
-            }
-          }}
-          onBlur={(e) => commitTextDraft(e.currentTarget.value)}
-          placeholder="Type…"
-          className="absolute z-40 rounded border border-[#60A5FA] bg-black/70 px-1 font-sans font-semibold outline-none"
-          style={{
-            left: imageOffsetX + textDraft.x * effectiveScale,
-            top: imageOffsetY + textDraft.y * effectiveScale,
-            color: textColor,
-            fontSize: textFontSize * effectiveScale,
-            minWidth: 90,
-          }}
-        />
-      )}
+      {/* Map text layer (shared) — placed labels + the in-progress editor. */}
+      <MapTextLayer
+        visible={textVisible}
+        texts={texts}
+        textActive={textActive}
+        canModify={canModifyText}
+        selectedTextId={selectedTextId}
+        effectiveScale={effectiveScale}
+        imageOffsetX={imageOffsetX}
+        imageOffsetY={imageOffsetY}
+        onBeginDrag={beginTextDrag}
+        onOpenEdit={openTextEdit}
+        draft={textDraft}
+        draftValue={textDraftValue}
+        onDraftChange={setTextDraftValue}
+        onCommit={commitTextDraft}
+        onCancel={cancelTextDraft}
+        inputRef={textInputRef}
+        draftColor={textColor}
+        draftFontSize={textFontSize}
+      />
 
       {/* Measurement (ruler) overlay — polyline + endpoints + per-segment feet. */}
       {ruler.measurement && (
