@@ -24,5 +24,8 @@ export default defineConfig({
     command: 'npm run dev',
     url: 'http://localhost:3000',
     reuseExistingServer: !process.env.CI,
+    // The dev server's first cold route compile can exceed Playwright's default
+    // 60s webServer boot window in CI; give it longer so cold starts don't flake.
+    timeout: 180_000,
   },
 });

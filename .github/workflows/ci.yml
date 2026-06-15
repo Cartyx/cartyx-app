@@ -34,12 +34,9 @@ jobs:
         # for an emergency CVE fix, set SKIP_AGE_CHECK=1 in the workflow run
         # and document in the PR. STRICT_AGE_CHECK=1 also gates transitives.
         #
-        # `continue-on-error: true` during rollout — the existing lockfile
-        # was regenerated recently (#432) and has ~20 direct deps published
-        # in the last 10 days. They will age out by ~2026-06-11, after
-        # which this flag should be removed so the step becomes blocking.
-        # TODO(2026-06-12): drop `continue-on-error` once the lockfile ages.
-        continue-on-error: true
+        # Rollout `continue-on-error` removed 2026-06-15: the #432 lockfile
+        # regeneration has aged past the 10-day window, so this step is now
+        # blocking as intended.
         run: npm run check:deps-age
 
       - name: Type check
@@ -87,3 +84,82 @@ jobs:
           SESSION_SECRET: build-placeholder-secret-at-least-32-chars
           NODE_ENV: production
           BASE_URL: https://cartyx.io
+
+  e2e:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    needs: quality
+    # E2E is heavier than the unit suite (spins up Mongo + the dev server and
+    # drives a real browser), so we only run it on PRs — not on every branch
+    # push. The repo convention is PRs target `dev`/`main` (see the top-level
+    # `on:` block), so this still gates every change before it merges.
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    services:
+      # Ephemeral MongoDB for the run — no external/Atlas secret required.
+      # The suite refuses any URI matching /prod/i (see e2e/globalSetup.ts),
+      # and this DB is torn down with the job.
+      mongo:
+        image: mongo:8
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'db.runCommand({ ping: 1 })'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Reuse the same throwaway value pattern as the unit-test job; this is a
+      # test fixture, not a secret.
+      SESSION_SECRET: ci-test-secret-at-least-32-characters-long
+      MONGODB_URI: mongodb://localhost:27017
+      MONGODB_DB: cartyx_e2e
+      NODE_ENV: test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '25'
+          cache: 'npm'
+
+      - name: Set up Python (for the DB seed)
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Create Python venv for seed scripts
+        run: |
+          python -m venv scripts/.venv
+          scripts/.venv/bin/pip install -r scripts/requirements.txt
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Seed database
+        # globalSetup.ts looks up a GM user + seeded campaign/location/screen.
+        # seed-gm.cjs bootstraps the GM user, then dev:seed populates campaigns.
+        run: |
+          node scripts/seed-gm.cjs
+          npm run dev:seed
+
+      - name: Run Playwright tests
+        # Retries (2) and webServer timeout are configured in playwright.config.ts
+        # so a slow cold first-route compile of the dev server doesn't flake the run.
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
