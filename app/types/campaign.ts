@@ -38,5 +38,7 @@ export interface CampaignData {
   isOwner: boolean;
   isGM: boolean;
   isMember: boolean;
+  /** The database User._id of the viewer when they are a member; otherwise null. */
+  currentUserId: string | null;
   scheduleText: string;
 }

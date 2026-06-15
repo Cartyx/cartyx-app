@@ -87,6 +87,26 @@ export const INDEX_GOVERNANCE: Record<string, GovernanceEntry[]> = {
     { key: { isPublic: 1 }, severity: 'optional' },
     { key: { _fts: 'text', _ftsx: 1 }, severity: 'optional' },
   ],
+  Map: [
+    { key: { campaignId: 1, updatedAt: -1 }, severity: 'optional' },
+    { key: { campaignId: 1, locationId: 1 }, severity: 'optional' },
+    { key: { campaignId: 1, name: 1 }, severity: 'critical' },
+  ],
+  MapToken: [
+    { key: { mapId: 1 }, severity: 'optional' },
+    {
+      key: { mapId: 1, sourceCollection: 1, sourceDocumentId: 1, instanceNumber: 1 },
+      severity: 'critical',
+    },
+  ],
+  Monster: [
+    { key: { campaignId: 1, updatedAt: -1 }, severity: 'optional' },
+    { key: { campaignId: 1, name: 1 }, severity: 'optional' },
+    { key: { campaignId: 1, tags: 1 }, severity: 'optional' },
+    { key: { campaignId: 1, sessionId: 1 }, severity: 'optional' },
+    { key: { campaignId: 1, 'cr.value': 1 }, severity: 'optional' },
+    { key: { _fts: 'text', _ftsx: 1 }, severity: 'optional' },
+  ],
 };
 
 /**

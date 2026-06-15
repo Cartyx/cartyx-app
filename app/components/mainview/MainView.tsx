@@ -14,6 +14,11 @@ interface MainViewProps {
   className?: string;
   campaignId?: string;
   sessions?: Array<{ id: string; name: string; number: number; status: string }>;
+  /** Controlled active tool. When omitted, MainView manages it internally. */
+  activeTool?: ToolType;
+  onToolChange?: (tool: ToolType) => void;
+  /** Whether the viewer is a GM (gates GM-only toolbar tools). */
+  isGM?: boolean;
 }
 
 export function MainView({
@@ -23,8 +28,18 @@ export function MainView({
   className = '',
   campaignId,
   sessions,
+  activeTool: controlledTool,
+  onToolChange,
+  isGM = false,
 }: MainViewProps) {
-  const [activeTool, setActiveTool] = useState<ToolType>('pointer');
+  // Tool state is controlled only when BOTH props are supplied. If `activeTool`
+  // were treated as controlled without `onToolChange`, clicks would update
+  // internal state the render never reads, freezing the toolbar — so require
+  // both, otherwise fall back to fully-internal state.
+  const [internalTool, setInternalTool] = useState<ToolType>('pointer');
+  const isControlled = controlledTool !== undefined && onToolChange !== undefined;
+  const activeTool = isControlled ? controlledTool : internalTool;
+  const setActiveTool = isControlled ? onToolChange : setInternalTool;
   const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
   const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false);
   const [inspectorVisible, setInspectorVisible] = useState(true);
@@ -76,6 +91,7 @@ export function MainView({
               onToolChange={setActiveTool}
               collapsed={toolbarCollapsed}
               onToggleCollapse={() => setToolbarCollapsed((c) => !c)}
+              isGM={isGM}
             />
           </div>
         )}

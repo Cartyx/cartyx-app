@@ -241,6 +241,23 @@ const COLLECTION_REGISTRY: Record<string, CollectionFetcher> = {
         );
     },
   },
+  monster: {
+    async fetch(ids: string[], campaignId: string) {
+      // Monsters are GM-only; the GM-screens tab is itself GM-only, so the
+      // window title bar can surface the name (the window renders the full
+      // stat block via MonsterWindowWrapper, which fetches its own data).
+      const { Monster } = await import('../db/models/Monster');
+      return Monster.find({ _id: { $in: ids }, campaignId }, '_id name gmNotes')
+        .lean()
+        .then((docs) =>
+          docs.map((d) => ({
+            _id: d._id,
+            title: (d as { name?: string }).name,
+            content: (d as { gmNotes?: string }).gmNotes ?? '',
+          }))
+        ) as Promise<Array<{ _id: unknown; title?: string; content?: string }>>;
+    },
+  },
 };
 
 /**

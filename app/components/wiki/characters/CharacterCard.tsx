@@ -1,6 +1,7 @@
 import React from 'react';
 import { Globe, Lock, ExternalLink } from 'lucide-react';
 import type { CharacterListItem, PictureCrop } from '~/types/character';
+import { setTokenDragImage } from '~/utils/setTokenDragImage';
 
 function getCropStyle(crop: PictureCrop): React.CSSProperties {
   const centerX = (crop.x + crop.width / 2) * 100;
@@ -68,6 +69,11 @@ export function CharacterCard({ character, onClick }: CharacterCardProps) {
           })
         );
         e.dataTransfer.effectAllowed = 'copy';
+        setTokenDragImage(e, {
+          pictureUrl: character.picture,
+          initial: character.firstName,
+          color: gradFrom,
+        });
         e.currentTarget.style.opacity = '0.4';
       }}
       onDragEnd={(e) => {
@@ -95,6 +101,7 @@ export function CharacterCard({ character, onClick }: CharacterCardProps) {
           <img
             src={character.picture}
             alt={fullName}
+            loading="lazy"
             className="w-full h-full object-cover"
             style={character.pictureCrop ? getCropStyle(character.pictureCrop) : undefined}
           />

@@ -12,6 +12,7 @@ export const SUPPORTED_COLLECTIONS: [string, ...string[]] = [
   'rule',
   'player',
   'location',
+  'monster',
 ];
 
 // ---------------------------------------------------------------------------
