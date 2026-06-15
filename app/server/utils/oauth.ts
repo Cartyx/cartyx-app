@@ -401,10 +401,12 @@ interface EncryptedTokenField {
  *
  * The provider access token is no longer carried in the session cookie; it is
  * loaded (encrypted) from the User document, decrypted, and used to call the
- * provider's revoke/delete endpoint. After a successful attempt the stored
- * tokens are cleared. Preserves the original early-return-when-no-token
- * behavior and per-provider routing (Google revoke, GitHub token delete; Apple
- * has no revoke path).
+ * provider's revoke/delete endpoint. Revocation is best-effort: the stored
+ * tokens are cleared once the attempt is made (regardless of the provider's
+ * HTTP response), so a token the provider has already rejected can't linger
+ * and fail again on the next logout. Preserves the original
+ * early-return-when-no-token behavior and per-provider routing (Google revoke,
+ * GitHub token delete; Apple has no revoke path).
  */
 export async function revokeToken(user: SessionUser): Promise<void> {
   try {

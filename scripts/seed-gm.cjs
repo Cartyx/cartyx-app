@@ -40,7 +40,10 @@ async function seed() {
       // Needed by e2e/globalSetup.ts to mint the test session JWT.
       providerId: 'seed-gm-alabeau',
     },
-    { upsert: true, returnDocument: 'after' }
+    // `new: true` alongside `returnDocument: 'after'` matches the repo
+    // convention (and upsertUser) so the post-update doc is returned reliably
+    // across Mongoose versions — otherwise `gm` could be the pre-upsert null.
+    { upsert: true, returnDocument: 'after', new: true }
   );
   console.log('✅ GM seeded:', gm.email, '| role:', gm.role, '|', gm._id.toString());
   await mongoose.disconnect();
