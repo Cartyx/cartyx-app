@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import { FormInput } from '~/components/FormInput';
@@ -8,6 +8,7 @@ import { TagAutocompleteInput } from '~/components/shared/TagAutocompleteInput';
 import { useRace, useCreateRace, useUpdateRace, useDeleteRace } from '~/hooks/useRaces';
 import { useCampaign } from '~/hooks/useCampaigns';
 import { ShowOnTabletopButton } from '~/components/wiki/shared/ShowOnTabletopButton';
+import { useModalForm } from '~/hooks/useModalForm';
 
 interface RaceModalProps {
   isOpen: boolean;
@@ -35,38 +36,7 @@ export function RaceModal({ isOpen, onClose, campaignId, raceId }: RaceModalProp
   const [content, setContent] = useState('');
   const [tags, setTags] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
-  const [hasSubmitted, setHasSubmitted] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-
-  // Close on Escape key — only active when the modal is open
-  useEffect(() => {
-    if (!isOpen) return;
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    document.addEventListener('keydown', handleEscape);
-    return () => document.removeEventListener('keydown', handleEscape);
-  }, [isOpen, onClose]);
-
-  // Reset form when opening
-  useEffect(() => {
-    setTitle('');
-    setContent('');
-    setTags([]);
-    setError(null);
-    setFieldErrors({});
-    setHasSubmitted(false);
-    setShowDeleteConfirm(false);
-  }, [raceId, isOpen]);
-
-  // Populate form with existing race data when editing
-  useEffect(() => {
-    if (!isEdit || !existingRace) return;
-    setTitle(existingRace.title);
-    setContent(existingRace.content);
-    setTags(existingRace.tags);
-  }, [isEdit, existingRace]);
 
   const validate = useCallback((): FieldErrors => {
     const errors: FieldErrors = {};
@@ -75,15 +45,33 @@ export function RaceModal({ isOpen, onClose, campaignId, raceId }: RaceModalProp
     return errors;
   }, [title, content]);
 
+  const { fieldErrors, runValidation } = useModalForm({
+    isOpen,
+    onClose,
+    recordId: raceId,
+    isEdit,
+    record: existingRace,
+    reset: () => {
+      setTitle('');
+      setContent('');
+      setTags([]);
+      setError(null);
+      setShowDeleteConfirm(false);
+    },
+    populate: (race) => {
+      setTitle(race.title);
+      setContent(race.content);
+      setTags(race.tags);
+    },
+    validate,
+  });
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setHasSubmitted(true);
-    const errors = validate();
+    const errors = runValidation();
     if (Object.keys(errors).length > 0) {
-      setFieldErrors(errors);
       return;
     }
-    setFieldErrors({});
     setError(null);
 
     let success = false;
@@ -113,12 +101,6 @@ export function RaceModal({ isOpen, onClose, campaignId, raceId }: RaceModalProp
       setShowDeleteConfirm(false);
     }
   };
-
-  // Update field errors on change if user has already submitted
-  useEffect(() => {
-    if (!isOpen || !hasSubmitted) return;
-    setFieldErrors(validate());
-  }, [isOpen, hasSubmitted, validate]);
 
   if (!isOpen) return null;
 
