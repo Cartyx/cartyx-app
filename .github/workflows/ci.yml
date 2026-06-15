@@ -116,6 +116,11 @@ jobs:
       MONGODB_URI: mongodb://localhost:27017
       MONGODB_DB: cartyx_e2e
       NODE_ENV: test
+      # The dev server reads BASE_URL when building OAuth redirect URIs and for
+      # isOAuthConfigured(); point it at the Playwright dev-server origin so no
+      # code path throws on a missing BASE_URL even though e2e uses a pre-minted
+      # session cookie rather than the live OAuth flow.
+      BASE_URL: http://localhost:3000
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
