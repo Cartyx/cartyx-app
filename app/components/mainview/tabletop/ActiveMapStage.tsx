@@ -4,7 +4,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react';
@@ -54,6 +53,7 @@ import { TextSettingsPanel } from './TextSettingsPanel';
 import { DrawingSettingsPanel, type DrawShape } from './DrawingSettingsPanel';
 import { MonsterBatchDialog } from './MonsterBatchDialog';
 import { MapConfirmDialog } from './MapConfirmDialog';
+import { useMapDropTarget } from './useMapDropTarget';
 import { MAX_DRAWING_POINT_VALUES } from '~/types/schemas/mapDrawings';
 import {
   clamp,
@@ -1338,104 +1338,26 @@ export function ActiveMapStage({
   };
 
   // -------------------------------------------------------------------------
-  // Drag-and-drop from wiki lists → create a token
+  // Drag-and-drop from wiki lists → create a token (GM only)
   // -------------------------------------------------------------------------
 
-  const [isDragOverMap, setIsDragOverMap] = useState(false);
-  // Latest Shift state seen during a drag-over (see handleDragOver/handleDrop).
-  const dragShiftRef = useRef(false);
-  // Shift-drag of a monster → "place how many?" dialog.
-  const [batchPlacement, setBatchPlacement] = useState<{
-    sourceDocumentId: string;
-    name: string;
-  } | null>(null);
-
-  const handleBatchPlace = useCallback(
-    (count: number) => {
-      if (!isGM || !batchPlacement) return;
-      mutations.createBatch.mutate(
-        { sourceDocumentId: batchPlacement.sourceDocumentId, count },
-        {
-          onSuccess: (res) => {
-            for (const token of res.tokens) {
-              onBroadcast({ type: 'token:added', mapId: map.id, token });
-            }
-          },
-        }
-      );
-      setBatchPlacement(null);
-    },
-    [isGM, batchPlacement, mutations.createBatch, onBroadcast, map.id]
-  );
-
-  const handleDragOver = (e: ReactDragEvent<HTMLDivElement>) => {
-    if (!isGM) return;
-    if (!e.dataTransfer.types.includes('application/x-cartyx-document')) return;
-    e.preventDefault();
-    e.stopPropagation();
-    e.dataTransfer.dropEffect = 'copy';
-    // Track the Shift state from the continuously-firing dragover (the drop
-    // event's modifier flags are unreliable mid-DnD); read it on drop.
-    dragShiftRef.current = e.shiftKey;
-    setIsDragOverMap(true);
-  };
-
-  const handleDragLeave = (e: ReactDragEvent<HTMLDivElement>) => {
-    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
-    setIsDragOverMap(false);
-  };
-
-  const handleDrop = (e: ReactDragEvent<HTMLDivElement>) => {
-    setIsDragOverMap(false);
-    if (!isGM) return;
-    const raw = e.dataTransfer.getData('application/x-cartyx-document');
-    if (!raw) return;
-    let payload: { collection: string; documentId: string; title?: string };
-    try {
-      payload = JSON.parse(raw);
-    } catch {
-      return;
-    }
-    if (
-      payload.collection !== 'player' &&
-      payload.collection !== 'character' &&
-      payload.collection !== 'monster'
-    )
-      return;
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    // Shift-dragging a monster opens a "how many?" dialog and scatters that
-    // many instances randomly across the map. Shift is used (not Ctrl/Cmd)
-    // because macOS treats Control-drag as a secondary click, so its modifier
-    // never reaches the web drop event.
-    if (payload.collection === 'monster' && (dragShiftRef.current || e.shiftKey)) {
-      setBatchPlacement({ sourceDocumentId: payload.documentId, name: payload.title ?? 'monster' });
-      return;
-    }
-
-    const imageCoord = domToImage(e.clientX, e.clientY);
-    if (!imageCoord) return;
-    const x = clamp(imageCoord.x, 0, map.imageWidth);
-    const y = clamp(imageCoord.y, 0, map.imageHeight);
-
-    mutations.create.mutate(
-      {
-        sourceCollection: payload.collection as 'player' | 'character' | 'monster',
-        sourceDocumentId: payload.documentId,
-        x,
-        y,
-      },
-      {
-        onSuccess: (res) => {
-          if (!res.existed) {
-            onBroadcast({ type: 'token:added', mapId: map.id, token: res.token });
-          }
-        },
-      }
-    );
-  };
+  const {
+    isDragOverMap,
+    batchPlacement,
+    setBatchPlacement,
+    handleBatchPlace,
+    handleDragOver,
+    handleDragLeave,
+    handleDrop,
+  } = useMapDropTarget({
+    isGM,
+    mapId: map.id,
+    imageWidth: map.imageWidth,
+    imageHeight: map.imageHeight,
+    domToImage,
+    mutations,
+    onBroadcast,
+  });
 
   // -------------------------------------------------------------------------
   // Token actions (GM only) — handled inline by passing callbacks.
