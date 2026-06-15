@@ -72,25 +72,27 @@ describe('WikiPanel', () => {
     expect(screen.getByRole('button', { name: 'Characters' })).toBeInTheDocument();
   });
 
-  it('shows the six non-GM categories when viewer is not GM (no Monsters)', () => {
+  it('shows only the five player categories when not GM (no Maps, no Monsters)', () => {
     useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
     render(<WikiPanel />);
 
-    expect(screen.getAllByRole('button')).toHaveLength(6);
+    expect(screen.getAllByRole('button')).toHaveLength(5);
     expect(screen.getByRole('button', { name: 'Characters' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Players' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Races' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Rules' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Locations' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Maps' })).toBeInTheDocument();
+    // Maps + Monsters are GM-only.
+    expect(screen.queryByRole('button', { name: 'Maps' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Monsters' })).not.toBeInTheDocument();
   });
 
-  it('shows the Monsters category when viewer is GM', () => {
+  it('shows the GM-only Maps + Monsters categories when viewer is GM', () => {
     useCampaignMock.mockReturnValue({ campaign: { isGM: true } });
     render(<WikiPanel />);
 
     expect(screen.getAllByRole('button')).toHaveLength(7);
+    expect(screen.getByRole('button', { name: 'Maps' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Monsters' })).toBeInTheDocument();
   });
 
