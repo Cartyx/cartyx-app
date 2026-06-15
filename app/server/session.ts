@@ -88,3 +88,17 @@ export async function createPartyToken(
     .sign(getSecret());
   return token;
 }
+
+/**
+ * Short-lived, signed credential the server attaches when it POSTs a
+ * `map:active-changed` broadcast to the `tabletop-map` party. The party verifies
+ * it (scope `tabletop-broadcast`) before relaying, so the HTTP broadcast endpoint
+ * isn't an open, unauthenticated cross-campaign injection vector.
+ */
+export async function createPartyBroadcastToken(): Promise<string> {
+  return new SignJWT({ scope: 'tabletop-broadcast' })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setIssuedAt()
+    .setExpirationTime('5m')
+    .sign(getSecret());
+}

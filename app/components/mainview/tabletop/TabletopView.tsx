@@ -101,7 +101,7 @@ export function TabletopView({
   // Map party — keeps every connected client in sync with map/token/text/drawing
   // writes by applying inbound messages to the query cache. Returns `send` for
   // broadcasting this client's local changes.
-  const sendMapMessage = useTabletopMapSync(campaignId, getToken);
+  const sendMapMessage = useTabletopMapSync(campaignId, getToken, isGM);
 
   const [badgeScreenIds, setBadgeScreenIds] = useState<Set<string>>(new Set());
   const [_pings, setPings] = useState<PingData[]>([]);

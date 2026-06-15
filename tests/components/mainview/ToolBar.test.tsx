@@ -36,11 +36,14 @@ describe('ToolBar', () => {
     }
   });
 
-  it('hides GM-only tools (drawing) for a non-GM', () => {
+  it('hides GM-only tools (drawing, layer) for a non-GM', () => {
     renderToolBar({ isGM: false });
-    expect(screen.queryByTestId('tool-drawing')).not.toBeInTheDocument();
+    const gmOnlyTools: ToolType[] = ['drawing', 'layer'];
+    for (const tool of gmOnlyTools) {
+      expect(screen.queryByTestId(`tool-${tool}`)).not.toBeInTheDocument();
+    }
     // Non-GM tools remain available.
-    for (const tool of allTools.filter((t) => t !== 'drawing')) {
+    for (const tool of allTools.filter((t) => !gmOnlyTools.includes(t))) {
       expect(screen.getByTestId(`tool-${tool}`)).toBeInTheDocument();
     }
   });

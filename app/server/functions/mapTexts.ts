@@ -94,6 +94,8 @@ export const listMapTexts = createServerFn({ method: 'GET' })
 
       const docs = await MapText.find({ mapId: data.mapId, campaignId: data.campaignId })
         .sort({ createdAt: 1 })
+        // Bound the result set.
+        .limit(2000)
         .lean();
       return { texts: docs.map((d) => serializeText(d as TextDoc)) };
     } catch (e) {

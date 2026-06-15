@@ -157,6 +157,8 @@ export const listMapDrawings = createServerFn({ method: 'GET' })
 
       const docs = await MapDrawing.find({ mapId: data.mapId, campaignId: data.campaignId })
         .sort({ createdAt: 1 })
+        // Bound the result set — freehand drawing can accumulate many strokes.
+        .limit(5000)
         .lean();
       return { drawings: docs.map((d) => serializeDrawing(d as DrawingDoc)) };
     } catch (e) {

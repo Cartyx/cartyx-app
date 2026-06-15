@@ -39,7 +39,10 @@ const tools: { id: ToolType; icon: React.ElementType; label: string; gmOnly?: bo
   { id: 'ruler', icon: Ruler, label: 'Ruler' },
   { id: 'dice', icon: Dices, label: 'Dice' },
   { id: 'stamp', icon: Stamp, label: 'Stamp' },
-  { id: 'layer', icon: Layers, label: 'Layer' },
+  // The Layers panel is GM-only (only rendered for the GM in ActiveMapStage), so
+  // hide the tool from players rather than leaving them a no-op button that
+  // still steals focus from the Pointer tool.
+  { id: 'layer', icon: Layers, label: 'Layer', gmOnly: true },
 ];
 
 export function ToolBar({

@@ -250,7 +250,8 @@ export const listMapTokens = createServerFn({ method: 'GET' })
 
       const filter: Record<string, unknown> = { mapId: data.mapId };
       if (!member.isGM) filter.hiddenFromPlayers = { $ne: true };
-      const docs = await MapToken.find(filter).sort({ zIndex: 1, createdAt: 1 }).lean();
+      // Bound the result set; batch placement can add many tokens per map.
+      const docs = await MapToken.find(filter).sort({ zIndex: 1, createdAt: 1 }).limit(2000).lean();
       return { tokens: docs.map((d) => serializeToken(d as TokenDoc)) };
     } catch (e) {
       serverCaptureException(e, sessionUserId, {

@@ -3,6 +3,7 @@ import usePartySocket from 'partysocket/react';
 import type { MapTokenData } from '~/types/mapToken';
 import type { MapTextData } from '~/types/mapText';
 import type { MapDrawingData } from '~/types/mapDrawing';
+import { parseTabletopMapMessage } from '~/types/schemas/tabletopMessage';
 
 const PARTYKIT_HOST = import.meta.env.VITE_PUBLIC_PARTYKIT_HOST ?? 'localhost:1999';
 
@@ -69,12 +70,20 @@ export function useTabletopMapParty(
   onMessageRef.current = onMessage;
 
   const stableOnMessage = useCallback((event: MessageEvent) => {
+    let raw: unknown;
     try {
-      const data = JSON.parse(event.data) as TabletopMapMessage;
-      onMessageRef.current(data);
+      raw = JSON.parse(event.data);
     } catch (err) {
       console.error('[TabletopMapParty] Failed to parse message', err);
+      return;
     }
+    // Peers can put arbitrary data on the socket — validate before dispatching.
+    const msg = parseTabletopMapMessage(raw);
+    if (!msg) {
+      console.warn('[TabletopMapParty] Dropped invalid message', raw);
+      return;
+    }
+    onMessageRef.current(msg);
   }, []);
 
   const roomId = campaignId ? `tabletop-map-${campaignId}` : '__disabled__';

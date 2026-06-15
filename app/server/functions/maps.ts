@@ -116,9 +116,14 @@ async function broadcastActiveMapChanged(
   // Mirrors `useTabletopMapParty`: party `tabletop-map`, room `tabletop-map-<campaignId>`.
   const url = `${protocol}://${host}/parties/tabletop-map/tabletop-map-${campaignId}`;
   try {
+    const { createPartyBroadcastToken } = await import('../session');
+    const broadcastToken = await createPartyBroadcastToken();
     await fetch(url, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${broadcastToken}`,
+      },
       body: JSON.stringify({ type: 'map:active-changed', mapId, screenId }),
     });
   } catch {
@@ -170,6 +175,8 @@ export const listMaps = createServerFn({ method: 'GET' })
 
       const docs = await MapModel.find({ campaignId: data.campaignId })
         .sort({ updatedAt: -1 })
+        // Bound the result set — a campaign's map library is small in practice.
+        .limit(500)
         .lean();
 
       return { maps: docs.map((d) => serializeMapListItem(d as MapDoc)) };
@@ -349,8 +356,8 @@ export const updateMap = createServerFn({ method: 'POST' })
   });
 
 // ---------------------------------------------------------------------------
-// deleteMap (GM only) — clears Campaign.activeMapId if it pointed here,
-// best-effort R2 object delete.
+// deleteMap (GM only) — clears the map from any tab (TabletopScreen) that had
+// it active, best-effort R2 object delete.
 // ---------------------------------------------------------------------------
 
 export const deleteMap = createServerFn({ method: 'POST' })
@@ -418,7 +425,7 @@ export const deleteMap = createServerFn({ method: 'POST' })
   });
 
 // ---------------------------------------------------------------------------
-// setActiveMap (GM only) — sets Campaign.activeMapId. Pass null to clear.
+// setActiveMap (GM only) — sets the per-tab TabletopScreen.activeMapId. Pass null to clear.
 // ---------------------------------------------------------------------------
 
 export const setActiveMap = createServerFn({ method: 'POST' })

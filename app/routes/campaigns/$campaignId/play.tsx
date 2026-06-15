@@ -31,8 +31,24 @@ const getTabletopPartyTokenFn = createServerFn({ method: 'GET' })
     await connectDB();
     if (!isDBConnected()) return '';
 
+    // Mint the token with the caller's campaign role so the tabletop-map party
+    // can enforce GM-only relays (drawings, token create/update/delete). A
+    // non-member resolves to 'player' and is still room-bound in onBeforeConnect.
+    const { User } = await import('~/server/db/models/User');
+    const { Campaign } = await import('~/server/db/models/Campaign');
+    const dbUser = await User.findOne({ providerId: user.id });
+    const campaign = dbUser ? await Campaign.findById(data.campaignId) : null;
+    const userId = dbUser ? String(dbUser._id) : '';
+    const isGM =
+      !!campaign &&
+      !!userId &&
+      (String(campaign.gameMasterId) === userId ||
+        (campaign.members ?? []).some(
+          (m: { userId: unknown; role?: string }) => String(m.userId) === userId && m.role === 'gm'
+        ));
+
     const { createPartyToken } = await import('~/server/session');
-    return createPartyToken(user.id, data.campaignId, 'tabletop');
+    return createPartyToken(user.id, data.campaignId, isGM ? 'gm' : 'player');
   });
 
 export const playSearchSchema = z.object({

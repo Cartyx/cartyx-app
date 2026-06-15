@@ -10,11 +10,8 @@ const campaignSchema = new mongoose.Schema({
   maxPlayers: { type: Number, default: 4 },
   inviteCode: { type: String, unique: true, sparse: true },
   status: { type: String, default: 'active' },
-  activeMapId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Map',
-    default: null,
-  },
+  // NOTE: the active map is per-tab (TabletopScreen.activeMapId), not per
+  // campaign. There is intentionally no campaign-level activeMapId.
   members: [
     {
       userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

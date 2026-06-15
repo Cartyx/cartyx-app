@@ -28,9 +28,26 @@ import {
  * broadcasting local changes. Extracted from TabletopView so the realtime
  * inbound reducer lives next to the map cache helpers it uses.
  */
-export function useTabletopMapSync(campaignId: string, getToken: () => Promise<string>) {
+export function useTabletopMapSync(
+  campaignId: string,
+  getToken: () => Promise<string>,
+  isGM: boolean
+) {
   const queryClient = useQueryClient();
   const { send } = useTabletopMapParty(campaignId, getToken, (msg) => {
+    // Defense-in-depth against GM-only data reaching player clients: drawings are
+    // a GM-only feature and hidden tokens must never land in a player's cache
+    // (readable via devtools even if not rendered). The party already gates
+    // these by sender role; this drops them on the receiving side too.
+    if (!isGM) {
+      if (msg.type.startsWith('drawing:')) return;
+      if (
+        (msg.type === 'token:added' || msg.type === 'token:updated') &&
+        msg.token.hiddenFromPlayers
+      ) {
+        return;
+      }
+    }
     if (msg.type === 'map:active-changed') {
       // Invalidate every tab's active-map query (cheap; only the visible tab refetches).
       queryClient.invalidateQueries({ queryKey: queryKeys.maps.activeAll(campaignId) });

@@ -21,6 +21,7 @@ import type { MapData } from '~/types/map';
 import type { MapTokenData } from '~/types/mapToken';
 import type { MapTextData } from '~/types/mapText';
 import type { MapDrawingData } from '~/types/mapDrawing';
+import { queryKeys } from '~/utils/queryKeys';
 import { useMapTokens, useMapTokenMutations, applyTokenMoveToCache } from '~/hooks/useMapTokens';
 import {
   useMapTexts,
@@ -301,12 +302,11 @@ export function ActiveMapStage({
   );
 
   // --- Drawing tool -------------------------------------------------------
-  // A player may modify (resize/delete) only their own drawing; a GM may modify
-  // anyone's. The server enforces this; the client mirrors it for affordances.
-  const canModifyDrawing = useCallback(
-    (d: MapDrawingData) => isGM || (currentUserId != null && d.createdBy === currentUserId),
-    [isGM, currentUserId]
-  );
+  // Drawings (Spell FX / Drawing layer) are a GM-only feature: the drawing tool
+  // is hidden from players, the server returns no drawings to non-GMs, and every
+  // drawing mutation is GM-only. So only a GM may modify any drawing. Kept as a
+  // per-drawing predicate to match the MapDrawingLayer `canModify` prop shape.
+  const canModifyDrawing = useCallback((_d: MapDrawingData) => isGM, [isGM]);
 
   // Clear the drawing preview + selection when the drawing tool is deselected.
   useEffect(() => {
@@ -357,8 +357,8 @@ export function ActiveMapStage({
     setDrawingsPendingClear(false);
   }, [isGM, qc, campaignId, map.id, drawingMutations.clear, onBroadcast]);
 
-  // Keyboard: Delete/Backspace removes the selected drawing (permission-gated);
-  // Esc clears the selection. Not GM-gated — players can delete their own.
+  // Keyboard: Delete/Backspace removes the selected drawing (GM-only, gated by
+  // canModifyDrawing); Esc clears the selection.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tgt = e.target as HTMLElement | null;
@@ -700,20 +700,26 @@ export function ActiveMapStage({
       const items = group.length > 0 ? group : [token];
       const starts = items.map((t) => ({ id: t.id, startX: t.x, startY: t.y }));
 
+      // Clamp by each token's footprint edges (center ± half its pixel size), not
+      // its center, so large multi-square tokens can't be dragged partially off
+      // the image. token.x/y are image-pixel centers; size = sizeSquares × pps.
+      const pps = Math.max(1, map.scale.pixelsPerSquare);
+      const half = (t: MapTokenData) => (Math.max(1, t.sizeSquares) * pps) / 2;
+
       dragRef.current = {
         mode: 'token',
         tokens: starts,
         startClientX: e.clientX,
         startClientY: e.clientY,
-        minX: Math.min(...starts.map((s) => s.startX)),
-        minY: Math.min(...starts.map((s) => s.startY)),
-        maxX: Math.max(...starts.map((s) => s.startX)),
-        maxY: Math.max(...starts.map((s) => s.startY)),
+        minX: Math.min(...items.map((t) => t.x - half(t))),
+        minY: Math.min(...items.map((t) => t.y - half(t))),
+        maxX: Math.max(...items.map((t) => t.x + half(t))),
+        maxY: Math.max(...items.map((t) => t.y + half(t))),
         lastBroadcastAt: 0,
       };
       setDragMode('token');
     },
-    [isGM, selectedTokenIds, tokens]
+    [isGM, selectedTokenIds, tokens, map.scale.pixelsPerSquare]
   );
 
   // Begin dragging a text (text tool, own/GM only). A press that doesn't move
@@ -1106,18 +1112,35 @@ export function ActiveMapStage({
       for (const t of d.tokens) {
         const nx = t.startX + cdx;
         const ny = t.startY + cdy;
+        const { startX, startY, id } = t;
         mutations.move.mutate(
-          { tokenId: t.id, x: nx, y: ny },
+          { tokenId: id, x: nx, y: ny },
           {
             onSuccess: () => {
               onBroadcast({
                 type: 'token:moved',
                 mapId: map.id,
-                tokenId: t.id,
+                tokenId: id,
                 x: nx,
                 y: ny,
                 final: true,
               });
+            },
+            onError: () => {
+              // The move didn't persist. Peers may have received interim
+              // (non-final) positions during the drag, so revert them and the
+              // local cache to the last-known-good (pre-drag) position rather
+              // than leaving a ghost, then refetch the authoritative state.
+              applyTokenMoveToCache(qc, campaignId, map.id, id, startX, startY);
+              onBroadcast({
+                type: 'token:moved',
+                mapId: map.id,
+                tokenId: id,
+                x: startX,
+                y: startY,
+                final: true,
+              });
+              qc.invalidateQueries({ queryKey: queryKeys.mapTokens.list(campaignId, map.id) });
             },
           }
         );

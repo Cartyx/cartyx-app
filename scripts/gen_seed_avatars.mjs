@@ -53,6 +53,20 @@ function avatarRelPath(kind, name) {
 }
 
 /**
+ * Whether it's safe to repoint a document's `picture` at the generated seed
+ * avatar. Only repoint placeholders we own — an empty value, an existing
+ * seed-avatar path, or the old DiceBear CDN URL the seed used to set. A custom
+ * uploaded picture (anything else) is left untouched so re-running this dev
+ * script never destroys real data.
+ */
+function isReplaceablePicture(picture) {
+  if (picture == null || picture === '') return true;
+  if (typeof picture !== 'string') return false;
+  if (picture.startsWith('/uploads/seed-avatars/')) return true;
+  return /(?:api\.)?dicebear\.com/i.test(picture);
+}
+
+/**
  * GitHub-style identicon: a 5×5 grid whose left three columns are mirrored to
  * the right, filled from the name hash, on a dark-tinted background. The hue is
  * derived from the hash so every entity is visually distinct but stable.
@@ -96,6 +110,7 @@ async function processCollection(db, collection, kind, nameOf) {
   let generated = 0;
   let reused = 0;
   let repointed = 0;
+  let skipped = 0;
   const cursor = db
     .collection(collection)
     .find({}, { projection: { name: 1, firstName: 1, lastName: 1, picture: 1 } });
@@ -112,13 +127,18 @@ async function processCollection(db, collection, kind, nameOf) {
       generated++;
     }
 
-    if (doc.picture !== rel) {
+    if (doc.picture === rel) {
+      // Already points at this seed avatar — nothing to do.
+    } else if (isReplaceablePicture(doc.picture)) {
       await db.collection(collection).updateOne({ _id: doc._id }, { $set: { picture: rel } });
       repointed++;
+    } else {
+      // Custom/uploaded picture — never overwrite real data.
+      skipped++;
     }
   }
   console.log(
-    `${collection}: ${generated} PNGs generated, ${reused} reused, ${repointed} documents repointed to local avatars`
+    `${collection}: ${generated} PNGs generated, ${reused} reused, ${repointed} repointed, ${skipped} custom pictures preserved`
   );
 }
 
