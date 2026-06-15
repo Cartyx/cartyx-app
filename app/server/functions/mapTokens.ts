@@ -248,6 +248,12 @@ export const listMapTokens = createServerFn({ method: 'GET' })
       const member = await requireCampaignMember(data.campaignId);
       sessionUserId = member.sessionUserId;
 
+      // Campaign membership alone does not prove the requested map belongs to
+      // this campaign. Scope the map by campaignId (like the mutating siblings)
+      // so a member of one campaign can't read tokens of another's maps.
+      const map = await MapModel.findOne({ _id: data.mapId, campaignId: data.campaignId }).lean();
+      if (!map) throw new Error('Map not found');
+
       const filter: Record<string, unknown> = { mapId: data.mapId };
       if (!member.isGM) filter.hiddenFromPlayers = { $ne: true };
       // Bound the result set; batch placement can add many tokens per map.
