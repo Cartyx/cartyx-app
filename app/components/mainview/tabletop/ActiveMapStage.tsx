@@ -684,10 +684,28 @@ export function ActiveMapStage({
         bh: number;
         /** Original pencil points, for proportional scaling. */
         startPoints: number[];
+      }
+    | {
+        mode: 'move';
+        drawingId: string;
+        kind: 'pencil' | 'rect' | 'ellipse';
+        startClientX: number;
+        startClientY: number;
+        /** Original geometry, translated by the drag delta. */
+        startPoints: number[];
+        startX: number;
+        startY: number;
+        /** Original bounding box (map-local pixels), for in-bounds clamping. */
+        bx: number;
+        by: number;
+        bw: number;
+        bh: number;
+        lastBroadcastAt: number;
+        moved: boolean;
       };
   const dragRef = useRef<DragState>({ mode: 'idle' });
   const [dragMode, setDragMode] = useState<
-    'idle' | 'pan' | 'token' | 'text' | 'panel' | 'draw' | 'erase' | 'resize'
+    'idle' | 'pan' | 'token' | 'text' | 'panel' | 'draw' | 'erase' | 'resize' | 'move'
   >('idle');
 
   const onPanPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -875,6 +893,42 @@ export function ActiveMapStage({
       setDragMode('resize');
     },
     [canModifyDrawing]
+  );
+
+  // Pointer-down on a drawing (pointer tool): always selects it; if the viewer
+  // may modify it, also primes a move. A press that doesn't move past a small
+  // threshold stays a plain selection (see onPointerUp).
+  const beginDrawingMove = useCallback(
+    (drawingId: string, e: ReactPointerEvent<SVGElement>) => {
+      if (e.button !== 0) return;
+      const dr = drawings.find((x) => x.id === drawingId);
+      if (!dr) return;
+      e.stopPropagation();
+      clearSelection();
+      setSelectedDrawingId(drawingId);
+      // Selectable by anyone, but only own/GM can move it.
+      if (!canModifyDrawing(dr)) return;
+      const bbox = drawingBBox(dr);
+      (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+      dragRef.current = {
+        mode: 'move',
+        drawingId,
+        kind: dr.kind,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        startPoints: dr.kind === 'pencil' ? [...dr.points] : [],
+        startX: dr.x,
+        startY: dr.y,
+        bx: bbox.x,
+        by: bbox.y,
+        bw: bbox.width,
+        bh: bbox.height,
+        lastBroadcastAt: 0,
+        moved: false,
+      };
+      setDragMode('move');
+    },
+    [drawings, canModifyDrawing, clearSelection]
   );
 
   // Clamp a panel position so the whole panel stays inside the workspace,
@@ -1070,6 +1124,22 @@ export function ActiveMapStage({
         width,
         height,
       });
+    } else if (d.mode === 'move') {
+      const existing = drawings.find((x) => x.id === d.drawingId);
+      if (!existing) return;
+      const dxImage = (e.clientX - d.startClientX) / effectiveScale;
+      const dyImage = (e.clientY - d.startClientY) / effectiveScale;
+      if (Math.abs(dxImage) > 1 || Math.abs(dyImage) > 1) d.moved = true;
+      const offX = clamp(dxImage, -d.bx, map.imageWidth - d.bw - d.bx);
+      const offY = clamp(dyImage, -d.by, map.imageHeight - d.bh - d.by);
+      const geom = movedGeometry(d, offX, offY);
+      const moved = { ...existing, ...geom };
+      applyDrawingUpdateToCache(qc, campaignId, map.id, moved);
+      const now = Date.now();
+      if (now - d.lastBroadcastAt >= MOVE_BROADCAST_INTERVAL_MS) {
+        d.lastBroadcastAt = now;
+        onBroadcast({ type: 'drawing:updated', mapId: map.id, drawing: moved });
+      }
     }
   };
 
@@ -1184,6 +1254,27 @@ export function ActiveMapStage({
           onBroadcast({ type: 'drawing:updated', mapId: map.id, drawing: res.drawing });
         },
       });
+    } else if (d.mode === 'move') {
+      // A press that never moved is just a selection — nothing to persist.
+      if (d.moved) {
+        const dxImage = (e.clientX - d.startClientX) / effectiveScale;
+        const dyImage = (e.clientY - d.startClientY) / effectiveScale;
+        const offX = clamp(dxImage, -d.bx, map.imageWidth - d.bw - d.bx);
+        const offY = clamp(dyImage, -d.by, map.imageHeight - d.bh - d.by);
+        const geom = movedGeometry(d, offX, offY);
+        const existing = drawings.find((x) => x.id === d.drawingId);
+        if (existing) applyDrawingUpdateToCache(qc, campaignId, map.id, { ...existing, ...geom });
+        const update =
+          d.kind === 'pencil'
+            ? { drawingId: d.drawingId, points: geom.points }
+            : { drawingId: d.drawingId, x: geom.x, y: geom.y };
+        drawingMutations.update.mutate(update, {
+          onSuccess: (res) => {
+            applyDrawingUpdateToCache(qc, campaignId, map.id, res.drawing);
+            onBroadcast({ type: 'drawing:updated', mapId: map.id, drawing: res.drawing });
+          },
+        });
+      }
     }
     dragRef.current = { mode: 'idle' };
     setDragMode('idle');
@@ -1535,6 +1626,7 @@ export function ActiveMapStage({
       y: number;
       width: number;
       height: number;
+      createdBy?: string;
     },
     opts: { interactive: boolean; isPreview?: boolean }
   ) => {
@@ -1542,6 +1634,9 @@ export function ActiveMapStage({
     const fill = d.filled ? d.color : 'none';
     const stroke = d.filled ? 'none' : d.color;
     const pointerEvents = opts.interactive ? (d.kind === 'pencil' ? 'stroke' : 'all') : 'none';
+    // Own/GM drawings can be dragged in the pointer tool → a move cursor.
+    const movable =
+      opts.interactive && (isGM || (currentUserId != null && d.createdBy === currentUserId));
     const common = {
       'data-testid': opts.isPreview ? undefined : 'map-drawing',
       'data-drawing-id': d.id,
@@ -1549,11 +1644,10 @@ export function ActiveMapStage({
       'data-filled': String(d.filled),
       onPointerDown: opts.interactive
         ? (e: ReactPointerEvent<SVGElement>) => {
-            e.stopPropagation();
-            if (d.id) setSelectedDrawingId(d.id);
+            if (d.id) beginDrawingMove(d.id, e);
           }
         : undefined,
-      style: { pointerEvents } as const,
+      style: { pointerEvents, cursor: movable ? 'move' : 'pointer' } as const,
     };
     if (d.kind === 'pencil') {
       const pts: string[] = [];
@@ -1562,17 +1656,39 @@ export function ActiveMapStage({
           `${imageOffsetX + d.points[i]! * effectiveScale},${imageOffsetY + d.points[i + 1]! * effectiveScale}`
         );
       }
+      const points = pts.join(' ');
+      // A thin line is hard to grab, so when interactive we lay a wider,
+      // transparent hit-area polyline under the visible one and put the
+      // interaction there; the visible polyline carries the testid + data attrs.
+      const hitWidth = Math.max(sw, 16);
       return (
-        <polyline
-          key={d.id ?? 'preview'}
-          {...common}
-          points={pts.join(' ')}
-          fill="none"
-          stroke={d.color}
-          strokeWidth={sw}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        />
+        <g key={d.id ?? 'preview'}>
+          {opts.interactive && (
+            <polyline
+              points={points}
+              fill="none"
+              stroke="transparent"
+              strokeWidth={hitWidth}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              onPointerDown={common.onPointerDown}
+              style={{ pointerEvents: 'stroke', cursor: common.style.cursor }}
+            />
+          )}
+          <polyline
+            data-testid={common['data-testid']}
+            data-drawing-id={common['data-drawing-id']}
+            data-drawing-kind={common['data-drawing-kind']}
+            data-filled={common['data-filled']}
+            points={points}
+            fill="none"
+            stroke={d.color}
+            strokeWidth={sw}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ pointerEvents: 'none' }}
+          />
+        </g>
       );
     }
     const dx = imageOffsetX + d.x * effectiveScale;
@@ -2337,6 +2453,26 @@ function resizedGeometry(
     return { points, x: 0, y: 0, width: 0, height: 0 };
   }
   return { points: [], x: d.bx, y: d.by, width: newW, height: newH };
+}
+
+/** New geometry while moving a drawing by (offX, offY) map-local pixels. */
+function movedGeometry(
+  d: {
+    kind: 'pencil' | 'rect' | 'ellipse';
+    startPoints: number[];
+    startX: number;
+    startY: number;
+    bw: number;
+    bh: number;
+  },
+  offX: number,
+  offY: number
+): { points: number[]; x: number; y: number; width: number; height: number } {
+  if (d.kind === 'pencil') {
+    const points = d.startPoints.map((v, i) => (i % 2 === 0 ? v + offX : v + offY));
+    return { points, x: 0, y: 0, width: 0, height: 0 };
+  }
+  return { points: [], x: d.startX + offX, y: d.startY + offY, width: d.bw, height: d.bh };
 }
 
 const BATCH_MIN = 1;

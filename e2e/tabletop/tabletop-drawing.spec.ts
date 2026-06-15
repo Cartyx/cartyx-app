@@ -430,6 +430,99 @@ test('the pointer tool selects a shape; the handle resizes it and Delete removes
   await expect.poll(() => countDrawings()).toBe(0);
 });
 
+test('the pointer tool can drag a selected shape to a new spot', async ({ page }) => {
+  await gotoTabletop(page);
+  await selectDrawingTool(page);
+  await page.getByTestId('drawing-settings-panel').getByTestId('draw-shape-square').click();
+  await dragPath(page, [
+    [0.35, 0.35],
+    [0.5, 0.5],
+  ]);
+  await expect.poll(() => countDrawings({ kind: 'rect' })).toBe(1);
+
+  const geom = async () =>
+    (await drawings().findOne({ mapId: new ObjectId(provisioned.mapId), kind: 'rect' })) as {
+      x?: number;
+      y?: number;
+      width?: number;
+      height?: number;
+    } | null;
+  const before = await geom();
+  const x0 = before?.x ?? 0;
+  const y0 = before?.y ?? 0;
+  const w0 = before?.width ?? 0;
+  const h0 = before?.height ?? 0;
+  expect(w0).toBeGreaterThan(0);
+
+  // Pointer tool: drag the shape itself (not a handle) to a new spot.
+  await page.getByTestId('tool-pointer').click();
+  const rect = page.getByTestId('map-drawing');
+  await expect(rect).toBeVisible();
+  const b = (await rect.boundingBox())!;
+  const cx = b.x + b.width / 2;
+  const cy = b.y + b.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 180, cy + 130, { steps: 10 });
+  await page.mouse.up();
+
+  // It is selected and visibly moved…
+  await expect(page.getByTestId('drawing-selection')).toBeVisible();
+  await expect.poll(async () => (await rect.boundingBox())?.x ?? b.x).toBeGreaterThan(b.x + 40);
+
+  // …the new position persisted, and the size is unchanged.
+  await expect.poll(async () => (await geom())?.x ?? x0).toBeGreaterThan(x0 + 1);
+  const after = await geom();
+  expect(after?.y ?? y0).toBeGreaterThan(y0 + 1);
+  expect(Math.round(after?.width ?? 0)).toBe(Math.round(w0));
+  expect(Math.round(after?.height ?? 0)).toBe(Math.round(h0));
+});
+
+test('a GM can drag a pencil stroke to a new spot', async ({ page }) => {
+  await gotoTabletop(page);
+  await selectDrawingTool(page);
+  await dragPath(page, [
+    [0.4, 0.4],
+    [0.5, 0.5],
+    [0.6, 0.45],
+  ]);
+  await expect.poll(() => countDrawings({ kind: 'pencil' })).toBe(1);
+
+  const pencilPoints = async () => {
+    const doc = await drawings().findOne({
+      mapId: new ObjectId(provisioned.mapId),
+      kind: 'pencil',
+    });
+    return (doc as { points?: number[] } | null)?.points ?? [];
+  };
+  const pts = await pencilPoints();
+  const before = pts[0] ?? 0;
+
+  // Grab the stroke at a point guaranteed to be on the line (the midpoint of its
+  // first segment), mapped from map-local pixels to DOM the same way the stage
+  // renders it (fit-scale, centred, zoom 1). A thin line only responds where it
+  // is actually drawn, so bounding-box centre is unreliable.
+  await page.getByTestId('tool-pointer').click();
+  const box = await stageBox(page);
+  const fit = Math.min(box.width / 1024, box.height / 1024);
+  const offX = box.x + (box.width - 1024 * fit) / 2;
+  const offY = box.y + (box.height - 1024 * fit) / 2;
+  const mx = (pts[0]! + pts[2]!) / 2;
+  const my = (pts[1]! + pts[3]!) / 2;
+  const gx = offX + mx * fit;
+  const gy = offY + my * fit;
+  // Ensure the committed stroke is rendered before grabbing it (a miss would
+  // start a pan instead of a move).
+  await expect(page.getByTestId('map-drawing')).toHaveCount(1);
+  await page.mouse.move(gx, gy);
+  await page.mouse.down();
+  await page.mouse.move(gx + 150, gy + 90, { steps: 10 });
+  await page.mouse.up();
+
+  await expect(page.getByTestId('drawing-selection')).toBeVisible();
+  await expect.poll(async () => (await pencilPoints())[0] ?? before).toBeGreaterThan(before + 1);
+});
+
 test("a GM can delete another user's drawing", async ({ page }) => {
   const now = new Date();
   await drawings().insertOne({
