@@ -268,3 +268,23 @@ test('dragging an unselected token moves only that token', async ({ page }) => {
   expect(Math.abs((afterB.x ?? 0) - (beforeB.x ?? 0))).toBeLessThan(2);
   expect(Math.abs((afterB.y ?? 0) - (beforeB.y ?? 0))).toBeLessThan(2);
 });
+
+test('a GM removes a selected token via the confirm dialog', async ({ page }) => {
+  const aId = await seedToken(400, 400, 'Doomed');
+
+  await gotoTabletop(page);
+  const a = tokenLocator(page, aId);
+  await expect(a).toBeVisible({ timeout: 20000 });
+
+  // Select, press Delete → a confirm dialog appears (GM-only token removal).
+  await a.click();
+  await page.keyboard.press('Delete');
+  const dialog = page.getByRole('alertdialog');
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText('Remove token?');
+
+  // Confirm → the token is gone from the DOM and the DB.
+  await dialog.getByRole('button', { name: 'Remove' }).click();
+  await expect(a).toHaveCount(0);
+  await expect.poll(() => tokens().countDocuments({ _id: new ObjectId(aId) })).toBe(0);
+});

@@ -53,6 +53,7 @@ import { RulerSettingsPanel } from './RulerSettingsPanel';
 import { TextSettingsPanel } from './TextSettingsPanel';
 import { DrawingSettingsPanel, type DrawShape } from './DrawingSettingsPanel';
 import { MonsterBatchDialog } from './MonsterBatchDialog';
+import { MapConfirmDialog } from './MapConfirmDialog';
 import { MAX_DRAWING_POINT_VALUES } from '~/types/schemas/mapDrawings';
 import {
   clamp,
@@ -2092,60 +2093,23 @@ export function ActiveMapStage({
 
       {/* Delete-confirmation dialog */}
       {tokensPendingDelete && tokensPendingDelete.length > 0 && (
-        <div
-          role="presentation"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-          className="absolute inset-0 z-30 flex items-center justify-center bg-black/60"
+        <MapConfirmDialog
+          title={tokensPendingDelete.length === 1 ? 'Remove token?' : 'Remove tokens?'}
+          confirmLabel="Remove"
+          onCancel={() => setTokensPendingDelete(null)}
+          onConfirm={() => {
+            for (const t of tokensPendingDelete) handleRemove(t);
+            setTokensPendingDelete(null);
+          }}
         >
-          <div
-            role="alertdialog"
-            aria-labelledby="token-delete-title"
-            className="w-full max-w-sm rounded-lg border border-white/10 bg-[#0D1117] p-4 shadow-2xl"
-          >
-            <h2
-              id="token-delete-title"
-              className="font-sans text-sm font-bold uppercase tracking-widest text-rose-400"
-            >
-              {tokensPendingDelete.length === 1 ? 'Remove token?' : 'Remove tokens?'}
-            </h2>
-            <p className="font-sans mt-2 text-xs text-slate-300">
-              Remove{' '}
-              <span className="font-semibold text-white">
-                {tokensPendingDelete.length === 1
-                  ? tokensPendingDelete[0].label || 'this token'
-                  : `${tokensPendingDelete.length} tokens`}
-              </span>{' '}
-              from the map? This cannot be undone.
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setTokensPendingDelete(null)}
-                className="rounded border border-white/10 bg-white/[0.03] px-3 py-1.5 font-sans text-xs font-semibold text-slate-300 hover:bg-white/[0.07]"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                ref={(el) => {
-                  // Focus the destructive primary so Enter immediately
-                  // confirms removal; the no-autofocus lint rule doesn't
-                  // catch ref-based focus, and a modal that pops up in
-                  // direct response to Delete needs keyboard continuity.
-                  if (el) el.focus();
-                }}
-                onClick={() => {
-                  for (const t of tokensPendingDelete) handleRemove(t);
-                  setTokensPendingDelete(null);
-                }}
-                className="rounded bg-rose-500 px-3 py-1.5 font-sans text-xs font-semibold text-white hover:bg-rose-400"
-              >
-                Remove
-              </button>
-            </div>
-          </div>
-        </div>
+          Remove{' '}
+          <span className="font-semibold text-white">
+            {tokensPendingDelete.length === 1
+              ? tokensPendingDelete[0].label || 'this token'
+              : `${tokensPendingDelete.length} tokens`}
+          </span>{' '}
+          from the map? This cannot be undone.
+        </MapConfirmDialog>
       )}
 
       {/* Token right-click context menu — move selection between token layers. */}
@@ -2254,49 +2218,16 @@ export function ActiveMapStage({
 
       {/* GM "clear all drawings" confirmation dialog. */}
       {drawingsPendingClear && (
-        <div
-          role="presentation"
-          onPointerDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-          className="absolute inset-0 z-30 flex items-center justify-center bg-black/60"
+        <MapConfirmDialog
+          title="Clear all drawings?"
+          confirmLabel="Clear all"
+          confirmTestId="map-clear-drawings-confirm"
+          onCancel={() => setDrawingsPendingClear(false)}
+          onConfirm={clearAllDrawings}
         >
-          <div
-            role="alertdialog"
-            aria-labelledby="drawings-clear-title"
-            className="w-full max-w-sm rounded-lg border border-white/10 bg-[#0D1117] p-4 shadow-2xl"
-          >
-            <h2
-              id="drawings-clear-title"
-              className="font-sans text-sm font-bold uppercase tracking-widest text-rose-400"
-            >
-              Clear all drawings?
-            </h2>
-            <p className="font-sans mt-2 text-xs text-slate-300">
-              Remove <span className="font-semibold text-white">every drawing</span> on this map?
-              This cannot be undone.
-            </p>
-            <div className="mt-4 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => setDrawingsPendingClear(false)}
-                className="rounded border border-white/10 bg-white/[0.03] px-3 py-1.5 font-sans text-xs font-semibold text-slate-300 hover:bg-white/[0.07]"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                ref={(el) => {
-                  if (el) el.focus();
-                }}
-                onClick={clearAllDrawings}
-                data-testid="map-clear-drawings-confirm"
-                className="rounded bg-rose-500 px-3 py-1.5 font-sans text-xs font-semibold text-white hover:bg-rose-400"
-              >
-                Clear all
-              </button>
-            </div>
-          </div>
-        </div>
+          Remove <span className="font-semibold text-white">every drawing</span> on this map? This
+          cannot be undone.
+        </MapConfirmDialog>
       )}
 
       {/* Zoom toolbar */}
