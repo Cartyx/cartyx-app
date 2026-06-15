@@ -51,6 +51,7 @@ import { LayersPanel } from './LayersPanel';
 import { RulerSettingsPanel } from './RulerSettingsPanel';
 import { useRulerTool } from './useRulerTool';
 import { RulerOverlay } from './RulerOverlay';
+import { useViewport, type Viewport } from './useViewport';
 import { TextSettingsPanel } from './TextSettingsPanel';
 import { DrawingSettingsPanel, type DrawShape } from './DrawingSettingsPanel';
 import { MonsterBatchDialog } from './MonsterBatchDialog';
@@ -72,12 +73,6 @@ import {
   type TokenLayerId,
 } from '~/types/mapLayer';
 import type { TabletopMapMessage } from '~/hooks/useTabletopMapParty';
-
-interface Viewport {
-  zoom: number;
-  panX: number;
-  panY: number;
-}
 
 interface ActiveMapStageProps {
   map: MapData;
@@ -101,8 +96,6 @@ interface ActiveMapStageProps {
   pointerActive?: boolean;
 }
 
-const MIN_ZOOM = 0.25;
-const MAX_ZOOM = 8;
 const MOVE_BROADCAST_HZ = 30;
 const MOVE_BROADCAST_INTERVAL_MS = 1000 / MOVE_BROADCAST_HZ;
 
@@ -137,11 +130,20 @@ export function ActiveMapStage({
   drawingActive = false,
   pointerActive = false,
 }: ActiveMapStageProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
-  const [viewport, setViewport] = useState<Viewport>({ zoom: 1, panX: 0, panY: 0 });
-  const viewportRef = useRef(viewport);
-  viewportRef.current = viewport;
+  // Viewport (zoom/pan) + the image↔DOM transform that every tool reads from.
+  const {
+    containerRef,
+    containerSize,
+    viewport,
+    setViewport,
+    effectiveScale,
+    displayedImageWidth,
+    displayedImageHeight,
+    imageOffsetX,
+    imageOffsetY,
+    domToImage,
+    zoomAround,
+  } = useViewport(map.imageWidth, map.imageHeight);
 
   const qc = useQueryClient();
   const { data: tokens = [] } = useMapTokens(campaignId, map.id);
@@ -500,45 +502,6 @@ export function ActiveMapStage({
     });
   }, []);
 
-  // Observe container size.
-  useEffect(() => {
-    if (!containerRef.current) return;
-    const el = containerRef.current;
-    const update = () => {
-      const rect = el.getBoundingClientRect();
-      setContainerSize({ width: rect.width, height: rect.height });
-    };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  // Transform math.
-  const fitScale =
-    containerSize.width === 0 || map.imageWidth === 0
-      ? 1
-      : Math.min(containerSize.width / map.imageWidth, containerSize.height / map.imageHeight);
-  const effectiveScale = fitScale * viewport.zoom;
-  const displayedImageWidth = map.imageWidth * effectiveScale;
-  const displayedImageHeight = map.imageHeight * effectiveScale;
-  const imageOffsetX = (containerSize.width - displayedImageWidth) / 2 + viewport.panX;
-  const imageOffsetY = (containerSize.height - displayedImageHeight) / 2 + viewport.panY;
-
-  const domToImage = useCallback(
-    (clientX: number, clientY: number): { x: number; y: number } | null => {
-      if (!containerRef.current || effectiveScale <= 0) return null;
-      const rect = containerRef.current.getBoundingClientRect();
-      const localX = clientX - rect.left;
-      const localY = clientY - rect.top;
-      return {
-        x: (localX - imageOffsetX) / effectiveScale,
-        y: (localY - imageOffsetY) / effectiveScale,
-      };
-    },
-    [effectiveScale, imageOffsetX, imageOffsetY]
-  );
-
   // Measurement (ruler) tool — client-only polyline measurement. Owns its own
   // state + handlers; it short-circuits the stage pointer handlers below and
   // never touches the dragRef.
@@ -554,50 +517,6 @@ export function ActiveMapStage({
     imageWidth: map.imageWidth,
     imageHeight: map.imageHeight,
   });
-
-  // -------------------------------------------------------------------------
-  // Zoom + pan
-  // -------------------------------------------------------------------------
-
-  const zoomAround = useCallback(
-    (focalX: number, focalY: number, nextZoom: number) => {
-      setViewport((vp) => {
-        const clampedZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom));
-        if (clampedZoom === vp.zoom) return vp;
-        const oldEffective = fitScale * vp.zoom;
-        const oldOffsetX = (containerSize.width - map.imageWidth * oldEffective) / 2 + vp.panX;
-        const oldOffsetY = (containerSize.height - map.imageHeight * oldEffective) / 2 + vp.panY;
-        const imgX = (focalX - oldOffsetX) / oldEffective;
-        const imgY = (focalY - oldOffsetY) / oldEffective;
-        const newEffective = fitScale * clampedZoom;
-        const newOffsetX = focalX - imgX * newEffective;
-        const newOffsetY = focalY - imgY * newEffective;
-        const newPanX = newOffsetX - (containerSize.width - map.imageWidth * newEffective) / 2;
-        const newPanY = newOffsetY - (containerSize.height - map.imageHeight * newEffective) / 2;
-        return { zoom: clampedZoom, panX: newPanX, panY: newPanY };
-      });
-    },
-    [fitScale, containerSize.width, containerSize.height, map.imageWidth, map.imageHeight]
-  );
-
-  // Non-passive wheel listener so we can preventDefault and stop the modal/
-  // page from scrolling under the cursor.
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      const rect = el.getBoundingClientRect();
-      const focalX = e.clientX - rect.left;
-      const focalY = e.clientY - rect.top;
-      const px =
-        e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * rect.height : e.deltaY;
-      const factor = Math.exp(-px * 0.0017);
-      zoomAround(focalX, focalY, viewportRef.current.zoom * factor);
-    };
-    el.addEventListener('wheel', onWheel, { passive: false });
-    return () => el.removeEventListener('wheel', onWheel);
-  }, [zoomAround]);
 
   // -------------------------------------------------------------------------
   // Pointer drag — either pans the viewport (drag on background) or moves a
@@ -1381,7 +1300,7 @@ export function ActiveMapStage({
         y: rect ? e.clientY - rect.top : e.clientY,
       });
     },
-    [isGM]
+    [isGM, containerRef]
   );
 
   // Keyboard: Delete/Backspace on a selected token opens confirm; Esc
