@@ -4,6 +4,18 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { WikiPanel } from '~/components/wiki/WikiPanel';
 
+// Mock the router param hook + campaign hook because WikiPanel needs
+// campaign.isGM to decide whether to render the GM-only Monsters entry.
+vi.mock('@tanstack/react-router', () => ({
+  useParams: () => ({ campaignId: 'c1' }),
+}));
+const { useCampaignMock } = vi.hoisted(() => ({
+  useCampaignMock: vi.fn(),
+}));
+vi.mock('~/hooks/useCampaigns', () => ({
+  useCampaign: useCampaignMock,
+}));
+
 // Mock panels since they require routing/campaign context
 vi.mock('~/components/wiki/characters/CharactersPanel', () => ({
   CharactersPanel: ({ onBack }: { onBack: () => void }) => (
@@ -37,14 +49,31 @@ vi.mock('~/components/wiki/locations/LocationsPanel', () => ({
   ),
 }));
 
-describe('WikiPanel', () => {
-  it('renders the Characters category button', () => {
-    render(<WikiPanel />);
+vi.mock('~/components/wiki/maps/MapsPanel', () => ({
+  MapsPanel: ({ onBack }: { onBack: () => void }) => (
+    <div data-testid="maps-panel">
+      <button onClick={onBack}>Back</button>
+    </div>
+  ),
+}));
 
+vi.mock('~/components/wiki/monsters/MonstersPanel', () => ({
+  MonstersPanel: ({ onBack }: { onBack: () => void }) => (
+    <div data-testid="monsters-panel">
+      <button onClick={onBack}>Back</button>
+    </div>
+  ),
+}));
+
+describe('WikiPanel', () => {
+  it('renders the Characters category button (non-GM)', () => {
+    useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
+    render(<WikiPanel />);
     expect(screen.getByRole('button', { name: 'Characters' })).toBeInTheDocument();
   });
 
-  it('shows Characters, Players, Races, Rules, and Locations categories', () => {
+  it('shows only the five player categories when not GM (no Maps, no Monsters)', () => {
+    useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
     render(<WikiPanel />);
 
     expect(screen.getAllByRole('button')).toHaveLength(5);
@@ -53,9 +82,22 @@ describe('WikiPanel', () => {
     expect(screen.getByRole('button', { name: 'Races' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Rules' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Locations' })).toBeInTheDocument();
+    // Maps + Monsters are GM-only.
+    expect(screen.queryByRole('button', { name: 'Maps' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Monsters' })).not.toBeInTheDocument();
+  });
+
+  it('shows the GM-only Maps + Monsters categories when viewer is GM', () => {
+    useCampaignMock.mockReturnValue({ campaign: { isGM: true } });
+    render(<WikiPanel />);
+
+    expect(screen.getAllByRole('button')).toHaveLength(7);
+    expect(screen.getByRole('button', { name: 'Maps' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Monsters' })).toBeInTheDocument();
   });
 
   it('clicking Characters shows CharactersPanel', async () => {
+    useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
     const user = userEvent.setup();
     render(<WikiPanel />);
 
@@ -65,6 +107,7 @@ describe('WikiPanel', () => {
   });
 
   it('clicking Races shows RacesPanel', async () => {
+    useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
     const user = userEvent.setup();
     render(<WikiPanel />);
 
@@ -74,6 +117,7 @@ describe('WikiPanel', () => {
   });
 
   it('clicking Rules shows RulesPanel', async () => {
+    useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
     const user = userEvent.setup();
     render(<WikiPanel />);
 
@@ -82,7 +126,18 @@ describe('WikiPanel', () => {
     expect(screen.getByTestId('rules-panel')).toBeInTheDocument();
   });
 
+  it('clicking Monsters shows MonstersPanel for GM', async () => {
+    useCampaignMock.mockReturnValue({ campaign: { isGM: true } });
+    const user = userEvent.setup();
+    render(<WikiPanel />);
+
+    await user.click(screen.getByRole('button', { name: 'Monsters' }));
+
+    expect(screen.getByTestId('monsters-panel')).toBeInTheDocument();
+  });
+
   it('CharactersPanel onBack returns to category list', async () => {
+    useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
     const user = userEvent.setup();
     render(<WikiPanel />);
 
@@ -94,6 +149,7 @@ describe('WikiPanel', () => {
   });
 
   it('RacesPanel onBack returns to category list', async () => {
+    useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
     const user = userEvent.setup();
     render(<WikiPanel />);
 

@@ -401,7 +401,11 @@ export const getTabletopScreen = createServerFn({ method: 'GET' })
 
       if (!doc) throw new Error('Screen not found');
 
-      const windows = (doc.windows ?? []).map(serializeWindow);
+      // Monsters are GM-only — players never see monster windows on a shared tab.
+      const rawWindows = (doc.windows ?? []).filter(
+        (w) => member.role === 'gm' || w.collection !== 'monster'
+      );
+      const windows = rawWindows.map(serializeWindow);
 
       // Collect all refs from windows
       const refs: Array<{ collection: string; documentId: string }> = [];

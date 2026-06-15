@@ -9,6 +9,9 @@ import {
 } from '~/hooks/useTabletopScreens';
 import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
 import { useTabletopParty } from '~/hooks/useTabletopParty';
+import { useActiveMap } from '~/hooks/useMaps';
+import { useTabletopMapSync } from '~/hooks/useTabletopMapSync';
+import { ActiveMapStage } from './ActiveMapStage';
 import { TabletopTabBar } from './TabletopTabBar';
 import { TabletopCanvas } from './TabletopCanvas';
 import {
@@ -34,7 +37,12 @@ import {
   LocationWindowWrapper,
   EditLocationModalWrapper,
 } from '~/components/wiki/locations/LocationWindowWrapper';
+import {
+  MonsterWindowWrapper,
+  EditMonsterModalWrapper,
+} from '~/components/wiki/monsters/MonsterWindowWrapper';
 import type { TabletopMessage } from '~/types/tabletop';
+import type { ToolType } from '~/components/mainview/ToolBar';
 import type { PingData } from './PingOverlay';
 
 // ---------------------------------------------------------------------------
@@ -66,21 +74,35 @@ function toFloatingState(state: string): FloatingWindowState {
 interface TabletopViewProps {
   campaignId: string;
   isGM: boolean;
+  currentUserId: string | null;
   getToken: () => Promise<string>;
   sessionId: string | null;
+  /** Active toolbar tool (owned by the play route). */
+  activeTool?: ToolType;
+  onToolChange?: (tool: ToolType) => void;
 }
 
 export function TabletopView({
   campaignId,
   isGM,
+  currentUserId,
   getToken,
   sessionId: _sessionId,
+  activeTool,
+  onToolChange,
 }: TabletopViewProps) {
   const { screens, isLoading } = useTabletopScreenList(campaignId);
   const mutations = useTabletopMutations(campaignId);
   const { playerState, updateState } = useTabletopPlayerState(campaignId);
-
   const [activeScreenId, setActiveScreenId] = useState<string | null>(null);
+  // Active map is per-tab — render the active map of the tab being viewed.
+  const { data: activeMap } = useActiveMap(campaignId, activeScreenId);
+
+  // Map party — keeps every connected client in sync with map/token/text/drawing
+  // writes by applying inbound messages to the query cache. Returns `send` for
+  // broadcasting this client's local changes.
+  const sendMapMessage = useTabletopMapSync(campaignId, getToken, isGM);
+
   const [badgeScreenIds, setBadgeScreenIds] = useState<Set<string>>(new Set());
   const [_pings, setPings] = useState<PingData[]>([]);
   const [dialog, setDialog] = useState<DialogState>({ type: 'none' });
@@ -89,6 +111,7 @@ export function TabletopView({
   const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
+  const [editingMonsterId, setEditingMonsterId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [localWindows, setLocalWindows] = useState<ManagedWindow[]>([]);
   const localScreenIdRef = useRef<string | null>(null);
@@ -316,6 +339,15 @@ export function TabletopView({
               }}
             />
           );
+        } else if (w.collection === 'monster') {
+          windowContent = (
+            <MonsterWindowWrapper
+              monsterId={w.documentId}
+              campaignId={campaignId}
+              isGM={isGM}
+              onEdit={() => setEditingMonsterId(w.documentId)}
+            />
+          );
         } else {
           windowContent = (
             <div className="p-4 overflow-auto h-full">
@@ -525,6 +557,7 @@ export function TabletopView({
 
       <div
         ref={workspaceRef}
+        data-testid="tabletop-workspace"
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
@@ -534,7 +567,23 @@ export function TabletopView({
           isDragOver ? 'ring-2 ring-inset ring-blue-500/40 bg-blue-500/[0.03]' : '',
         ].join(' ')}
       >
-        <TabletopCanvas screen={activeScreen} />
+        {activeMap ? (
+          <ActiveMapStage
+            map={activeMap}
+            campaignId={campaignId}
+            isGM={isGM}
+            currentUserId={currentUserId}
+            onBroadcast={sendMapMessage}
+            layerPanelOpen={activeTool === 'layer'}
+            onCloseLayerPanel={() => onToolChange?.('pointer')}
+            rulerActive={activeTool === 'ruler'}
+            textActive={activeTool === 'text'}
+            drawingActive={activeTool === 'drawing'}
+            pointerActive={activeTool === 'pointer'}
+          />
+        ) : (
+          <TabletopCanvas screen={activeScreen} />
+        )}
 
         <FloatingWindowManager windows={localWindows} onWindowsChange={handleWindowsChange} />
       </div>
@@ -605,6 +654,13 @@ export function TabletopView({
           campaignId={campaignId}
           locationId={editingLocationId}
           onClose={() => setEditingLocationId(null)}
+        />
+      )}
+      {editingMonsterId !== null && (
+        <EditMonsterModalWrapper
+          campaignId={campaignId}
+          monsterId={editingMonsterId}
+          onClose={() => setEditingMonsterId(null)}
         />
       )}
     </div>

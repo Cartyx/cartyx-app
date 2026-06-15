@@ -1,4 +1,4 @@
-import React from 'react'
+import React from 'react';
 import {
   MousePointer2,
   Hand,
@@ -9,35 +9,56 @@ import {
   Stamp,
   Layers,
   ChevronLeft,
-} from 'lucide-react'
+} from 'lucide-react';
 
-export type ToolType = 'pointer' | 'hand' | 'drawing' | 'text' | 'ruler' | 'dice' | 'stamp' | 'layer'
+export type ToolType =
+  | 'pointer'
+  | 'hand'
+  | 'drawing'
+  | 'text'
+  | 'ruler'
+  | 'dice'
+  | 'stamp'
+  | 'layer';
 
 export interface ToolBarProps {
-  activeTool: ToolType
-  onToolChange: (tool: ToolType) => void
-  collapsed: boolean
-  onToggleCollapse: () => void
+  activeTool: ToolType;
+  onToolChange: (tool: ToolType) => void;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+  /** When false, GM-only tools (e.g. Drawing) are hidden. */
+  isGM?: boolean;
 }
 
-const tools: { id: ToolType; icon: React.ElementType; label: string }[] = [
+const tools: { id: ToolType; icon: React.ElementType; label: string; gmOnly?: boolean }[] = [
   { id: 'pointer', icon: MousePointer2, label: 'Pointer' },
   { id: 'hand', icon: Hand, label: 'Hand' },
-  { id: 'drawing', icon: Pencil, label: 'Drawing' },
+  // Drawings are GM-only annotations (Spell FX / Drawing layer).
+  { id: 'drawing', icon: Pencil, label: 'Drawing', gmOnly: true },
   { id: 'text', icon: Type, label: 'Text' },
   { id: 'ruler', icon: Ruler, label: 'Ruler' },
   { id: 'dice', icon: Dices, label: 'Dice' },
   { id: 'stamp', icon: Stamp, label: 'Stamp' },
-  { id: 'layer', icon: Layers, label: 'Layer' },
-]
+  // The Layers panel is GM-only (only rendered for the GM in ActiveMapStage), so
+  // hide the tool from players rather than leaving them a no-op button that
+  // still steals focus from the Pointer tool.
+  { id: 'layer', icon: Layers, label: 'Layer', gmOnly: true },
+];
 
-export function ToolBar({ activeTool, onToolChange, collapsed, onToggleCollapse }: ToolBarProps) {
+export function ToolBar({
+  activeTool,
+  onToolChange,
+  collapsed,
+  onToggleCollapse,
+  isGM = false,
+}: ToolBarProps) {
+  const visibleTools = tools.filter((t) => !t.gmOnly || isGM);
   return (
     <div className="flex flex-col items-center h-full py-2 bg-[#080A12]">
       {!collapsed && (
         <div id="toolbar-tools" className="flex flex-col items-center gap-1 flex-1">
-          {tools.map(({ id, icon: Icon, label }) => {
-            const isActive = id === activeTool
+          {visibleTools.map(({ id, icon: Icon, label }) => {
+            const isActive = id === activeTool;
             return (
               <button
                 key={id}
@@ -56,7 +77,7 @@ export function ToolBar({ activeTool, onToolChange, collapsed, onToggleCollapse 
               >
                 <Icon size={18} />
               </button>
-            )
+            );
           })}
         </div>
       )}
@@ -76,10 +97,12 @@ export function ToolBar({ activeTool, onToolChange, collapsed, onToggleCollapse 
           collapsed ? 'w-8' : 'w-10',
         ].join(' ')}
       >
-        <span className={`inline-flex transition-transform duration-200 ${collapsed ? 'rotate-180' : 'rotate-0'}`}>
+        <span
+          className={`inline-flex transition-transform duration-200 ${collapsed ? 'rotate-180' : 'rotate-0'}`}
+        >
           <ChevronLeft size={16} />
         </span>
       </button>
     </div>
-  )
+  );
 }

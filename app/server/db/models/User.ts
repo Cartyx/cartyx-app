@@ -1,4 +1,4 @@
-import mongoose from 'mongoose'
+import mongoose from 'mongoose';
 
 const userSchema = new mongoose.Schema({
   email: { type: String, unique: true, sparse: true },
@@ -9,8 +9,33 @@ const userSchema = new mongoose.Schema({
   lastName: String,
   avatarUrl: String,
   campaigns: [{ campaignId: mongoose.Schema.Types.ObjectId, joinedAt: Date, status: String }],
+  // Per-user UI preferences that persist across campaigns/sessions.
+  preferences: {
+    // Measurement (ruler) line color, a 6-digit hex string (e.g. '#fbbf24').
+    rulerColor: { type: String },
+  },
+  // Provider OAuth tokens, encrypted at rest (AES-256-GCM). Kept server-side
+  // only (never in the session cookie) and `select: false` so they are never
+  // returned by normal queries — only explicitly via `.select('+oauthTokens')`.
+  // Used at logout time to revoke the provider grant.
+  oauthTokens: {
+    type: {
+      accessToken: {
+        ciphertext: String,
+        iv: String,
+        authTag: String,
+      },
+      refreshToken: {
+        ciphertext: String,
+        iv: String,
+        authTag: String,
+      },
+    },
+    select: false,
+    _id: false,
+  },
   lastLoginAt: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now },
-})
+});
 
-export const User = mongoose.models.User || mongoose.model('User', userSchema)
+export const User = mongoose.models.User || mongoose.model('User', userSchema);

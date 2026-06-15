@@ -2,6 +2,10 @@ export const queryKeys = {
   auth: {
     me: ['auth', 'me'] as const,
   },
+  userPreferences: {
+    all: ['userPreferences'] as const,
+    rulerColor: ['userPreferences', 'rulerColor'] as const,
+  },
   campaigns: {
     all: ['campaigns'] as const,
     list: () => ['campaigns', 'list'] as const,
@@ -131,5 +135,51 @@ export const queryKeys = {
   cleanup: {
     all: ['cleanup'] as const,
     orphanImages: (campaignId: string) => ['cleanup', 'orphanImages', campaignId] as const,
+  },
+  maps: {
+    all: ['maps'] as const,
+    list: (campaignId: string) => ['maps', 'list', campaignId] as const,
+    detail: (campaignId: string, mapId: string) => ['maps', 'detail', campaignId, mapId] as const,
+    // Active map is per-tab (screen). The campaignId-only `activeAll` prefix
+    // invalidates every tab's active-map query at once.
+    active: (campaignId: string, screenId: string) =>
+      ['maps', 'active', campaignId, screenId] as const,
+    activeAll: (campaignId: string) => ['maps', 'active', campaignId] as const,
+  },
+  mapTokens: {
+    all: ['mapTokens'] as const,
+    list: (campaignId: string, mapId: string) => ['mapTokens', 'list', campaignId, mapId] as const,
+  },
+  mapTexts: {
+    all: ['mapTexts'] as const,
+    list: (campaignId: string, mapId: string) => ['mapTexts', 'list', campaignId, mapId] as const,
+  },
+  mapDrawings: {
+    all: ['mapDrawings'] as const,
+    list: (campaignId: string, mapId: string) =>
+      ['mapDrawings', 'list', campaignId, mapId] as const,
+  },
+  monsters: {
+    all: ['monsters'] as const,
+    list: (
+      campaignId: string,
+      search?: string,
+      tags?: string[],
+      sessionId?: string,
+      minCr?: number,
+      maxCr?: number
+    ) =>
+      [
+        'monsters',
+        'list',
+        campaignId,
+        search ?? '',
+        tags ?? [],
+        sessionId ?? '',
+        minCr ?? null,
+        maxCr ?? null,
+      ] as const,
+    detail: (campaignId: string, monsterId: string) =>
+      ['monsters', 'detail', campaignId, monsterId] as const,
   },
 };

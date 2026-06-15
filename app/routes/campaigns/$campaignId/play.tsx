@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { z } from 'zod';
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
@@ -12,6 +12,7 @@ import { MainView } from '~/components/mainview/MainView';
 import { TabletopView } from '~/components/mainview/TabletopView';
 import { GMScreensView } from '~/components/mainview/gmscreens';
 import type { TabId } from '~/components/mainview/TabNavigation';
+import type { ToolType } from '~/components/mainview/ToolBar';
 import { CatchUpWidget } from '~/components/mainview/widgets/CatchUpWidget';
 import { CampaignTimelineWidget } from '~/components/mainview/widgets/CampaignTimelineWidget';
 import { KeyAlliesWidget } from '~/components/mainview/widgets/KeyAlliesWidget';
@@ -30,8 +31,24 @@ const getTabletopPartyTokenFn = createServerFn({ method: 'GET' })
     await connectDB();
     if (!isDBConnected()) return '';
 
+    // Mint the token with the caller's campaign role so the tabletop-map party
+    // can enforce GM-only relays (drawings, token create/update/delete). A
+    // non-member resolves to 'player' and is still room-bound in onBeforeConnect.
+    const { User } = await import('~/server/db/models/User');
+    const { Campaign } = await import('~/server/db/models/Campaign');
+    const dbUser = await User.findOne({ providerId: user.id });
+    const campaign = dbUser ? await Campaign.findById(data.campaignId) : null;
+    const userId = dbUser ? String(dbUser._id) : '';
+    const isGM =
+      !!campaign &&
+      !!userId &&
+      (String(campaign.gameMasterId) === userId ||
+        (campaign.members ?? []).some(
+          (m: { userId: unknown; role?: string }) => String(m.userId) === userId && m.role === 'gm'
+        ));
+
     const { createPartyToken } = await import('~/server/session');
-    return createPartyToken(user.id, data.campaignId, 'tabletop');
+    return createPartyToken(user.id, data.campaignId, isGM ? 'gm' : 'player');
   });
 
 export const playSearchSchema = z.object({
@@ -66,6 +83,10 @@ function PlayPageContent() {
 
   const { activePlayer, isLoading: isPlayerLoading } = useActivePlayerContext();
 
+  // Toolbar tool is owned here so the Tabletop (a MainView child) can react to
+  // it — e.g. the Layer tool opens the map's Layers panel.
+  const [activeTool, setActiveTool] = useState<ToolType>('pointer');
+
   const activeSession = campaign?.sessions.find((s) => s.status === 'active');
 
   const getTabletopToken = useCallback(async () => {
@@ -99,6 +120,9 @@ function PlayPageContent() {
           showToolbar={effectiveTab === 'tabletop'}
           campaignId={campaignId}
           sessions={campaign?.sessions}
+          activeTool={activeTool}
+          onToolChange={setActiveTool}
+          isGM={campaign?.isGM ?? false}
         >
           {needsNewPlayer && (
             <div className="mx-4 mt-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center gap-3">
@@ -147,8 +171,11 @@ function PlayPageContent() {
             <TabletopView
               campaignId={campaignId}
               isGM={campaign?.isGM ?? false}
+              currentUserId={campaign?.currentUserId ?? null}
               getToken={getTabletopToken}
               sessionId={activeSession?.id ?? null}
+              activeTool={activeTool}
+              onToolChange={setActiveTool}
             />
           </div>
           {campaign?.isGM && (

@@ -1,55 +1,82 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { userMock, campaignMock, playerMock, sessionMock, gmScreenMock, noteMock, raceMock } =
-  vi.hoisted(() => {
-    function make(
-      name: string,
-      collectionName: string,
-      schemaIndexes: Array<[Record<string, unknown>, Record<string, unknown>]>
-    ) {
-      return {
-        modelName: name,
-        collection: { collectionName },
-        schema: { indexes: vi.fn().mockReturnValue(schemaIndexes) },
-        listIndexes: vi.fn().mockResolvedValue([{ key: { _id: 1 } }]),
-        createCollection: vi.fn().mockResolvedValue(undefined),
-        createIndexes: vi.fn().mockResolvedValue(undefined),
-      };
-    }
-
+const {
+  userMock,
+  campaignMock,
+  playerMock,
+  sessionMock,
+  gmScreenMock,
+  noteMock,
+  raceMock,
+  mapMock,
+  mapTokenMock,
+  monsterMock,
+} = vi.hoisted(() => {
+  function make(
+    name: string,
+    collectionName: string,
+    schemaIndexes: Array<[Record<string, unknown>, Record<string, unknown>]>
+  ) {
     return {
-      userMock: make('User', 'users', [
-        [{ email: 1 }, { unique: true, sparse: true }],
-        [{ role: 1 }, {}],
-      ]),
-      campaignMock: make('Campaign', 'campaigns', [[{ 'members.userId': 1 }, {}]]),
-      playerMock: make('Player', 'players', [
-        [{ campaignId: 1, userId: 1 }, { unique: true }],
-        [{ campaignId: 1 }, {}],
-      ]),
-      sessionMock: make('Session', 'sessions', [[{ campaignId: 1, number: -1 }, {}]]),
-      gmScreenMock: make('GMScreen', 'gmscreen', [
-        [{ campaignId: 1, tabOrder: 1 }, { unique: true }],
-        [{ campaignId: 1, name: 1 }, { unique: true }],
-      ]),
-      noteMock: make('Note', 'notes', [
-        [{ sessionId: 1 }, {}],
-        [{ campaignId: 1 }, {}],
-        [{ campaignId: 1, updatedAt: -1 }, {}],
-        [{ createdBy: 1 }, {}],
-        [{ tags: 1 }, {}],
-        [{ isPublic: 1 }, {}],
-        [{ title: 'text', note: 'text' }, {}],
-      ]),
-      raceMock: make('Race', 'races', [
-        [{ campaignId: 1 }, {}],
-        [{ campaignId: 1, updatedAt: -1 }, {}],
-        [{ createdBy: 1 }, {}],
-        [{ tags: 1 }, {}],
-        [{ title: 'text', content: 'text' }, {}],
-      ]),
+      modelName: name,
+      collection: { collectionName },
+      schema: { indexes: vi.fn().mockReturnValue(schemaIndexes) },
+      listIndexes: vi.fn().mockResolvedValue([{ key: { _id: 1 } }]),
+      createCollection: vi.fn().mockResolvedValue(undefined),
+      createIndexes: vi.fn().mockResolvedValue(undefined),
     };
-  });
+  }
+
+  return {
+    userMock: make('User', 'users', [
+      [{ email: 1 }, { unique: true, sparse: true }],
+      [{ role: 1 }, {}],
+    ]),
+    campaignMock: make('Campaign', 'campaigns', [[{ 'members.userId': 1 }, {}]]),
+    playerMock: make('Player', 'players', [
+      [{ campaignId: 1, userId: 1 }, { unique: true }],
+      [{ campaignId: 1 }, {}],
+    ]),
+    sessionMock: make('Session', 'sessions', [[{ campaignId: 1, number: -1 }, {}]]),
+    gmScreenMock: make('GMScreen', 'gmscreen', [
+      [{ campaignId: 1, tabOrder: 1 }, { unique: true }],
+      [{ campaignId: 1, name: 1 }, { unique: true }],
+    ]),
+    noteMock: make('Note', 'notes', [
+      [{ sessionId: 1 }, {}],
+      [{ campaignId: 1 }, {}],
+      [{ campaignId: 1, updatedAt: -1 }, {}],
+      [{ createdBy: 1 }, {}],
+      [{ tags: 1 }, {}],
+      [{ isPublic: 1 }, {}],
+      [{ title: 'text', note: 'text' }, {}],
+    ]),
+    raceMock: make('Race', 'races', [
+      [{ campaignId: 1 }, {}],
+      [{ campaignId: 1, updatedAt: -1 }, {}],
+      [{ createdBy: 1 }, {}],
+      [{ tags: 1 }, {}],
+      [{ title: 'text', content: 'text' }, {}],
+    ]),
+    mapMock: make('Map', 'map', [
+      [{ campaignId: 1, updatedAt: -1 }, {}],
+      [{ campaignId: 1, locationId: 1 }, {}],
+      [{ campaignId: 1, name: 1 }, { unique: true }],
+    ]),
+    mapTokenMock: make('MapToken', 'mapToken', [
+      [{ mapId: 1 }, {}],
+      [{ mapId: 1, sourceCollection: 1, sourceDocumentId: 1, instanceNumber: 1 }, { unique: true }],
+    ]),
+    monsterMock: make('Monster', 'monsters', [
+      [{ campaignId: 1, updatedAt: -1 }, {}],
+      [{ campaignId: 1, name: 1 }, {}],
+      [{ campaignId: 1, tags: 1 }, {}],
+      [{ campaignId: 1, sessionId: 1 }, {}],
+      [{ campaignId: 1, 'cr.value': 1 }, {}],
+      [{ name: 'text', 'features.description': 'text' }, {}],
+    ]),
+  };
+});
 
 vi.mock('~/server/db/models/User', () => ({ User: userMock }));
 vi.mock('~/server/db/models/Campaign', () => ({ Campaign: campaignMock }));
@@ -58,6 +85,9 @@ vi.mock('~/server/db/models/Session', () => ({ Session: sessionMock }));
 vi.mock('~/server/db/models/GMScreen', () => ({ GMScreen: gmScreenMock }));
 vi.mock('~/server/db/models/Note', () => ({ Note: noteMock }));
 vi.mock('~/server/db/models/Race', () => ({ Race: raceMock }));
+vi.mock('~/server/db/models/Map', () => ({ Map: mapMock }));
+vi.mock('~/server/db/models/MapToken', () => ({ MapToken: mapTokenMock }));
+vi.mock('~/server/db/models/Monster', () => ({ Monster: monsterMock }));
 
 import {
   inspectIndexes,
@@ -74,11 +104,14 @@ const allMocks = [
   gmScreenMock,
   noteMock,
   raceMock,
+  mapMock,
+  mapTokenMock,
+  monsterMock,
 ];
 
 describe('ALL_MODELS', () => {
-  it('contains all seven models', () => {
-    expect(ALL_MODELS).toHaveLength(7);
+  it('contains all ten models', () => {
+    expect(ALL_MODELS).toHaveLength(10);
   });
 
   // Regression: Session and GMScreen are included in bootstrap (#302)
@@ -141,6 +174,29 @@ describe('inspectIndexes', () => {
       { key: { campaignId: 1, updatedAt: -1 } },
       { key: { createdBy: 1 } },
       { key: { tags: 1 } },
+      { key: { _fts: 'text', _ftsx: 1 } },
+    ]);
+    mapMock.listIndexes.mockResolvedValue([
+      { key: { _id: 1 } },
+      { key: { campaignId: 1, updatedAt: -1 } },
+      { key: { campaignId: 1, locationId: 1 } },
+      { key: { campaignId: 1, name: 1 }, unique: true },
+    ]);
+    mapTokenMock.listIndexes.mockResolvedValue([
+      { key: { _id: 1 } },
+      { key: { mapId: 1 } },
+      {
+        key: { mapId: 1, sourceCollection: 1, sourceDocumentId: 1, instanceNumber: 1 },
+        unique: true,
+      },
+    ]);
+    monsterMock.listIndexes.mockResolvedValue([
+      { key: { _id: 1 } },
+      { key: { campaignId: 1, updatedAt: -1 } },
+      { key: { campaignId: 1, name: 1 } },
+      { key: { campaignId: 1, tags: 1 } },
+      { key: { campaignId: 1, sessionId: 1 } },
+      { key: { campaignId: 1, 'cr.value': 1 } },
       { key: { _fts: 'text', _ftsx: 1 } },
     ]);
 
@@ -346,6 +402,19 @@ describe('inspectIndexes', () => {
       { key: { _id: 1 } },
       { key: { campaignId: 1, tabOrder: 1 }, unique: true },
       { key: { campaignId: 1, name: 1 }, unique: true },
+    ]);
+    mapMock.listIndexes.mockResolvedValue([
+      { key: { _id: 1 } },
+      { key: { campaignId: 1, name: 1 }, unique: true },
+      // optional indexes (updatedAt, locationId) are missing
+    ]);
+    mapTokenMock.listIndexes.mockResolvedValue([
+      { key: { _id: 1 } },
+      {
+        key: { mapId: 1, sourceCollection: 1, sourceDocumentId: 1, instanceNumber: 1 },
+        unique: true,
+      },
+      // optional mapId-only index is missing
     ]);
 
     const result = await inspectIndexes();

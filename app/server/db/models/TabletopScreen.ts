@@ -52,6 +52,9 @@ const tabletopScreenSchema = new mongoose.Schema(
     gridScale: { type: Number, default: 5 },
     locationId: { type: mongoose.Schema.Types.ObjectId, default: null },
     battleMapImage: { type: String, default: null },
+    // The Map shown on this tab. Active map is per-tab (per screen), not
+    // campaign-wide, so different tabs can display different maps.
+    activeMapId: { type: mongoose.Schema.Types.ObjectId, ref: 'Map', default: null },
     windows: {
       type: [windowSchema],
       default: [],
