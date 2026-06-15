@@ -19,17 +19,67 @@ describe('parseTabletopMapMessage', () => {
     expect(msg).toMatchObject({ type: 'token:moved', tokenId: 't1', x: 10, y: 20, final: true });
   });
 
-  it('accepts entity-bearing frames when the entity has a string id', () => {
+  const fullToken = {
+    id: 'k1',
+    mapId: 'm1',
+    campaignId: 'c1',
+    sourceCollection: 'monster',
+    sourceDocumentId: 'doc1',
+    ownerUserId: null,
+    x: 1,
+    y: 2,
+    sizeSquares: 1,
+    instanceNumber: null,
+    color: '#fff',
+    label: 'Goblin',
+    imageUrl: '',
+    labelVisible: true,
+    hiddenFromPlayers: true,
+    zIndex: 0,
+    createdAt: '2026-06-15T00:00:00Z',
+    updatedAt: '2026-06-15T00:00:00Z',
+  };
+  const fullDrawing = {
+    id: 'd1',
+    mapId: 'm1',
+    campaignId: 'c1',
+    kind: 'rect',
+    color: '#f00',
+    strokeWidth: 2,
+    filled: false,
+    points: [],
+    x: 0,
+    y: 0,
+    width: 10,
+    height: 10,
+    createdBy: 'u1',
+    createdAt: '2026-06-15T00:00:00Z',
+    updatedAt: '2026-06-15T00:00:00Z',
+  };
+
+  it('accepts entity-bearing frames carrying a fully-shaped payload', () => {
+    expect(
+      parseTabletopMapMessage({ type: 'drawing:added', mapId: 'm1', drawing: fullDrawing })
+    ).not.toBeNull();
+    expect(
+      parseTabletopMapMessage({ type: 'token:added', mapId: 'm1', token: fullToken })
+    ).not.toBeNull();
+  });
+
+  it('rejects entity-bearing frames with an incomplete payload', () => {
+    // A forged/buggy frame whose entity is missing required fields must not seed
+    // the cache with a partial object that later crashes render code.
+    expect(
+      parseTabletopMapMessage({ type: 'token:added', mapId: 'm1', token: { id: 'k1' } })
+    ).toBeNull();
+    const noHidden: Record<string, unknown> = { ...fullToken };
+    delete noHidden.hiddenFromPlayers;
+    expect(
+      parseTabletopMapMessage({ type: 'token:updated', mapId: 'm1', token: noHidden })
+    ).toBeNull();
     expect(
       parseTabletopMapMessage({ type: 'drawing:added', mapId: 'm1', drawing: { id: 'd1' } })
-    ).not.toBeNull();
-    expect(
-      parseTabletopMapMessage({
-        type: 'token:added',
-        mapId: 'm1',
-        token: { id: 'k1', hiddenFromPlayers: true },
-      })
-    ).not.toBeNull();
+    ).toBeNull();
   });
 
   it('accepts map:active-changed with null mapId', () => {

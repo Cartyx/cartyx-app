@@ -32,10 +32,14 @@ export function MainView({
   onToolChange,
   isGM = false,
 }: MainViewProps) {
-  // Tool state is controlled when both props are supplied, else internal.
+  // Tool state is controlled only when BOTH props are supplied. If `activeTool`
+  // were treated as controlled without `onToolChange`, clicks would update
+  // internal state the render never reads, freezing the toolbar — so require
+  // both, otherwise fall back to fully-internal state.
   const [internalTool, setInternalTool] = useState<ToolType>('pointer');
-  const activeTool = controlledTool ?? internalTool;
-  const setActiveTool = onToolChange ?? setInternalTool;
+  const isControlled = controlledTool !== undefined && onToolChange !== undefined;
+  const activeTool = isControlled ? controlledTool : internalTool;
+  const setActiveTool = isControlled ? onToolChange : setInternalTool;
   const [toolbarCollapsed, setToolbarCollapsed] = useState(false);
   const [mobileInspectorOpen, setMobileInspectorOpen] = useState(false);
   const [inspectorVisible, setInspectorVisible] = useState(true);
