@@ -519,11 +519,17 @@ export function ActiveMapStage({
   const selectToken = useCallback((id: string, additive: boolean) => {
     setContextMenu(null);
     setSelectedTokenIds((cur) => {
-      if (!additive) return new Set([id]);
-      const next = new Set(cur);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
+      if (additive) {
+        const next = new Set(cur);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      }
+      // A plain press on a token that is already part of a multi-selection keeps
+      // the whole selection, so the press can drag the group together (GM). Any
+      // other plain press selects just that token.
+      if (cur.has(id) && cur.size > 1) return cur;
+      return new Set([id]);
     });
   }, []);
 
@@ -630,11 +636,15 @@ export function ActiveMapStage({
     | { mode: 'pan'; startClientX: number; startClientY: number; startVp: Viewport }
     | {
         mode: 'token';
-        tokenId: string;
+        /** Every token moving with this drag (one, or a whole GM selection). */
+        tokens: Array<{ id: string; startX: number; startY: number }>;
         startClientX: number;
         startClientY: number;
-        startTokenX: number;
-        startTokenY: number;
+        /** Group start-bounds, so the delta is clamped to keep all in-image. */
+        minX: number;
+        minY: number;
+        maxX: number;
+        maxY: number;
         lastBroadcastAt: number;
       }
     | {
@@ -806,18 +816,34 @@ export function ActiveMapStage({
       e.preventDefault();
       e.stopPropagation();
       (e.target as Element).setPointerCapture?.(e.pointerId);
+
+      // Pressing a token that's part of a multi-selection drags the whole group
+      // together (GM only — players can move only their own single token). Any
+      // other press drags just the pressed token.
+      const groupIds =
+        isGM && selectedTokenIds.has(token.id) && selectedTokenIds.size > 1
+          ? [...selectedTokenIds]
+          : [token.id];
+      const group = groupIds
+        .map((id) => tokens.find((t) => t.id === id))
+        .filter((t): t is MapTokenData => !!t);
+      const items = group.length > 0 ? group : [token];
+      const starts = items.map((t) => ({ id: t.id, startX: t.x, startY: t.y }));
+
       dragRef.current = {
         mode: 'token',
-        tokenId: token.id,
+        tokens: starts,
         startClientX: e.clientX,
         startClientY: e.clientY,
-        startTokenX: token.x,
-        startTokenY: token.y,
+        minX: Math.min(...starts.map((s) => s.startX)),
+        minY: Math.min(...starts.map((s) => s.startY)),
+        maxX: Math.max(...starts.map((s) => s.startX)),
+        maxY: Math.max(...starts.map((s) => s.startY)),
         lastBroadcastAt: 0,
       };
       setDragMode('token');
     },
-    []
+    [isGM, selectedTokenIds, tokens]
   );
 
   // Begin dragging a text (text tool, own/GM only). A press that doesn't move
@@ -1036,21 +1062,22 @@ export function ActiveMapStage({
     } else if (d.mode === 'token') {
       const dxImage = (e.clientX - d.startClientX) / effectiveScale;
       const dyImage = (e.clientY - d.startClientY) / effectiveScale;
-      const nx = clamp(d.startTokenX + dxImage, 0, map.imageWidth);
-      const ny = clamp(d.startTokenY + dyImage, 0, map.imageHeight);
-      // Optimistic local update.
-      applyTokenMoveToCache(qc, campaignId, map.id, d.tokenId, nx, ny);
-      // Throttled broadcast for smooth remote views.
+      // Clamp the delta (not each token) so the whole group keeps its formation
+      // and never leaves the image.
+      const cdx = clamp(dxImage, -d.minX, map.imageWidth - d.maxX);
+      const cdy = clamp(dyImage, -d.minY, map.imageHeight - d.maxY);
       const now = Date.now();
-      if (now - d.lastBroadcastAt >= MOVE_BROADCAST_INTERVAL_MS) {
-        d.lastBroadcastAt = now;
-        onBroadcast({
-          type: 'token:moved',
-          mapId: map.id,
-          tokenId: d.tokenId,
-          x: nx,
-          y: ny,
-        });
+      const broadcast = now - d.lastBroadcastAt >= MOVE_BROADCAST_INTERVAL_MS;
+      if (broadcast) d.lastBroadcastAt = now;
+      for (const t of d.tokens) {
+        const nx = t.startX + cdx;
+        const ny = t.startY + cdy;
+        // Optimistic local update.
+        applyTokenMoveToCache(qc, campaignId, map.id, t.id, nx, ny);
+        // Throttled broadcast for smooth remote views.
+        if (broadcast) {
+          onBroadcast({ type: 'token:moved', mapId: map.id, tokenId: t.id, x: nx, y: ny });
+        }
       }
     } else if (d.mode === 'text') {
       const dxImage = (e.clientX - d.startClientX) / effectiveScale;
@@ -1148,24 +1175,28 @@ export function ActiveMapStage({
     if (d.mode === 'token') {
       const dxImage = (e.clientX - d.startClientX) / effectiveScale;
       const dyImage = (e.clientY - d.startClientY) / effectiveScale;
-      const nx = clamp(d.startTokenX + dxImage, 0, map.imageWidth);
-      const ny = clamp(d.startTokenY + dyImage, 0, map.imageHeight);
-      // Persist and broadcast the final position.
-      mutations.move.mutate(
-        { tokenId: d.tokenId, x: nx, y: ny },
-        {
-          onSuccess: () => {
-            onBroadcast({
-              type: 'token:moved',
-              mapId: map.id,
-              tokenId: d.tokenId,
-              x: nx,
-              y: ny,
-              final: true,
-            });
-          },
-        }
-      );
+      const cdx = clamp(dxImage, -d.minX, map.imageWidth - d.maxX);
+      const cdy = clamp(dyImage, -d.minY, map.imageHeight - d.maxY);
+      // Persist and broadcast the final position of every token in the group.
+      for (const t of d.tokens) {
+        const nx = t.startX + cdx;
+        const ny = t.startY + cdy;
+        mutations.move.mutate(
+          { tokenId: t.id, x: nx, y: ny },
+          {
+            onSuccess: () => {
+              onBroadcast({
+                type: 'token:moved',
+                mapId: map.id,
+                tokenId: t.id,
+                x: nx,
+                y: ny,
+                final: true,
+              });
+            },
+          }
+        );
+      }
     } else if (d.mode === 'text') {
       if (d.moved) {
         const dxImage = (e.clientX - d.startClientX) / effectiveScale;
