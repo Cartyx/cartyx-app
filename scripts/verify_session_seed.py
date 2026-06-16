@@ -157,17 +157,20 @@ def test_dice_log_deterministic():
 
 
 def test_lore_docs():
-    race_id     = ObjectId()
-    location_id = ObjectId()
-    char_id0    = ObjectId()
-    char_id1    = ObjectId()
-    player_id0  = ObjectId()
-    player_id1  = ObjectId()
+    race_id        = ObjectId()
+    location_id    = ObjectId()
+    char_id0       = ObjectId()
+    char_id1       = ObjectId()
+    player_id0     = ObjectId()   # Player document _id
+    player_id1     = ObjectId()
+    player_user_id0 = ObjectId()  # User _id for the owning player
+    player_user_id1 = ObjectId()
 
     docs = seed.build_lore_docs(
         campaign_id=CAMPAIGN_ID,
         gm_id=GM_ID,
         player_ids=[player_id0, player_id1],
+        player_user_ids=[player_user_id0, player_user_id1],
         character_ids=[char_id0, char_id1],
         location_ids={"Phandalin": location_id},
         race_ids={"Elf": race_id},
@@ -231,11 +234,33 @@ def test_lore_docs():
     assert player_id0 in linked_player_ids or player_id1 in linked_player_ids, \
         "player links must use the supplied player_ids"
 
+    # ── Player-linked private lore must use the User _id as createdBy ──────────
+    # The server checks String(doc.createdBy) === member.userId where
+    # member.userId is the authenticated User's DB _id — NOT the Player doc _id.
+    player_private = [
+        d for d in docs
+        if not d["isPublic"]
+        and any(lnk["kind"] == "player" for lnk in d["links"])
+    ]
+    assert player_private, "need at least one private player-linked lore doc"
+    player_user_ids_set = {player_user_id0, player_user_id1}
+    player_doc_ids_set  = {player_id0, player_id1}
+    for d in player_private:
+        assert d["createdBy"] in player_user_ids_set, (
+            f"Private player lore {d['title']!r} createdBy={d['createdBy']} "
+            f"must be a User _id {player_user_ids_set}, not a Player doc _id"
+        )
+        assert d["createdBy"] not in player_doc_ids_set, (
+            f"Private player lore {d['title']!r} createdBy must NOT be the "
+            f"Player document _id {player_doc_ids_set}"
+        )
+
     # ── Graceful fallback when race_ids is empty ─────────────────────────────
     docs_no_races = seed.build_lore_docs(
         campaign_id=CAMPAIGN_ID,
         gm_id=GM_ID,
         player_ids=[player_id0, player_id1],
+        player_user_ids=[player_user_id0, player_user_id1],
         character_ids=[char_id0, char_id1],
         location_ids={"Phandalin": location_id},
         race_ids={},  # empty — should still produce docs without crashing

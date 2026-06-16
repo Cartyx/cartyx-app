@@ -568,13 +568,19 @@ CAMPAIGNS = [
 ]
 
 
-def build_lore_docs(*, campaign_id, gm_id, player_ids, character_ids,
-                    location_ids, race_ids, now):
+def build_lore_docs(*, campaign_id, gm_id, player_ids, player_user_ids,
+                    character_ids, location_ids, race_ids, now):
     """Return at least 5 Lore docs for the rich campaign.
 
     Arguments
     ---------
-    player_ids  : list of Player document ObjectIds (not userId)
+    player_ids      : list of Player document ObjectIds (not userId) — used for
+                      the "player" link targets so the Lore tab can filter by
+                      player doc id.
+    player_user_ids : list of User ObjectIds, parallel to player_ids — used as
+                      createdBy so the server's ownership check
+                      (String(doc.createdBy) === member.userId) correctly
+                      identifies the owning player.
     character_ids : list of Character document ObjectIds (in insertion order)
     location_ids  : dict mapping location name → ObjectId
     race_ids      : dict mapping race title → ObjectId (subset; may be empty)
@@ -608,9 +614,13 @@ def build_lore_docs(*, campaign_id, gm_id, player_ids, character_ids,
     npc_id        = character_ids[0] if character_ids else ObjectId()
     # Second character (Elara Moonwhisper) for the dragon legend multi-link.
     char2_id      = character_ids[1] if len(character_ids) > 1 else npc_id
-    # Player ids for the two player-linked lore docs.
+    # Player *document* ids for the two player-linked lore docs (link targets).
     player0_id    = player_ids[0] if player_ids else ObjectId()
     player1_id    = player_ids[1] if len(player_ids) > 1 else player0_id
+    # Player *user* ids — used as createdBy so the server ownership check
+    # (String(doc.createdBy) === member.userId) recognises the owning player.
+    player0_user_id = player_user_ids[0] if player_user_ids else ObjectId()
+    player1_user_id = player_user_ids[1] if len(player_user_ids) > 1 else player0_user_id
 
     docs = [
         # 1 — Race link (public, GM-authored)
@@ -703,7 +713,10 @@ def build_lore_docs(*, campaign_id, gm_id, player_ids, character_ids,
                 "silver coin always turning between their fingers."
             ),
             public=False,
-            author_id=player0_id,
+            # createdBy must be the User _id (not the Player doc _id) so the
+            # server ownership check (String(doc.createdBy) === member.userId)
+            # lets the owning player read their own private lore.
+            author_id=player0_user_id,
             links=[{"kind": "player", "id": player0_id}],
             images=[],
             tags=["lore", "player", "backstory"],
@@ -720,7 +733,8 @@ def build_lore_docs(*, campaign_id, gm_id, player_ids, character_ids,
                 "Anyone who asks may read it at camp."
             ),
             public=True,
-            author_id=player1_id,
+            # Same reasoning: createdBy is the User _id, not the Player doc _id.
+            author_id=player1_user_id,
             links=[{"kind": "player", "id": player1_id}],
             images=[],
             tags=["lore", "player", "journal"],
@@ -1393,6 +1407,7 @@ def main() -> None:
                 campaign_id=campaign_id,
                 gm_id=gm_id,
                 player_ids=player_doc_ids,
+                player_user_ids=[pu["_id"] for pu in player_users],
                 character_ids=character_ids,
                 location_ids=location_ids,
                 race_ids=race_ids,
