@@ -1,6 +1,15 @@
 import React, { useState } from 'react';
 import { useParams } from '@tanstack/react-router';
-import { Users, Dna, ScrollText, UserCircle, MapPin, Map as MapIcon, Skull } from 'lucide-react';
+import {
+  Users,
+  Dna,
+  ScrollText,
+  UserCircle,
+  MapPin,
+  Map as MapIcon,
+  Skull,
+  BookOpen,
+} from 'lucide-react';
 import { CharactersPanel } from './characters/CharactersPanel';
 import { RacesPanel } from './races/RacesPanel';
 import { RulesPanel } from './rules/RulesPanel';
@@ -8,6 +17,7 @@ import { PlayersPanel } from './players/PlayersPanel';
 import { LocationsPanel } from './locations/LocationsPanel';
 import { MapsPanel } from './maps/MapsPanel';
 import { MonstersPanel } from './monsters/MonstersPanel';
+import { LorePanel } from './lore/LorePanel';
 import { useCampaign } from '~/hooks/useCampaigns';
 
 type WikiCategoryId =
@@ -16,6 +26,7 @@ type WikiCategoryId =
   | 'races'
   | 'rules'
   | 'locations'
+  | 'lore'
   | 'maps'
   | 'monsters';
 
@@ -33,6 +44,7 @@ const WIKI_CATEGORIES: WikiCategory[] = [
   { id: 'races', label: 'Races', icon: Dna },
   { id: 'rules', label: 'Rules', icon: ScrollText },
   { id: 'locations', label: 'Locations', icon: MapPin },
+  { id: 'lore', label: 'Lore', icon: BookOpen },
   { id: 'maps', label: 'Maps', icon: MapIcon, gmOnly: true },
   { id: 'monsters', label: 'Monsters', icon: Skull, gmOnly: true },
 ];
@@ -79,6 +91,8 @@ export function WikiPanel() {
         <RulesPanel onBack={() => setSelectedCategory(null)} />
       ) : selectedCategory === 'locations' ? (
         <LocationsPanel onBack={() => setSelectedCategory(null)} />
+      ) : selectedCategory === 'lore' ? (
+        <LorePanel onBack={() => setSelectedCategory(null)} />
       ) : selectedCategory === 'maps' && isGM ? (
         <MapsPanel onBack={() => setSelectedCategory(null)} />
       ) : selectedCategory === 'monsters' && isGM ? (
