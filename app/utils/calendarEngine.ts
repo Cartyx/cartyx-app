@@ -184,3 +184,78 @@ export function weekdayOf(cfg: CalendarConfig, date: CalDate): number {
   }
   return mod(cfg.epoch.weekdayIndex + toOrdinal(cfg, date), w);
 }
+
+/** Rows of week-length cells; null = padding (leading/trailing blanks). */
+export function monthGrid(
+  cfg: CalendarConfig,
+  year: number,
+  monthIndex: number
+): (number | null)[][] {
+  const total = daysInMonth(cfg, year, monthIndex);
+  const w = cfg.weekdays.length;
+  const lead =
+    cfg.weekdayMode === 'continuous'
+      ? mod(cfg.epoch.weekdayIndex + toOrdinal(cfg, { year, monthIndex, day: 1 }), w)
+      : 0;
+  const cells: (number | null)[] = [];
+  for (let i = 0; i < lead; i++) cells.push(null);
+  for (let d = 1; d <= total; d++) cells.push(d);
+  while (cells.length % w !== 0) cells.push(null);
+  const rows: (number | null)[][] = [];
+  for (let i = 0; i < cells.length; i += w) rows.push(cells.slice(i, i + w));
+  return rows;
+}
+
+/** Phase as a 0..1 fraction (0 = new). Display-only. */
+export function moonPhase(_cfg: CalendarConfig, moon: CalMoon, ordinal: number): number {
+  return mod(ordinal - moon.offsetDays, moon.cycleLength) / moon.cycleLength;
+}
+
+/** The active season for an ordinal, or null if no seasons configured. */
+export function seasonOf(cfg: CalendarConfig, ordinal: number): CalSeason | null {
+  if (!cfg.seasons?.length) return null;
+  const date = fromOrdinal(cfg, ordinal);
+  // Start ordinal of each season within this date's year.
+  const starts = cfg.seasons.map((s) => ({
+    s,
+    o: toOrdinal(cfg, { year: date.year, monthIndex: s.startMonthIndex, day: s.startDay }),
+  }));
+  starts.sort((a, b) => a.o - b.o);
+  let active: CalSeason = starts[starts.length - 1]!.s; // wraps from previous year
+  for (const { s, o } of starts) {
+    if (ordinal >= o) active = s;
+  }
+  return active;
+}
+
+export function holidaysOn(
+  cfg: CalendarConfig,
+  _year: number,
+  monthIndex: number,
+  day: number
+): CalHoliday[] {
+  return (cfg.holidays ?? []).filter((h) => h.monthIndex === monthIndex && h.day === day);
+}
+
+function ordinalSuffix(n: number): string {
+  const v = n % 100;
+  if (v >= 11 && v <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
+}
+
+export function formatDate(cfg: CalendarConfig, date: CalDate): string {
+  const m = cfg.months[date.monthIndex];
+  const yearLabel = `${date.year}${cfg.yearSuffix ? ` ${cfg.yearSuffix}` : ''}`;
+  if (!m) return yearLabel;
+  if (m.isIntercalary) return `${m.name}, ${yearLabel}`;
+  return `${ordinalSuffix(date.day)} ${m.name}, ${yearLabel}`;
+}

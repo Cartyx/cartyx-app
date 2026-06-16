@@ -8,6 +8,11 @@ import {
   compareDates,
   addDays,
   weekdayOf,
+  monthGrid,
+  moonPhase,
+  seasonOf,
+  holidaysOn,
+  formatDate,
   type CalendarConfig,
 } from '~/utils/calendarEngine';
 
@@ -153,5 +158,54 @@ describe('weekdayOf', () => {
     expect(weekdayOf(r, { year: 1, monthIndex: 0, day: 1 })).toBe(0);
     expect(weekdayOf(r, { year: 1, monthIndex: 0, day: 7 })).toBe(1);
     expect(weekdayOf(r, { year: 1, monthIndex: 1, day: 1 })).toBe(-1);
+  });
+});
+
+describe('monthGrid', () => {
+  it('chunks days into week rows, padding the last row with null', () => {
+    const grid = monthGrid(cfg, 1, 0); // 30 days, 5-day week, continuous, day1 weekday 0
+    expect(grid.length).toBe(6);
+    expect(grid[0]).toEqual([1, 2, 3, 4, 5]);
+    expect(grid[5]).toEqual([26, 27, 28, 29, 30]);
+  });
+  it('adds leading blanks in continuous mode when day 1 is mid-week', () => {
+    // month 1 of year 1 starts at ordinal 30 -> weekday 30 % 5 = 0; force offset
+    const off: CalendarConfig = { ...cfg, epoch: { year: 1, weekdayIndex: 2 } };
+    const grid = monthGrid(off, 1, 0);
+    expect(grid[0]!.slice(0, 2)).toEqual([null, null]);
+    expect(grid[0]![2]).toBe(1);
+  });
+});
+
+describe('moonPhase / seasonOf / holidaysOn / formatDate', () => {
+  const dcfg: CalendarConfig = {
+    ...cfg,
+    moons: [{ name: 'Luna', cycleLength: 10, offsetDays: 0 }],
+    seasons: [
+      { name: 'Cold', startMonthIndex: 0, startDay: 1 },
+      { name: 'Warm', startMonthIndex: 1, startDay: 1 },
+    ],
+    holidays: [{ name: 'Feast', monthIndex: 0, day: 15 }],
+    yearSuffix: 'DR',
+  };
+  it('moonPhase returns a 0..1 fraction', () => {
+    expect(moonPhase(dcfg, dcfg.moons![0]!, 0)).toBeCloseTo(0, 5);
+    expect(moonPhase(dcfg, dcfg.moons![0]!, 5)).toBeCloseTo(0.5, 5);
+  });
+  it('seasonOf picks the active season', () => {
+    expect(seasonOf(dcfg, toOrdinal(dcfg, { year: 1, monthIndex: 0, day: 5 }))?.name).toBe('Cold');
+    expect(seasonOf(dcfg, toOrdinal(dcfg, { year: 1, monthIndex: 1, day: 5 }))?.name).toBe('Warm');
+  });
+  it('holidaysOn returns matching holidays', () => {
+    expect(holidaysOn(dcfg, 1, 0, 15).map((h) => h.name)).toEqual(['Feast']);
+    expect(holidaysOn(dcfg, 1, 0, 16)).toEqual([]);
+  });
+  it('formatDate renders normal vs intercalary', () => {
+    expect(formatDate(dcfg, { year: 1482, monthIndex: 0, day: 11 })).toBe('11th Alpha, 1482 DR');
+    const ic: CalendarConfig = {
+      ...dcfg,
+      months: [{ name: 'Midsummer', days: 1, isIntercalary: true }],
+    };
+    expect(formatDate(ic, { year: 1482, monthIndex: 0, day: 1 })).toBe('Midsummer, 1482 DR');
   });
 });
