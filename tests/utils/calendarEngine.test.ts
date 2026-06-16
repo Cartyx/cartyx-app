@@ -101,6 +101,9 @@ describe('validateDate', () => {
     };
     expect(validateDate(z, { year: 1, monthIndex: 1, day: 1 }).ok).toBe(false);
   });
+  it('rejects a non-integer year', () => {
+    expect(validateDate(cfg, { year: 1.5, monthIndex: 0, day: 1 }).ok).toBe(false);
+  });
 });
 
 describe('compareDates / addDays', () => {
@@ -112,11 +115,23 @@ describe('compareDates / addDays', () => {
       compareDates(cfg, { year: 2, monthIndex: 0, day: 1 }, { year: 1, monthIndex: 0, day: 1 })
     ).toBe(1);
   });
+  it('returns 0 for equal dates', () => {
+    expect(
+      compareDates(cfg, { year: 1, monthIndex: 0, day: 5 }, { year: 1, monthIndex: 0, day: 5 })
+    ).toBe(0);
+  });
   it('adds days across a month boundary', () => {
     expect(addDays(cfg, { year: 1, monthIndex: 0, day: 30 }, 1)).toEqual({
       year: 1,
       monthIndex: 1,
       day: 1,
+    });
+  });
+  it('subtracts days across a month boundary (negative n)', () => {
+    expect(addDays(cfg, { year: 1, monthIndex: 1, day: 1 }, -1)).toEqual({
+      year: 1,
+      monthIndex: 0,
+      day: 30,
     });
   });
 });
