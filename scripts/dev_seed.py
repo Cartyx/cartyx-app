@@ -575,6 +575,16 @@ _GM_SPINE = {
         "Glasstaff's quarters: papers everywhere, and a half-burned letter in the grate.",
         "The letter is sealed with a spider sigil. It is signed 'The Black Spider.'",
     ],
+    3: [
+        "The trail ends at a cliff face above a rushing stream — the dark "
+        "mouth of Wave Echo Cave yawns open before you.",
+        "Inside, the air is stale and metallic. Old bones and rusted mining "
+        "gear litter the worked-stone tunnels.",
+        "A sickly green light flickers ahead, and a flaming skull drifts out "
+        "of the dark, cackling as it comes.",
+        "Deeper in, the Forge of Spells pulses with old magic — and a cold "
+        "drow voice echoes: 'You should not have come here.'",
+    ],
 }
 
 # A couple of GM-channel (secret) lines per session for role-filter testing.

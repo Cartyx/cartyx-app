@@ -139,6 +139,44 @@ def test_dice_log():
     assert any(d["channel"] == "gm" for d in docs), "need a gm-channel roll"
 
 
+def test_dice_log_deterministic():
+    start = NOW - timedelta(days=21)
+    end = start + timedelta(hours=4)
+    a = seed.build_dice_log(
+        session_id=SESSION_IDS[1], campaign_id=CAMPAIGN_ID,
+        party=PARTY, start_ts=start, end_ts=end, rng=random.Random(2), target_count=15,
+    )
+    b = seed.build_dice_log(
+        session_id=SESSION_IDS[1], campaign_id=CAMPAIGN_ID,
+        party=PARTY, start_ts=start, end_ts=end, rng=random.Random(2), target_count=15,
+    )
+    # Same seed → identical roll stream (titles, rollTypes, natural dice, ids).
+    assert [(d["title"], d["rollType"], d["attackRolls"][0]["dice"]) for d in a] == \
+           [(d["title"], d["rollType"], d["attackRolls"][0]["dice"]) for d in b], "dice log must be deterministic"
+    assert [d["id"] for d in a] == [d["id"] for d in b], "dice ids must be deterministic"
+
+
+def test_chat_transcript_spine_per_session():
+    start = NOW
+    end = start + timedelta(hours=4)
+    # The GM opener (first message, channel general, authored by the GM) should
+    # match the session's own spine — not fall back to session 1's.
+    def opener(session_number):
+        docs = seed.build_chat_transcript(
+            session_id=SESSION_IDS[session_number], campaign_id=CAMPAIGN_ID,
+            party=PARTY, gm_id=GM_ID, gm_name="Game Master",
+            start_ts=start, end_ts=end, rng=random.Random(7),
+            target_count=5, session_number=session_number,
+        )
+        return docs[0]["text"]
+    o1, o2, o3 = opener(1), opener(2), opener(3)
+    assert o1 != o2 != o3 and o1 != o3, "each session opens with its own narration"
+    # Active session 3 is Wave Echo Cave — its opener must reference the cave,
+    # not session 1's Triboar Trail ambush.
+    assert "cave" in o3.lower(), f"session 3 opener should be cave-themed, got: {o3!r}"
+    assert "triboar" not in o3.lower(), "session 3 must not reuse session 1's Triboar Trail narration"
+
+
 def run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
