@@ -156,6 +156,94 @@ def test_dice_log_deterministic():
     assert [d["id"] for d in a] == [d["id"] for d in b], "dice ids must be deterministic"
 
 
+def test_lore_docs():
+    race_id     = ObjectId()
+    location_id = ObjectId()
+    char_id0    = ObjectId()
+    char_id1    = ObjectId()
+    player_id0  = ObjectId()
+    player_id1  = ObjectId()
+
+    docs = seed.build_lore_docs(
+        campaign_id=CAMPAIGN_ID,
+        gm_id=GM_ID,
+        player_ids=[player_id0, player_id1],
+        character_ids=[char_id0, char_id1],
+        location_ids={"Phandalin": location_id},
+        race_ids={"Elf": race_id},
+        now=NOW,
+    )
+
+    # ── Volume ──────────────────────────────────────────────────────────────
+    assert len(docs) >= 5, f"expected >=5 lore docs, got {len(docs)}"
+
+    # ── Required fields present on every doc ────────────────────────────────
+    required = {
+        "title", "content", "gmContent", "isPublic", "images",
+        "links", "tags", "campaignId", "createdBy", "createdAt", "updatedAt",
+    }
+    for d in docs:
+        assert required.issubset(d), f"missing fields in {d.get('title')!r}: {required - d.keys()}"
+        assert d["campaignId"] == CAMPAIGN_ID
+        assert isinstance(d["isPublic"], bool)
+        assert isinstance(d["tags"], list)
+        assert isinstance(d["links"], list)
+        assert isinstance(d["images"], list)
+
+    # ── All four link kinds must appear at least once ────────────────────────
+    link_kinds = {lnk["kind"] for d in docs for lnk in d["links"]}
+    for kind in ("race", "location", "character", "player"):
+        assert kind in link_kinds, f"no link of kind={kind!r} found"
+
+    # ── Links must carry real (non-falsy) ids ────────────────────────────────
+    for d in docs:
+        for lnk in d["links"]:
+            assert lnk.get("id"), f"link missing id in doc {d.get('title')!r}"
+            assert lnk.get("kind") in ("race", "location", "character", "player"), \
+                f"unexpected link kind {lnk.get('kind')!r}"
+
+    # ── At least one private doc with non-empty gmContent ───────────────────
+    private_with_gm = [d for d in docs if not d["isPublic"] and d.get("gmContent")]
+    assert private_with_gm, "need at least one private doc with gmContent"
+
+    # ── At least one public and one private doc ──────────────────────────────
+    assert any(d["isPublic"] for d in docs), "need at least one public doc"
+    assert any(not d["isPublic"] for d in docs), "need at least one private doc"
+
+    # ── Images carry the expected slug-based URL pattern ────────────────────
+    img_urls = [img["url"] for d in docs for img in d["images"]]
+    assert any(u.startswith("/uploads/seed-lore/") for u in img_urls), \
+        "image urls should be under /uploads/seed-lore/"
+
+    # ── The race link uses the supplied race_id ──────────────────────────────
+    race_links = [lnk for d in docs for lnk in d["links"] if lnk["kind"] == "race"]
+    assert any(lnk["id"] == race_id for lnk in race_links), \
+        "race link must use the supplied race_id"
+
+    # ── The location link uses the supplied location_id ──────────────────────
+    loc_links = [lnk for d in docs for lnk in d["links"] if lnk["kind"] == "location"]
+    assert any(lnk["id"] == location_id for lnk in loc_links), \
+        "location link must use the supplied location_id"
+
+    # ── Player links use the supplied player doc ids ─────────────────────────
+    player_links = [lnk for d in docs for lnk in d["links"] if lnk["kind"] == "player"]
+    linked_player_ids = {lnk["id"] for lnk in player_links}
+    assert player_id0 in linked_player_ids or player_id1 in linked_player_ids, \
+        "player links must use the supplied player_ids"
+
+    # ── Graceful fallback when race_ids is empty ─────────────────────────────
+    docs_no_races = seed.build_lore_docs(
+        campaign_id=CAMPAIGN_ID,
+        gm_id=GM_ID,
+        player_ids=[player_id0, player_id1],
+        character_ids=[char_id0, char_id1],
+        location_ids={"Phandalin": location_id},
+        race_ids={},  # empty — should still produce docs without crashing
+        now=NOW,
+    )
+    assert len(docs_no_races) >= 5, "build_lore_docs must work even when race_ids is empty"
+
+
 def test_chat_transcript_spine_per_session():
     start = NOW
     end = start + timedelta(hours=4)
