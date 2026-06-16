@@ -13,6 +13,7 @@ import { useModalForm } from '~/hooks/useModalForm';
 import type { PictureCrop } from '~/types/character';
 import { uploadToR2 } from '~/utils/uploadToR2';
 import { compressImage } from '~/utils/compressImage';
+import { PlayerLoreTab } from './PlayerLoreTab';
 
 interface PlayerModalProps {
   campaignId: string;
@@ -456,6 +457,16 @@ export function PlayerModal({ campaignId, playerId, onClose }: PlayerModalProps)
                   minHeight="120px"
                   id="player-gmnotes-editor"
                 />
+              )}
+
+              {/* Lore — only shown when editing an existing player */}
+              {isEdit && playerId && (
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-widest">
+                    Lore
+                  </p>
+                  <PlayerLoreTab campaignId={campaignId} playerId={playerId} canManage={true} />
+                </div>
               )}
             </>
           )}
