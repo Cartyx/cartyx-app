@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import { LoreModal } from '~/components/wiki/lore/LoreModal';
 
 vi.mock('~/hooks/useLore', () => ({
@@ -88,5 +88,18 @@ describe('LoreModal', () => {
       fireEvent.submit(screen.getByRole('dialog'));
     });
     expect(screen.getByText(/title is required/i)).toBeInTheDocument();
+  });
+
+  it('pre-seeds the links editor with initialLinks in create mode', () => {
+    render(
+      <LoreModal
+        isOpen
+        onClose={() => {}}
+        campaignId="c1"
+        initialLinks={[{ kind: 'character', id: 'ch1', label: 'Gandalf' }]}
+      />
+    );
+    const linksEditor = screen.getByTestId('lore-links-editor');
+    expect(within(linksEditor).getByText('Gandalf')).toBeInTheDocument();
   });
 });
