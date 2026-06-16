@@ -81,3 +81,51 @@ export function daysInYear(cfg: CalendarConfig, year: number): number {
   for (let m = 0; m < cfg.months.length; m++) total += daysInMonth(cfg, year, m);
   return total;
 }
+
+/** Signed day count from the epoch-year's first day to `year`'s first day. */
+function yearStartOrdinal(cfg: CalendarConfig, year: number): number {
+  let total = 0;
+  if (year >= cfg.epoch.year) {
+    for (let y = cfg.epoch.year; y < year; y++) total += daysInYear(cfg, y);
+  } else {
+    for (let y = year; y < cfg.epoch.year; y++) total -= daysInYear(cfg, y);
+  }
+  return total;
+}
+
+function daysBeforeMonth(cfg: CalendarConfig, year: number, monthIndex: number): number {
+  let total = 0;
+  for (let m = 0; m < monthIndex; m++) total += daysInMonth(cfg, year, m);
+  return total;
+}
+
+export function toOrdinal(cfg: CalendarConfig, date: CalDate): number {
+  return (
+    yearStartOrdinal(cfg, date.year) +
+    daysBeforeMonth(cfg, date.year, date.monthIndex) +
+    (date.day - 1)
+  );
+}
+
+export function fromOrdinal(cfg: CalendarConfig, ordinal: number): CalDate {
+  let year = cfg.epoch.year;
+  let rem = ordinal;
+  if (rem >= 0) {
+    while (rem >= daysInYear(cfg, year)) {
+      rem -= daysInYear(cfg, year);
+      year++;
+    }
+  } else {
+    while (rem < 0) {
+      year--;
+      rem += daysInYear(cfg, year);
+    }
+  }
+  // rem is now in [0, daysInYear(year)). Walk months; 0-length months are skipped.
+  let monthIndex = 0;
+  while (rem >= daysInMonth(cfg, year, monthIndex)) {
+    rem -= daysInMonth(cfg, year, monthIndex);
+    monthIndex++;
+  }
+  return { year, monthIndex, day: rem + 1 };
+}
