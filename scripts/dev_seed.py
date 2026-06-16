@@ -28,6 +28,7 @@ from html import escape
 from pathlib import Path
 
 from dotenv import load_dotenv
+from bson import ObjectId
 from pymongo import MongoClient
 from pymongo.errors import ConfigurationError
 
@@ -257,6 +258,7 @@ CAMPAIGNS = [
         # scale.  The other two campaigns stay lean for happy-path testing.
         "stock_test_campaign": True,
         "bulk_test_campaign": True,
+        "rich_session_history": True,
         "name": "The Lost Mines of Phandelver",
         "description": (
             "A classic introductory adventure. The party has been hired to escort a wagon "
@@ -284,9 +286,59 @@ CAMPAIGNS = [
         "maxPlayers": 5,
         "colors": {"bg": "#1a3a2a", "fg": "#e8e0d0", "accent": "#2d5a3f"},
         "sessions": [
-            {"name": "Goblin Arrows", "number": 1, "status": "completed"},
-            {"name": "The Spider's Web", "number": 2, "status": "completed"},
-            {"name": "Wave Echo Cave", "number": 3, "status": "not_started"},
+            {
+                "name": "Goblin Arrows",
+                "number": 1,
+                "status": "completed",
+                # Played ~3 weeks ago, ran ~4 hours.
+                "start_offset_days": 21,
+                "end_offset_hours": 4,
+                "summary": (
+                    "## Session 1 — Goblin Arrows\n\n"
+                    "The party set out from Neverwinter escorting Gundren Rockseeker's "
+                    "supply wagon to Phandalin. On the Triboar Trail they were ambushed "
+                    "by Cragmaw goblins.\n\n"
+                    "### Key events\n"
+                    "- Found two dead horses and signs Gundren and Sildar were taken\n"
+                    "- Tracked the goblins to the **Cragmaw Hideout**\n"
+                    "- Freed **Sildar Hallwinter**, who offered 50 gp to reach Phandalin\n"
+                    "- Klarg the bugbear fell; the wagon was recovered"
+                ),
+            },
+            {
+                "name": "The Spider's Web",
+                "number": 2,
+                "status": "completed",
+                # Played ~10 days ago.
+                "start_offset_days": 10,
+                "end_offset_hours": 4,
+                "summary": (
+                    "## Session 2 — The Spider's Web\n\n"
+                    "The party reached Phandalin and ran afoul of the **Redbrand** "
+                    "ruffians terrorizing the town.\n\n"
+                    "### Key events\n"
+                    "- Cleared the Redbrand hideout beneath Tresendar Manor\n"
+                    "- Discovered Glasstaff (Iarno Albrek) was the Redbrands' leader\n"
+                    "- Learned of the **Black Spider** and the search for Wave Echo Cave\n"
+                    "- Rescued the Dendrar family and rest of the captives"
+                ),
+            },
+            {
+                "name": "Wave Echo Cave",
+                "number": 3,
+                "status": "active",
+                # Starts today; no end date (in progress).
+                "start_offset_days": 0,
+                "end_offset_hours": None,
+                "summary": (
+                    "## Previously on… The Lost Mines of Phandelver\n\n"
+                    "You freed Sildar, broke the Redbrands, and unmasked Glasstaff — who "
+                    "served the mysterious **Black Spider**. With the map to **Wave Echo "
+                    "Cave** in hand, you set out to find the lost mine and the Forge of "
+                    "Spells before the Black Spider's forces beat you to it.\n\n"
+                    "_Tonight: the cave mouth waits._"
+                ),
+            },
         ],
         "characters": [
             {
@@ -513,19 +565,30 @@ def main() -> None:
 
         # Insert sessions
         sessions = defn["sessions"]
+        session_ids: dict[int, ObjectId] = {}
         for sess in sessions:
-            start_date = now - timedelta(weeks=len(sessions) - sess["number"])
-            db.sessions.insert_one({
+            start_offset_days = sess.get("start_offset_days", len(sessions) - sess["number"])
+            start_date = now - timedelta(days=start_offset_days)
+            # Pin start to 18:00 local-ish for realism; keep tz-aware UTC.
+            start_date = start_date.replace(hour=18, minute=0, second=0, microsecond=0)
+            end_hours = sess.get("end_offset_hours")
+            end_date = start_date + timedelta(hours=end_hours) if end_hours is not None else None
+            doc = {
                 "campaignId": campaign_id,
                 "name": sess["name"],
                 "gm": gm_id,
                 "number": sess["number"],
                 "startDate": start_date,
+                "endDate": end_date,
                 "status": sess["status"],
+                "summary": sess.get("summary"),
                 "createdAt": now,
                 "updatedAt": now,
-            })
-            print(f"    session #{sess['number']}  {sess['name']} [{sess['status']}]")
+            }
+            result = db.sessions.insert_one(doc)
+            session_ids[sess["number"]] = result.inserted_id
+            print(f"    session #{sess['number']}  {sess['name']} [{sess['status']}]"
+                  f"{' (active)' if sess['status'] == 'active' else ''}")
 
         # Insert default LocationTypes for the campaign (matches LocationType.ts behavior)
         db.locationtype.insert_many([
