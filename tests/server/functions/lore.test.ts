@@ -214,6 +214,27 @@ describe('createLore', () => {
     >;
     expect(res.success).toBe(true);
   });
+
+  it('does NOT persist gmContent when a non-GM creates lore', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign as never);
+    vi.mocked(Lore.create).mockResolvedValue({
+      _id: 'new',
+      title: 'T',
+      content: '',
+      gmContent: '',
+      isPublic: false,
+      images: [],
+      links: [],
+      tags: [],
+      campaignId: 'camp-1',
+      createdBy: 'user-1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never);
+    await _create({ data: { campaignId: 'camp-1', title: 'T', gmContent: 'secret' } });
+    const createArg = vi.mocked(Lore.create).mock.calls[0][0] as Record<string, unknown>;
+    expect(createArg.gmContent).toBe('');
+  });
 });
 
 describe('listLore GM visibility filter', () => {
@@ -260,5 +281,39 @@ describe('updateLore GM gmContent', () => {
     })) as Record<string, Record<string, unknown>>;
     expect(res.success).toBe(true);
     expect(res.lore.gmContent).toBe('gm notes');
+  });
+
+  it('does NOT persist gmContent when a non-GM creator updates lore', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign as never);
+    // non-GM must be the creator to pass the permission check
+    vi.mocked(Lore.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'l1',
+        campaignId: 'camp-1',
+        createdBy: 'user-1',
+      }),
+    } as never);
+    vi.mocked(Lore.findOneAndUpdate).mockResolvedValue({
+      _id: 'l1',
+      title: 'Updated',
+      content: 'body',
+      gmContent: '',
+      isPublic: false,
+      images: [],
+      links: [],
+      tags: [],
+      campaignId: 'camp-1',
+      createdBy: 'user-1',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never);
+    await _update({
+      data: { id: 'l1', campaignId: 'camp-1', title: 'Updated', gmContent: 'secret' },
+    });
+    const updateArg = vi.mocked(Lore.findOneAndUpdate).mock.calls[0][1] as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(updateArg.$set.gmContent).toBe('');
   });
 });

@@ -159,7 +159,7 @@ export const createLore = createServerFn({ method: 'POST' })
       const doc = (await Lore.create({
         title: data.title,
         content: data.content,
-        gmContent: data.gmContent,
+        gmContent: member.isGM ? data.gmContent : '',
         isPublic: data.isPublic,
         images: data.images,
         links: data.links,
@@ -202,7 +202,7 @@ export const updateLore = createServerFn({ method: 'POST' })
           $set: {
             title: data.title,
             content: data.content,
-            gmContent: data.gmContent,
+            gmContent: member.isGM ? data.gmContent : '',
             isPublic: data.isPublic,
             images: data.images,
             links: data.links,
