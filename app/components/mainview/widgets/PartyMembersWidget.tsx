@@ -1,53 +1,59 @@
-import { useEffect, useState } from 'react'
-import { Widget } from '../Widget'
-import { getPartyMembers, type PartyMember } from '~/services/mocks/partyMembersService'
+import { Widget } from '../Widget';
+import { usePlayers } from '~/hooks/usePlayers';
+import type { PlayerListItem } from '~/types/player';
+import type { PartyMember } from '~/services/mocks/types';
 
 export interface PartyMembersWidgetProps {
-  members?: ReadonlyArray<Readonly<PartyMember>>
-  className?: string
+  /**
+   * Explicit members to render. When provided, the widget renders these
+   * directly and skips fetching — used by Storybook and tests. In the app the
+   * widget fetches the campaign's real players via `campaignId`.
+   */
+  members?: ReadonlyArray<Readonly<PartyMember>>;
+  campaignId?: string;
+  className?: string;
+}
+
+/** Normalized shape the widget renders, sourced from real players or props. */
+interface PartyMemberView {
+  id: string;
+  name: string;
+  characterClass: string;
+  race: string;
+  avatarUrl?: string;
+  color?: string;
+}
+
+function playerToView(player: PlayerListItem): PartyMemberView {
+  return {
+    id: player.id,
+    name: `${player.firstName} ${player.lastName}`.trim(),
+    characterClass: player.characterClass,
+    race: player.race,
+    avatarUrl: player.picture || undefined,
+    color: player.color,
+  };
 }
 
 export function PartyMembersWidget({
   members,
+  campaignId,
   className = '',
 }: PartyMembersWidgetProps) {
-  const [resolvedMembers, setResolvedMembers] = useState<PartyMember[] | null>(
-    members ? members.map((member) => ({ ...member })) : null,
-  )
-  const [error, setError] = useState<string | null>(null)
+  // Hook is always called (React rules); its result is ignored when `members`
+  // is provided. usePlayers is disabled when campaignId is falsy.
+  const { players, isLoading, error: fetchError } = usePlayers(campaignId ?? '');
 
-  useEffect(() => {
-    if (members) {
-      setResolvedMembers(members.map((member) => ({ ...member })))
-      setError(null)
-      return
-    }
+  const resolvedMembers: PartyMemberView[] = members
+    ? members.map((member) => ({ ...member }))
+    : players.map(playerToView);
 
-    let isMounted = true
-    setError(null)
-
-    void getPartyMembers()
-      .then((nextMembers) => {
-        if (isMounted) {
-          setResolvedMembers(nextMembers)
-        }
-      })
-      .catch((error) => {
-        console.error(error)
-        if (isMounted) {
-          setError('Unable to load party members.')
-          setResolvedMembers([])
-        }
-      })
-
-    return () => {
-      isMounted = false
-    }
-  }, [members])
+  const isFetching = !members && isLoading;
+  const error = !members && fetchError ? 'Unable to load party members.' : null;
 
   return (
     <Widget title="Party Members" className={className}>
-      {resolvedMembers === null ? (
+      {isFetching ? (
         <div className="flex items-center justify-center py-8">
           <p className="font-sans font-semibold text-xs text-slate-500">Loading party members...</p>
         </div>
@@ -76,6 +82,7 @@ export function PartyMembersWidget({
                 <div
                   aria-hidden="true"
                   className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-700 font-sans font-semibold text-xs text-slate-200"
+                  style={member.color ? { backgroundColor: member.color } : undefined}
                 >
                   {member.name.charAt(0)}
                 </div>
@@ -83,7 +90,9 @@ export function PartyMembersWidget({
 
               <div className="min-w-0">
                 <p className="truncate font-sans font-semibold text-xs text-white">{member.name}</p>
-                <p className="font-sans font-semibold text-xs text-slate-400">{member.characterClass}</p>
+                <p className="font-sans font-semibold text-xs text-slate-400">
+                  {member.characterClass}
+                </p>
                 <p className="font-sans font-semibold text-xs text-slate-400">{member.race}</p>
               </div>
             </article>
@@ -91,5 +100,5 @@ export function PartyMembersWidget({
         </div>
       )}
     </Widget>
-  )
+  );
 }
