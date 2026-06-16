@@ -23,6 +23,7 @@ import re
 import secrets
 import shutil
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
@@ -534,6 +535,109 @@ def build_note_docs(*, campaign_id, session_ids, gm_id, party, now):
              public=True, author_id=gm_id, session_id=None,
              tags=["rules"], day_offset=21),
     ]
+    return docs
+
+
+# Generic in-character banter the builder samples to pad transcripts to length.
+# Speaker is a player; lines are character-agnostic so any party fits.
+_BANTER_POOL = [
+    "I check the room for traps before anyone touches anything.",
+    "Can I make a Perception check? Something feels off.",
+    "I ready my weapon and move to the front.",
+    "Wait — did anyone else hear that?",
+    "I take cover behind the rubble and nock an arrow.",
+    "Let me try to talk to it first. Diplomacy, remember?",
+    "I'm going to search the bodies for anything useful.",
+    "Do we rest here or push on? I'm down to half my spell slots.",
+    "I light a torch and hold it high.",
+    "That's a terrible plan. I love it. Let's go.",
+    "I keep watch on the corridor while you all loot.",
+    "Mark it on the map — we'll want to come back here.",
+]
+
+# GM narration spine per session number; first item sets the scene.
+_GM_SPINE = {
+    1: [
+        "The Triboar Trail bends ahead. Two dead horses lie across the path, "
+        "bristling with black-feathered arrows.",
+        "Four goblins burst from the underbrush! Roll initiative.",
+        "The trail of the captives leads northwest, toward a cave by a stream.",
+        "Inside the Cragmaw Hideout, a snarl of goblin voices echoes off wet stone.",
+        "Klarg the bugbear rises, wolf at his side, and bellows a challenge.",
+        "With Klarg down, you find Sildar Hallwinter bound and bloodied but alive.",
+    ],
+    2: [
+        "Phandalin spreads out before you — a few dozen buildings, a ruined "
+        "manor on the hill. Rough-looking men loiter outside the Sleeping Giant.",
+        "The Redbrands sneer: 'You must be new. This is our town now.'",
+        "Beneath Tresendar Manor, a natural cavern opens into worked stone.",
+        "A nothic skitters in the dark, its single eye fixing on you hungrily.",
+        "Glasstaff's quarters: papers everywhere, and a half-burned letter in the grate.",
+        "The letter is sealed with a spider sigil. It is signed 'The Black Spider.'",
+    ],
+}
+
+# A couple of GM-channel (secret) lines per session for role-filter testing.
+_GM_CHANNEL_LINES = [
+    "(GM) Reminder: the bugbear has 7 HP left and will flee at 5.",
+    "(GM) The doppelganger is posing as a captive — play it friendly for now.",
+    "(GM) Secret door behind the tapestry if they roll a 15+.",
+]
+
+
+def build_chat_transcript(*, session_id, campaign_id, party, gm_id, gm_name,
+                          start_ts, end_ts, rng, target_count, session_number=1):
+    """Return a deterministic list of Message docs for one session.
+
+    Interleaves GM narration (the per-session-number spine) with player banter
+    to ~target_count lines, plus a few gm-channel asides. seq is 1..N;
+    timestamps are monotonic across [start_ts, end_ts]. authorId is
+    str(user_id); authorName is the speaker.
+    """
+    spine = list(_GM_SPINE.get(session_number, _GM_SPINE[1]))
+    lines = []  # (channel, author_id, author_name, text)
+
+    # 1) GM opens the scene.
+    lines.append(("general", str(gm_id), gm_name, spine.pop(0)))
+
+    # 2) Interleave: a couple of player lines, then a GM spine beat, repeat.
+    while len(lines) < target_count:
+        for _ in range(rng.randint(2, 4)):
+            pc = rng.choice(party)
+            # Banter lines are character-agnostic (no {pc} placeholders), so the
+            # speaker is the `pc` chosen above; the text needs no formatting.
+            text = rng.choice(_BANTER_POOL)
+            lines.append(("general", str(pc["user_id"]), pc["name"], text))
+            if len(lines) >= target_count:
+                break
+        if spine:
+            lines.append(("general", str(gm_id), gm_name, spine.pop(0)))
+
+    # 3) Sprinkle in 2-3 gm-channel asides (GM author).
+    for aside in _GM_CHANNEL_LINES[: rng.randint(2, 3)]:
+        pos = rng.randint(1, len(lines))
+        lines.insert(pos, ("gm", str(gm_id), gm_name, aside))
+
+    # 4) Assign monotonic timestamps across the window and seq 1..N.
+    span_ms = max(int((end_ts - start_ts).total_seconds() * 1000), len(lines))
+    start_ms = int(start_ts.timestamp() * 1000)
+    step = span_ms // len(lines)
+    docs = []
+    for i, (channel, author_id, author_name, text) in enumerate(lines):
+        docs.append({
+            "id": str(uuid.UUID(int=rng.getrandbits(128))),
+            "seq": i + 1,
+            "sessionId": session_id,
+            "campaignId": campaign_id,
+            "channel": channel,
+            "type": "chat",
+            "authorId": author_id,
+            "authorName": author_name,
+            "text": text,
+            "beyond20Data": None,
+            "timestamp": start_ms + i * step,
+            "createdAt": start_ts,
+        })
     return docs
 
 

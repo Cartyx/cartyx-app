@@ -58,6 +58,47 @@ def test_note_docs():
         "need a player-authored public note"
 
 
+def test_chat_transcript():
+    start = NOW - timedelta(days=21)
+    end = start + timedelta(hours=4)
+    rng = random.Random(1)
+    docs = seed.build_chat_transcript(
+        session_id=SESSION_IDS[1], campaign_id=CAMPAIGN_ID,
+        party=PARTY, gm_id=GM_ID, gm_name="Game Master",
+        start_ts=start, end_ts=end, rng=rng, target_count=40,
+    )
+    assert len(docs) >= 40, f"expected >=40 messages, got {len(docs)}"
+    seqs = [d["seq"] for d in docs]
+    assert seqs == list(range(1, len(docs) + 1)), "seq must be 1..N in order"
+    ts = [d["timestamp"] for d in docs]
+    assert ts == sorted(ts), "timestamps must be non-decreasing"
+    start_ms, end_ms = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+    ids = set()
+    for d in docs:
+        assert set(["id", "seq", "sessionId", "campaignId", "channel", "type",
+                    "authorId", "authorName", "text", "timestamp",
+                    "createdAt"]).issubset(d), d
+        assert d["channel"] in ("general", "gm")
+        assert d["type"] == "chat"
+        assert isinstance(d["authorId"], str) and d["authorId"], "authorId is a non-empty str"
+        assert d["text"], "no empty messages"
+        assert start_ms <= d["timestamp"] <= end_ms, "timestamp within session window"
+        ids.add(d["id"])
+    assert len(ids) == len(docs), "message ids must be unique"
+    # Both GM and player authors present; some gm-channel lines for role filtering.
+    assert any(d["authorName"] == "Game Master" for d in docs)
+    assert any(d["authorName"] != "Game Master" for d in docs)
+    assert any(d["channel"] == "gm" for d in docs), "need some gm-channel messages"
+    assert any(d["channel"] == "general" for d in docs)
+    # Determinism: same rng seed → identical output.
+    docs2 = seed.build_chat_transcript(
+        session_id=SESSION_IDS[1], campaign_id=CAMPAIGN_ID,
+        party=PARTY, gm_id=GM_ID, gm_name="Game Master",
+        start_ts=start, end_ts=end, rng=random.Random(1), target_count=40,
+    )
+    assert [d["text"] for d in docs] == [d["text"] for d in docs2], "must be deterministic"
+
+
 def run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
