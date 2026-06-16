@@ -24,6 +24,10 @@ import {
   CharacterWindowWrapper,
   EditCharacterModalWrapper,
 } from '~/components/mainview/gmscreens/CharacterWindowWrapper';
+import {
+  LoreWindowWrapper,
+  EditLoreModalWrapper,
+} from '~/components/mainview/gmscreens/LoreWindowWrapper';
 import { RaceWindowWrapper, EditRaceModalWrapper } from '~/components/wiki/races/RaceWindowWrapper';
 import {
   RuleWindowWrapper,
@@ -112,6 +116,7 @@ export function TabletopView({
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
   const [editingMonsterId, setEditingMonsterId] = useState<string | null>(null);
+  const [editingLoreId, setEditingLoreId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [localWindows, setLocalWindows] = useState<ManagedWindow[]>([]);
   const localScreenIdRef = useRef<string | null>(null);
@@ -348,6 +353,14 @@ export function TabletopView({
               onEdit={() => setEditingMonsterId(w.documentId)}
             />
           );
+        } else if (w.collection === 'lore') {
+          windowContent = (
+            <LoreWindowWrapper
+              loreId={w.documentId}
+              campaignId={campaignId}
+              onEdit={() => setEditingLoreId(w.documentId)}
+            />
+          );
         } else {
           windowContent = (
             <div className="p-4 overflow-auto h-full">
@@ -365,7 +378,8 @@ export function TabletopView({
         if (
           w.collection === 'rule' ||
           w.collection === 'character' ||
-          w.collection === 'location'
+          w.collection === 'location' ||
+          w.collection === 'lore'
         ) {
           if (doc?.isPublic === true) {
             titleIcon = (
@@ -661,6 +675,13 @@ export function TabletopView({
           campaignId={campaignId}
           monsterId={editingMonsterId}
           onClose={() => setEditingMonsterId(null)}
+        />
+      )}
+      {editingLoreId !== null && (
+        <EditLoreModalWrapper
+          campaignId={campaignId}
+          loreId={editingLoreId}
+          onClose={() => setEditingLoreId(null)}
         />
       )}
     </div>
