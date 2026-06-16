@@ -54,8 +54,13 @@ test.describe('Lore editor (create flow)', () => {
       await page.keyboard.type('A legendary account written for automated testing.');
     }
 
-    // Toggle visibility to Public.
-    await page.getByRole('radio', { name: 'Public' }).click();
+    // Toggle visibility to Public. The radio is an `sr-only` input behind a
+    // styled label, so click the visible label (native <label> toggles the
+    // wrapped input) rather than the offscreen radio itself.
+    await page
+      .getByRole('dialog', { name: /Create Lore/i })
+      .locator('label', { hasText: 'Public' })
+      .click();
 
     // Submit the form.
     await page.getByRole('button', { name: 'Create Lore' }).click();
@@ -64,6 +69,12 @@ test.describe('Lore editor (create flow)', () => {
     await expect(page.getByRole('dialog', { name: /Create Lore/i })).toBeHidden({
       timeout: 10_000,
     });
-    await expect(page.getByText(LORE_TITLE)).toBeVisible({ timeout: 10_000 });
+    // Assert the lore CARD (a button whose accessible name includes the title)
+    // is present — more robust than the title <h3>, which is truncate/min-w-0
+    // and can read as zero-width. .first() because re-runs accumulate fixtures
+    // with the same title in the dev DB.
+    await expect(page.getByRole('button', { name: new RegExp(LORE_TITLE) }).first()).toBeVisible({
+      timeout: 10_000,
+    });
   });
 });

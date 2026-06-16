@@ -104,10 +104,13 @@ test.describe('Lore drag-and-drop onto tabletop', () => {
     // Drop onto the workspace centre.
     await dropOnWorkspace(page, payload, { dx: 0, dy: 0 });
 
-    // A floating lore window should appear on the workspace.
-    await expect(page.getByTestId('lore-window')).toBeVisible({ timeout: 10_000 });
+    // A floating lore window should appear on the workspace. Use .first() —
+    // the E2E screen persists across runs and may already hold lore windows
+    // from earlier drops, so more than one lore-window can be present.
+    await expect(page.getByTestId('lore-window').first()).toBeVisible({ timeout: 10_000 });
 
-    // The FloatingWindow title bar should also contain the lore entry's title.
+    // The FloatingWindow title bar should also contain the lore entry's title
+    // (server now hydrates lore so the title resolves, not "lore:<id>").
     await expect(page.getByText(title).first()).toBeVisible({ timeout: 10_000 });
   });
 });

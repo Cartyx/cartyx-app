@@ -1414,7 +1414,8 @@ def main() -> None:
                 now=now,
             )
             if lore_docs:
-                db.lore.insert_many(lore_docs)
+                # Mongoose pluralizes model('Lore') to the `lores` collection.
+                db.lores.insert_many(lore_docs)
             print(f"    lore       inserted {len(lore_docs)}")
 
         print()

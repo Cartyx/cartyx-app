@@ -119,6 +119,21 @@ const COLLECTION_REGISTRY: Record<string, CollectionFetcher> = {
         ) as Promise<Array<{ _id: unknown; title?: string; content?: string }>>;
     },
   },
+  lore: {
+    async fetch(ids: string[], campaignId: string) {
+      const { Lore } = await import('../db/models/Lore');
+      return Lore.find({ _id: { $in: ids }, campaignId }, '_id title content isPublic')
+        .lean()
+        .then((docs) =>
+          docs.map((d) => ({
+            _id: d._id,
+            title: (d as { title?: string }).title,
+            content: (d as { content?: string }).content,
+            isPublic: (d as { isPublic?: boolean }).isPublic,
+          }))
+        ) as Promise<Array<{ _id: unknown; title?: string; content?: string; isPublic?: boolean }>>;
+    },
+  },
   player: {
     async fetch(ids: string[], campaignId: string) {
       const { Player } = await import('../db/models/Player');

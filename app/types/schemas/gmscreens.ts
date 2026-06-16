@@ -13,6 +13,7 @@ export const SUPPORTED_COLLECTIONS: [string, ...string[]] = [
   'player',
   'location',
   'monster',
+  'lore',
 ];
 
 // ---------------------------------------------------------------------------
