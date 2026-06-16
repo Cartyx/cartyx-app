@@ -60,13 +60,19 @@ describe('toOrdinal / fromOrdinal', () => {
       }
     }
   });
+
+  it('fromOrdinal throws on a degenerate zero-length-year config', () => {
+    const zeroCfg: CalendarConfig = {
+      months: [{ name: 'Z', days: 0 }],
+      weekdays: ['d1'],
+      weekdayMode: 'continuous',
+      epoch: { year: 1, weekdayIndex: 0 },
+      leapDays: [],
+    };
+    expect(() => fromOrdinal(zeroCfg, 5)).toThrow();
+  });
 });
 
 function daysInMonthHelper(year: number, m: number): number {
-  // mirror engine for the loop bound
-  const base = cfg.months[m]!.days;
-  const leap = cfg.leapDays.some(
-    (r) => r.monthIndex === m && (((year - r.offset) % r.interval) + r.interval) % r.interval === 0
-  );
-  return base + (leap ? 1 : 0);
+  return daysInMonth(cfg, year, m);
 }

@@ -108,6 +108,10 @@ export function toOrdinal(cfg: CalendarConfig, date: CalDate): number {
 }
 
 export function fromOrdinal(cfg: CalendarConfig, ordinal: number): CalDate {
+  // A calendar whose year has zero total days would make the walks below loop forever.
+  if (daysInYear(cfg, cfg.epoch.year) <= 0) {
+    throw new RangeError('Calendar has a zero-length year; cannot map ordinals to dates.');
+  }
   let year = cfg.epoch.year;
   let rem = ordinal;
   if (rem >= 0) {
