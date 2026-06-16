@@ -155,8 +155,8 @@ function PlayPageContent() {
               <CatchUpWidget
                 catchUp={isCampaignLoading ? undefined : (activeSession?.catchUp ?? null)}
               />
-              <PartyMembersWidget />
-              <KeyAlliesWidget />
+              <PartyMembersWidget campaignId={campaignId} />
+              <KeyAlliesWidget campaignId={campaignId} />
               <SessionsListWidget campaignId={campaignId} className="col-span-full" />
               <CampaignTimelineWidget className="xl:col-span-2" />
             </DashboardView>

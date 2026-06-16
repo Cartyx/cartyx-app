@@ -5,9 +5,11 @@ import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
 import { Campaign } from '../db/models/Campaign';
 import { Session } from '../db/models/Session';
+import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
 import {
   listSessionsSchema,
+  getSessionCatchUpSchema,
   createSessionSchema,
   updateSessionSchema,
 } from '~/types/schemas/sessions';
@@ -74,6 +76,36 @@ export const listSessions = createServerFn({ method: 'GET' })
       serverCaptureException(e, undefined, {
         action: 'listSessions',
         campaignId: data.campaignId,
+      });
+      throw e;
+    }
+  });
+
+/**
+ * Fetch a single session's catch-up (summary) markdown. Readable by any
+ * campaign member — players need this to catch up on sessions they missed.
+ * The campaign payload only ships the active session's catch-up, so the
+ * dashboard fetches other sessions' catch-ups on demand via this function.
+ */
+export const getSessionCatchUp = createServerFn({ method: 'GET' })
+  .inputValidator(getSessionCatchUpSchema)
+  .handler(async ({ data }) => {
+    try {
+      await requireCampaignMember(data.campaignId);
+
+      const session = (await Session.findOne(
+        { _id: data.sessionId, campaignId: data.campaignId },
+        '_id summary'
+      ).lean()) as { _id: unknown; summary?: string | null } | null;
+
+      if (!session) return { catchUp: null };
+
+      return { catchUp: session.summary ?? null };
+    } catch (e) {
+      serverCaptureException(e, undefined, {
+        action: 'getSessionCatchUp',
+        campaignId: data.campaignId,
+        sessionId: data.sessionId,
       });
       throw e;
     }

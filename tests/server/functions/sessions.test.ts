@@ -47,7 +47,12 @@ import { getSession } from '~/server/session';
 import { User } from '~/server/db/models/User';
 import { Campaign } from '~/server/db/models/Campaign';
 import { Session } from '~/server/db/models/Session';
-import { listSessions, createSession, updateSession } from '~/server/functions/sessions';
+import {
+  listSessions,
+  getSessionCatchUp,
+  createSession,
+  updateSession,
+} from '~/server/functions/sessions';
 
 const mockSession = {
   id: 'session-user-1',
@@ -78,6 +83,9 @@ beforeEach(() => {
 const _listSessions = listSessions as unknown as (args: {
   data: { campaignId: string; includeCompleted?: boolean };
 }) => Promise<unknown>;
+const _getSessionCatchUp = getSessionCatchUp as unknown as (args: {
+  data: { campaignId: string; sessionId: string };
+}) => Promise<{ catchUp: string | null }>;
 const _createSession = createSession as unknown as (args: {
   data: { campaignId: string; name: string; startDate: string };
 }) => Promise<unknown>;
@@ -183,6 +191,74 @@ describe('listSessions', () => {
     });
 
     await expect(_listSessions({ data: { campaignId: 'camp-1' } })).rejects.toThrow('Forbidden');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getSessionCatchUp
+// ---------------------------------------------------------------------------
+describe('getSessionCatchUp', () => {
+  it("returns a session's summary as catchUp for a campaign member", async () => {
+    vi.mocked(Session.findOne).mockReturnValue({
+      lean: vi
+        .fn()
+        .mockResolvedValue({ _id: 's1', summary: 'Recap of the **fall** of Emberfall.' }),
+    } as never);
+
+    const result = await _getSessionCatchUp({ data: { campaignId: 'camp-1', sessionId: 's1' } });
+
+    expect(Session.findOne).toHaveBeenCalledWith(
+      { _id: 's1', campaignId: 'camp-1' },
+      '_id summary'
+    );
+    expect(result).toEqual({ catchUp: 'Recap of the **fall** of Emberfall.' });
+  });
+
+  it('is readable by a non-GM player member', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue({
+      _id: 'camp-1',
+      gameMasterId: 'other-gm',
+      members: [{ userId: 'dbuser-1', role: 'player' }],
+    });
+    vi.mocked(Session.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({ _id: 's1', summary: 'Player-visible recap.' }),
+    } as never);
+
+    const result = await _getSessionCatchUp({ data: { campaignId: 'camp-1', sessionId: 's1' } });
+
+    expect(result).toEqual({ catchUp: 'Player-visible recap.' });
+  });
+
+  it('returns null catchUp when the session has no summary', async () => {
+    vi.mocked(Session.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({ _id: 's1' }),
+    } as never);
+
+    const result = await _getSessionCatchUp({ data: { campaignId: 'camp-1', sessionId: 's1' } });
+
+    expect(result).toEqual({ catchUp: null });
+  });
+
+  it('returns null catchUp when the session is not found in the campaign', async () => {
+    vi.mocked(Session.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(null),
+    } as never);
+
+    const result = await _getSessionCatchUp({ data: { campaignId: 'camp-1', sessionId: 'nope' } });
+
+    expect(result).toEqual({ catchUp: null });
+  });
+
+  it('throws when the user is not a member of the campaign', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue({
+      _id: 'camp-1',
+      gameMasterId: 'other-gm',
+      members: [{ userId: 'someone-else', role: 'player' }],
+    });
+
+    await expect(
+      _getSessionCatchUp({ data: { campaignId: 'camp-1', sessionId: 's1' } })
+    ).rejects.toThrow('Forbidden');
   });
 });
 
