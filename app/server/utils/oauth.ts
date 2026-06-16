@@ -364,25 +364,49 @@ export async function upsertUser(profile: OAuthProfile): Promise<SessionUser> {
       accessToken: profile.accessToken ? encryptToken(profile.accessToken) : null,
       refreshToken: profile.refreshToken ? encryptToken(profile.refreshToken) : null,
     };
-    const stored = (await User.findOneAndUpdate(
+    const $set = {
+      provider: profile.provider,
+      providerId: profile.id,
+      ...(profile.email && { email: profile.email }),
+      ...(profile.name && {
+        firstName: nameParts[0] ?? '',
+        lastName: nameParts.slice(1).join(' ') ?? '',
+      }),
+      ...(profile.avatar && { avatarUrl: profile.avatar }),
+      oauthTokens,
+      lastLoginAt: new Date(),
+    };
+
+    // 1. Returning user — match by the OAuth subject id.
+    let stored = (await User.findOneAndUpdate(
       { providerId: profile.id },
-      {
-        $set: {
-          provider: profile.provider,
-          providerId: profile.id,
-          ...(profile.email && { email: profile.email }),
-          ...(profile.name && {
-            firstName: nameParts[0] ?? '',
-            lastName: nameParts.slice(1).join(' ') ?? '',
-          }),
-          ...(profile.avatar && { avatarUrl: profile.avatar }),
-          oauthTokens,
-          lastLoginAt: new Date(),
-        },
-        $setOnInsert: { createdAt: new Date(), role: 'unknown' },
-      },
-      { upsert: true, returnDocument: 'after', new: true }
+      { $set },
+      { returnDocument: 'after', new: true }
     )) as UserDoc | null;
+
+    // 2. First login for a pre-provisioned account. The dev seed (and the
+    //    invite flow) create User docs keyed only by email, with no providerId,
+    //    to be "claimed" on first OAuth login. Link the OAuth identity onto that
+    //    existing doc — which preserves its campaign memberships. Only claim
+    //    docs with no providerId yet, so we never hijack an account already
+    //    bound to a different provider identity.
+    if (!stored && profile.email) {
+      stored = (await User.findOneAndUpdate(
+        { email: profile.email, providerId: null },
+        { $set },
+        { returnDocument: 'after', new: true }
+      )) as UserDoc | null;
+    }
+
+    // 3. Brand-new user — create the account.
+    if (!stored) {
+      stored = (await User.findOneAndUpdate(
+        { providerId: profile.id },
+        { $set, $setOnInsert: { createdAt: new Date(), role: 'unknown' } },
+        { upsert: true, returnDocument: 'after', new: true }
+      )) as UserDoc | null;
+    }
+
     return toSessionUser(profile, stored?.role ?? 'unknown', stored);
   } catch (e) {
     serverCaptureException(e, profile.id, { action: 'upsertUser', provider: profile.provider });
