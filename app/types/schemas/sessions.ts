@@ -5,6 +5,11 @@ export const listSessionsSchema = z.object({
   includeCompleted: z.boolean().optional(),
 });
 
+export const getSessionCatchUpSchema = z.object({
+  campaignId: z.string().min(1),
+  sessionId: z.string().min(1),
+});
+
 export const createSessionSchema = z.object({
   campaignId: z.string().min(1),
   name: z.string().trim().min(1),

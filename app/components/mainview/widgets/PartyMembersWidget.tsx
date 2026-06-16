@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { Widget } from '../Widget';
+import { PlayerViewModal } from '~/components/wiki/players/PlayerViewModal';
 import { usePlayers } from '~/hooks/usePlayers';
 import type { PlayerListItem } from '~/types/player';
 import type { PartyMember } from '~/services/mocks/types';
@@ -51,6 +53,12 @@ export function PartyMembersWidget({
   const isFetching = !members && isLoading;
   const error = !members && fetchError ? 'Unable to load party members.' : null;
 
+  // Clicking a card opens the read-only player popup, but only when we know
+  // which campaign to fetch the full player from (the app always passes
+  // campaignId; Storybook/tests render explicit members without one).
+  const [selectedMemberId, setSelectedMemberId] = useState<string | null>(null);
+  const canOpenDetail = Boolean(campaignId);
+
   return (
     <Widget title="Party Members" className={className}>
       {isFetching ? (
@@ -68,9 +76,12 @@ export function PartyMembersWidget({
       ) : (
         <div className="space-y-3">
           {resolvedMembers.map((member) => (
-            <article
+            <button
               key={member.id}
-              className="flex items-center gap-3 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2.5"
+              type="button"
+              onClick={canOpenDetail ? () => setSelectedMemberId(member.id) : undefined}
+              aria-label={`View ${member.name}`}
+              className="flex w-full items-center gap-3 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2.5 text-left transition-colors hover:border-white/20 hover:bg-white/[0.05] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60"
             >
               {member.avatarUrl ? (
                 <img
@@ -95,10 +106,19 @@ export function PartyMembersWidget({
                 </p>
                 <p className="font-sans font-semibold text-xs text-slate-400">{member.race}</p>
               </div>
-            </article>
+            </button>
           ))}
         </div>
       )}
+
+      {campaignId && selectedMemberId ? (
+        <PlayerViewModal
+          isOpen={Boolean(selectedMemberId)}
+          onClose={() => setSelectedMemberId(null)}
+          playerId={selectedMemberId}
+          campaignId={campaignId}
+        />
+      ) : null}
     </Widget>
   );
 }

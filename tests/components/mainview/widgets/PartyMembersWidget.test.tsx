@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { PartyMembersWidget } from '~/components/mainview/widgets/PartyMembersWidget';
 import { getPartyMembers } from '~/services/mocks/partyMembersService';
 import type { PlayerListItem } from '~/types/player';
@@ -10,6 +10,14 @@ import type { PlayerListItem } from '~/types/player';
 const mockUsePlayers = vi.fn();
 vi.mock('~/hooks/usePlayers', () => ({
   usePlayers: (...args: unknown[]) => mockUsePlayers(...args),
+}));
+
+// Stub the detail popup so these tests don't need a QueryClientProvider; we
+// only assert that clicking a card opens it with the right player/campaign.
+vi.mock('~/components/wiki/players/PlayerViewModal', () => ({
+  PlayerViewModal: ({ playerId, campaignId }: { playerId: string; campaignId: string }) => (
+    <div data-testid="player-view-modal">{`${campaignId}:${playerId}`}</div>
+  ),
 }));
 
 function makePlayer(overrides: Partial<PlayerListItem>): PlayerListItem {
@@ -142,5 +150,33 @@ describe('PartyMembersWidget', () => {
     render(<PartyMembersWidget campaignId="c1" />);
 
     expect(screen.getByText('No party members found')).toBeInTheDocument();
+  });
+
+  it('opens the player detail popup when a member card is clicked', () => {
+    mockUsePlayers.mockReturnValue({
+      players: [makePlayer({ id: 'p1', firstName: 'Yara', lastName: 'Cinderfell' })],
+      isLoading: false,
+      error: null,
+    });
+
+    render(<PartyMembersWidget campaignId="c1" />);
+
+    expect(screen.queryByTestId('player-view-modal')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'View Yara Cinderfell' }));
+
+    expect(screen.getByTestId('player-view-modal')).toHaveTextContent('c1:p1');
+  });
+
+  it('does not make cards interactive without a campaignId', () => {
+    render(
+      <PartyMembersWidget
+        members={[{ id: 'p1', name: 'Yara Cinderfell', characterClass: 'Rogue', race: 'Half-Orc' }]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'View Yara Cinderfell' }));
+
+    expect(screen.queryByTestId('player-view-modal')).not.toBeInTheDocument();
   });
 });
