@@ -23,11 +23,13 @@ import re
 import secrets
 import shutil
 import sys
+import uuid
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 
 from dotenv import load_dotenv
+from bson import ObjectId
 from pymongo import MongoClient
 from pymongo.errors import ConfigurationError
 
@@ -257,6 +259,7 @@ CAMPAIGNS = [
         # scale.  The other two campaigns stay lean for happy-path testing.
         "stock_test_campaign": True,
         "bulk_test_campaign": True,
+        "rich_session_history": True,
         "name": "The Lost Mines of Phandelver",
         "description": (
             "A classic introductory adventure. The party has been hired to escort a wagon "
@@ -284,9 +287,59 @@ CAMPAIGNS = [
         "maxPlayers": 5,
         "colors": {"bg": "#1a3a2a", "fg": "#e8e0d0", "accent": "#2d5a3f"},
         "sessions": [
-            {"name": "Goblin Arrows", "number": 1, "status": "completed"},
-            {"name": "The Spider's Web", "number": 2, "status": "completed"},
-            {"name": "Wave Echo Cave", "number": 3, "status": "not_started"},
+            {
+                "name": "Goblin Arrows",
+                "number": 1,
+                "status": "completed",
+                # Played ~3 weeks ago, ran ~4 hours.
+                "start_offset_days": 21,
+                "end_offset_hours": 4,
+                "summary": (
+                    "## Session 1 — Goblin Arrows\n\n"
+                    "The party set out from Neverwinter escorting Gundren Rockseeker's "
+                    "supply wagon to Phandalin. On the Triboar Trail they were ambushed "
+                    "by Cragmaw goblins.\n\n"
+                    "### Key events\n"
+                    "- Found two dead horses and signs Gundren and Sildar were taken\n"
+                    "- Tracked the goblins to the **Cragmaw Hideout**\n"
+                    "- Freed **Sildar Hallwinter**, who offered 50 gp to reach Phandalin\n"
+                    "- Klarg the bugbear fell; the wagon was recovered"
+                ),
+            },
+            {
+                "name": "The Spider's Web",
+                "number": 2,
+                "status": "completed",
+                # Played ~10 days ago.
+                "start_offset_days": 10,
+                "end_offset_hours": 4,
+                "summary": (
+                    "## Session 2 — The Spider's Web\n\n"
+                    "The party reached Phandalin and ran afoul of the **Redbrand** "
+                    "ruffians terrorizing the town.\n\n"
+                    "### Key events\n"
+                    "- Cleared the Redbrand hideout beneath Tresendar Manor\n"
+                    "- Discovered Glasstaff (Iarno Albrek) was the Redbrands' leader\n"
+                    "- Learned of the **Black Spider** and the search for Wave Echo Cave\n"
+                    "- Rescued the Dendrar family and rest of the captives"
+                ),
+            },
+            {
+                "name": "Wave Echo Cave",
+                "number": 3,
+                "status": "active",
+                # Starts today; no end date (in progress).
+                "start_offset_days": 0,
+                "end_offset_hours": None,
+                "summary": (
+                    "## Previously on… The Lost Mines of Phandelver\n\n"
+                    "You freed Sildar, broke the Redbrands, and unmasked Glasstaff — who "
+                    "served the mysterious **Black Spider**. With the map to **Wave Echo "
+                    "Cave** in hand, you set out to find the lost mine and the Forge of "
+                    "Spells before the Black Spider's forces beat you to it.\n\n"
+                    "_Tonight: the cave mouth waits._"
+                ),
+            },
         ],
         "characters": [
             {
@@ -387,6 +440,328 @@ CAMPAIGNS = [
 ]
 
 
+def build_note_docs(*, campaign_id, session_ids, gm_id, party, now):
+    """Return a realistic mix of Note docs for the rich campaign.
+
+    Visibility model (Note.ts has no GM-only flag): public notes use
+    isPublic=True; "GM-only" notes are private (isPublic=False) authored by
+    the GM, so only the GM can read them. Some public notes are authored by
+    players to read like shared party notes.
+    """
+    s1, s2, s3 = session_ids[1], session_ids[2], session_ids[3]
+    p = party  # shorthand; party[i]["user_id"], party[i]["name"]
+
+    def note(title, body, *, public, author_id, session_id=None, tags=None,
+             day_offset=0):
+        ts = now - timedelta(days=day_offset)
+        return {
+            "title": title,
+            "note": body,
+            "tags": tags or [],
+            "isPublic": public,
+            "isReadOnly": False,
+            "createdBy": author_id,
+            "campaignId": campaign_id,
+            "sessionId": session_id,
+            "createdAt": ts,
+            "updatedAt": ts,
+        }
+
+    docs = [
+        # --- Public, session 1 (GM recap + a player observation) ---
+        note("Recap: Goblin Arrows",
+             "Ambushed on the Triboar Trail. Freed Sildar from the Cragmaw "
+             "Hideout. Klarg is dead. Gundren is still missing — taken to "
+             "Cragmaw Castle by someone called the Black Spider.",
+             public=True, author_id=gm_id, session_id=s1,
+             tags=["recap", "session-1"], day_offset=21),
+        note("Sildar's offer",
+             "Sildar promised 50 gp if we get him safely to Phandalin. He's "
+             "looking for his friend Iarno who went missing.",
+             public=True, author_id=p[0]["user_id"], session_id=s1,
+             tags=["npc", "quest"], day_offset=21),
+        note("Loot from the hideout",
+             "Recovered the supply wagon, a few potions, and Klarg's coin stash. "
+             "Split evenly.",
+             public=True, author_id=p[1]["user_id"], session_id=s1,
+             tags=["loot", "session-1"], day_offset=21),
+        # --- Public, session 2 ---
+        note("Recap: The Spider's Web",
+             "Phandalin was under the boot of the Redbrands. We cleared their "
+             "hideout under Tresendar Manor and unmasked Glasstaff — Iarno "
+             "Albrek. He served the Black Spider and pointed us at Wave Echo Cave.",
+             public=True, author_id=gm_id, session_id=s2,
+             tags=["recap", "session-2"], day_offset=10),
+        note("People of Phandalin",
+             "Townmaster Harbin Wester (useless), Sister Garaele at the "
+             "Shrine of Luck, Barthen's Provisions, and the Stonehill Inn. "
+             "Sister Garaele wants a spellbook from Old Owl Well.",
+             public=True, author_id=p[2]["user_id"], session_id=s2,
+             tags=["npc", "town"], day_offset=10),
+        note("Glasstaff's letter",
+             "Found a letter from the Black Spider ordering Glasstaff to find "
+             "the cave and kill 'the Rockseekers.' Gundren has two brothers.",
+             public=True, author_id=p[3]["user_id"], session_id=s2,
+             tags=["clue", "session-2"], day_offset=10),
+        # --- GM-only (private, GM-authored), active session 3 ---
+        note("GM: Wave Echo Cave prep",
+             "Nezznar 'The Black Spider' (drow) is in the cave with Bugbears "
+             "and a doppelganger. Forge of Spells is in area 12. Flameskull "
+             "guards the eastern hall — relights unless hit with holy water or "
+             "downed twice.",
+             public=False, author_id=gm_id, session_id=s3,
+             tags=["gm", "prep", "boss"], day_offset=0),
+        note("GM: traps & secrets",
+             "Pressure plate at the cave entrance (DC 13 Perception). Secret "
+             "door in area 7 (DC 15 Investigation) hides the Spider's escape "
+             "route. Don't let the party TPK on the flameskull — fudge if needed.",
+             public=False, author_id=gm_id, session_id=s3,
+             tags=["gm", "traps"], day_offset=0),
+        # --- Campaign-level (no session) ---
+        note("Party Loot & Leads",
+             "Running tally of shared loot and open leads. Current leads: find "
+             "Cragmaw Castle, reach Wave Echo Cave, help Sister Garaele.",
+             public=True, author_id=p[0]["user_id"], session_id=None,
+             tags=["loot", "leads"], day_offset=2),
+        note("GM: campaign plot threads",
+             "Black Spider = Nezznar, wants the Forge of Spells. Gundren held "
+             "at Cragmaw Castle (King Grol). Reward the party with the mine "
+             "stake if they save Gundren. Long game: Spider's drow backers.",
+             public=False, author_id=gm_id, session_id=None,
+             tags=["gm", "plot"], day_offset=2),
+        note("House rules",
+             "Potions are a bonus action to drink. Inspiration refreshes each "
+             "session. We use flanking (advantage).",
+             public=True, author_id=gm_id, session_id=None,
+             tags=["rules"], day_offset=21),
+    ]
+    return docs
+
+
+# Generic in-character banter the builder samples to pad transcripts to length.
+# Speaker is a player; lines are character-agnostic so any party fits.
+_BANTER_POOL = [
+    "I check the room for traps before anyone touches anything.",
+    "Can I make a Perception check? Something feels off.",
+    "I ready my weapon and move to the front.",
+    "Wait — did anyone else hear that?",
+    "I take cover behind the rubble and nock an arrow.",
+    "Let me try to talk to it first. Diplomacy, remember?",
+    "I'm going to search the bodies for anything useful.",
+    "Do we rest here or push on? I'm down to half my spell slots.",
+    "I light a torch and hold it high.",
+    "That's a terrible plan. I love it. Let's go.",
+    "I keep watch on the corridor while you all loot.",
+    "Mark it on the map — we'll want to come back here.",
+]
+
+# GM narration spine per session number; first item sets the scene.
+_GM_SPINE = {
+    1: [
+        "The Triboar Trail bends ahead. Two dead horses lie across the path, "
+        "bristling with black-feathered arrows.",
+        "Four goblins burst from the underbrush! Roll initiative.",
+        "The trail of the captives leads northwest, toward a cave by a stream.",
+        "Inside the Cragmaw Hideout, a snarl of goblin voices echoes off wet stone.",
+        "Klarg the bugbear rises, wolf at his side, and bellows a challenge.",
+        "With Klarg down, you find Sildar Hallwinter bound and bloodied but alive.",
+    ],
+    2: [
+        "Phandalin spreads out before you — a few dozen buildings, a ruined "
+        "manor on the hill. Rough-looking men loiter outside the Sleeping Giant.",
+        "The Redbrands sneer: 'You must be new. This is our town now.'",
+        "Beneath Tresendar Manor, a natural cavern opens into worked stone.",
+        "A nothic skitters in the dark, its single eye fixing on you hungrily.",
+        "Glasstaff's quarters: papers everywhere, and a half-burned letter in the grate.",
+        "The letter is sealed with a spider sigil. It is signed 'The Black Spider.'",
+    ],
+    3: [
+        "The trail ends at a cliff face above a rushing stream — the dark "
+        "mouth of Wave Echo Cave yawns open before you.",
+        "Inside, the air is stale and metallic. Old bones and rusted mining "
+        "gear litter the worked-stone tunnels.",
+        "A sickly green light flickers ahead, and a flaming skull drifts out "
+        "of the dark, cackling as it comes.",
+        "Deeper in, the Forge of Spells pulses with old magic — and a cold "
+        "drow voice echoes: 'You should not have come here.'",
+    ],
+}
+
+# A couple of GM-channel (secret) lines per session for role-filter testing.
+_GM_CHANNEL_LINES = [
+    "(GM) Reminder: the bugbear has 7 HP left and will flee at 5.",
+    "(GM) The doppelganger is posing as a captive — play it friendly for now.",
+    "(GM) Secret door behind the tapestry if they roll a 15+.",
+]
+
+
+def build_chat_transcript(*, session_id, campaign_id, party, gm_id, gm_name,
+                          start_ts, end_ts, rng, target_count, session_number=1):
+    """Return a deterministic list of Message docs for one session.
+
+    Interleaves GM narration (the per-session-number spine) with player banter
+    to ~target_count lines, plus a few gm-channel asides. seq is 1..N;
+    timestamps are monotonic across [start_ts, end_ts]. authorId is
+    str(user_id); authorName is the speaker.
+    """
+    spine = list(_GM_SPINE.get(session_number, _GM_SPINE[1]))
+    lines = []  # (channel, author_id, author_name, text)
+
+    # 1) GM opens the scene.
+    lines.append(("general", str(gm_id), gm_name, spine.pop(0)))
+
+    # 2) Interleave: a couple of player lines, then a GM spine beat, repeat.
+    while len(lines) < target_count:
+        for _ in range(rng.randint(2, 4)):
+            pc = rng.choice(party)
+            # Banter lines are character-agnostic (no {pc} placeholders), so the
+            # speaker is the `pc` chosen above; the text needs no formatting.
+            text = rng.choice(_BANTER_POOL)
+            lines.append(("general", str(pc["user_id"]), pc["name"], text))
+            if len(lines) >= target_count:
+                break
+        if spine:
+            lines.append(("general", str(gm_id), gm_name, spine.pop(0)))
+
+    # 3) Sprinkle in 2-3 gm-channel asides (GM author).
+    for aside in _GM_CHANNEL_LINES[: rng.randint(2, 3)]:
+        pos = rng.randint(1, len(lines))
+        lines.insert(pos, ("gm", str(gm_id), gm_name, aside))
+
+    # 4) Assign monotonic timestamps across the window and seq 1..N.
+    span_ms = max(int((end_ts - start_ts).total_seconds() * 1000), len(lines))
+    start_ms = int(start_ts.timestamp() * 1000)
+    step = span_ms // len(lines)
+    docs = []
+    for i, (channel, author_id, author_name, text) in enumerate(lines):
+        docs.append({
+            # Deterministic but collision-free across re-seeds: session_id is a
+            # fresh ObjectId each run, so ids differ run-to-run, while seq is
+            # unique within a session. Avoids duplicate-key errors on the unique
+            # {id:1} index when dev:seed runs without a prior dev:clear.
+            "id": str(uuid.uuid5(uuid.NAMESPACE_URL,
+                                 f"cartyx-message:{session_id}:{i + 1}")),
+            "seq": i + 1,
+            "sessionId": session_id,
+            "campaignId": campaign_id,
+            "channel": channel,
+            "type": "chat",
+            "authorId": author_id,
+            "authorName": author_name,
+            "text": text,
+            "beyond20Data": None,
+            "timestamp": start_ms + i * step,
+            "createdAt": start_ts,
+        })
+    return docs
+
+
+def _d20(rng):
+    return rng.randint(1, 20)
+
+
+def build_dice_log(*, session_id, campaign_id, party, start_ts, end_ts, rng,
+                   target_count):
+    """Return a deterministic list of DiceRoll docs for one session.
+
+    Produces a mix of attack rolls (with damage), skill checks, and saving
+    throws, guaranteeing at least one nat-20 crit and one nat-1 fumble, plus
+    one gm-channel roll. seq is 1..N; timestamps monotonic across the window.
+    """
+    rolls = []  # each: dict ready except seq/timestamp/id
+
+    def attack(character, title, *, force=None, channel="general"):
+        nat = {"crit": 20, "crit-fail": 1}.get(force) or _d20(rng)
+        bonus = rng.randint(3, 7)
+        rtype = ("crit" if nat == 20 else "crit-fail" if nat == 1
+                 else "hit" if nat + bonus >= 13 else "miss")
+        total = nat + bonus
+        roll = {
+            "channel": channel, "character": character, "title": title,
+            "rollType": "attack",
+            "attackRolls": [{
+                "roll": 1, "type": rtype, "total": total,
+                "formula": f"1d20+{bonus}", "discarded": False, "dice": [nat],
+            }],
+            "damageRolls": [], "totalDamages": {}, "rollInfo": [], "description": "",
+        }
+        if rtype in ("hit", "crit"):
+            d1, d2 = rng.randint(1, 8), rng.randint(1, 8)
+            dmg = d1 + d2 + (d1 + d2 if rtype == "crit" else 0)
+            roll["damageRolls"] = [{
+                "damageType": "Slashing", "dice": [d1, d2], "total": dmg,
+                # flags: 16 = crit (matches DiceRoll wire format)
+                "flags": 16 if rtype == "crit" else 0, "formula": "2d8",
+            }]
+            roll["totalDamages"] = {"Slashing": dmg}
+        return roll
+
+    def check(character, ability, *, channel="general"):
+        nat = _d20(rng)
+        bonus = rng.randint(0, 6)
+        return {
+            "channel": channel, "character": character, "title": f"{ability} Check",
+            "rollType": "skill-check",
+            "attackRolls": [{
+                "roll": 1, "type": "hit", "total": nat + bonus,
+                "formula": f"1d20+{bonus}", "discarded": False, "dice": [nat],
+            }],
+            "damageRolls": [], "totalDamages": {},
+            "rollInfo": [["Ability", ability]], "description": "",
+        }
+
+    def save(character, ability, *, channel="general"):
+        nat = _d20(rng)
+        bonus = rng.randint(0, 5)
+        return {
+            "channel": channel, "character": character, "title": f"{ability} Save",
+            "rollType": "saving-throw",
+            "attackRolls": [{
+                "roll": 1, "type": "hit", "total": nat + bonus,
+                "formula": f"1d20+{bonus}", "discarded": False, "dice": [nat],
+            }],
+            "damageRolls": [], "totalDamages": {},
+            "rollInfo": [["Save", ability]], "description": "",
+        }
+
+    names = [p["name"] for p in party]
+    # Guaranteed variety up front.
+    # Seed always creates a 4-player party (names[0..3]).
+    rolls.append(attack(names[0], "Longsword Attack", force="crit"))
+    rolls.append(attack(names[1], "Shortbow Attack", force="crit-fail"))
+    rolls.append(check(names[2], "Perception"))
+    rolls.append(check(names[3], "Investigation"))
+    rolls.append(save(names[0], "Dexterity", channel="gm"))  # gm-channel roll
+    # Pad to target with random rolls.
+    makers = [
+        lambda n: attack(n, "Weapon Attack"),
+        lambda n: check(n, rng.choice(["Perception", "Insight", "Stealth", "Arcana"])),
+        lambda n: save(n, rng.choice(["Strength", "Wisdom", "Constitution"])),
+    ]
+    while len(rolls) < target_count:
+        rolls.append(rng.choice(makers)(rng.choice(names)))
+
+    # Assign timestamps + seq + id.
+    span_ms = max(int((end_ts - start_ts).total_seconds() * 1000), len(rolls))
+    start_ms = int(start_ts.timestamp() * 1000)
+    step = span_ms // len(rolls)
+    docs = []
+    for i, r in enumerate(rolls):
+        r.update({
+            # Deterministic but collision-free across re-seeds (see
+            # build_chat_transcript): scoped to the fresh per-run session_id.
+            "id": str(uuid.uuid5(uuid.NAMESPACE_URL,
+                                 f"cartyx-diceroll:{session_id}:{i + 1}")),
+            "seq": i + 1,
+            "sessionId": session_id,
+            "campaignId": campaign_id,
+            "timestamp": start_ms + i * step,
+            "createdAt": start_ts,
+        })
+        docs.append(r)
+    return docs
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -472,6 +847,7 @@ def main() -> None:
 
         # Insert four players (one per player account), each with a unique
         # portrait + randomised name/race/class/backstory.
+        party = []
         for pu in player_users:
             pc = random_pc(rng)
             picture = PLAYER_IMAGES[image_cursor % len(PLAYER_IMAGES)]
@@ -510,22 +886,83 @@ def main() -> None:
             })
             print(f"    player    {pc['firstName']} {pc['lastName']} "
                   f"({pc['race']} {pc['characterClass']}) — {pu['email']}")
+            party.append({"name": f"{pc['firstName']} {pc['lastName']}",
+                          "user_id": pu["_id"]})
 
         # Insert sessions
         sessions = defn["sessions"]
+        session_ids: dict[int, ObjectId] = {}
+        session_windows: dict[int, tuple] = {}
         for sess in sessions:
-            start_date = now - timedelta(weeks=len(sessions) - sess["number"])
-            db.sessions.insert_one({
+            start_offset_days = sess.get("start_offset_days")
+            if start_offset_days is None:
+                # Legacy spacing for campaigns without explicit offsets: one
+                # week per session back from now (preserves the prior weekly
+                # cadence for the lean campaigns).
+                start_date = now - timedelta(weeks=len(sessions) - sess["number"])
+            else:
+                start_date = now - timedelta(days=start_offset_days)
+            # Pin start to 18:00 local-ish for realism; keep tz-aware UTC.
+            start_date = start_date.replace(hour=18, minute=0, second=0, microsecond=0)
+            end_hours = sess.get("end_offset_hours")
+            end_date = start_date + timedelta(hours=end_hours) if end_hours is not None else None
+            doc = {
                 "campaignId": campaign_id,
                 "name": sess["name"],
                 "gm": gm_id,
                 "number": sess["number"],
                 "startDate": start_date,
+                "endDate": end_date,
                 "status": sess["status"],
+                "summary": sess.get("summary"),
                 "createdAt": now,
                 "updatedAt": now,
-            })
-            print(f"    session #{sess['number']}  {sess['name']} [{sess['status']}]")
+            }
+            result = db.sessions.insert_one(doc)
+            session_ids[sess["number"]] = result.inserted_id
+            session_windows[sess["number"]] = (start_date, end_date)
+            print(f"    session #{sess['number']}  {sess['name']} [{sess['status']}]"
+                  f"{' (active)' if sess['status'] == 'active' else ''}")
+
+        # Rich session history — notes, chat, and dice for the main campaign so
+        # past sessions look genuinely played and the active session is underway.
+        if defn.get("rich_session_history"):
+            note_docs = build_note_docs(
+                campaign_id=campaign_id, session_ids=session_ids,
+                gm_id=gm_id, party=party, now=now,
+            )
+            if note_docs:
+                db.notes.insert_many(note_docs)
+            print(f"    notes      inserted {len(note_docs)}")
+
+            msg_total = roll_total = 0
+            # Completed sessions 1 & 2 get heavy transcripts; active session 3
+            # gets a light "just underway" transcript.
+            transcript_plan = {1: (40, 15), 2: (40, 15), 3: (5, 2)}
+            for num, (n_msgs, n_rolls) in transcript_plan.items():
+                sid = session_ids[num]
+                s_start, s_end = session_windows[num]
+                # Active session has no DB endDate; use a nominal 4h window so
+                # its in-progress events still get spread over a sensible span.
+                if s_end is None:
+                    s_end = s_start + timedelta(hours=4)
+                msgs = build_chat_transcript(
+                    session_id=sid, campaign_id=campaign_id, party=party,
+                    gm_id=gm_id, gm_name="Game Master", start_ts=s_start,
+                    end_ts=s_end, rng=rng, target_count=n_msgs, session_number=num,
+                )
+                rolls = build_dice_log(
+                    session_id=sid, campaign_id=campaign_id, party=party,
+                    start_ts=s_start, end_ts=s_end, rng=rng, target_count=n_rolls,
+                )
+                if msgs:
+                    db.messages.insert_many(msgs)
+                if rolls:
+                    db.dicerolls.insert_many(rolls)
+                msg_total += len(msgs)
+                roll_total += len(rolls)
+            print(f"    chat       inserted {msg_total} messages")
+            print(f"    dice       inserted {roll_total} rolls")
 
         # Insert default LocationTypes for the campaign (matches LocationType.ts behavior)
         db.locationtype.insert_many([
