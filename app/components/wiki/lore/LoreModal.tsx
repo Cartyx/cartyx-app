@@ -217,6 +217,7 @@ export function LoreModal({ isOpen, onClose, campaignId, loreId, initialLinks }:
                 required
                 disabled={isDisabled}
                 placeholder="Lore entry title"
+                data-testid="lore-title-input"
               />
 
               {/* Content */}

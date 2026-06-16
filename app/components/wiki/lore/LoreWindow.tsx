@@ -47,7 +47,7 @@ export function LoreWindow({ lore, onEdit }: LoreWindowProps) {
   const hasLinks = lore.links.length > 0;
 
   return (
-    <div className="flex flex-col gap-4 p-4">
+    <div data-testid="lore-window" className="flex flex-col gap-4 p-4">
       {/* Header: title, visibility, edit */}
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
