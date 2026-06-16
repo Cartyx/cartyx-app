@@ -163,10 +163,12 @@ describe('getLore', () => {
 describe('updateLore / deleteLore permissions', () => {
   it('forbids a non-creator non-GM from updating', async () => {
     vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign as never);
-    vi.mocked(Lore.findById).mockResolvedValue({
-      _id: 'l1',
-      campaignId: 'camp-1',
-      createdBy: 'someone-else',
+    vi.mocked(Lore.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'l1',
+        campaignId: 'camp-1',
+        createdBy: 'someone-else',
+      }),
     } as never);
     await expect(_update({ data: { id: 'l1', campaignId: 'camp-1', title: 'X' } })).rejects.toThrow(
       'Forbidden'
@@ -174,10 +176,12 @@ describe('updateLore / deleteLore permissions', () => {
   });
 
   it('lets the creator delete and clears screen refs', async () => {
-    vi.mocked(Lore.findById).mockResolvedValue({
-      _id: 'l1',
-      campaignId: 'camp-1',
-      createdBy: 'user-1',
+    vi.mocked(Lore.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'l1',
+        campaignId: 'camp-1',
+        createdBy: 'user-1',
+      }),
     } as never);
     vi.mocked(Lore.deleteOne).mockResolvedValue({ deletedCount: 1 } as never);
     const res = await _delete({ data: { id: 'l1', campaignId: 'camp-1' } });
@@ -209,5 +213,52 @@ describe('createLore', () => {
       unknown
     >;
     expect(res.success).toBe(true);
+  });
+});
+
+describe('listLore GM visibility filter', () => {
+  it('adds isPublic:true filter when GM requests visibility=public', async () => {
+    mockFindReturning([]);
+    await _list({ data: { campaignId: 'camp-1', visibility: 'public' } });
+    const filter = vi.mocked(Lore.find).mock.calls[0][0] as unknown as Record<string, unknown>;
+    expect(filter.isPublic).toBe(true);
+  });
+
+  it('adds isPublic:false filter when GM requests visibility=private', async () => {
+    mockFindReturning([]);
+    await _list({ data: { campaignId: 'camp-1', visibility: 'private' } });
+    const filter = vi.mocked(Lore.find).mock.calls[0][0] as unknown as Record<string, unknown>;
+    expect(filter.isPublic).toBe(false);
+  });
+});
+
+describe('updateLore GM gmContent', () => {
+  it('returns gmContent populated when a GM updates lore', async () => {
+    vi.mocked(Lore.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'l1',
+        campaignId: 'camp-1',
+        createdBy: 'someone-else',
+      }),
+    } as never);
+    vi.mocked(Lore.findOneAndUpdate).mockResolvedValue({
+      _id: 'l1',
+      title: 'Updated',
+      content: 'body',
+      gmContent: 'gm notes',
+      isPublic: true,
+      images: [],
+      links: [],
+      tags: [],
+      campaignId: 'camp-1',
+      createdBy: 'someone-else',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never);
+    const res = (await _update({
+      data: { id: 'l1', campaignId: 'camp-1', title: 'Updated', gmContent: 'gm notes' },
+    })) as Record<string, Record<string, unknown>>;
+    expect(res.success).toBe(true);
+    expect(res.lore.gmContent).toBe('gm notes');
   });
 });

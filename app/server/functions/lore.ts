@@ -15,6 +15,7 @@ import {
   deleteLoreSchema,
 } from '~/types/schemas/lore';
 import type { LoreData, LoreLink, LoreListItem } from '~/types/lore';
+import type { PictureCrop } from '~/types/character';
 
 type AnyDoc = Record<string, unknown> & { _id: unknown };
 
@@ -31,7 +32,7 @@ function baseSerialize(doc: AnyDoc) {
       return {
         url: String(img.url),
         caption: (img.caption as string) ?? '',
-        crop: (img.crop as never) ?? null,
+        crop: (img.crop as unknown as PictureCrop) ?? null,
       };
     }),
     links: ((doc.links as unknown[]) ?? []).map((l) => {
@@ -46,29 +47,32 @@ function baseSerialize(doc: AnyDoc) {
 
 // Resolve {kind,id} -> display label across the four entity collections.
 async function resolveLinkLabels(links: LoreLink[]): Promise<LoreLink[]> {
-  const out: LoreLink[] = [];
-  for (const link of links) {
-    let label = '';
-    try {
-      if (link.kind === 'character') {
-        const c = (await Character.findById(link.id, 'firstName lastName').lean()) as AnyDoc | null;
-        if (c) label = `${c.firstName ?? ''} ${c.lastName ?? ''}`.trim();
-      } else if (link.kind === 'player') {
-        const p = (await Player.findById(link.id, 'firstName lastName').lean()) as AnyDoc | null;
-        if (p) label = `${p.firstName ?? ''} ${p.lastName ?? ''}`.trim();
-      } else if (link.kind === 'location') {
-        const loc = (await Location.findById(link.id, 'name').lean()) as AnyDoc | null;
-        if (loc) label = String(loc.name ?? '');
-      } else if (link.kind === 'race') {
-        const r = (await Race.findById(link.id, 'title').lean()) as AnyDoc | null;
-        if (r) label = String(r.title ?? '');
+  return Promise.all(
+    links.map(async (link) => {
+      let label = '';
+      try {
+        if (link.kind === 'character') {
+          const c = (await Character.findById(
+            link.id,
+            'firstName lastName'
+          ).lean()) as AnyDoc | null;
+          if (c) label = `${c.firstName ?? ''} ${c.lastName ?? ''}`.trim();
+        } else if (link.kind === 'player') {
+          const p = (await Player.findById(link.id, 'firstName lastName').lean()) as AnyDoc | null;
+          if (p) label = `${p.firstName ?? ''} ${p.lastName ?? ''}`.trim();
+        } else if (link.kind === 'location') {
+          const loc = (await Location.findById(link.id, 'name').lean()) as AnyDoc | null;
+          if (loc) label = String(loc.name ?? '');
+        } else if (link.kind === 'race') {
+          const r = (await Race.findById(link.id, 'title').lean()) as AnyDoc | null;
+          if (r) label = String(r.title ?? '');
+        }
+      } catch {
+        label = '';
       }
-    } catch {
-      label = '';
-    }
-    out.push({ ...link, label });
-  }
-  return out;
+      return { ...link, label };
+    })
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -165,7 +169,11 @@ export const createLore = createServerFn({ method: 'POST' })
       })) as AnyDoc;
       return {
         success: true,
-        lore: { ...baseSerialize(doc), gmContent: (doc.gmContent as string) ?? '', canEdit: true },
+        lore: {
+          ...baseSerialize(doc),
+          gmContent: member.isGM ? (data.gmContent ?? '') : '',
+          canEdit: true,
+        },
       };
     } catch (e) {
       serverCaptureException(e, undefined, { action: 'createLore', campaignId: data.campaignId });
@@ -182,7 +190,7 @@ export const updateLore = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     try {
       const member = await requireCampaignMember(data.campaignId);
-      const existing = (await Lore.findById(data.id)) as AnyDoc | null;
+      const existing = (await Lore.findById(data.id).lean()) as AnyDoc | null;
       if (!existing || String(existing.campaignId) !== data.campaignId)
         throw new Error('Not found');
       if (String(existing.createdBy) !== member.userId && !member.isGM)
@@ -208,7 +216,7 @@ export const updateLore = createServerFn({ method: 'POST' })
         success: true,
         lore: {
           ...baseSerialize(updated),
-          gmContent: (updated.gmContent as string) ?? '',
+          gmContent: member.isGM ? (data.gmContent ?? '') : '',
           canEdit: true,
         },
       };
@@ -227,7 +235,7 @@ export const deleteLore = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     try {
       const member = await requireCampaignMember(data.campaignId);
-      const existing = (await Lore.findById(data.id)) as AnyDoc | null;
+      const existing = (await Lore.findById(data.id).lean()) as AnyDoc | null;
       if (!existing || String(existing.campaignId) !== data.campaignId)
         throw new Error('Not found');
       if (String(existing.createdBy) !== member.userId && !member.isGM)
