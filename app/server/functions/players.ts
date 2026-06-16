@@ -7,6 +7,7 @@ import { Campaign } from '../db/models/Campaign';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { Player } from '../db/models/Player';
 import { Character } from '../db/models/Character';
+import { Lore } from '../db/models/Lore';
 import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { pruneLoreLinks } from '../utils/pruneLoreLinks';
@@ -721,6 +722,21 @@ export const completeJoinWizard = createServerFn({ method: 'POST' })
             },
           }
         );
+      }
+
+      // 6. Create Lore documents linked to the new player
+      for (const entry of data.lore ?? []) {
+        await Lore.create({
+          title: entry.title,
+          content: entry.content,
+          gmContent: '',
+          isPublic: entry.isPublic,
+          images: [],
+          tags: [],
+          links: [{ kind: 'player', id: playerDoc._id }],
+          campaignId: data.campaignId,
+          createdBy: userId,
+        });
       }
 
       serverCaptureEvent(sessionUserId, 'join_wizard_completed', {
