@@ -84,53 +84,30 @@ test.describe('Lore drag-and-drop onto tabletop', () => {
     const firstCard = page.getByTestId('lore-card').first();
     await expect(firstCard).toBeVisible({ timeout: 10_000 });
 
-    // Read the lore title from the card so we can assert it in the window header.
-    // The title is the first text-sm span inside the card.
-    const loreTitle = await firstCard.locator('span.text-sm').first().innerText();
+    // Read the documentId directly from the stable DOM attribute set on the
+    // card's root element.  This avoids the unreliable synthetic-dragstart
+    // approach — Chromium's DragEvent constructor silently ignores the
+    // dataTransfer init member outside a trusted drag gesture, causing getData
+    // to return '' and the payload to fall back to documentId: 'unknown'.
+    const documentId = await firstCard.getAttribute('data-lore-id');
+    if (!documentId) throw new Error('data-lore-id attribute missing from lore-card');
 
-    // Extract the documentId from the card's drag payload — we need to do this
-    // by reading the data attribute set during onDragStart. The card sets the
-    // payload via JS, so we read it via evaluate.
-    const cardPayload = await firstCard.evaluate((el) => {
-      // Trigger a synthetic dragstart so the payload is set on a real DataTransfer,
-      // then read it back. We do not actually need to start a real drag; instead
-      // we intercept via a one-shot dragstart listener.
-      return new Promise<{ collection: string; documentId: string; title: string } | null>(
-        (resolve) => {
-          const handler = (e: DragEvent) => {
-            el.removeEventListener('dragstart', handler);
-            const raw = e.dataTransfer?.getData('application/x-cartyx-document') ?? null;
-            resolve(raw ? JSON.parse(raw) : null);
-          };
-          el.addEventListener('dragstart', handler);
-          el.dispatchEvent(
-            new DragEvent('dragstart', {
-              bubbles: true,
-              cancelable: true,
-              dataTransfer: new DataTransfer(),
-            })
-          );
-        }
-      );
-    });
+    // Read the title from the dedicated testid span — more stable than the
+    // fragile span.text-sm selector used previously.
+    const title = await firstCard.getByTestId('lore-card-title').innerText();
 
-    // If we couldn't extract the payload from the dragstart event (some browsers
-    // restrict DataTransfer access outside the event), fall back to constructing
-    // the payload from what we know: collection is always "lore" and we use the
-    // title we already captured.
-    const payload: { collection: string; documentId: string; title: string } = cardPayload ?? {
-      collection: 'lore',
-      documentId: 'unknown',
-      title: loreTitle,
-    };
+    // Build the drop payload the same way dropOnMap does in
+    // tabletop-monster-tokens.spec.ts: construct it directly rather than
+    // intercepting a dragstart event.
+    const payload = { collection: 'lore', documentId, title };
 
     // Drop onto the workspace centre.
     await dropOnWorkspace(page, payload, { dx: 0, dy: 0 });
 
-    // A floating lore window should appear on the workspace.  The FloatingWindow
-    // component renders the lore title in its title bar as a <span>.
-    // Also assert the LoreWindow content root (data-testid="lore-window") is present.
-    await expect(page.getByText(loreTitle).first()).toBeVisible({ timeout: 10_000 });
+    // A floating lore window should appear on the workspace.
     await expect(page.getByTestId('lore-window')).toBeVisible({ timeout: 10_000 });
+
+    // The FloatingWindow title bar should also contain the lore entry's title.
+    await expect(page.getByText(title).first()).toBeVisible({ timeout: 10_000 });
   });
 });

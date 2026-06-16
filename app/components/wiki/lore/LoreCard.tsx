@@ -37,6 +37,7 @@ export function LoreCard({ lore, onClick }: LoreCardProps) {
       tabIndex={0}
       draggable="true"
       data-testid="lore-card"
+      data-lore-id={lore.id}
       onDragStart={(e) => {
         e.dataTransfer.setData(
           'application/x-cartyx-document',
@@ -87,7 +88,10 @@ export function LoreCard({ lore, onClick }: LoreCardProps) {
       {/* Details */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
-          <span className="text-sm font-semibold text-slate-200 group-hover:text-blue-400 transition-colors truncate">
+          <span
+            data-testid="lore-card-title"
+            className="text-sm font-semibold text-slate-200 group-hover:text-blue-400 transition-colors truncate"
+          >
             {lore.title}
           </span>
           {lore.isPublic ? (
