@@ -439,6 +439,104 @@ CAMPAIGNS = [
 ]
 
 
+def build_note_docs(*, campaign_id, session_ids, gm_id, party, now):
+    """Return a realistic mix of Note docs for the rich campaign.
+
+    Visibility model (Note.ts has no GM-only flag): public notes use
+    isPublic=True; "GM-only" notes are private (isPublic=False) authored by
+    the GM, so only the GM can read them. Some public notes are authored by
+    players to read like shared party notes.
+    """
+    s1, s2, s3 = session_ids[1], session_ids[2], session_ids[3]
+    p = party  # shorthand; party[i]["user_id"], party[i]["name"]
+
+    def note(title, body, *, public, author_id, session_id=None, tags=None,
+             day_offset=0):
+        ts = now - timedelta(days=day_offset)
+        return {
+            "title": title,
+            "note": body,
+            "tags": tags or [],
+            "isPublic": public,
+            "isReadOnly": False,
+            "createdBy": author_id,
+            "campaignId": campaign_id,
+            "sessionId": session_id,
+            "createdAt": ts,
+            "updatedAt": ts,
+        }
+
+    docs = [
+        # --- Public, session 1 (GM recap + a player observation) ---
+        note("Recap: Goblin Arrows",
+             "Ambushed on the Triboar Trail. Freed Sildar from the Cragmaw "
+             "Hideout. Klarg is dead. Gundren is still missing — taken to "
+             "Cragmaw Castle by someone called the Black Spider.",
+             public=True, author_id=gm_id, session_id=s1,
+             tags=["recap", "session-1"], day_offset=21),
+        note("Sildar's offer",
+             "Sildar promised 50 gp if we get him safely to Phandalin. He's "
+             "looking for his friend Iarno who went missing.",
+             public=True, author_id=p[0]["user_id"], session_id=s1,
+             tags=["npc", "quest"], day_offset=21),
+        note("Loot from the hideout",
+             "Recovered the supply wagon, a few potions, and Klarg's coin stash. "
+             "Split evenly.",
+             public=True, author_id=p[1]["user_id"], session_id=s1,
+             tags=["loot", "session-1"], day_offset=21),
+        # --- Public, session 2 ---
+        note("Recap: The Spider's Web",
+             "Phandalin was under the boot of the Redbrands. We cleared their "
+             "hideout under Tresendar Manor and unmasked Glasstaff — Iarno "
+             "Albrek. He served the Black Spider and pointed us at Wave Echo Cave.",
+             public=True, author_id=gm_id, session_id=s2,
+             tags=["recap", "session-2"], day_offset=10),
+        note("People of Phandalin",
+             "Townmaster Harbin Wester (useless), Sister Garaele at the "
+             "Shrine of Luck, Barthen's Provisions, and the Stonehill Inn. "
+             "Sister Garaele wants a spellbook from Old Owl Well.",
+             public=True, author_id=p[2]["user_id"], session_id=s2,
+             tags=["npc", "town"], day_offset=10),
+        note("Glasstaff's letter",
+             "Found a letter from the Black Spider ordering Glasstaff to find "
+             "the cave and kill 'the Rockseekers.' Gundren has two brothers.",
+             public=True, author_id=p[3]["user_id"], session_id=s2,
+             tags=["clue", "session-2"], day_offset=10),
+        # --- GM-only (private, GM-authored), active session 3 ---
+        note("GM: Wave Echo Cave prep",
+             "Nezznar 'The Black Spider' (drow) is in the cave with Bugbears "
+             "and a doppelganger. Forge of Spells is in area 12. Flameskull "
+             "guards the eastern hall — relights unless hit with holy water or "
+             "downed twice.",
+             public=False, author_id=gm_id, session_id=s3,
+             tags=["gm", "prep", "boss"], day_offset=0),
+        note("GM: traps & secrets",
+             "Pressure plate at the cave entrance (DC 13 Perception). Secret "
+             "door in area 7 (DC 15 Investigation) hides the Spider's escape "
+             "route. Don't let the party TPK on the flameskull — fudge if needed.",
+             public=False, author_id=gm_id, session_id=s3,
+             tags=["gm", "traps"], day_offset=0),
+        # --- Campaign-level (no session) ---
+        note("Party Loot & Leads",
+             "Running tally of shared loot and open leads. Current leads: find "
+             "Cragmaw Castle, reach Wave Echo Cave, help Sister Garaele.",
+             public=True, author_id=p[0]["user_id"], session_id=None,
+             tags=["loot", "leads"], day_offset=2),
+        note("GM: campaign plot threads",
+             "Black Spider = Nezznar, wants the Forge of Spells. Gundren held "
+             "at Cragmaw Castle (King Grol). Reward the party with the mine "
+             "stake if they save Gundren. Long game: Spider's drow backers.",
+             public=False, author_id=gm_id, session_id=None,
+             tags=["gm", "plot"], day_offset=2),
+        note("House rules",
+             "Potions are a bonus action to drink. Inspiration refreshes each "
+             "session. We use flanking (advantage).",
+             public=True, author_id=gm_id, session_id=None,
+             tags=["rules"], day_offset=21),
+    ]
+    return docs
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
