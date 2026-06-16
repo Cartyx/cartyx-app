@@ -49,6 +49,14 @@ vi.mock('~/components/wiki/locations/LocationsPanel', () => ({
   ),
 }));
 
+vi.mock('~/components/wiki/lore/LorePanel', () => ({
+  LorePanel: ({ onBack }: { onBack: () => void }) => (
+    <div data-testid="lore-panel">
+      <button onClick={onBack}>Back</button>
+    </div>
+  ),
+}));
+
 vi.mock('~/components/wiki/maps/MapsPanel', () => ({
   MapsPanel: ({ onBack }: { onBack: () => void }) => (
     <div data-testid="maps-panel">
@@ -72,16 +80,18 @@ describe('WikiPanel', () => {
     expect(screen.getByRole('button', { name: 'Characters' })).toBeInTheDocument();
   });
 
-  it('shows only the five player categories when not GM (no Maps, no Monsters)', () => {
+  it('shows only the six player categories when not GM (no Maps, no Monsters)', () => {
     useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
     render(<WikiPanel />);
 
-    expect(screen.getAllByRole('button')).toHaveLength(5);
+    expect(screen.getAllByRole('button')).toHaveLength(6);
     expect(screen.getByRole('button', { name: 'Characters' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Players' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Races' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Rules' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Locations' })).toBeInTheDocument();
+    // Lore is visible to all members.
+    expect(screen.getByRole('button', { name: 'Lore' })).toBeInTheDocument();
     // Maps + Monsters are GM-only.
     expect(screen.queryByRole('button', { name: 'Maps' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Monsters' })).not.toBeInTheDocument();
@@ -91,9 +101,19 @@ describe('WikiPanel', () => {
     useCampaignMock.mockReturnValue({ campaign: { isGM: true } });
     render(<WikiPanel />);
 
-    expect(screen.getAllByRole('button')).toHaveLength(7);
+    expect(screen.getAllByRole('button')).toHaveLength(8);
     expect(screen.getByRole('button', { name: 'Maps' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Monsters' })).toBeInTheDocument();
+  });
+
+  it('clicking Lore shows LorePanel', async () => {
+    useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
+    const user = userEvent.setup();
+    render(<WikiPanel />);
+
+    await user.click(screen.getByRole('button', { name: 'Lore' }));
+
+    expect(screen.getByTestId('lore-panel')).toBeInTheDocument();
   });
 
   it('clicking Characters shows CharactersPanel', async () => {
