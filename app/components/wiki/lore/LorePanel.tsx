@@ -63,7 +63,7 @@ export function LorePanel({ onBack }: LorePanelProps) {
         onSearchChange={setSearch}
         visibility={visibility}
         onVisibilityChange={setVisibility}
-        onCreateClick={isGM ? handleCreateClick : undefined}
+        onCreateClick={handleCreateClick}
         createButtonTestId="lore-create-button"
         campaignId={campaignId}
         filterTags={filterTags}
@@ -102,14 +102,12 @@ export function LorePanel({ onBack }: LorePanelProps) {
         </div>
       )}
 
-      {isGM && (
-        <LoreModal
-          isOpen={isModalOpen}
-          onClose={handleModalClose}
-          campaignId={campaignId}
-          loreId={selectedLoreId}
-        />
-      )}
+      <LoreModal
+        isOpen={isModalOpen}
+        onClose={handleModalClose}
+        campaignId={campaignId}
+        loreId={selectedLoreId}
+      />
       {viewLoreId && (
         <LoreViewModal
           isOpen={!!viewLoreId}

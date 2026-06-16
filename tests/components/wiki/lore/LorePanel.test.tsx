@@ -83,10 +83,10 @@ describe('LorePanel', () => {
     expect(screen.getByTestId('lore-create-button')).toBeInTheDocument();
   });
 
-  it('hides the create button for non-GM players', () => {
+  it('shows the create button for non-GM members', () => {
     setupMocks({ isGM: false });
     render(<LorePanel onBack={vi.fn()} />);
-    expect(screen.queryByTestId('lore-create-button')).not.toBeInTheDocument();
+    expect(screen.getByTestId('lore-create-button')).toBeInTheDocument();
   });
 
   it('renders a lore card for each item', async () => {
@@ -107,6 +107,17 @@ describe('LorePanel', () => {
 
   it('clicking a canEdit lore card opens LoreModal (edit)', async () => {
     setupMocks({ isGM: true });
+    const user = userEvent.setup();
+    render(<LorePanel onBack={vi.fn()} />);
+    await waitFor(() => {
+      expect(screen.getByText('The Ancient Prophecy')).toBeInTheDocument();
+    });
+    await user.click(screen.getByText('The Ancient Prophecy'));
+    expect(screen.getByRole('dialog', { name: 'lore-modal' })).toBeInTheDocument();
+  });
+
+  it('non-GM clicking a canEdit lore card opens LoreModal (edit)', async () => {
+    setupMocks({ isGM: false, lore: [{ ...mockLore[0]!, canEdit: true }] });
     const user = userEvent.setup();
     render(<LorePanel onBack={vi.fn()} />);
     await waitFor(() => {
