@@ -635,7 +635,12 @@ def build_chat_transcript(*, session_id, campaign_id, party, gm_id, gm_name,
     docs = []
     for i, (channel, author_id, author_name, text) in enumerate(lines):
         docs.append({
-            "id": str(uuid.UUID(int=rng.getrandbits(128))),
+            # Deterministic but collision-free across re-seeds: session_id is a
+            # fresh ObjectId each run, so ids differ run-to-run, while seq is
+            # unique within a session. Avoids duplicate-key errors on the unique
+            # {id:1} index when dev:seed runs without a prior dev:clear.
+            "id": str(uuid.uuid5(uuid.NAMESPACE_URL,
+                                 f"cartyx-message:{session_id}:{i + 1}")),
             "seq": i + 1,
             "sessionId": session_id,
             "campaignId": campaign_id,
@@ -743,7 +748,10 @@ def build_dice_log(*, session_id, campaign_id, party, start_ts, end_ts, rng,
     docs = []
     for i, r in enumerate(rolls):
         r.update({
-            "id": str(uuid.UUID(int=rng.getrandbits(128))),
+            # Deterministic but collision-free across re-seeds (see
+            # build_chat_transcript): scoped to the fresh per-run session_id.
+            "id": str(uuid.uuid5(uuid.NAMESPACE_URL,
+                                 f"cartyx-diceroll:{session_id}:{i + 1}")),
             "seq": i + 1,
             "sessionId": session_id,
             "campaignId": campaign_id,
@@ -886,8 +894,14 @@ def main() -> None:
         session_ids: dict[int, ObjectId] = {}
         session_windows: dict[int, tuple] = {}
         for sess in sessions:
-            start_offset_days = sess.get("start_offset_days", len(sessions) - sess["number"])
-            start_date = now - timedelta(days=start_offset_days)
+            start_offset_days = sess.get("start_offset_days")
+            if start_offset_days is None:
+                # Legacy spacing for campaigns without explicit offsets: one
+                # week per session back from now (preserves the prior weekly
+                # cadence for the lean campaigns).
+                start_date = now - timedelta(weeks=len(sessions) - sess["number"])
+            else:
+                start_date = now - timedelta(days=start_offset_days)
             # Pin start to 18:00 local-ish for realism; keep tz-aware UTC.
             start_date = start_date.replace(hour=18, minute=0, second=0, microsecond=0)
             end_hours = sess.get("end_offset_hours")

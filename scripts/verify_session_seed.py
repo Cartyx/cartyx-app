@@ -177,6 +177,31 @@ def test_chat_transcript_spine_per_session():
     assert "triboar" not in o3.lower(), "session 3 must not reuse session 1's Triboar Trail narration"
 
 
+def test_transcript_ids_are_session_scoped():
+    # Re-seed safety: ids derive from (session_id, seq), and session ObjectIds
+    # differ each run, so a fresh run produces non-colliding ids on the unique
+    # {id:1} index. Same session_id → reproducible ids; different session_id →
+    # disjoint ids. (Models a second `dev:seed` against a non-cleared DB.)
+    start = NOW - timedelta(days=21)
+    end = start + timedelta(hours=4)
+    other_session = ObjectId()
+    for builder, kwargs in (
+        (seed.build_chat_transcript, dict(party=PARTY, gm_id=GM_ID,
+                                          gm_name="Game Master", target_count=40)),
+        (seed.build_dice_log, dict(party=PARTY, target_count=15)),
+    ):
+        run1 = builder(session_id=SESSION_IDS[1], campaign_id=CAMPAIGN_ID,
+                       start_ts=start, end_ts=end, rng=random.Random(3), **kwargs)
+        run1_again = builder(session_id=SESSION_IDS[1], campaign_id=CAMPAIGN_ID,
+                             start_ts=start, end_ts=end, rng=random.Random(3), **kwargs)
+        run2 = builder(session_id=other_session, campaign_id=CAMPAIGN_ID,
+                       start_ts=start, end_ts=end, rng=random.Random(3), **kwargs)
+        ids1 = [d["id"] for d in run1]
+        assert ids1 == [d["id"] for d in run1_again], "ids reproducible for same session"
+        assert set(ids1).isdisjoint(d["id"] for d in run2), \
+            "ids must not collide across runs with different session ids"
+
+
 def run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
