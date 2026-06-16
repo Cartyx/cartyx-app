@@ -829,6 +829,7 @@ def main() -> None:
 
         # Insert four players (one per player account), each with a unique
         # portrait + randomised name/race/class/backstory.
+        party = []
         for pu in player_users:
             pc = random_pc(rng)
             picture = PLAYER_IMAGES[image_cursor % len(PLAYER_IMAGES)]
@@ -867,10 +868,13 @@ def main() -> None:
             })
             print(f"    player    {pc['firstName']} {pc['lastName']} "
                   f"({pc['race']} {pc['characterClass']}) — {pu['email']}")
+            party.append({"name": f"{pc['firstName']} {pc['lastName']}",
+                          "user_id": pu["_id"]})
 
         # Insert sessions
         sessions = defn["sessions"]
         session_ids: dict[int, ObjectId] = {}
+        session_windows: dict[int, tuple] = {}
         for sess in sessions:
             start_offset_days = sess.get("start_offset_days", len(sessions) - sess["number"])
             start_date = now - timedelta(days=start_offset_days)
@@ -892,8 +896,49 @@ def main() -> None:
             }
             result = db.sessions.insert_one(doc)
             session_ids[sess["number"]] = result.inserted_id
+            session_windows[sess["number"]] = (start_date, end_date)
             print(f"    session #{sess['number']}  {sess['name']} [{sess['status']}]"
                   f"{' (active)' if sess['status'] == 'active' else ''}")
+
+        # Rich session history — notes, chat, and dice for the main campaign so
+        # past sessions look genuinely played and the active session is underway.
+        if defn.get("rich_session_history"):
+            note_docs = build_note_docs(
+                campaign_id=campaign_id, session_ids=session_ids,
+                gm_id=gm_id, party=party, now=now,
+            )
+            if note_docs:
+                db.notes.insert_many(note_docs)
+            print(f"    notes      inserted {len(note_docs)}")
+
+            msg_total = roll_total = 0
+            # Completed sessions 1 & 2 get heavy transcripts; active session 3
+            # gets a light "just underway" transcript.
+            transcript_plan = {1: (40, 15), 2: (40, 15), 3: (5, 2)}
+            for num, (n_msgs, n_rolls) in transcript_plan.items():
+                sid = session_ids[num]
+                s_start, s_end = session_windows[num]
+                # Active session has no DB endDate; use a nominal 4h window so
+                # its in-progress events still get spread over a sensible span.
+                if s_end is None:
+                    s_end = s_start + timedelta(hours=4)
+                msgs = build_chat_transcript(
+                    session_id=sid, campaign_id=campaign_id, party=party,
+                    gm_id=gm_id, gm_name="Game Master", start_ts=s_start,
+                    end_ts=s_end, rng=rng, target_count=n_msgs, session_number=num,
+                )
+                rolls = build_dice_log(
+                    session_id=sid, campaign_id=campaign_id, party=party,
+                    start_ts=s_start, end_ts=s_end, rng=rng, target_count=n_rolls,
+                )
+                if msgs:
+                    db.messages.insert_many(msgs)
+                if rolls:
+                    db.dicerolls.insert_many(rolls)
+                msg_total += len(msgs)
+                roll_total += len(rolls)
+            print(f"    chat       inserted {msg_total} messages")
+            print(f"    dice       inserted {roll_total} rolls")
 
         # Insert default LocationTypes for the campaign (matches LocationType.ts behavior)
         db.locationtype.insert_many([
