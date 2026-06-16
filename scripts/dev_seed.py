@@ -641,6 +641,109 @@ def build_chat_transcript(*, session_id, campaign_id, party, gm_id, gm_name,
     return docs
 
 
+def _d20(rng):
+    return rng.randint(1, 20)
+
+
+def build_dice_log(*, session_id, campaign_id, party, start_ts, end_ts, rng,
+                   target_count):
+    """Return a deterministic list of DiceRoll docs for one session.
+
+    Produces a mix of attack rolls (with damage), skill checks, and saving
+    throws, guaranteeing at least one nat-20 crit and one nat-1 fumble, plus
+    one gm-channel roll. seq is 1..N; timestamps monotonic across the window.
+    """
+    rolls = []  # each: dict ready except seq/timestamp/id
+
+    def attack(character, title, *, force=None, channel="general"):
+        nat = {"crit": 20, "crit-fail": 1}.get(force) or _d20(rng)
+        bonus = rng.randint(3, 7)
+        rtype = ("crit" if nat == 20 else "crit-fail" if nat == 1
+                 else "hit" if nat + bonus >= 13 else "miss")
+        total = nat + bonus
+        roll = {
+            "channel": channel, "character": character, "title": title,
+            "rollType": "attack",
+            "attackRolls": [{
+                "roll": 1, "type": rtype, "total": total,
+                "formula": f"1d20+{bonus}", "discarded": False, "dice": [nat],
+            }],
+            "damageRolls": [], "totalDamages": {}, "rollInfo": [], "description": "",
+        }
+        if rtype in ("hit", "crit"):
+            d1, d2 = rng.randint(1, 8), rng.randint(1, 8)
+            dmg = d1 + d2 + (d1 + d2 if rtype == "crit" else 0)
+            roll["damageRolls"] = [{
+                "damageType": "Slashing", "dice": [d1, d2], "total": dmg,
+                # flags: 16 = crit (matches DiceRoll wire format)
+                "flags": 16 if rtype == "crit" else 0, "formula": "2d8",
+            }]
+            roll["totalDamages"] = {"Slashing": dmg}
+        return roll
+
+    def check(character, ability, *, channel="general"):
+        nat = _d20(rng)
+        bonus = rng.randint(0, 6)
+        return {
+            "channel": channel, "character": character, "title": f"{ability} Check",
+            "rollType": "skill-check",
+            "attackRolls": [{
+                "roll": 1, "type": "hit", "total": nat + bonus,
+                "formula": f"1d20+{bonus}", "discarded": False, "dice": [nat],
+            }],
+            "damageRolls": [], "totalDamages": {},
+            "rollInfo": [["Ability", ability]], "description": "",
+        }
+
+    def save(character, ability, *, channel="general"):
+        nat = _d20(rng)
+        bonus = rng.randint(0, 5)
+        return {
+            "channel": channel, "character": character, "title": f"{ability} Save",
+            "rollType": "saving-throw",
+            "attackRolls": [{
+                "roll": 1, "type": "hit", "total": nat + bonus,
+                "formula": f"1d20+{bonus}", "discarded": False, "dice": [nat],
+            }],
+            "damageRolls": [], "totalDamages": {},
+            "rollInfo": [["Save", ability]], "description": "",
+        }
+
+    names = [p["name"] for p in party]
+    # Guaranteed variety up front.
+    # Seed always creates a 4-player party (names[0..3]).
+    rolls.append(attack(names[0], "Longsword Attack", force="crit"))
+    rolls.append(attack(names[1], "Shortbow Attack", force="crit-fail"))
+    rolls.append(check(names[2], "Perception"))
+    rolls.append(check(names[3], "Investigation"))
+    rolls.append(save(names[0], "Dexterity", channel="gm"))  # gm-channel roll
+    # Pad to target with random rolls.
+    makers = [
+        lambda n: attack(n, "Weapon Attack"),
+        lambda n: check(n, rng.choice(["Perception", "Insight", "Stealth", "Arcana"])),
+        lambda n: save(n, rng.choice(["Strength", "Wisdom", "Constitution"])),
+    ]
+    while len(rolls) < target_count:
+        rolls.append(rng.choice(makers)(rng.choice(names)))
+
+    # Assign timestamps + seq + id.
+    span_ms = max(int((end_ts - start_ts).total_seconds() * 1000), len(rolls))
+    start_ms = int(start_ts.timestamp() * 1000)
+    step = span_ms // len(rolls)
+    docs = []
+    for i, r in enumerate(rolls):
+        r.update({
+            "id": str(uuid.UUID(int=rng.getrandbits(128))),
+            "seq": i + 1,
+            "sessionId": session_id,
+            "campaignId": campaign_id,
+            "timestamp": start_ms + i * step,
+            "createdAt": start_ts,
+        })
+        docs.append(r)
+    return docs
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------

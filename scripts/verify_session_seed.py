@@ -99,6 +99,46 @@ def test_chat_transcript():
     assert [d["text"] for d in docs] == [d["text"] for d in docs2], "must be deterministic"
 
 
+def test_dice_log():
+    start = NOW - timedelta(days=21)
+    end = start + timedelta(hours=4)
+    rng = random.Random(2)
+    docs = seed.build_dice_log(
+        session_id=SESSION_IDS[1], campaign_id=CAMPAIGN_ID,
+        party=PARTY, start_ts=start, end_ts=end, rng=rng, target_count=15,
+    )
+    assert len(docs) >= 15, f"expected >=15 rolls, got {len(docs)}"
+    assert [d["seq"] for d in docs] == list(range(1, len(docs) + 1))
+    start_ms, end_ms = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+    ids = set()
+    for d in docs:
+        assert set(["id", "seq", "sessionId", "campaignId", "channel",
+                    "character", "title", "rollType", "attackRolls",
+                    "damageRolls", "totalDamages", "rollInfo", "timestamp",
+                    "createdAt"]).issubset(d), d
+        assert d["channel"] in ("general", "gm")
+        assert isinstance(d["attackRolls"], list)
+        assert isinstance(d["damageRolls"], list)
+        assert start_ms <= d["timestamp"] <= end_ms
+        # attack roll subdocs are well-formed when present
+        for ar in d["attackRolls"]:
+            assert set(["roll", "type", "total", "formula", "discarded", "dice"]).issubset(ar)
+            assert ar["type"] in ("hit", "crit", "miss", "crit-fail")
+            assert isinstance(ar["dice"], list)
+        for dr in d["damageRolls"]:
+            assert set(["damageType", "dice", "total", "flags", "formula"]).issubset(dr)
+        ids.add(d["id"])
+    assert len(ids) == len(docs), "roll ids unique"
+    # Variety: at least one crit (nat 20) and one crit-fail (nat 1) somewhere.
+    types = [ar["type"] for d in docs for ar in d["attackRolls"]]
+    assert "crit" in types, "need a natural-20 crit"
+    assert "crit-fail" in types, "need a natural-1 fumble"
+    # Some rolls are skill checks / saves (rollType variety).
+    roll_types = {d["rollType"] for d in docs}
+    assert len(roll_types) >= 3, f"need varied rollTypes, got {roll_types}"
+    assert any(d["channel"] == "gm" for d in docs), "need a gm-channel roll"
+
+
 def run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
