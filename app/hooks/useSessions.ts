@@ -4,6 +4,7 @@ import { captureException } from '~/providers/PostHogProvider';
 import { queryKeys } from '~/utils/queryKeys';
 import {
   listSessionsSchema,
+  getSessionCatchUpSchema,
   createSessionSchema,
   updateSessionSchema,
 } from '~/types/schemas/sessions';
@@ -14,6 +15,13 @@ const listSessionsFn = createServerFn({ method: 'GET' })
   .handler(async ({ data }) => {
     const { listSessions } = await import('~/server/functions/sessions');
     return listSessions({ data });
+  });
+
+const getSessionCatchUpFn = createServerFn({ method: 'GET' })
+  .inputValidator(getSessionCatchUpSchema)
+  .handler(async ({ data }) => {
+    const { getSessionCatchUp } = await import('~/server/functions/sessions');
+    return getSessionCatchUp({ data });
   });
 
 const createSessionFn = createServerFn({ method: 'POST' })
@@ -48,6 +56,23 @@ export function useSessions(campaignId: string, includeCompleted: boolean) {
   });
   return {
     sessions,
+    isLoading,
+    error: error instanceof Error ? error.message : error ? String(error) : null,
+  };
+}
+
+/**
+ * Fetch a single session's catch-up markdown on demand. Enabled only when both
+ * ids are present, so the query stays idle until a session is actually opened.
+ */
+export function useSessionCatchUp(campaignId: string, sessionId: string) {
+  const { data, isLoading, error } = useQuery({
+    queryKey: queryKeys.sessions.catchUp(campaignId, sessionId),
+    queryFn: () => getSessionCatchUpFn({ data: { campaignId, sessionId } }),
+    enabled: !!campaignId && !!sessionId,
+  });
+  return {
+    catchUp: data?.catchUp ?? null,
     isLoading,
     error: error instanceof Error ? error.message : error ? String(error) : null,
   };

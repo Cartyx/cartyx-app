@@ -5,7 +5,7 @@ describe('mockKeyAlliesService', () => {
   it('returns key NPC allies with home towns', async () => {
     const allies = await getKeyAllies();
 
-    expect(allies).toHaveLength(5);
+    expect(allies).toHaveLength(15);
     expect(allies[0]).toMatchObject({
       name: 'Elder Morvain',
       town: 'Thornhollow',

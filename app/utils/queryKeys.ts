@@ -15,6 +15,8 @@ export const queryKeys = {
     all: ['sessions'] as const,
     list: (campaignId: string, includeCompleted: boolean) =>
       ['sessions', 'list', campaignId, String(includeCompleted)] as const,
+    catchUp: (campaignId: string, sessionId: string) =>
+      ['sessions', 'catchUp', campaignId, sessionId] as const,
   },
   gmscreens: {
     all: ['gmscreens'] as const,
