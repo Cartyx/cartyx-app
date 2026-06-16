@@ -75,39 +75,58 @@ export function PartyMembersWidget({
         </div>
       ) : (
         <div className="space-y-3">
-          {resolvedMembers.map((member) => (
-            <button
-              key={member.id}
-              type="button"
-              onClick={canOpenDetail ? () => setSelectedMemberId(member.id) : undefined}
-              aria-label={`View ${member.name}`}
-              className="flex w-full items-center gap-3 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2.5 text-left transition-colors hover:border-white/20 hover:bg-white/[0.05] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60"
-            >
-              {member.avatarUrl ? (
-                <img
-                  src={member.avatarUrl}
-                  alt={`${member.name} avatar`}
-                  className="h-10 w-10 rounded-full object-cover"
-                />
-              ) : (
-                <div
-                  aria-hidden="true"
-                  className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-700 font-sans font-semibold text-xs text-slate-200"
-                  style={member.color ? { backgroundColor: member.color } : undefined}
-                >
-                  {member.name.charAt(0)}
-                </div>
-              )}
+          {resolvedMembers.map((member) => {
+            const cardClass =
+              'flex w-full items-center gap-3 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2.5 text-left';
+            const cardBody = (
+              <>
+                {member.avatarUrl ? (
+                  <img
+                    src={member.avatarUrl}
+                    alt={`${member.name} avatar`}
+                    className="h-10 w-10 rounded-full object-cover"
+                  />
+                ) : (
+                  <div
+                    aria-hidden="true"
+                    className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-700 font-sans font-semibold text-xs text-slate-200"
+                    style={member.color ? { backgroundColor: member.color } : undefined}
+                  >
+                    {member.name.charAt(0)}
+                  </div>
+                )}
 
-              <div className="min-w-0">
-                <p className="truncate font-sans font-semibold text-xs text-white">{member.name}</p>
-                <p className="font-sans font-semibold text-xs text-slate-400">
-                  {member.characterClass}
-                </p>
-                <p className="font-sans font-semibold text-xs text-slate-400">{member.race}</p>
+                <div className="min-w-0">
+                  <p className="truncate font-sans font-semibold text-xs text-white">
+                    {member.name}
+                  </p>
+                  <p className="font-sans font-semibold text-xs text-slate-400">
+                    {member.characterClass}
+                  </p>
+                  <p className="font-sans font-semibold text-xs text-slate-400">{member.race}</p>
+                </div>
+              </>
+            );
+
+            // Only render an interactive control when a detail view is actually
+            // reachable (needs campaignId). Otherwise render a plain row so
+            // assistive tech isn't presented a focusable, do-nothing button.
+            return canOpenDetail ? (
+              <button
+                key={member.id}
+                type="button"
+                onClick={() => setSelectedMemberId(member.id)}
+                aria-label={`View ${member.name}`}
+                className={`${cardClass} transition-colors hover:border-white/20 hover:bg-white/[0.05] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60`}
+              >
+                {cardBody}
+              </button>
+            ) : (
+              <div key={member.id} className={cardClass}>
+                {cardBody}
               </div>
-            </button>
-          ))}
+            );
+          })}
         </div>
       )}
 

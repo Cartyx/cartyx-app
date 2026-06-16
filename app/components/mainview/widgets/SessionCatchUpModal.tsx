@@ -13,21 +13,26 @@ interface SessionCatchUpModalProps {
   /** The session to show a catch-up for; `null` keeps the modal closed. */
   session: Session | null;
   /**
-   * Campaign the session belongs to. Required to fetch the catch-up on demand —
-   * the campaign payload only ships the active session's catch-up, so non-active
-   * sessions are fetched here by id. When omitted (Storybook/tests), the modal
-   * falls back to the catch-up carried on the session object.
+   * Campaign the session belongs to. Used to fetch the catch-up on demand — the
+   * campaign payload only ships the active session's catch-up, so non-active
+   * sessions are fetched here by id. When the session already carries its
+   * catch-up (active session) or no campaignId is given (Storybook/tests), the
+   * modal uses the catch-up on the session object and skips the fetch.
    */
   campaignId?: string;
   onClose: () => void;
 }
 
 export function SessionCatchUpModal({ session, campaignId, onClose }: SessionCatchUpModalProps) {
-  const shouldFetch = Boolean(campaignId && session);
-  const { catchUp: fetchedCatchUp, isLoading } = useSessionCatchUp(
-    shouldFetch ? campaignId! : '',
-    shouldFetch ? session!.id : ''
-  );
+  // Only hit the network when we have a campaign and the session didn't already
+  // carry its catch-up — the active session's catch-up is in the campaign
+  // payload, so re-fetching it would be wasted latency.
+  const shouldFetch = Boolean(campaignId && session && !session.catchUp);
+  const {
+    catchUp: fetchedCatchUp,
+    isLoading,
+    error,
+  } = useSessionCatchUp(shouldFetch ? campaignId! : '', shouldFetch ? session!.id : '');
 
   useEffect(() => {
     if (!session) return;
@@ -41,10 +46,11 @@ export function SessionCatchUpModal({ session, campaignId, onClose }: SessionCat
 
   if (!session) return null;
 
-  // Prefer the freshly fetched catch-up; fall back to whatever the session
-  // object carries when we have no campaign to fetch from (Storybook/tests).
-  const catchUp = shouldFetch ? fetchedCatchUp : (session.catchUp ?? null);
+  // Prefer the catch-up already on the session (active session / prop mode);
+  // otherwise use whatever the on-demand fetch returned.
+  const catchUp = session.catchUp ?? fetchedCatchUp;
   const showLoading = shouldFetch && isLoading;
+  const showError = shouldFetch && !isLoading && !!error && !catchUp;
 
   return createPortal(
     <div
@@ -94,6 +100,12 @@ export function SessionCatchUpModal({ session, campaignId, onClose }: SessionCat
             <div className="flex items-center justify-center py-12">
               <p className="font-sans font-semibold text-xs text-slate-500 animate-pulse">
                 Loading catch-up...
+              </p>
+            </div>
+          ) : showError ? (
+            <div className="flex items-center justify-center py-12">
+              <p className="font-sans font-semibold text-xs text-rose-400">
+                Unable to load this session's catch-up. Please try again.
               </p>
             </div>
           ) : catchUp ? (

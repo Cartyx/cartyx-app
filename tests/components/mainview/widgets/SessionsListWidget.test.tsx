@@ -197,4 +197,37 @@ describe('SessionsListWidget', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Close modal' }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
+
+  it('shows an error state in the popup when the catch-up fetch fails', () => {
+    mockUseSessionCatchUp.mockReturnValue({
+      catchUp: null,
+      isLoading: false,
+      error: 'boom',
+    });
+    render(<SessionsListWidget sessions={[completedSession]} campaignId="c1" />);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Catch up on Session 14: Ashes at Emberfall' })
+    );
+
+    expect(screen.getByRole('dialog')).toHaveTextContent("Unable to load this session's catch-up");
+  });
+
+  it('does not fetch when the session already carries its catch-up', () => {
+    mockUseSessionCatchUp.mockReturnValue({ catchUp: null, isLoading: false, error: null });
+    const activeSession = {
+      ...completedSession,
+      status: 'active' as const,
+      catchUp: 'Already here.',
+    };
+    render(<SessionsListWidget sessions={[activeSession]} campaignId="c1" />);
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Catch up on Session 14: Ashes at Emberfall' })
+    );
+
+    // Renders the inline catch-up and leaves the fetch disabled (empty-string ids).
+    expect(screen.getByRole('dialog')).toHaveTextContent('Already here.');
+    expect(mockUseSessionCatchUp).toHaveBeenCalledWith('', '');
+  });
 });

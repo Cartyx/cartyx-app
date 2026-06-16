@@ -168,15 +168,17 @@ describe('PartyMembersWidget', () => {
     expect(screen.getByTestId('player-view-modal')).toHaveTextContent('c1:p1');
   });
 
-  it('does not make cards interactive without a campaignId', () => {
+  it('renders cards as non-interactive rows without a campaignId', () => {
     render(
       <PartyMembersWidget
         members={[{ id: 'p1', name: 'Yara Cinderfell', characterClass: 'Rogue', race: 'Half-Orc' }]}
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'View Yara Cinderfell' }));
-
+    // No focusable, do-nothing button is presented when no detail view is reachable.
+    expect(screen.queryByRole('button', { name: 'View Yara Cinderfell' })).not.toBeInTheDocument();
+    // The member is still shown, just not clickable.
+    expect(screen.getByText('Yara Cinderfell')).toBeInTheDocument();
     expect(screen.queryByTestId('player-view-modal')).not.toBeInTheDocument();
   });
 });

@@ -26,8 +26,9 @@ export function SessionsListWidget({
   const error = fetchError && !sessionsProp ? fetchError : null;
 
   // Selecting a card opens that session's catch-up popup so players can get
-  // caught up on a session they missed. The session object already carries its
-  // `catchUp`, so no extra fetch is needed.
+  // caught up on a session they missed. Only the active session's catch-up
+  // ships in the campaign payload, so SessionCatchUpModal fetches other
+  // sessions' catch-up on demand by id.
   const [selectedSession, setSelectedSession] = useState<Session | null>(null);
 
   return (

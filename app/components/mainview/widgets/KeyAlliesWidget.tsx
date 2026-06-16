@@ -86,34 +86,51 @@ export function KeyAlliesWidget({ allies, campaignId, className = '' }: KeyAllie
         <p className="font-sans font-semibold text-xs text-slate-500">No allies found</p>
       ) : (
         <div className="space-y-3">
-          {pageAllies.map((ally) => (
-            <button
-              key={ally.id}
-              type="button"
-              onClick={canOpenDetail ? () => setSelectedAllyId(ally.id) : undefined}
-              aria-label={`View ${ally.name}`}
-              className="flex w-full items-center gap-3 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2 text-left transition-colors hover:border-white/20 hover:bg-white/[0.05] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60"
-            >
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/[0.07] bg-slate-800 font-sans font-semibold text-xs text-white">
-                {ally.avatarUrl ? (
-                  <img
-                    src={ally.avatarUrl}
-                    alt={ally.name}
-                    className="h-full w-full object-cover"
-                  />
-                ) : (
-                  <span aria-hidden="true">{getInitials(ally.name)}</span>
-                )}
-              </div>
+          {pageAllies.map((ally) => {
+            const cardClass =
+              'flex w-full items-center gap-3 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 py-2 text-left';
+            const cardBody = (
+              <>
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full border border-white/[0.07] bg-slate-800 font-sans font-semibold text-xs text-white">
+                  {ally.avatarUrl ? (
+                    <img
+                      src={ally.avatarUrl}
+                      alt={ally.name}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <span aria-hidden="true">{getInitials(ally.name)}</span>
+                  )}
+                </div>
 
-              <div className="min-w-0">
-                <p className="truncate font-sans font-semibold text-xs text-white">{ally.name}</p>
-                <p className="truncate font-sans font-semibold text-xs text-slate-400">
-                  {ally.town}
-                </p>
+                <div className="min-w-0">
+                  <p className="truncate font-sans font-semibold text-xs text-white">{ally.name}</p>
+                  <p className="truncate font-sans font-semibold text-xs text-slate-400">
+                    {ally.town}
+                  </p>
+                </div>
+              </>
+            );
+
+            // Only render an interactive control when a detail view is actually
+            // reachable (needs campaignId). Otherwise render a plain row so
+            // assistive tech isn't presented a focusable, do-nothing button.
+            return canOpenDetail ? (
+              <button
+                key={ally.id}
+                type="button"
+                onClick={() => setSelectedAllyId(ally.id)}
+                aria-label={`View ${ally.name}`}
+                className={`${cardClass} transition-colors hover:border-white/20 hover:bg-white/[0.05] focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60`}
+              >
+                {cardBody}
+              </button>
+            ) : (
+              <div key={ally.id} className={cardClass}>
+                {cardBody}
               </div>
-            </button>
-          ))}
+            );
+          })}
 
           {showPager ? (
             <nav

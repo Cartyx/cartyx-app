@@ -233,11 +233,13 @@ describe('KeyAlliesWidget', () => {
     expect(screen.getByTestId('character-view-modal')).toHaveTextContent('camp1:c1');
   });
 
-  it('does not make cards interactive without a campaignId', () => {
+  it('renders cards as non-interactive rows without a campaignId', () => {
     render(<KeyAlliesWidget allies={[{ id: 'a1', name: 'Elder Morvain', town: 'Thornhollow' }]} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'View Elder Morvain' }));
-
+    // No focusable, do-nothing button is presented when no detail view is reachable.
+    expect(screen.queryByRole('button', { name: 'View Elder Morvain' })).not.toBeInTheDocument();
+    // The ally is still shown, just not clickable.
+    expect(screen.getByText('Elder Morvain')).toBeInTheDocument();
     expect(screen.queryByTestId('character-view-modal')).not.toBeInTheDocument();
   });
 });
