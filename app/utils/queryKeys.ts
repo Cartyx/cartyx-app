@@ -161,6 +161,14 @@ export const queryKeys = {
     list: (campaignId: string, mapId: string) =>
       ['mapDrawings', 'list', campaignId, mapId] as const,
   },
+  lore: {
+    all: ['lore'] as const,
+    list: (campaignId: string, filters?: string) =>
+      ['lore', 'list', campaignId, filters ?? ''] as const,
+    detail: (id: string, campaignId: string) => ['lore', 'detail', id, campaignId] as const,
+    linked: (campaignId: string, kind: string, id: string) =>
+      ['lore', 'linked', campaignId, kind, id] as const,
+  },
   monsters: {
     all: ['monsters'] as const,
     list: (
