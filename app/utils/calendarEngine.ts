@@ -107,6 +107,51 @@ export function toOrdinal(cfg: CalendarConfig, date: CalDate): number {
   );
 }
 
+export interface ValidateResult {
+  ok: boolean;
+  error?: string;
+}
+
+export function validateDate(cfg: CalendarConfig, date: CalDate): ValidateResult {
+  if (
+    !Number.isInteger(date.monthIndex) ||
+    date.monthIndex < 0 ||
+    date.monthIndex >= cfg.months.length
+  ) {
+    return { ok: false, error: 'Month is out of range' };
+  }
+  if (!Number.isInteger(date.day) || date.day < 1) {
+    return { ok: false, error: 'Day must be 1 or greater' };
+  }
+  const dim = daysInMonth(cfg, date.year, date.monthIndex);
+  if (date.day > dim) {
+    return {
+      ok: false,
+      error: `Day ${date.day} exceeds ${dim} for ${cfg.months[date.monthIndex]!.name}`,
+    };
+  }
+  return { ok: true };
+}
+
+export function compareDates(cfg: CalendarConfig, a: CalDate, b: CalDate): -1 | 0 | 1 {
+  const d = toOrdinal(cfg, a) - toOrdinal(cfg, b);
+  return d < 0 ? -1 : d > 0 ? 1 : 0;
+}
+
+export function addDays(cfg: CalendarConfig, date: CalDate, n: number): CalDate {
+  return fromOrdinal(cfg, toOrdinal(cfg, date) + n);
+}
+
+/** Weekday index, or -1 for intercalary days in resetEachMonth mode. */
+export function weekdayOf(cfg: CalendarConfig, date: CalDate): number {
+  const w = cfg.weekdays.length;
+  if (cfg.weekdayMode === 'resetEachMonth') {
+    if (cfg.months[date.monthIndex]?.isIntercalary) return -1;
+    return mod(date.day - 1, w);
+  }
+  return mod(cfg.epoch.weekdayIndex + toOrdinal(cfg, date), w);
+}
+
 export function fromOrdinal(cfg: CalendarConfig, ordinal: number): CalDate {
   // A calendar whose year has zero total days would make the walks below loop forever.
   if (daysInYear(cfg, cfg.epoch.year) <= 0) {
