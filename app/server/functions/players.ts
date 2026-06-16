@@ -9,6 +9,7 @@ import { Player } from '../db/models/Player';
 import { Character } from '../db/models/Character';
 import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
+import { pruneLoreLinks } from '../utils/pruneLoreLinks';
 import type { PlayerData, PlayerListItem } from '~/types/player';
 import type { PictureCrop } from '~/types/character';
 import {
@@ -340,6 +341,8 @@ export const deletePlayer = createServerFn({ method: 'POST' })
           playerId: data.id,
         });
       }
+
+      await pruneLoreLinks('player', data.id, data.campaignId);
 
       serverCaptureEvent(sessionUserId, 'player_deleted', {
         campaign_id: data.campaignId,
