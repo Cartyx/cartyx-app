@@ -37,6 +37,7 @@ from pymongo.errors import ConfigurationError
 # focused on insertion logic.
 from seed_player_data import PLAYER_EMAILS, PLAYER_IMAGES, random_pc
 from seed_monster_data import build_monster_docs
+from seed_calendar_data import HARPTOS, to_ordinal
 
 
 def import_srd_races(db, *, campaign_id, gm_id, now) -> int:
@@ -744,6 +745,101 @@ def build_lore_docs(*, campaign_id, gm_id, player_ids, player_user_ids,
     return docs
 
 
+def build_calendar_doc(*, campaign_id, gm_id, now):
+    """One Calendar of Harptos document for the rich campaign.
+
+    Starts from the shared HARPTOS config (which mirrors app/utils/harptos.ts)
+    and stamps on the per-campaign ownership/timestamps. A shallow copy is fine
+    because we only add top-level keys; the nested month/season/etc. lists are
+    static reference data we never mutate.
+    """
+    doc = dict(HARPTOS)
+    doc.update({
+        "campaignId": campaign_id,
+        "createdBy": gm_id,
+        "createdAt": now,
+        "updatedAt": now,
+    })
+    return doc
+
+
+def build_event_docs(*, campaign_id, calendar_id, gm_id, now,
+                     character_ids, location_ids, race_ids, player_ids, session_ids):
+    """~10 sample events on the Harptos calendar, linked to seeded entities.
+
+    Arguments
+    ---------
+    character_ids : list of Character document ObjectIds (insertion order) —
+                    character_ids[0] is the first named NPC (Thorin Ironforge).
+    location_ids  : dict mapping location name → ObjectId (e.g. "Phandalin").
+    race_ids      : dict mapping race title → ObjectId (subset; may be empty).
+    player_ids    : list of Player document ObjectIds.
+    session_ids   : list of session ObjectIds (the first is linked from the
+                    Siege event). Pass [] when none are available — the link
+                    simply becomes None.
+
+    Every start/end date is valid under Harptos (see seed_calendar_data.py for
+    month lengths; Shieldmeet — monthIndex 10 — is only valid in leap years, and
+    1488 IS a leap year so day 1 resolves).
+    """
+    def ev(title, content, start, *, public, epic=False, end=None, links=None,
+           gm_content="", tags=None, session_id=None, day_offset=0):
+        ts = now - timedelta(days=day_offset)
+        return {
+            "title": title, "content": content, "gmContent": gm_content,
+            "isPublic": public, "isEpic": epic,
+            "start": start, "end": end,
+            "startOrdinal": to_ordinal(HARPTOS, start),
+            "endOrdinal": to_ordinal(HARPTOS, end or start),
+            "links": links or [], "sessionId": session_id, "images": [],
+            "tags": tags or [], "color": None,
+            "campaignId": campaign_id, "calendarId": calendar_id, "createdBy": gm_id,
+            "createdAt": ts, "updatedAt": ts,
+        }
+
+    # Resolve ids against the real seeded structures, falling back to a fresh
+    # ObjectId only when the collection is genuinely empty (keeps the builder
+    # usable in DB-free unit checks).
+    phandalin = location_ids.get("Phandalin") or (next(iter(location_ids.values())) if location_ids else ObjectId())
+    npc0 = character_ids[0] if character_ids else ObjectId()
+    player0 = player_ids[0] if player_ids else ObjectId()
+    elf = race_ids.get("Elf") or (next(iter(race_ids.values())) if race_ids else ObjectId())
+    session0 = session_ids[0] if session_ids else None
+
+    return [
+        ev("The Time of Troubles", "The gods walked Faerûn as mortals; Mystra fell at Mistmere.",
+           {"year": 1358, "monthIndex": 6, "day": 15}, public=True, epic=True, tags=["world", "history"]),
+        ev("The Spellplague", "Blue fire swept the Weave; magic itself convulsed across the Realms.",
+           {"year": 1385, "monthIndex": 8, "day": 1}, public=True, epic=True, tags=["world", "history"]),
+        ev("Shieldmeet Grand Council", "Rulers renewed pacts on the leap-day festival of Shieldmeet.",
+           {"year": 1488, "monthIndex": 10, "day": 1}, public=True, tags=["festival", "politics"]),
+        ev("Founding of Phandalin", "Settlers rebuilt the ruined town atop the old Phandelver pact lands.",
+           {"year": 1451, "monthIndex": 3, "day": 8}, public=True,
+           links=[{"kind": "location", "id": phandalin}], tags=["history"]),
+        ev("The Siege of Phandalin", "Redbrands stormed the town over two desperate days.",
+           {"year": 1491, "monthIndex": 4, "day": 11}, end={"year": 1491, "monthIndex": 4, "day": 12},
+           public=True, epic=True,
+           links=[{"kind": "location", "id": phandalin}, {"kind": "character", "id": npc0}],
+           tags=["campaign", "battle"], session_id=session0),
+        ev("Gundren's Disappearance", "Gundren Rockseeker vanished on the Triboar Trail.",
+           {"year": 1491, "monthIndex": 4, "day": 2}, public=False,
+           gm_content="Captured by Cragmaw goblins on the Black Spider's orders.",
+           links=[{"kind": "character", "id": npc0}], tags=["campaign", "secret"]),
+        ev("Wave Echo Cave Rediscovered", "The lost mine and its Forge of Spells came to light again.",
+           {"year": 1491, "monthIndex": 4, "day": 20}, public=True,
+           links=[{"kind": "location", "id": phandalin}], tags=["campaign"]),
+        ev("Greengrass in Phandalin", "The spring festival of Greengrass was kept with garlands and ale.",
+           {"year": 1491, "monthIndex": 5, "day": 1}, public=True,
+           links=[{"kind": "player", "id": player0}], tags=["festival"]),
+        ev("The Elven Retreat", "The elves withdrew to their hidden refuges as the age turned.",
+           {"year": 1344, "monthIndex": 12, "day": 20}, public=True,
+           links=[{"kind": "race", "id": elf}], tags=["history", "elf"]),
+        ev("Council Vote at Neverwinter", "A closed council set the season's trade compacts.",
+           {"year": 1491, "monthIndex": 6, "day": 10}, public=False,
+           gm_content="Sets up the next arc's politics.", tags=["politics", "secret"]),
+    ]
+
+
 def build_note_docs(*, campaign_id, session_ids, gm_id, party, now):
     """Return a realistic mix of Note docs for the rich campaign.
 
@@ -1417,6 +1513,24 @@ def main() -> None:
                 # Mongoose pluralizes model('Lore') to the `lores` collection.
                 db.lores.insert_many(lore_docs)
             print(f"    lore       inserted {len(lore_docs)}")
+
+            # Calendar of Harptos + sample events — inserted after lore so all
+            # entity ids (characters, locations, races, players, sessions) are
+            # available to link from events.
+            cal_doc = build_calendar_doc(campaign_id=campaign_id, gm_id=gm_id, now=now)
+            cal_result = db.calendars.insert_one(cal_doc)
+            calendar_id = cal_result.inserted_id
+            print(f"    calendar   inserted 1")
+
+            event_docs = build_event_docs(
+                campaign_id=campaign_id, calendar_id=calendar_id, gm_id=gm_id, now=now,
+                character_ids=character_ids, location_ids=location_ids, race_ids=race_ids,
+                player_ids=player_doc_ids, session_ids=list(session_ids.values()),
+            )
+            if event_docs:
+                # Mongoose pluralizes model('Event') to the `events` collection.
+                db.events.insert_many(event_docs)
+            print(f"    events     inserted {len(event_docs)}")
 
         print()
 
