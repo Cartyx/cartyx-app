@@ -1,6 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
+import { pruneEventLinks } from '../utils/pruneEventLinks';
 import { serverCaptureException } from '../utils/posthog';
 import { Lore } from '../db/models/Lore';
 import { Character } from '../db/models/Character';
@@ -243,6 +244,7 @@ export const deleteLore = createServerFn({ method: 'POST' })
       await Lore.deleteOne({ _id: data.id, campaignId: data.campaignId });
       // Signature: removeDocumentRefsFromScreens(campaignId, collection, documentId)
       await removeDocumentRefsFromScreens(data.campaignId, 'lore', data.id);
+      await pruneEventLinks('lore', data.id, data.campaignId);
       return { success: true };
     } catch (e) {
       serverCaptureException(e, undefined, { action: 'deleteLore', loreId: data.id });
