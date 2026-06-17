@@ -104,7 +104,8 @@ export const useDeleteCalendar = createMutationHook({
   actionName: 'remove',
   mutationFn: async (input: { campaignId: string }) => deleteCalendarFn({ data: input }),
   onSuccess: (queryClient, _data, variables) => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.calendar.detail(variables.campaignId) });
+    // The calendar is gone; drop its cached detail rather than invalidating (which would refetch a null). Mirrors useDeleteLore.
+    queryClient.removeQueries({ queryKey: queryKeys.calendar.detail(variables.campaignId) });
   },
   errorContext: () => ({ action: 'deleteCalendar' }),
 });
