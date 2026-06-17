@@ -15,6 +15,7 @@ import {
   formatDate,
   type CalendarConfig,
 } from '~/utils/calendarEngine';
+import { HARPTOS_CONFIG } from '~/utils/harptos';
 
 // Minimal config: 2 months (30, 30), 5-day week, leap +1 to month 1 every 4 years.
 const cfg: CalendarConfig = {
@@ -230,5 +231,28 @@ describe('moonPhase / seasonOf / holidaysOn / formatDate', () => {
       months: [{ name: 'Midsummer', days: 1, isIntercalary: true }],
     };
     expect(formatDate(ic, { year: 1482, monthIndex: 0, day: 1 })).toBe('Midsummer, 1482 DR');
+  });
+});
+
+describe('Harptos', () => {
+  it('a normal year has 365 days', () => {
+    expect(daysInYear(HARPTOS_CONFIG, 1373)).toBe(365); // 1373 % 4 !== 0
+  });
+  it('a Shieldmeet year has 366 days', () => {
+    expect(daysInYear(HARPTOS_CONFIG, 1372)).toBe(366); // 1372 % 4 === 0
+  });
+  it('Shieldmeet has no placeable day in a non-leap year', () => {
+    expect(validateDate(HARPTOS_CONFIG, { year: 1373, monthIndex: 10, day: 1 }).ok).toBe(false);
+  });
+  it('Shieldmeet day 1 is valid in a leap year', () => {
+    expect(validateDate(HARPTOS_CONFIG, { year: 1488, monthIndex: 10, day: 1 }).ok).toBe(true);
+  });
+  it('round-trips across a Shieldmeet year', () => {
+    for (let m = 0; m < HARPTOS_CONFIG.months.length; m++) {
+      for (let day = 1; day <= daysInMonth(HARPTOS_CONFIG, 1488, m); day++) {
+        const d = { year: 1488, monthIndex: m, day };
+        expect(fromOrdinal(HARPTOS_CONFIG, toOrdinal(HARPTOS_CONFIG, d))).toEqual(d);
+      }
+    }
   });
 });
