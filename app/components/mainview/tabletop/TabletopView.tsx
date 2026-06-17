@@ -28,6 +28,7 @@ import {
   LoreWindowWrapper,
   EditLoreModalWrapper,
 } from '~/components/mainview/gmscreens/LoreWindowWrapper';
+import { EventWindowWrapper } from '~/components/mainview/gmscreens/EventWindowWrapper';
 import { RaceWindowWrapper, EditRaceModalWrapper } from '~/components/wiki/races/RaceWindowWrapper';
 import {
   RuleWindowWrapper,
@@ -361,6 +362,8 @@ export function TabletopView({
               onEdit={() => setEditingLoreId(w.documentId)}
             />
           );
+        } else if (w.collection === 'events') {
+          windowContent = <EventWindowWrapper eventId={w.documentId} campaignId={campaignId} />;
         } else {
           windowContent = (
             <div className="p-4 overflow-auto h-full">
