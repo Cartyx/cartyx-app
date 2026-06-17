@@ -36,6 +36,7 @@ import { User } from '~/server/db/models/User';
 import { Campaign } from '~/server/db/models/Campaign';
 import { Calendar } from '~/server/db/models/Calendar';
 import { Event } from '~/server/db/models/Event';
+import { removeDocumentRefsFromScreens } from '~/server/functions/gmscreens-helpers';
 import {
   listEvents,
   createEvent,
@@ -295,5 +296,18 @@ describe('deleteEvent', () => {
     await expect(_delete({ data: { id: 'e1', campaignId: 'camp-1' } })).rejects.toThrow(
       'Forbidden'
     );
+  });
+
+  it('GM deletes an event and removeDocumentRefsFromScreens is called', async () => {
+    vi.mocked(Event.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({ _id: 'e1', campaignId: 'camp-1' }),
+    } as never);
+    vi.mocked(Event.deleteOne).mockResolvedValue({ deletedCount: 1 } as never);
+
+    const result = await _delete({ data: { id: 'e1', campaignId: 'camp-1' } });
+
+    expect(vi.mocked(removeDocumentRefsFromScreens)).toHaveBeenCalledOnce();
+    expect(vi.mocked(removeDocumentRefsFromScreens)).toHaveBeenCalledWith('camp-1', 'events', 'e1');
+    expect(result.success).toBe(true);
   });
 });

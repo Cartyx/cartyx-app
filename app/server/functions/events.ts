@@ -22,10 +22,10 @@ import type { CalendarConfig, CalDate } from '~/utils/calendarEngine';
 
 type AnyDoc = Record<string, unknown> & { _id: unknown };
 
-async function loadConfig(campaignId: string): Promise<CalendarConfig> {
+async function loadCalendar(campaignId: string): Promise<{ cfg: CalendarConfig; id: unknown }> {
   const cal = (await Calendar.findOne({ campaignId }).lean()) as AnyDoc | null;
   if (!cal) throw new Error('No calendar exists for this campaign. Create one first.');
-  return {
+  const cfg: CalendarConfig = {
     months: cal.months as CalendarConfig['months'],
     weekdays: cal.weekdays as string[],
     weekdayMode: cal.weekdayMode as CalendarConfig['weekdayMode'],
@@ -36,6 +36,7 @@ async function loadConfig(campaignId: string): Promise<CalendarConfig> {
     seasons: cal.seasons as CalendarConfig['seasons'],
     holidays: cal.holidays as CalendarConfig['holidays'],
   };
+  return { cfg, id: cal._id };
 }
 
 function baseSerialize(doc: AnyDoc) {
@@ -115,6 +116,7 @@ export const listEvents = createServerFn({ method: 'GET' })
       const member = await requireCampaignMember(data.campaignId);
       const filter: Record<string, unknown> = { campaignId: data.campaignId };
 
+      // Events are GM-owned (no player-authored events), so non-GMs see only public events — no "see your own" branch like lore.
       if (!member.isGM) {
         filter.isPublic = true;
       } else if (data.visibility === 'public') {
@@ -186,8 +188,8 @@ export const createEvent = createServerFn({ method: 'POST' })
       const member = await requireCampaignMember(data.campaignId);
       if (!member.isGM) throw new Error('Forbidden');
 
-      const cfg = await loadConfig(data.campaignId);
-      const cal = (await Calendar.findOne({ campaignId: data.campaignId }, '_id').lean()) as AnyDoc;
+      const { cfg, id: calendarId } = await loadCalendar(data.campaignId);
+      const safeGmContent = member.isGM ? (data.gmContent ?? '') : '';
 
       const sv = validateDate(cfg, data.start);
       if (!sv.ok) throw new Error(sv.error);
@@ -199,7 +201,7 @@ export const createEvent = createServerFn({ method: 'POST' })
       const doc = (await Event.create({
         title: data.title,
         content: data.content,
-        gmContent: data.gmContent,
+        gmContent: safeGmContent,
         isPublic: data.isPublic,
         isEpic: data.isEpic,
         start: data.start,
@@ -212,7 +214,7 @@ export const createEvent = createServerFn({ method: 'POST' })
         tags: data.tags,
         color: data.color,
         campaignId: data.campaignId,
-        calendarId: cal._id,
+        calendarId: calendarId,
         createdBy: member.userId,
       })) as AnyDoc;
 
@@ -220,7 +222,7 @@ export const createEvent = createServerFn({ method: 'POST' })
         success: true,
         event: {
           ...baseSerialize(doc),
-          gmContent: (data.gmContent as string) ?? '',
+          gmContent: safeGmContent,
           canEdit: true,
         },
       };
@@ -245,7 +247,8 @@ export const updateEvent = createServerFn({ method: 'POST' })
       if (!existing || String(existing.campaignId) !== data.campaignId)
         throw new Error('Not found');
 
-      const cfg = await loadConfig(data.campaignId);
+      const { cfg } = await loadCalendar(data.campaignId);
+      const safeGmContent = member.isGM ? (data.gmContent ?? '') : '';
 
       const sv = validateDate(cfg, data.start);
       if (!sv.ok) throw new Error(sv.error);
@@ -260,7 +263,7 @@ export const updateEvent = createServerFn({ method: 'POST' })
           $set: {
             title: data.title,
             content: data.content,
-            gmContent: data.gmContent,
+            gmContent: safeGmContent,
             isPublic: data.isPublic,
             isEpic: data.isEpic,
             start: data.start,
@@ -282,7 +285,7 @@ export const updateEvent = createServerFn({ method: 'POST' })
         success: true,
         event: {
           ...baseSerialize(updated),
-          gmContent: (data.gmContent as string) ?? '',
+          gmContent: safeGmContent,
           canEdit: true,
         },
       };
