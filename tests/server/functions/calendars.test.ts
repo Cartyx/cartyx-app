@@ -102,6 +102,16 @@ describe('upsertCalendar', () => {
     expect(res.invalidEventIds).toEqual([]);
   });
 
+  it('rejects when the incoming currentDate is invalid for the new config', async () => {
+    vi.mocked(Event.find).mockReturnValue({
+      lean: vi.fn().mockResolvedValue([]),
+    } as never);
+    // baseInput has months=[{name:'Hammer', days:30}] — monthIndex 5 is out of range (only index 0 exists)
+    await expect(
+      _upsert({ data: { ...baseInput, currentDate: { year: 1, monthIndex: 5, day: 1 } } })
+    ).rejects.toThrow();
+  });
+
   it('re-validates events against the new config: flags invalid, recomputes valid ordinals', async () => {
     // baseInput config: months=[{name:'Hammer', days:30}], epoch={year:1, weekdayIndex:0}
     // ev-valid: start={year:1, monthIndex:0, day:5} => day 5 <= 30, valid
@@ -177,6 +187,9 @@ describe('setCurrentDate', () => {
   });
 
   it('updates currentDate for a GM', async () => {
+    vi.mocked(Calendar.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(calDoc),
+    } as never);
     vi.mocked(Calendar.findOneAndUpdate).mockResolvedValue({
       ...calDoc,
       currentDate: { year: 1, monthIndex: 0, day: 2 },
@@ -186,6 +199,15 @@ describe('setCurrentDate', () => {
     })) as Record<string, Record<string, unknown>>;
     expect(res.success).toBe(true);
     expect(res.calendar.currentDate).toEqual({ year: 1, monthIndex: 0, day: 2 });
+  });
+
+  it('rejects a currentDate out of range for the calendar', async () => {
+    vi.mocked(Calendar.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(calDoc),
+    } as never);
+    await expect(
+      _setDate({ data: { campaignId: 'camp-1', currentDate: { year: 1, monthIndex: 0, day: 99 } } })
+    ).rejects.toThrow();
   });
 });
 

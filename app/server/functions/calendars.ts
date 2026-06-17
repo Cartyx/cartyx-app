@@ -83,6 +83,8 @@ export const upsertCalendar = createServerFn({ method: 'POST' })
       if (!member.isGM) throw new Error('Forbidden');
 
       const cfg = toConfig(data);
+      const cd = validateDate(cfg, data.currentDate);
+      if (!cd.ok) throw new Error(cd.error ?? 'Current date is invalid for this calendar');
       const doc = (await Calendar.findOneAndUpdate(
         { campaignId: data.campaignId },
         {
@@ -112,7 +114,10 @@ export const upsertCalendar = createServerFn({ method: 'POST' })
       )) as AnyDoc;
 
       // Re-validate every event against the new config and recompute ordinals.
-      const events = (await Event.find({ campaignId: data.campaignId }).lean()) as AnyDoc[];
+      const events = (await Event.find(
+        { campaignId: data.campaignId },
+        { start: 1, end: 1 }
+      ).lean()) as AnyDoc[];
       const invalidEventIds: string[] = [];
       const ops: AnyBulkWriteOperation[] = [];
       for (const ev of events) {
@@ -124,13 +129,14 @@ export const upsertCalendar = createServerFn({ method: 'POST' })
           invalidEventIds.push(String(ev._id));
           continue;
         }
+        const startOrd = toOrdinal(cfg, start);
         ops.push({
           updateOne: {
             filter: { _id: ev._id },
             update: {
               $set: {
-                startOrdinal: toOrdinal(cfg, start),
-                endOrdinal: toOrdinal(cfg, end ?? start),
+                startOrdinal: startOrd,
+                endOrdinal: end ? toOrdinal(cfg, end) : startOrd,
               },
             },
           },
@@ -158,6 +164,13 @@ export const setCurrentDate = createServerFn({ method: 'POST' })
     try {
       const member = await requireCampaignMember(data.campaignId);
       if (!member.isGM) throw new Error('Forbidden');
+      const existing = (await Calendar.findOne({
+        campaignId: data.campaignId,
+      }).lean()) as AnyDoc | null;
+      if (!existing) throw new Error('Not found');
+      const cfg = toConfig(existing);
+      const cd = validateDate(cfg, data.currentDate);
+      if (!cd.ok) throw new Error(cd.error ?? 'Current date is invalid for this calendar');
       const doc = (await Calendar.findOneAndUpdate(
         { campaignId: data.campaignId },
         { $set: { currentDate: data.currentDate, updatedAt: new Date() } },
