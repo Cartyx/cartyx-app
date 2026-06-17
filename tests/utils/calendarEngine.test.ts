@@ -169,11 +169,17 @@ describe('monthGrid', () => {
     expect(grid[5]).toEqual([26, 27, 28, 29, 30]);
   });
   it('adds leading blanks in continuous mode when day 1 is mid-week', () => {
-    // month 1 of year 1 starts at ordinal 30 -> weekday 30 % 5 = 0; force offset
+    // epoch weekdayIndex:2 -> day 1 of year 1 (ordinal 0) is weekday 2 -> 2 leading nulls
     const off: CalendarConfig = { ...cfg, epoch: { year: 1, weekdayIndex: 2 } };
     const grid = monthGrid(off, 1, 0);
     expect(grid[0]!.slice(0, 2)).toEqual([null, null]);
     expect(grid[0]![2]).toBe(1);
+  });
+  it('pads the final row with trailing nulls when days do not fill a week', () => {
+    // 31-day month, 5-day week, continuous, day1 weekday 0 -> last row [31, null, null, null, null]
+    const c31: CalendarConfig = { ...cfg, months: [{ name: 'Long', days: 31 }] };
+    const grid = monthGrid(c31, 1, 0);
+    expect(grid[grid.length - 1]).toEqual([31, null, null, null, null]);
   });
 });
 
@@ -195,6 +201,23 @@ describe('moonPhase / seasonOf / holidaysOn / formatDate', () => {
   it('seasonOf picks the active season', () => {
     expect(seasonOf(dcfg, toOrdinal(dcfg, { year: 1, monthIndex: 0, day: 5 }))?.name).toBe('Cold');
     expect(seasonOf(dcfg, toOrdinal(dcfg, { year: 1, monthIndex: 1, day: 5 }))?.name).toBe('Warm');
+  });
+  it("seasonOf wraps the previous year's last season before the first season start", () => {
+    const wrapCfg: CalendarConfig = {
+      ...cfg,
+      seasons: [
+        { name: 'Spring', startMonthIndex: 0, startDay: 10 },
+        { name: 'Autumn', startMonthIndex: 1, startDay: 10 },
+      ],
+    };
+    // year 1, month 0, day 1 is before Spring's day-10 start -> should carry over Autumn (last season)
+    expect(seasonOf(wrapCfg, toOrdinal(wrapCfg, { year: 1, monthIndex: 0, day: 1 }))?.name).toBe(
+      'Autumn'
+    );
+    // and a date after Spring start but before Autumn is Spring
+    expect(seasonOf(wrapCfg, toOrdinal(wrapCfg, { year: 1, monthIndex: 0, day: 15 }))?.name).toBe(
+      'Spring'
+    );
   });
   it('holidaysOn returns matching holidays', () => {
     expect(holidaysOn(dcfg, 1, 0, 15).map((h) => h.name)).toEqual(['Feast']);

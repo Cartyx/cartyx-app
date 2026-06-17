@@ -185,7 +185,10 @@ export function weekdayOf(cfg: CalendarConfig, date: CalDate): number {
   return mod(cfg.epoch.weekdayIndex + toOrdinal(cfg, date), w);
 }
 
-/** Rows of week-length cells; null = padding (leading/trailing blanks). */
+/**
+ * Rows of week-length cells; null = padding (leading/trailing blanks).
+ * Not meaningful for isIntercalary months (those render as a single banner, not a grid).
+ */
 export function monthGrid(
   cfg: CalendarConfig,
   year: number,
