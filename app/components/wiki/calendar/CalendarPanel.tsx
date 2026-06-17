@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { CalendarDays, List, LayoutGrid } from 'lucide-react';
 import { WikiCategoryHeader } from '~/components/wiki/shared/WikiCategoryHeader';
@@ -12,6 +12,7 @@ import { useCampaign } from '~/hooks/useCampaigns';
 import { HARPTOS_CONFIG } from '~/utils/harptos';
 import type { CalendarConfig } from '~/utils/calendarEngine';
 import type { CalDate } from '~/types/calendar';
+import { calendarConfigFromData } from '~/types/calendar';
 
 interface CalendarPanelProps {
   onBack: () => void;
@@ -31,20 +32,14 @@ export function CalendarPanel({ onBack }: CalendarPanelProps) {
   const [viewEventId, setViewEventId] = useState<string | undefined>();
   const [editorOpen, setEditorOpen] = useState(false);
 
+  // Reset cursor when the calendar identity or month count changes so a stale
+  // cursor can't point past the end of the month array.
+  useEffect(() => {
+    setCursor(null);
+  }, [calendar?.id, calendar?.months.length]);
+
   // Build CalendarConfig from CalendarData when available.
-  const cfg: CalendarConfig | null = calendar
-    ? {
-        months: calendar.months,
-        weekdays: calendar.weekdays,
-        weekdayMode: calendar.weekdayMode,
-        epoch: calendar.epoch,
-        leapDays: calendar.leapDays,
-        yearSuffix: calendar.yearSuffix,
-        moons: calendar.moons,
-        seasons: calendar.seasons,
-        holidays: calendar.holidays,
-      }
-    : null;
+  const cfg: CalendarConfig | null = calendar ? calendarConfigFromData(calendar) : null;
 
   const handleHarptos = () => {
     const harptosCurrentDate: CalDate = { year: 1491, monthIndex: 6, day: 15 };
@@ -185,7 +180,7 @@ export function CalendarPanel({ onBack }: CalendarPanelProps) {
               <CalendarGridView
                 cfg={cfg}
                 year={currentYear}
-                monthIndex={currentMonthIndex}
+                monthIndex={Math.min(Math.max(currentMonthIndex, 0), cfg.months.length - 1)}
                 events={events}
                 currentDate={calendar.currentDate}
                 onPrev={handlePrev}

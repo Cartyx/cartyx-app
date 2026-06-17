@@ -53,7 +53,7 @@ function LinkChip({ link }: { link: EventLink }) {
 
 interface EventWindowProps {
   event: EventData;
-  cfg: CalendarConfig;
+  cfg: CalendarConfig | null;
   onEdit?: () => void;
 }
 
@@ -63,8 +63,8 @@ export function EventWindow({ event, cfg, onEdit }: EventWindowProps) {
   const hasGmContent = !!event.gmContent;
   const hasLinks = event.links.length > 0;
 
-  const startLabel = formatDate(cfg, event.start);
-  const endLabel = event.end !== null ? formatDate(cfg, event.end) : null;
+  const startLabel = cfg ? formatDate(cfg, event.start) : null;
+  const endLabel = cfg && event.end !== null ? formatDate(cfg, event.end) : null;
 
   return (
     <div data-testid="event-window" className="flex flex-col gap-4 p-4">
@@ -99,11 +99,13 @@ export function EventWindow({ event, cfg, onEdit }: EventWindowProps) {
         </div>
       )}
 
-      {/* Date range */}
-      <p className="text-xs text-slate-500">
-        {startLabel}
-        {endLabel && ` – ${endLabel}`}
-      </p>
+      {/* Date range (only rendered when cfg is available) */}
+      {startLabel !== null && (
+        <p className="text-xs text-slate-500">
+          {startLabel}
+          {endLabel && ` – ${endLabel}`}
+        </p>
+      )}
 
       {/* Tags */}
       {event.tags.length > 0 && (

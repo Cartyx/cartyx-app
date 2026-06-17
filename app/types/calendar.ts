@@ -5,6 +5,7 @@ import type {
   CalSeason,
   CalHoliday,
   CalDate,
+  CalendarConfig,
 } from '~/utils/calendarEngine';
 
 export type { CalMonth, CalLeapRule, CalMoon, CalSeason, CalHoliday, CalDate };
@@ -29,4 +30,18 @@ export interface CalendarData {
   createdAt: string;
   updatedAt: string;
   canEdit: boolean;
+}
+
+export function calendarConfigFromData(c: CalendarData): CalendarConfig {
+  return {
+    months: c.months,
+    weekdays: c.weekdays,
+    weekdayMode: c.weekdayMode,
+    epoch: c.epoch,
+    yearSuffix: c.yearSuffix,
+    leapDays: c.leapDays,
+    moons: c.moons,
+    seasons: c.seasons,
+    holidays: c.holidays,
+  };
 }

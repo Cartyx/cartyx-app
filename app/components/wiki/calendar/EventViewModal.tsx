@@ -6,6 +6,7 @@ import { EventModal } from './EventModal';
 import { useEvent } from '~/hooks/useEvents';
 import { useCalendar } from '~/hooks/useCalendar';
 import type { CalendarConfig } from '~/utils/calendarEngine';
+import { calendarConfigFromData } from '~/types/calendar';
 
 interface EventViewModalProps {
   isOpen: boolean;
@@ -16,10 +17,8 @@ interface EventViewModalProps {
 
 export function EventViewModal({ isOpen, onClose, eventId, campaignId }: EventViewModalProps) {
   const { event, isLoading: isLoadingEvent } = useEvent(eventId, campaignId);
-  const { calendar, isLoading: isLoadingCalendar } = useCalendar(campaignId);
+  const { calendar } = useCalendar(campaignId);
   const [isEditOpen, setIsEditOpen] = useState(false);
-
-  const isLoading = isLoadingEvent || isLoadingCalendar;
 
   useEffect(() => {
     if (!isOpen) return;
@@ -34,19 +33,7 @@ export function EventViewModal({ isOpen, onClose, eventId, campaignId }: EventVi
   if (!isOpen) return null;
 
   // Build a CalendarConfig from the calendar data when available.
-  const cfg: CalendarConfig | null = calendar
-    ? {
-        months: calendar.months,
-        weekdays: calendar.weekdays,
-        weekdayMode: calendar.weekdayMode,
-        epoch: calendar.epoch,
-        leapDays: calendar.leapDays,
-        yearSuffix: calendar.yearSuffix,
-        moons: calendar.moons,
-        seasons: calendar.seasons,
-        holidays: calendar.holidays,
-      }
-    : null;
+  const cfg: CalendarConfig | null = calendar ? calendarConfigFromData(calendar) : null;
 
   return createPortal(
     <>
@@ -94,20 +81,20 @@ export function EventViewModal({ isOpen, onClose, eventId, campaignId }: EventVi
           </header>
 
           <div className="flex-1 overflow-y-auto min-h-0">
-            {isLoading ? (
+            {isLoadingEvent ? (
               <div className="flex items-center justify-center py-12">
                 <p className="text-xs text-slate-500 animate-pulse">Loading event...</p>
               </div>
-            ) : event && cfg ? (
+            ) : !event ? (
+              <div className="flex items-center justify-center py-12">
+                <p className="text-xs text-slate-500">Event not found</p>
+              </div>
+            ) : (
               <EventWindow
                 event={event}
                 cfg={cfg}
                 onEdit={event.canEdit ? () => setIsEditOpen(true) : undefined}
               />
-            ) : (
-              <div className="flex items-center justify-center py-12">
-                <p className="text-xs text-slate-500">Event not found</p>
-              </div>
             )}
           </div>
         </div>

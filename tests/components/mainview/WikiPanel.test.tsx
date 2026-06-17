@@ -75,7 +75,7 @@ vi.mock('~/components/wiki/monsters/MonstersPanel', () => ({
 
 vi.mock('~/components/wiki/calendar/CalendarPanel', () => ({
   CalendarPanel: ({ onBack }: { onBack: () => void }) => (
-    <div data-testid="calendar-panel-stub">
+    <div data-testid="calendar-panel">
       <button onClick={onBack}>Back</button>
     </div>
   ),
@@ -139,7 +139,7 @@ describe('WikiPanel', () => {
 
     await user.click(screen.getByRole('button', { name: 'Calendar' }));
 
-    expect(screen.getByTestId('calendar-panel-stub')).toBeInTheDocument();
+    expect(screen.getByTestId('calendar-panel')).toBeInTheDocument();
   });
 
   it('clicking Events shows EventsPanel for GM', async () => {
