@@ -9,7 +9,9 @@ import { EventLinksEditor } from '~/components/wiki/calendar/EventLinksEditor';
 import { CalDatePicker } from '~/components/wiki/calendar/CalDatePicker';
 import { useEvent, useCreateEvent, useUpdateEvent, useDeleteEvent } from '~/hooks/useEvents';
 import { useCalendar } from '~/hooks/useCalendar';
+import { useSessions } from '~/hooks/useSessions';
 import { useModalForm } from '~/hooks/useModalForm';
+import { FormSelect } from '~/components/FormSelect';
 import { uploadToR2 } from '~/utils/uploadToR2';
 import { compressImage } from '~/utils/compressImage';
 import { validateDate } from '~/utils/calendarEngine';
@@ -38,6 +40,7 @@ export function EventModal({ isOpen, onClose, campaignId, eventId }: EventModalP
   const { update, isLoading: isUpdating } = useUpdateEvent();
   const { remove, isLoading: isDeleting } = useDeleteEvent();
   const { calendar } = useCalendar(campaignId);
+  const { sessions } = useSessions(campaignId, true);
 
   const cfg = calendar ? calendarConfigFromData(calendar) : null;
   const defaultDate: CalDate = calendar ? calendar.currentDate : { year: 1, monthIndex: 0, day: 1 };
@@ -51,7 +54,7 @@ export function EventModal({ isOpen, onClose, campaignId, eventId }: EventModalP
   const [isMultiDay, setIsMultiDay] = useState(false);
   const [end, setEnd] = useState<CalDate | null>(null);
   const [links, setLinks] = useState<EventLink[]>([]);
-  const [sessionId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [images, setImages] = useState<EventImage[]>([]);
   const [tags, setTags] = useState<string[]>([]);
   const [color] = useState<string | null>(null);
@@ -89,6 +92,7 @@ export function EventModal({ isOpen, onClose, campaignId, eventId }: EventModalP
       setIsMultiDay(false);
       setEnd(null);
       setLinks([]);
+      setSessionId(null);
       setImages([]);
       setTags([]);
       setError(null);
@@ -109,6 +113,7 @@ export function EventModal({ isOpen, onClose, campaignId, eventId }: EventModalP
         setEnd(null);
       }
       setLinks(ev.links);
+      setSessionId(ev.sessionId ?? null);
       setImages(ev.images);
       setTags(ev.tags);
     },
@@ -486,6 +491,28 @@ export function EventModal({ isOpen, onClose, campaignId, eventId }: EventModalP
                 onChange={setLinks}
                 disabled={isBusy}
               />
+
+              {/* Session (optional) */}
+              <div data-testid="event-session-select">
+                <FormSelect
+                  label={
+                    <span>
+                      Session{' '}
+                      <span className="text-slate-600 text-[10px] font-normal">(optional)</span>
+                    </span>
+                  }
+                  value={sessionId ?? ''}
+                  onChange={(e) => setSessionId(e.target.value || null)}
+                  disabled={isBusy}
+                  options={[
+                    { value: '', label: 'None' },
+                    ...sessions.map((s) => ({
+                      value: s.id,
+                      label: `Session ${s.number}: ${s.name}`,
+                    })),
+                  ]}
+                />
+              </div>
             </>
           )}
         </div>

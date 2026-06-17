@@ -54,6 +54,40 @@ export function EventsPanel({ onBack }: EventsPanelProps) {
     setSelectedEventId(undefined);
   };
 
+  // When there's no calendar configured, show only the header + empty state.
+  // Do NOT render the WikiFilterBar or EventModal—those require a calendar.
+  if (isLoadingCalendar) {
+    return (
+      <div className="flex flex-col h-full w-full bg-[#080A12]">
+        <WikiCategoryHeader title="Events" onBack={onBack} />
+        <div className="flex flex-1 items-center justify-center p-8">
+          <p className="font-sans font-semibold text-xs text-slate-500 animate-pulse">
+            Loading calendar...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!calendar) {
+    return (
+      <div className="flex flex-col h-full w-full bg-[#080A12]">
+        <WikiCategoryHeader title="Events" onBack={onBack} />
+        <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
+          <div className="h-12 w-12 rounded-full bg-white/[0.03] flex items-center justify-center mb-3">
+            <CalendarDays className="h-6 w-6 text-slate-600" />
+          </div>
+          <p className="font-sans font-semibold text-xs text-slate-500 mb-1">
+            No calendar configured.
+          </p>
+          <p className="font-sans text-xs text-slate-600">
+            Create a calendar first in the Calendar category.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full w-full bg-[#080A12]">
       <WikiCategoryHeader title="Events" onBack={onBack} />
@@ -88,25 +122,7 @@ export function EventsPanel({ onBack }: EventsPanelProps) {
         </button>
       </div>
 
-      {isLoadingCalendar ? (
-        <div className="flex flex-1 items-center justify-center p-8">
-          <p className="font-sans font-semibold text-xs text-slate-500 animate-pulse">
-            Loading calendar...
-          </p>
-        </div>
-      ) : !calendar ? (
-        <div className="flex flex-1 flex-col items-center justify-center p-8 text-center">
-          <div className="h-12 w-12 rounded-full bg-white/[0.03] flex items-center justify-center mb-3">
-            <CalendarDays className="h-6 w-6 text-slate-600" />
-          </div>
-          <p className="font-sans font-semibold text-xs text-slate-500 mb-1">
-            No calendar configured.
-          </p>
-          <p className="font-sans text-xs text-slate-600">
-            Create a calendar first in the Calendar category.
-          </p>
-        </div>
-      ) : isLoading ? (
+      {isLoading ? (
         <div className="flex flex-1 items-center justify-center p-8">
           <p className="font-sans font-semibold text-xs text-slate-500 animate-pulse">
             Loading events...
