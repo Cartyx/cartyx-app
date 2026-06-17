@@ -36,7 +36,13 @@ import { User } from '~/server/db/models/User';
 import { Campaign } from '~/server/db/models/Campaign';
 import { Calendar } from '~/server/db/models/Calendar';
 import { Event } from '~/server/db/models/Event';
-import { listEvents, createEvent } from '~/server/functions/events';
+import {
+  listEvents,
+  createEvent,
+  getEvent,
+  updateEvent,
+  deleteEvent,
+} from '~/server/functions/events';
 
 const gmCampaign = {
   _id: 'camp-1',
@@ -63,6 +69,15 @@ const calDoc = {
 
 const _list = listEvents as unknown as (a: { data: Record<string, unknown> }) => Promise<unknown[]>;
 const _create = createEvent as unknown as (a: {
+  data: Record<string, unknown>;
+}) => Promise<Record<string, unknown>>;
+const _get = getEvent as unknown as (a: {
+  data: Record<string, unknown>;
+}) => Promise<Record<string, unknown> | null>;
+const _update = updateEvent as unknown as (a: {
+  data: Record<string, unknown>;
+}) => Promise<Record<string, unknown>>;
+const _delete = deleteEvent as unknown as (a: {
   data: Record<string, unknown>;
 }) => Promise<Record<string, unknown>>;
 
@@ -153,5 +168,132 @@ describe('createEvent', () => {
         data: { campaignId: 'camp-1', title: 'T', start: { year: 1, monthIndex: 0, day: 99 } },
       })
     ).rejects.toThrow(/Day/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getEvent
+// ---------------------------------------------------------------------------
+
+const publicEventDoc = {
+  _id: 'e1',
+  campaignId: 'camp-1',
+  calendarId: 'cal-1',
+  createdBy: 'user-1',
+  title: 'T',
+  content: 'pub',
+  gmContent: 'secret',
+  isPublic: true,
+  isEpic: false,
+  start: { year: 1, monthIndex: 0, day: 1 },
+  end: null,
+  startOrdinal: 0,
+  endOrdinal: 0,
+  links: [],
+  images: [],
+  tags: [],
+  createdAt: new Date(),
+  updatedAt: new Date(),
+};
+
+describe('getEvent', () => {
+  it('strips gmContent for a non-GM member', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign as never);
+    vi.mocked(Event.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(publicEventDoc),
+    } as never);
+    const res = await _get({ data: { id: 'e1', campaignId: 'camp-1' } });
+    expect(res).not.toBeNull();
+    expect(res!.gmContent).toBe('');
+    expect(res!.content).toBe('pub');
+  });
+
+  it('returns gmContent for a GM member', async () => {
+    // gmCampaign is already the default from beforeEach
+    vi.mocked(Event.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(publicEventDoc),
+    } as never);
+    const res = await _get({ data: { id: 'e1', campaignId: 'camp-1' } });
+    expect(res).not.toBeNull();
+    expect(res!.gmContent).toBe('secret');
+  });
+
+  it('hides a non-public event from a non-GM', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign as never);
+    vi.mocked(Event.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({ ...publicEventDoc, isPublic: false }),
+    } as never);
+    const res = await _get({ data: { id: 'e1', campaignId: 'camp-1' } });
+    expect(res).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// updateEvent
+// ---------------------------------------------------------------------------
+
+describe('updateEvent', () => {
+  it('recomputes startOrdinal and endOrdinal from the calendar', async () => {
+    // gmCampaign + calDoc are set up in beforeEach
+    vi.mocked(Event.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({ _id: 'e1', campaignId: 'camp-1' }),
+    } as never);
+    vi.mocked(Event.findOneAndUpdate).mockResolvedValue({
+      _id: 'e1',
+      campaignId: 'camp-1',
+      calendarId: 'cal-1',
+      createdBy: 'user-1',
+      start: { year: 1, monthIndex: 0, day: 3 },
+      end: null,
+      startOrdinal: 2,
+      endOrdinal: 2,
+      links: [],
+      images: [],
+      tags: [],
+    } as never);
+
+    await _update({
+      data: {
+        id: 'e1',
+        campaignId: 'camp-1',
+        title: 'T',
+        start: { year: 1, monthIndex: 0, day: 3 },
+        end: null,
+      },
+    });
+
+    const updateArg = vi.mocked(Event.findOneAndUpdate).mock.calls[0][1] as Record<
+      string,
+      Record<string, unknown>
+    >;
+    expect(updateArg.$set.startOrdinal).toBe(2);
+    expect(updateArg.$set.endOrdinal).toBe(2);
+  });
+
+  it('rejects a non-GM', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign as never);
+    await expect(
+      _update({
+        data: {
+          id: 'e1',
+          campaignId: 'camp-1',
+          title: 'T',
+          start: { year: 1, monthIndex: 0, day: 1 },
+        },
+      })
+    ).rejects.toThrow('Forbidden');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// deleteEvent
+// ---------------------------------------------------------------------------
+
+describe('deleteEvent', () => {
+  it('rejects a non-GM', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign as never);
+    await expect(_delete({ data: { id: 'e1', campaignId: 'camp-1' } })).rejects.toThrow(
+      'Forbidden'
+    );
   });
 });
