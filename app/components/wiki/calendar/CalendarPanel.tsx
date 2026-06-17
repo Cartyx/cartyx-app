@@ -204,7 +204,7 @@ export function CalendarPanel({ onBack }: CalendarPanelProps) {
         />
       )}
 
-      {/* Calendar editor modal (stub until Task 16) */}
+      {/* Calendar editor modal */}
       <CalendarEditorModal
         isOpen={editorOpen}
         onClose={() => setEditorOpen(false)}

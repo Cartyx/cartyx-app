@@ -20,7 +20,7 @@ import type {
 import type { CalendarData } from '~/types/calendar';
 
 // ---------------------------------------------------------------------------
-// Prop interface (kept as-is from stub)
+// Prop interface
 // ---------------------------------------------------------------------------
 
 interface CalendarEditorModalProps {
