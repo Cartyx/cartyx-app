@@ -101,6 +101,42 @@ describe('upsertCalendar', () => {
     expect(res.success).toBe(true);
     expect(res.invalidEventIds).toEqual([]);
   });
+
+  it('re-validates events against the new config: flags invalid, recomputes valid ordinals', async () => {
+    // baseInput config: months=[{name:'Hammer', days:30}], epoch={year:1, weekdayIndex:0}
+    // ev-valid: start={year:1, monthIndex:0, day:5} => day 5 <= 30, valid
+    //   toOrdinal = yearStartOrdinal(year=1, epoch=1)=0 + daysBeforeMonth(monthIndex=0)=0 + (day-1)=4 => 4
+    // ev-invalid: start={year:1, monthIndex:0, day:99} => day 99 > 30, invalid
+    vi.mocked(Event.find).mockReturnValue({
+      lean: vi.fn().mockResolvedValue([
+        { _id: 'ev-valid', start: { year: 1, monthIndex: 0, day: 5 }, end: null },
+        { _id: 'ev-invalid', start: { year: 1, monthIndex: 0, day: 99 }, end: null },
+      ]),
+    } as never);
+    vi.mocked(Event.bulkWrite).mockResolvedValue({} as never);
+    vi.mocked(Calendar.findOneAndUpdate).mockResolvedValue({ _id: 'cal-1', ...baseInput } as never);
+
+    const res = (await _upsert({ data: baseInput })) as Record<string, unknown>;
+
+    // Invalid event is flagged, valid event is not
+    const invalidIds = res.invalidEventIds as string[];
+    expect(invalidIds).toContain('ev-invalid');
+    expect(invalidIds).not.toContain('ev-valid');
+
+    // bulkWrite called once with only the valid event's op
+    expect(Event.bulkWrite).toHaveBeenCalledOnce();
+    const ops = vi.mocked(Event.bulkWrite).mock.calls[0][0] as Array<{
+      updateOne: {
+        filter: { _id: string };
+        update: { $set: { startOrdinal: number; endOrdinal: number } };
+      };
+    }>;
+    expect(ops).toHaveLength(1);
+    expect(ops[0].updateOne.filter._id).toBe('ev-valid');
+    // startOrdinal and endOrdinal both 4: toOrdinal({year:1,monthIndex:0,day:5}) = 0+0+(5-1) = 4
+    expect(ops[0].updateOne.update.$set.startOrdinal).toBe(4);
+    expect(ops[0].updateOne.update.$set.endOrdinal).toBe(4);
+  });
 });
 
 describe('getCalendar', () => {
