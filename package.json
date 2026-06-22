@@ -89,7 +89,7 @@
     "@storybook/addon-onboarding": "^10.3.5",
     "@storybook/addon-vitest": "^10.3.5",
     "@storybook/react-vite": "^10.3.5",
-    "@tailwindcss/vite": "^4.2.4",
+    "@tailwindcss/vite": "^4.3.1",
     "@tanstack/eslint-plugin-query": "^5.100.5",
     "@tanstack/react-query-devtools": "^5.99.2",
     "@testing-library/jest-dom": "^6.6.3",
