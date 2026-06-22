@@ -88,7 +88,7 @@
     "@storybook/addon-docs": "^10.3.5",
     "@storybook/addon-onboarding": "^10.3.5",
     "@storybook/addon-vitest": "^10.3.5",
-    "@storybook/react-vite": "^10.3.5",
+    "@storybook/react-vite": "^10.4.4",
     "@tailwindcss/vite": "^4.2.4",
     "@tanstack/eslint-plugin-query": "^5.100.5",
     "@tanstack/react-query-devtools": "^5.99.2",
