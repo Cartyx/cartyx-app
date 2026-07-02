@@ -110,8 +110,9 @@ async function broadcastActiveMapChanged(
   if (!host) return;
   const isLocal = host.startsWith('localhost') || host.startsWith('127.0.0.1');
   const protocol = isLocal ? 'http' : 'https';
-  // Mirrors `useTabletopMapParty`: party `tabletop-map`, room `tabletop-map-<campaignId>`.
-  const url = `${protocol}://${host}/parties/tabletop-map/tabletop-map-${campaignId}`;
+  // Mirrors `useTabletopMapParty`: party `tabletop_map` (underscore — the
+  // partykit.json key), room `tabletop-map-<campaignId>`.
+  const url = `${protocol}://${host}/parties/tabletop_map/tabletop-map-${campaignId}`;
   try {
     const { createPartyBroadcastToken } = await import('../session');
     const broadcastToken = await createPartyBroadcastToken();

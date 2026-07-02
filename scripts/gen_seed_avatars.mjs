@@ -198,6 +198,11 @@ async function processCollection(db, collection, kind, nameOf, cdn) {
     const publicPath = cdn ? `${cdn.base}${rel}` : rel;
     if (doc.picture === publicPath) {
       // Already points at this seed avatar — nothing to do.
+    } else if (!cdn && typeof doc.picture === 'string' && doc.picture.startsWith('https://')) {
+      // Never downgrade a CDN-hosted picture to a local path just because
+      // this run lacks CDN config — the deployed dev app can't serve local
+      // files, so the repoint would break every avatar until re-run with R2.
+      skipped++;
     } else if (isReplaceablePicture(doc.picture)) {
       await db
         .collection(collection)
@@ -209,7 +214,7 @@ async function processCollection(db, collection, kind, nameOf, cdn) {
     }
   }
   console.log(
-    `${collection}: ${generated} PNGs generated, ${reused} reused, ${uploaded} uploaded to R2, ${repointed} repointed, ${skipped} custom pictures preserved`
+    `${collection}: ${generated} PNGs generated, ${reused} reused, ${uploaded} uploaded to R2, ${repointed} repointed, ${skipped} pictures preserved (custom or CDN-hosted)`
   );
 }
 

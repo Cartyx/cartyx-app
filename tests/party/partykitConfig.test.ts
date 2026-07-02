@@ -15,14 +15,22 @@ interface PartykitConfig {
 
 const config: PartykitConfig = JSON.parse(readFileSync(path.join(ROOT, 'partykit.json'), 'utf8'));
 
-/** Every party name the client connects to via usePartySocket({ party }). */
-function hookPartyNames(): string[] {
-  const hooksDir = path.join(ROOT, 'app', 'hooks');
+/**
+ * Every party name referenced anywhere in app/: client connections via
+ * usePartySocket({ party }) AND server-side HTTP broadcasts that build
+ * `/parties/<name>/…` URLs by hand (e.g. maps.ts broadcastActiveMapChanged —
+ * a stale name there 404s silently because the fetch error is swallowed).
+ */
+function referencedPartyNames(): string[] {
   const names = new Set<string>();
-  for (const file of readdirSync(hooksDir)) {
-    if (!/\.tsx?$/.test(file)) continue;
-    const src = readFileSync(path.join(hooksDir, file), 'utf8');
+  const appDir = path.join(ROOT, 'app');
+  for (const entry of readdirSync(appDir, { recursive: true, withFileTypes: true })) {
+    if (!entry.isFile() || !/\.tsx?$/.test(entry.name)) continue;
+    const src = readFileSync(path.join(entry.parentPath, entry.name), 'utf8');
     for (const m of src.matchAll(/party:\s*['"]([^'"]+)['"]/g)) {
+      names.add(m[1]);
+    }
+    for (const m of src.matchAll(/\/parties\/([a-zA-Z0-9_-]+)\//g)) {
       names.add(m[1]);
     }
   }
@@ -30,10 +38,10 @@ function hookPartyNames(): string[] {
 }
 
 describe('partykit.json', () => {
-  it('declares every party the client hooks connect to', () => {
+  it('declares every party referenced by hooks or server-side broadcast URLs', () => {
     const declared = new Set(['main', ...Object.keys(config.parties ?? {})]);
-    for (const name of hookPartyNames()) {
-      expect(declared, `party '${name}' is used by a hook but not declared`).toContain(name);
+    for (const name of referencedPartyNames()) {
+      expect(declared, `party '${name}' is referenced in app/ but not declared`).toContain(name);
     }
   });
 
