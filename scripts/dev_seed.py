@@ -145,17 +145,18 @@ def ensure_player_users(db, now) -> list[dict]:
 
 
 def local_avatar_path(kind: str, name: str) -> str:
-    """Deterministic served path for a generated local avatar.
+    """Deterministic served URL for a generated seed avatar.
 
     The PNG itself is produced by `scripts/gen_seed_avatars.mjs` (run via
     `npm run dev:gen-avatars`) — Python has no SVG rasteriser, so the seed only
-    records the path and the Node generator renders the identicon there. The
-    hash MUST stay in sync with that script: sha1("{kind}:{name}")[:16].
-    Local files avoid DiceBear's CDN rate limit (which 429s the burst of ~350
-    avatar requests the wiki fires on load) and work offline.
+    records the URL and the Node generator renders (and, when the CDN is
+    configured, uploads) the identicon there. The hash MUST stay in sync with
+    that script: sha1("{kind}:{name}")[:16]. Generated files avoid DiceBear's
+    CDN rate limit (which 429s the burst of ~350 avatar requests the wiki
+    fires on load) and work offline.
     """
     digest = hashlib.sha1(f"{kind}:{name}".encode("utf-8")).hexdigest()[:16]
-    return f"/uploads/seed-avatars/{kind}/{digest}.png"
+    return public_url(f"/uploads/seed-avatars/{kind}/{digest}.png")
 
 
 def adventurer_avatar(first_name: str, last_name: str) -> str:
@@ -180,6 +181,90 @@ def require_mongo_uri() -> str:
     if re.search(r"prod", uri, re.IGNORECASE):
         sys.exit("MONGODB_URI looks like a production connection string. Aborting.")
     return uri
+
+
+# ---------------------------------------------------------------------------
+# CDN / R2 uploads
+# ---------------------------------------------------------------------------
+# The deployed dev environment (Vercel) cannot serve files written to a local
+# public/uploads/ — its filesystem is baked from git at build time and
+# public/uploads/ is gitignored. When the CDN is configured (CDN_URL + R2_*
+# env vars, same ones the app uses), seed images are uploaded to R2 and the
+# documents store full CDN URLs — exactly like a real user upload through the
+# app (see app/server/functions/uploads.ts). Without CDN config everything
+# falls back to local public/uploads/ writes for plain-localhost dev and CI.
+
+def _r2_env() -> dict[str, str] | None:
+    """The app's CDN/R2 env vars, or None unless ALL are present."""
+    keys = ("CDN_URL", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID",
+            "R2_SECRET_ACCESS_KEY", "R2_BUCKET")
+    env = {k: os.environ.get(k) or "" for k in keys}
+    if not all(env.values()):
+        return None
+    if re.search(r"prod", env["R2_BUCKET"], re.IGNORECASE):
+        sys.exit("R2_BUCKET looks like a production bucket. Aborting.")
+    return env
+
+
+_r2_client = None
+
+
+def cdn_base() -> str | None:
+    """Normalized CDN origin (no trailing slash) when fully configured."""
+    env = _r2_env()
+    return env["CDN_URL"].rstrip("/") if env else None
+
+
+def public_url(rel_path: str) -> str:
+    """Where the app will serve `rel_path` from: the CDN when configured
+    (matching the validation in campaigns.ts — origin must be CDN_URL and the
+    path must start with /uploads/), else the path itself for local Vite."""
+    base = cdn_base()
+    return f"{base}{rel_path}" if base else rel_path
+
+
+def _get_r2_client(env: dict[str, str]):
+    """Lazily-constructed shared boto3 S3 client for the R2 endpoint."""
+    global _r2_client
+    if _r2_client is None:
+        import boto3  # local import: only needed when R2 is configured
+
+        _r2_client = boto3.client(
+            "s3",
+            endpoint_url=f"https://{env['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
+            aws_access_key_id=env["R2_ACCESS_KEY_ID"],
+            aws_secret_access_key=env["R2_SECRET_ACCESS_KEY"],
+            region_name="auto",
+        )
+    return _r2_client
+
+
+def upload_to_r2(rel_path: str, body: bytes, content_type: str) -> None:
+    """Put `body` at the R2 key matching `rel_path` (leading slash stripped),
+    so `{CDN_URL}{rel_path}` serves it. Requires CDN/R2 to be configured."""
+    env = _r2_env()
+    if not env:
+        sys.exit("upload_to_r2 called without full CDN/R2 configuration")
+    _get_r2_client(env).put_object(
+        Bucket=env["R2_BUCKET"],
+        Key=rel_path.lstrip("/"),
+        Body=body,
+        ContentType=content_type,
+    )
+
+
+def list_r2_keys(prefix: str) -> set[str]:
+    """Existing R2 keys under `prefix` (used by repair_seed_images.py to spot
+    dangling CDN references). Requires CDN/R2 to be configured."""
+    env = _r2_env()
+    if not env:
+        sys.exit("list_r2_keys called without full CDN/R2 configuration")
+    keys: set[str] = set()
+    paginator = _get_r2_client(env).get_paginator("list_objects_v2")
+    for page in paginator.paginate(Bucket=env["R2_BUCKET"], Prefix=prefix):
+        for obj in page.get("Contents", []):
+            keys.add(obj["Key"])
+    return keys
 
 
 # ---------------------------------------------------------------------------
@@ -208,21 +293,33 @@ def generate_campaign_svg(title: str, colors: dict[str, str]) -> str:
 
 
 def save_image(svg_content: str, filename: str) -> str:
+    """Store a generated campaign image where the app will serve it.
+
+    CDN configured → upload to R2 under uploads/campaigns/ and return the full
+    CDN URL, matching a real user upload. Otherwise → write to the local
+    public/uploads/ fallback and return the relative path."""
+    rel = f"/uploads/campaigns/{filename}"
+    if cdn_base():
+        upload_to_r2(rel, svg_content.encode("utf-8"), "image/svg+xml")
+        return public_url(rel)
     uploads_dir = REPO_ROOT / "public" / "uploads" / "campaigns"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     (uploads_dir / filename).write_text(svg_content, encoding="utf-8")
-    return f"/uploads/campaigns/{filename}"
+    return rel
 
 
 def copy_player_portraits() -> None:
     """Publish the 12 committed player portraits so the URLs the player docs
-    reference (`/uploads/seed-players/playerN.jpg`, see PLAYER_IMAGES) actually
-    resolve. The source files live in `assets/` (not web-served); Vite only
-    serves `public/` at the site root, so each portrait is copied into
-    `public/uploads/seed-players/`. Idempotent — overwrites on every seed."""
+    reference (PLAYER_IMAGES via public_url) actually resolve. The source
+    files live in `assets/` (not web-served). CDN configured → upload each to
+    R2 under uploads/seed-players/; otherwise copy into
+    `public/uploads/seed-players/` for the local Vite server. Idempotent —
+    overwrites on every seed."""
     src_dir = REPO_ROOT / "assets"
+    use_cdn = bool(cdn_base())
     dst_dir = REPO_ROOT / "public" / "uploads" / "seed-players"
-    dst_dir.mkdir(parents=True, exist_ok=True)
+    if not use_cdn:
+        dst_dir.mkdir(parents=True, exist_ok=True)
     copied = 0
     missing = []
     for i in range(1, 13):
@@ -230,9 +327,14 @@ def copy_player_portraits() -> None:
         if not src.exists():
             missing.append(src.name)
             continue
-        shutil.copyfile(src, dst_dir / f"player{i}.jpg")
+        if use_cdn:
+            upload_to_r2(f"/uploads/seed-players/player{i}.jpg",
+                         src.read_bytes(), "image/jpeg")
+        else:
+            shutil.copyfile(src, dst_dir / f"player{i}.jpg")
         copied += 1
-    print(f"Player portraits: copied {copied}/12 → public/uploads/seed-players/")
+    dest = "R2 uploads/seed-players/" if use_cdn else "public/uploads/seed-players/"
+    print(f"Player portraits: published {copied}/12 → {dest}")
     if missing:
         print(f"  WARNING missing portrait sources: {', '.join(missing)}")
 
@@ -978,7 +1080,7 @@ def main() -> None:
         party = []
         for pu in player_users:
             pc = random_pc(rng)
-            picture = PLAYER_IMAGES[image_cursor % len(PLAYER_IMAGES)]
+            picture = public_url(PLAYER_IMAGES[image_cursor % len(PLAYER_IMAGES)])
             image_cursor += 1
             db.players.insert_one({
                 "campaignId": campaign_id,
@@ -1203,6 +1305,11 @@ def main() -> None:
                 with_variants=with_variants,
             )
             if monster_docs:
+                # seed_monster_data records served-relative avatar paths; map
+                # them to the CDN when configured (same as local_avatar_path).
+                for m in monster_docs:
+                    if m.get("picture"):
+                        m["picture"] = public_url(m["picture"])
                 db.monsters.insert_many(monster_docs)
             print(
                 f"    monsters   imported {len(monster_docs)} stat blocks "
