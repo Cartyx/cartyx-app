@@ -91,7 +91,10 @@ export function useTabletopMapParty(
   const socket = usePartySocket({
     host: PARTYKIT_HOST,
     room: roomId,
-    party: 'tabletop-map',
+    // Party names must be valid JS identifiers (PartyKit interpolates them
+    // into generated code) AND match its /^[a-z0-9_-]+$/ config schema, so
+    // underscore is the only separator that satisfies both.
+    party: 'tabletop_map',
     query: campaignId ? async () => ({ token: await getToken() }) : () => ({ token: '' }),
     onOpen() {
       console.info(`[TabletopMapParty] Connected to room ${roomId}`);
