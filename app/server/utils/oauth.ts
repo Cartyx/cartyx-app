@@ -409,8 +409,13 @@ export async function upsertUser(profile: OAuthProfile): Promise<SessionUser> {
 
     return toSessionUser(profile, stored?.role ?? 'unknown', stored);
   } catch (e) {
+    // A write failure here (lost connection, duplicate-key from the unique email
+    // index, etc.) means we could NOT persist/claim the account. Swallowing it and
+    // returning a fallback session would log the user into a broken, unpersisted
+    // session and redirect them to /campaigns. Capture it, then rethrow so the
+    // OAuth callback's catch redirects to an error page instead.
     serverCaptureException(e, profile.id, { action: 'upsertUser', provider: profile.provider });
-    return toSessionUser(profile, 'unknown');
+    throw e;
   }
 }
 

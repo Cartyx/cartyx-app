@@ -12,10 +12,10 @@ const loreImageSchema = z.object({
   caption: z.string().trim().default(''),
   crop: z
     .object({
-      x: z.number().finite(),
-      y: z.number().finite(),
-      width: z.number().finite(),
-      height: z.number().finite(),
+      x: z.number().finite().min(0).max(1),
+      y: z.number().finite().min(0).max(1),
+      width: z.number().finite().gt(0).max(1),
+      height: z.number().finite().gt(0).max(1),
     })
     .nullable()
     .default(null),

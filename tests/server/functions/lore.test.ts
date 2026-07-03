@@ -284,7 +284,7 @@ describe('updateLore GM gmContent', () => {
     expect(res.lore.gmContent).toBe('gm notes');
   });
 
-  it('does NOT persist gmContent when a non-GM creator updates lore', async () => {
+  it('does NOT write gmContent when a non-GM creator updates lore (preserves stored GM notes)', async () => {
     vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign as never);
     // non-GM must be the creator to pass the permission check
     vi.mocked(Lore.findById).mockReturnValue({
@@ -292,13 +292,16 @@ describe('updateLore GM gmContent', () => {
         _id: 'l1',
         campaignId: 'camp-1',
         createdBy: 'user-1',
+        // A GM previously attached private notes to this doc.
+        gmContent: 'gm-only secret',
       }),
     } as never);
     vi.mocked(Lore.findOneAndUpdate).mockResolvedValue({
       _id: 'l1',
       title: 'Updated',
       content: 'body',
-      gmContent: '',
+      // Stored value is untouched because the update omitted the field.
+      gmContent: 'gm-only secret',
       isPublic: false,
       images: [],
       links: [],
@@ -308,13 +311,17 @@ describe('updateLore GM gmContent', () => {
       createdAt: new Date(),
       updatedAt: new Date(),
     } as never);
-    await _update({
-      data: { id: 'l1', campaignId: 'camp-1', title: 'Updated', gmContent: 'secret' },
-    });
+    const res = (await _update({
+      data: { id: 'l1', campaignId: 'camp-1', title: 'Updated', gmContent: 'injected' },
+    })) as Record<string, Record<string, unknown>>;
     const updateArg = vi.mocked(Lore.findOneAndUpdate).mock.calls[0][1] as Record<
       string,
       Record<string, unknown>
     >;
-    expect(updateArg.$set.gmContent).toBe('');
+    // The non-GM's gmContent input is neither trusted nor persisted: the field
+    // must be absent from $set so the GM's stored notes survive the edit...
+    expect(updateArg.$set).not.toHaveProperty('gmContent');
+    // ...and a non-GM never receives gmContent back in the response.
+    expect(res.lore.gmContent).toBe('');
   });
 });

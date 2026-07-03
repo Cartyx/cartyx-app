@@ -197,13 +197,16 @@ export const updateLore = createServerFn({ method: 'POST' })
       if (String(existing.createdBy) !== member.userId && !member.isGM)
         throw new Error('Forbidden');
 
+      // gmContent is GM-only at write. For a non-GM creator editing their own
+      // lore, OMIT the field entirely so any GM-authored gmContent is PRESERVED —
+      // overwriting it with '' would silently destroy the GM's private notes.
       const updated = (await Lore.findOneAndUpdate(
         { _id: data.id, campaignId: data.campaignId },
         {
           $set: {
             title: data.title,
             content: data.content,
-            gmContent: member.isGM ? data.gmContent : '',
+            ...(member.isGM ? { gmContent: data.gmContent } : {}),
             isPublic: data.isPublic,
             images: data.images,
             links: data.links,
@@ -217,7 +220,9 @@ export const updateLore = createServerFn({ method: 'POST' })
         success: true,
         lore: {
           ...baseSerialize(updated),
-          gmContent: member.isGM ? (data.gmContent ?? '') : '',
+          // Reflect the persisted value: GM sees what they wrote; a non-GM never
+          // receives gmContent regardless of what's stored.
+          gmContent: member.isGM ? ((updated.gmContent as string) ?? '') : '',
           canEdit: true,
         },
       };

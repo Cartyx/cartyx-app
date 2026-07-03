@@ -207,7 +207,7 @@ describe('upsertUser', () => {
     mockIsDBConnected.mockReturnValue(true);
   });
 
-  it('captures exception to PostHog when DB upsert fails', async () => {
+  it('captures the exception to PostHog and rethrows when the DB upsert fails', async () => {
     const dbError = new Error('MongoDB connection lost');
     mockFindOneAndUpdate.mockRejectedValue(dbError);
 
@@ -223,14 +223,15 @@ describe('upsertUser', () => {
       tokenIssuedAt: Date.now(),
     };
 
-    const result = await upsertUser(profile);
+    // A persistence failure must surface, not be swallowed into a broken session:
+    // the OAuth callback relies on this throw to redirect to an error page rather
+    // than logging the user in with an unpersisted "unknown" session.
+    await expect(upsertUser(profile)).rejects.toThrow(dbError);
 
     expect(mockServerCaptureException).toHaveBeenCalledWith(dbError, 'google_123', {
       action: 'upsertUser',
       provider: 'google',
     });
-    // Should still return fallback session user with role 'unknown'
-    expect(result.role).toBe('unknown');
   });
 
   it('does not capture exception on successful upsert', async () => {
