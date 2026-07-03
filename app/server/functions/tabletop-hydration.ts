@@ -186,8 +186,10 @@ const COLLECTION_REGISTRY: Record<string, CollectionFetcher> = {
  */
 export async function hydrateRefs(
   refs: Array<{ collection: string; documentId: string }>,
-  campaignId: string
+  campaignId: string,
+  opts: { isGM?: boolean } = {}
 ): Promise<Record<string, HydratedDocument>> {
+  const isGM = opts.isGM ?? true;
   const grouped = new Map<string, Set<string>>();
   for (const ref of refs) {
     if (!ref.collection || !ref.documentId) continue;
@@ -208,6 +210,9 @@ export async function hydrateRefs(
 
       const docs = await fetcher.fetch(Array.from(idSet), campaignId);
       for (const doc of docs) {
+        // Events can carry private GM content; never hydrate a non-public event
+        // for a non-GM viewer, or its title/content would leak on a shared screen.
+        if (!isGM && collectionName === 'events' && doc.isPublic === false) continue;
         const id = String(doc._id);
         hydrated[`${collectionName}:${id}`] = {
           id,

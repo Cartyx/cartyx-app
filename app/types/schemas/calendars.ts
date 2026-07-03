@@ -3,7 +3,7 @@ import { z } from 'zod';
 const calDate = z.object({
   year: z.number().int(),
   monthIndex: z.number().int().min(0),
-  day: z.number().int().min(0),
+  day: z.number().int().min(1),
 });
 
 const month = z.object({

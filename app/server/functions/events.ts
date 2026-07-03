@@ -193,9 +193,14 @@ export const createEvent = createServerFn({ method: 'POST' })
 
       const sv = validateDate(cfg, data.start);
       if (!sv.ok) throw new Error(sv.error);
+      const startOrdinal = toOrdinal(cfg, data.start);
+      let endOrdinal = startOrdinal;
       if (data.end) {
         const ev = validateDate(cfg, data.end);
         if (!ev.ok) throw new Error(ev.error);
+        endOrdinal = toOrdinal(cfg, data.end);
+        if (endOrdinal < startOrdinal)
+          throw new Error('Event end date must be on or after the start date.');
       }
 
       const doc = (await Event.create({
@@ -206,8 +211,8 @@ export const createEvent = createServerFn({ method: 'POST' })
         isEpic: data.isEpic,
         start: data.start,
         end: data.end,
-        startOrdinal: toOrdinal(cfg, data.start),
-        endOrdinal: toOrdinal(cfg, data.end ?? data.start),
+        startOrdinal,
+        endOrdinal,
         links: data.links,
         sessionId: data.sessionId,
         images: data.images,
@@ -252,9 +257,14 @@ export const updateEvent = createServerFn({ method: 'POST' })
 
       const sv = validateDate(cfg, data.start);
       if (!sv.ok) throw new Error(sv.error);
+      const startOrdinal = toOrdinal(cfg, data.start);
+      let endOrdinal = startOrdinal;
       if (data.end) {
         const ev = validateDate(cfg, data.end);
         if (!ev.ok) throw new Error(ev.error);
+        endOrdinal = toOrdinal(cfg, data.end);
+        if (endOrdinal < startOrdinal)
+          throw new Error('Event end date must be on or after the start date.');
       }
 
       const updated = (await Event.findOneAndUpdate(
@@ -268,8 +278,8 @@ export const updateEvent = createServerFn({ method: 'POST' })
             isEpic: data.isEpic,
             start: data.start,
             end: data.end,
-            startOrdinal: toOrdinal(cfg, data.start),
-            endOrdinal: toOrdinal(cfg, data.end ?? data.start),
+            startOrdinal,
+            endOrdinal,
             links: data.links,
             sessionId: data.sessionId,
             images: data.images,

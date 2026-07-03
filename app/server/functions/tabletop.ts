@@ -413,7 +413,9 @@ export const getTabletopScreen = createServerFn({ method: 'GET' })
         refs.push({ collection: w.collection, documentId: w.documentId });
       }
 
-      const hydrated = await hydrateRefs(refs, data.campaignId);
+      const hydrated = await hydrateRefs(refs, data.campaignId, {
+        isGM: member.role === 'gm',
+      });
 
       return {
         ...serializeTabletopScreen(doc),

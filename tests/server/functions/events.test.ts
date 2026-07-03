@@ -170,6 +170,19 @@ describe('createEvent', () => {
       })
     ).rejects.toThrow(/Day/);
   });
+  it('rejects an end date before the start date', async () => {
+    await expect(
+      _create({
+        data: {
+          campaignId: 'camp-1',
+          title: 'T',
+          start: { year: 1, monthIndex: 0, day: 5 },
+          end: { year: 1, monthIndex: 0, day: 2 },
+        },
+      })
+    ).rejects.toThrow(/on or after the start date/);
+    expect(Event.create).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -269,6 +282,24 @@ describe('updateEvent', () => {
     >;
     expect(updateArg.$set.startOrdinal).toBe(2);
     expect(updateArg.$set.endOrdinal).toBe(2);
+  });
+
+  it('rejects an end date before the start date', async () => {
+    vi.mocked(Event.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({ _id: 'e1', campaignId: 'camp-1' }),
+    } as never);
+    await expect(
+      _update({
+        data: {
+          id: 'e1',
+          campaignId: 'camp-1',
+          title: 'T',
+          start: { year: 1, monthIndex: 0, day: 5 },
+          end: { year: 1, monthIndex: 0, day: 2 },
+        },
+      })
+    ).rejects.toThrow(/on or after the start date/);
+    expect(Event.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('rejects a non-GM', async () => {
