@@ -7,6 +7,7 @@ import { StepInviteCode } from './StepInviteCode';
 import { StepPlayerInfo } from './StepPlayerInfo';
 import { StepBackstory } from './StepBackstory';
 import { StepRelatedCharacters } from './StepRelatedCharacters';
+import { StepLore } from './StepLore';
 import { StepReview } from './StepReview';
 import type { PictureCrop } from '~/types/character';
 
@@ -36,6 +37,12 @@ export interface WizardPlayerState {
   appearance: string;
 }
 
+export interface WizardLore {
+  title: string;
+  content: string;
+  isPublic: boolean;
+}
+
 export interface WizardCharacter {
   firstName: string;
   lastName: string;
@@ -56,6 +63,7 @@ export interface WizardState {
   campaignName: string;
   player: WizardPlayerState;
   characters: WizardCharacter[];
+  lore: WizardLore[];
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +100,7 @@ function defaultState(): WizardState {
     campaignName: '',
     player: defaultPlayer(),
     characters: [],
+    lore: [],
   };
 }
 
@@ -136,7 +145,7 @@ export function clearStorage(campaignId: string) {
 // Step labels
 // ---------------------------------------------------------------------------
 
-const STEPS = ['INVITE', 'PLAYER', 'BACKSTORY', 'CHARACTERS', 'REVIEW'];
+const STEPS = ['INVITE', 'PLAYER', 'BACKSTORY', 'CHARACTERS', 'LORE', 'REVIEW'];
 
 // ---------------------------------------------------------------------------
 // JoinWizard component
@@ -212,6 +221,10 @@ export function JoinWizard() {
     setWizardState((prev) => ({ ...prev, characters }));
   }, []);
 
+  const setLore = useCallback((lore: WizardLore[]) => {
+    setWizardState((prev) => ({ ...prev, lore }));
+  }, []);
+
   // Only allow step navigation to already-visited steps
   const handleStepClick = useCallback(
     (s: number) => {
@@ -282,7 +295,16 @@ export function JoinWizard() {
           />
         )}
 
-        {step === 5 && <StepReview wizardState={wizardState} onBack={() => goToStep(4)} />}
+        {step === 5 && (
+          <StepLore
+            lore={wizardState.lore}
+            onUpdate={setLore}
+            onNext={() => goToStep(6)}
+            onBack={() => goToStep(4)}
+          />
+        )}
+
+        {step === 6 && <StepReview wizardState={wizardState} onBack={() => goToStep(5)} />}
       </main>
     </div>
   );

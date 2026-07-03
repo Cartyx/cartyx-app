@@ -161,6 +161,27 @@ export const queryKeys = {
     list: (campaignId: string, mapId: string) =>
       ['mapDrawings', 'list', campaignId, mapId] as const,
   },
+  lore: {
+    all: ['lore'] as const,
+    list: (campaignId: string, filters?: string) =>
+      ['lore', 'list', campaignId, filters ?? ''] as const,
+    detail: (id: string, campaignId: string) => ['lore', 'detail', id, campaignId] as const,
+    linked: (campaignId: string, kind: string, id: string) =>
+      ['lore', 'linked', campaignId, kind, id] as const,
+  },
+  calendar: {
+    all: ['calendar'] as const,
+    detail: (campaignId: string) => ['calendar', 'detail', campaignId] as const,
+  },
+  events: {
+    all: ['events'] as const,
+    list: (campaignId: string, filters?: string) =>
+      ['events', 'list', campaignId, filters ?? ''] as const,
+    detail: (id: string, campaignId: string) => ['events', 'detail', id, campaignId] as const,
+    linked: (campaignId: string, kind: string, id: string) =>
+      ['events', 'linked', campaignId, kind, id] as const,
+    epic: (campaignId: string) => ['events', 'epic', campaignId] as const,
+  },
   monsters: {
     all: ['monsters'] as const,
     list: (

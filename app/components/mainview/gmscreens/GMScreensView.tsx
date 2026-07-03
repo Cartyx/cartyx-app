@@ -11,6 +11,8 @@ import type { FloatingWindowState } from '~/components/mainview/FloatingWindow';
 import type { WindowState } from '~/types/gmscreen';
 import { MARKDOWN_PROSE_CLASSES } from '~/utils/markdownProseClasses';
 import { CharacterWindowWrapper, EditCharacterModalWrapper } from './CharacterWindowWrapper';
+import { LoreWindowWrapper, EditLoreModalWrapper } from './LoreWindowWrapper';
+import { EventWindowWrapper } from './EventWindowWrapper';
 import { RaceWindowWrapper, EditRaceModalWrapper } from '~/components/wiki/races/RaceWindowWrapper';
 import { RuleWindowWrapper, EditRuleModalWrapper } from './RuleWindowWrapper';
 import {
@@ -60,6 +62,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
   const [editingMonsterId, setEditingMonsterId] = useState<string | null>(null);
+  const [editingLoreId, setEditingLoreId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [flashWindowId, setFlashWindowId] = useState<string | null>(null);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -461,6 +464,16 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
               onEdit={() => setEditingMonsterId(w.documentId)}
             />
           );
+        } else if (w.collection === 'lore') {
+          windowContent = (
+            <LoreWindowWrapper
+              loreId={w.documentId}
+              campaignId={campaignId}
+              onEdit={() => setEditingLoreId(w.documentId)}
+            />
+          );
+        } else if (w.collection === 'events') {
+          windowContent = <EventWindowWrapper eventId={w.documentId} campaignId={campaignId} />;
         } else {
           windowContent = (
             <div className="p-4 overflow-auto h-full">
@@ -478,7 +491,8 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
         if (
           w.collection === 'rule' ||
           w.collection === 'character' ||
-          w.collection === 'location'
+          w.collection === 'location' ||
+          w.collection === 'lore'
         ) {
           if (doc?.isPublic === true) {
             titleIcon = (
@@ -761,6 +775,13 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
           campaignId={campaignId}
           monsterId={editingMonsterId}
           onClose={() => setEditingMonsterId(null)}
+        />
+      )}
+      {editingLoreId !== null && (
+        <EditLoreModalWrapper
+          campaignId={campaignId}
+          loreId={editingLoreId}
+          onClose={() => setEditingLoreId(null)}
         />
       )}
     </div>

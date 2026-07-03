@@ -13,6 +13,7 @@ import {
   useUpdatePlayerRelationship,
   useRemovePlayerRelationship,
 } from '~/hooks/usePlayers';
+import { PlayerLoreTab } from '~/components/wiki/players/PlayerLoreTab';
 
 function getCropStyle(crop: PictureCrop): React.CSSProperties {
   const centerX = (crop.x + crop.width / 2) * 100;
@@ -99,6 +100,7 @@ export function PlayerWindow({ player, onEdit }: PlayerWindowProps) {
     { id: 'backstory', label: 'Backstory', hidden: player.backstory === '' },
     { id: 'gmnotes', label: 'GM Notes', hidden: player.gmNotes === '' },
     { id: 'relationships', label: 'Relationships' },
+    { id: 'lore', label: 'Lore' },
   ];
 
   return (
@@ -297,6 +299,14 @@ export function PlayerWindow({ player, onEdit }: PlayerWindowProps) {
               />
             )}
           </>
+        )}
+
+        {activeTab === 'lore' && (
+          <PlayerLoreTab
+            campaignId={player.campaignId}
+            playerId={player.id}
+            canManage={player.canEdit}
+          />
         )}
       </div>
     </div>
