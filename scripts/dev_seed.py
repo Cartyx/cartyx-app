@@ -193,78 +193,16 @@ def require_mongo_uri() -> str:
 # documents store full CDN URLs — exactly like a real user upload through the
 # app (see app/server/functions/uploads.ts). Without CDN config everything
 # falls back to local public/uploads/ writes for plain-localhost dev and CI.
+# The shared implementation lives in r2_util (also used by dev_clear.py and
+# repair_seed_images.py) so the guards and endpoint can't drift.
 
-def _r2_env() -> dict[str, str] | None:
-    """The app's CDN/R2 env vars, or None unless ALL are present."""
-    keys = ("CDN_URL", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID",
-            "R2_SECRET_ACCESS_KEY", "R2_BUCKET")
-    env = {k: os.environ.get(k) or "" for k in keys}
-    if not all(env.values()):
-        return None
-    if re.search(r"prod", env["R2_BUCKET"], re.IGNORECASE):
-        sys.exit("R2_BUCKET looks like a production bucket. Aborting.")
-    return env
-
-
-_r2_client = None
-
-
-def cdn_base() -> str | None:
-    """Normalized CDN origin (no trailing slash) when fully configured."""
-    env = _r2_env()
-    return env["CDN_URL"].rstrip("/") if env else None
-
-
-def public_url(rel_path: str) -> str:
-    """Where the app will serve `rel_path` from: the CDN when configured
-    (matching the validation in campaigns.ts — origin must be CDN_URL and the
-    path must start with /uploads/), else the path itself for local Vite."""
-    base = cdn_base()
-    return f"{base}{rel_path}" if base else rel_path
-
-
-def _get_r2_client(env: dict[str, str]):
-    """Lazily-constructed shared boto3 S3 client for the R2 endpoint."""
-    global _r2_client
-    if _r2_client is None:
-        import boto3  # local import: only needed when R2 is configured
-
-        _r2_client = boto3.client(
-            "s3",
-            endpoint_url=f"https://{env['R2_ACCOUNT_ID']}.r2.cloudflarestorage.com",
-            aws_access_key_id=env["R2_ACCESS_KEY_ID"],
-            aws_secret_access_key=env["R2_SECRET_ACCESS_KEY"],
-            region_name="auto",
-        )
-    return _r2_client
-
-
-def upload_to_r2(rel_path: str, body: bytes, content_type: str) -> None:
-    """Put `body` at the R2 key matching `rel_path` (leading slash stripped),
-    so `{CDN_URL}{rel_path}` serves it. Requires CDN/R2 to be configured."""
-    env = _r2_env()
-    if not env:
-        sys.exit("upload_to_r2 called without full CDN/R2 configuration")
-    _get_r2_client(env).put_object(
-        Bucket=env["R2_BUCKET"],
-        Key=rel_path.lstrip("/"),
-        Body=body,
-        ContentType=content_type,
-    )
-
-
-def list_r2_keys(prefix: str) -> set[str]:
-    """Existing R2 keys under `prefix` (used by repair_seed_images.py to spot
-    dangling CDN references). Requires CDN/R2 to be configured."""
-    env = _r2_env()
-    if not env:
-        sys.exit("list_r2_keys called without full CDN/R2 configuration")
-    keys: set[str] = set()
-    paginator = _get_r2_client(env).get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=env["R2_BUCKET"], Prefix=prefix):
-        for obj in page.get("Contents", []):
-            keys.add(obj["Key"])
-    return keys
+from r2_util import (  # noqa: F401 — re-exported for repair/verify scripts
+    CDN_ENV_KEYS,
+    cdn_base,
+    list_r2_keys,
+    public_url,
+    upload_to_r2,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -314,12 +252,14 @@ def copy_player_portraits() -> None:
     files live in `assets/` (not web-served). CDN configured → upload each to
     R2 under uploads/seed-players/; otherwise copy into
     `public/uploads/seed-players/` for the local Vite server. Idempotent —
-    overwrites on every seed."""
+    R2 keys already present are skipped (the portraits are committed assets
+    that never change); local copies are overwritten."""
     src_dir = REPO_ROOT / "assets"
     use_cdn = bool(cdn_base())
     dst_dir = REPO_ROOT / "public" / "uploads" / "seed-players"
     if not use_cdn:
         dst_dir.mkdir(parents=True, exist_ok=True)
+    existing = list_r2_keys("uploads/seed-players/") if use_cdn else set()
     copied = 0
     missing = []
     for i in range(1, 13):
@@ -328,8 +268,9 @@ def copy_player_portraits() -> None:
             missing.append(src.name)
             continue
         if use_cdn:
-            upload_to_r2(f"/uploads/seed-players/player{i}.jpg",
-                         src.read_bytes(), "image/jpeg")
+            if f"uploads/seed-players/player{i}.jpg" not in existing:
+                upload_to_r2(f"/uploads/seed-players/player{i}.jpg",
+                             src.read_bytes(), "image/jpeg")
         else:
             shutil.copyfile(src, dst_dir / f"player{i}.jpg")
         copied += 1
@@ -1303,13 +1244,9 @@ def main() -> None:
                 gm_id=gm_id,
                 now=now,
                 with_variants=with_variants,
+                map_picture=public_url,
             )
             if monster_docs:
-                # seed_monster_data records served-relative avatar paths; map
-                # them to the CDN when configured (same as local_avatar_path).
-                for m in monster_docs:
-                    if m.get("picture"):
-                        m["picture"] = public_url(m["picture"])
                 db.monsters.insert_many(monster_docs)
             print(
                 f"    monsters   imported {len(monster_docs)} stat blocks "

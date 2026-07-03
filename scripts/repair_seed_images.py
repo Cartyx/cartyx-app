@@ -27,16 +27,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pymongo import MongoClient
 
-# Reuse the seed's SVG generator + repo anchor + CDN helpers (importing is
-# safe — dev_seed guards its insertion logic behind `if __name__ == "__main__"`).
-from dev_seed import (
-    REPO_ROOT,
-    cdn_base,
-    copy_player_portraits,
-    generate_campaign_svg,
-    list_r2_keys,
-    upload_to_r2,
-)
+# Reuse the seed's SVG generator + repo anchor (importing is safe — dev_seed
+# guards its insertion logic behind `if __name__ == "__main__"`) and the
+# shared CDN/R2 helpers.
+from dev_seed import REPO_ROOT, copy_player_portraits, generate_campaign_svg
+from r2_util import cdn_base, list_r2_keys, upload_to_r2
 
 load_dotenv()
 
@@ -95,10 +90,20 @@ def main() -> None:
     regenerated = 0
     ok = 0
     skipped = 0
+    stale_origin = 0
     for c in db.campaigns.find({}, {"name": 1, "imagePath": 1}):
         image_path = c.get("imagePath")
         name = c.get("name") or "Campaign"
         rel = served_rel_path(image_path) if image_path else None
+        if (not rel and image_path and image_path.startswith("https://")
+                and "/uploads/" in image_path):
+            # A seed image on some OTHER https origin — the CDN_URL was
+            # rotated, or this env lacks the CDN config that wrote it. This
+            # script never touches the DB, so it can't fix the doc; surface
+            # it distinctly instead of lumping it in with "not ours".
+            print(f"  WARNING stale CDN origin (re-seed to fix): {image_path}  ({name})")
+            stale_origin += 1
+            continue
         if not rel or not rel.endswith(".svg"):
             # Missing, foreign-origin, or a non-generated raster — not ours.
             skipped += 1
@@ -120,10 +125,13 @@ def main() -> None:
         print(f"  regenerated  {image_path}  ({name})")
         regenerated += 1
 
-    print(
+    summary = (
         f"\nCampaign images: {regenerated} regenerated, {ok} already present, "
         f"{skipped} skipped (no generated SVG path)."
     )
+    if stale_origin:
+        summary += f" {stale_origin} on a stale CDN origin (see warnings above)."
+    print(summary)
     client.close()
 
 

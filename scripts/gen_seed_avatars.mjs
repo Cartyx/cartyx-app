@@ -165,33 +165,45 @@ async function processCollection(db, collection, kind, nameOf, cdn) {
   const cursor = db
     .collection(collection)
     .find({}, { projection: { name: 1, firstName: 1, lastName: 1, picture: 1 } });
+  // Uploads run with bounded concurrency: the first CDN run mirrors ~350
+  // PNGs, and one awaited round-trip each is ~10x slower than a small pool.
+  const inflight = new Set();
+  const MAX_INFLIGHT = 10;
   for await (const doc of cursor) {
     const name = nameOf(doc) || kind;
     const rel = avatarRelPath(kind, name);
     const abs = join(REPO_ROOT, 'public', rel.replace(/^\//, ''));
 
     // Local PNG doubles as the render cache for R2 uploads.
+    let png = null;
     if (existsSync(abs)) {
       reused++;
     } else {
+      png = renderPng(identiconSvg(name));
       mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, renderPng(identiconSvg(name)));
+      writeFileSync(abs, png);
       generated++;
     }
 
     if (cdn) {
       const key = rel.replace(/^\//, '');
       if (!cdn.existingKeys.has(key)) {
-        await cdn.s3.send(
-          new PutObjectCommand({
-            Bucket: cdn.bucket,
-            Key: key,
-            Body: readFileSync(abs),
-            ContentType: 'image/png',
-          })
-        );
         cdn.existingKeys.add(key);
-        uploaded++;
+        const put = cdn.s3
+          .send(
+            new PutObjectCommand({
+              Bucket: cdn.bucket,
+              Key: key,
+              Body: png ?? readFileSync(abs),
+              ContentType: 'image/png',
+            })
+          )
+          .then(() => {
+            uploaded++;
+            inflight.delete(put);
+          });
+        inflight.add(put);
+        if (inflight.size >= MAX_INFLIGHT) await Promise.race(inflight);
       }
     }
 
@@ -213,6 +225,7 @@ async function processCollection(db, collection, kind, nameOf, cdn) {
       skipped++;
     }
   }
+  await Promise.all(inflight);
   console.log(
     `${collection}: ${generated} PNGs generated, ${reused} reused, ${uploaded} uploaded to R2, ${repointed} repointed, ${skipped} pictures preserved (custom or CDN-hosted)`
   );

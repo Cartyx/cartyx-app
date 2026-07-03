@@ -206,12 +206,10 @@ def test_public_url_cdn_toggle():
     # Seed image URLs must flip between local paths (no CDN config — localhost
     # dev and CI) and full CDN URLs (deployed dev, where local files 404).
     import os
+    from unittest import mock
 
-    r2_keys = ("CDN_URL", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID",
-               "R2_SECRET_ACCESS_KEY", "R2_BUCKET")
-    saved = {k: os.environ.get(k) for k in r2_keys}
-    try:
-        for k in r2_keys:
+    with mock.patch.dict(os.environ):  # restores the real env on exit
+        for k in seed.CDN_ENV_KEYS:
             os.environ.pop(k, None)
         assert seed.cdn_base() is None, "no CDN without full config"
         assert seed.public_url("/uploads/campaigns/x.svg") == "/uploads/campaigns/x.svg"
@@ -234,12 +232,6 @@ def test_public_url_cdn_toggle():
         os.environ.pop("R2_BUCKET")
         assert seed.cdn_base() is None, "partial R2 config must disable the CDN path"
         assert seed.public_url("/uploads/campaigns/x.svg") == "/uploads/campaigns/x.svg"
-    finally:
-        for k, v in saved.items():
-            if v is None:
-                os.environ.pop(k, None)
-            else:
-                os.environ[k] = v
 
 
 def run():
