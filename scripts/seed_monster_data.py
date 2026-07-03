@@ -678,12 +678,17 @@ def all_monster_specs() -> list[dict]:
     return out
 
 
-def build_monster_docs(*, campaign_id, gm_id, now, with_variants: bool = False) -> list[dict]:
+def build_monster_docs(*, campaign_id, gm_id, now, with_variants: bool = False,
+                       map_picture=None) -> list[dict]:
     """Return full mongoose-shaped Monster documents ready for insertMany.
 
     When `with_variants=True`, expands each hand-authored stat block into
     multiple lightly-modified variants for volume-testing the wiki list,
     search, and tag/CR filters.
+
+    `map_picture` (optional callable) maps the served-relative avatar path to
+    its final stored URL — dev_seed passes `public_url` so pictures become CDN
+    URLs when the CDN is configured, mirroring `local_avatar_path`.
     """
     specs = all_monster_specs() if with_variants else MONSTERS
     docs = []
@@ -713,7 +718,7 @@ def build_monster_docs(*, campaign_id, gm_id, now, with_variants: bool = False) 
             "languages": spec.get("languages", []),
             "cr": spec["cr"],
             "features": spec.get("features", []),
-            "picture": _avatar(spec["name"]),
+            "picture": (map_picture or (lambda p: p))(_avatar(spec["name"])),
             "pictureCrop": None,
             "links": [
                 {"name": "D&D Beyond",

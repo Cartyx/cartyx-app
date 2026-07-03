@@ -36,6 +36,8 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.errors import ConfigurationError
 
+from r2_util import get_r2_client, r2_env
+
 load_dotenv()
 
 # Repo root anchored to this script's location (scripts/ is one level down)
@@ -115,25 +117,13 @@ def clear_local_uploads() -> int:
 
 def clear_r2_bucket() -> int:
     """Delete every object in the R2 bucket. No-op if R2 isn't configured."""
-    account_id = os.environ.get("R2_ACCOUNT_ID")
-    access_key = os.environ.get("R2_ACCESS_KEY_ID")
-    secret_key = os.environ.get("R2_SECRET_ACCESS_KEY")
-    bucket = os.environ.get("R2_BUCKET")
-    if not all([account_id, access_key, secret_key, bucket]):
+    env = r2_env()  # shared env detection + prod-bucket guard (r2_util)
+    if not env:
         print("  skip  R2 (not configured — R2_* env vars missing)")
         return 0
-    if re.search(r"prod", bucket, re.IGNORECASE):
-        sys.exit("R2_BUCKET looks like a production bucket. Aborting.")
+    bucket = env["R2_BUCKET"]
 
-    import boto3  # local import: only needed when R2 is configured
-
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        region_name="auto",
-    )
+    s3 = get_r2_client(env)
     deleted = 0
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=bucket):
         objs = page.get("Contents", [])
