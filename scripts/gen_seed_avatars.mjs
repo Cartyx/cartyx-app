@@ -8,9 +8,11 @@
  * For each monster/character we build a deterministic identicon SVG (seeded by
  * the entity name), rasterize it to PNG with @resvg/resvg-js, write it to
  * `public/uploads/seed-avatars/{kind}/{hash}.png`, and repoint the document's
- * `picture` at that path. Idempotent: existing PNGs are reused, and the path is
- * derived purely from the name so the Python seed (which sets the same path on
- * insert) and this generator always agree.
+ * `picture` at it. When the app's CDN is configured (CDN_URL + R2_* env vars)
+ * the PNG is also uploaded to R2 and `picture` gets the full CDN URL — the
+ * deployed dev environment can't serve local files. Idempotent: existing
+ * PNGs/objects are reused, and the path is derived purely from the name so the
+ * Python seed (which sets the same URL on insert) and this generator agree.
  *
  * Usage:
  *   npm run dev:gen-avatars
@@ -23,6 +25,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MongoClient } from 'mongodb';
 import { Resvg } from '@resvg/resvg-js';
+import { S3Client, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -44,6 +47,51 @@ function loadEnv() {
   }
 }
 
+// --- CDN / R2 ----------------------------------------------------------------
+// Mirrors scripts/dev_seed.py: when the app's CDN is configured (CDN_URL +
+// R2_* env vars), avatars are uploaded to R2 and documents point at full CDN
+// URLs — the deployed dev environment (Vercel) cannot serve local
+// public/uploads/ writes. Without CDN config, local files are all we need.
+
+function r2Env() {
+  const keys = [
+    'CDN_URL',
+    'R2_ACCOUNT_ID',
+    'R2_ACCESS_KEY_ID',
+    'R2_SECRET_ACCESS_KEY',
+    'R2_BUCKET',
+  ];
+  const env = Object.fromEntries(keys.map((k) => [k, process.env[k] ?? '']));
+  if (!keys.every((k) => env[k])) return null;
+  if (/prod/i.test(env.R2_BUCKET)) {
+    console.error('R2_BUCKET looks like a production bucket. Aborting.');
+    process.exit(1);
+  }
+  return env;
+}
+
+function r2ClientFor(env) {
+  return new S3Client({
+    region: 'auto',
+    endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    credentials: { accessKeyId: env.R2_ACCESS_KEY_ID, secretAccessKey: env.R2_SECRET_ACCESS_KEY },
+  });
+}
+
+/** Keys already present under a prefix — one LIST instead of ~350 HEADs. */
+async function listExistingKeys(s3, bucket, prefix) {
+  const keys = new Set();
+  let token;
+  do {
+    const page = await s3.send(
+      new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token })
+    );
+    for (const obj of page.Contents ?? []) keys.add(obj.Key);
+    token = page.NextContinuationToken;
+  } while (token);
+  return keys;
+}
+
 // --- Deterministic identicon ------------------------------------------------
 
 /** Stable path (served + on disk) for an entity's avatar. */
@@ -63,6 +111,8 @@ function isReplaceablePicture(picture) {
   if (picture == null || picture === '') return true;
   if (typeof picture !== 'string') return false;
   if (picture.startsWith('/uploads/seed-avatars/')) return true;
+  // CDN-hosted seed avatar (any origin — the CDN URL may have changed).
+  if (/^https:\/\/[^/]+\/uploads\/seed-avatars\//.test(picture)) return true;
   return /(?:api\.)?dicebear\.com/i.test(picture);
 }
 
@@ -106,39 +156,78 @@ function renderPng(svg) {
 
 // --- Main -------------------------------------------------------------------
 
-async function processCollection(db, collection, kind, nameOf) {
+async function processCollection(db, collection, kind, nameOf, cdn) {
   let generated = 0;
   let reused = 0;
+  let uploaded = 0;
   let repointed = 0;
   let skipped = 0;
   const cursor = db
     .collection(collection)
     .find({}, { projection: { name: 1, firstName: 1, lastName: 1, picture: 1 } });
+  // Uploads run with bounded concurrency: the first CDN run mirrors ~350
+  // PNGs, and one awaited round-trip each is ~10x slower than a small pool.
+  const inflight = new Set();
+  const MAX_INFLIGHT = 10;
   for await (const doc of cursor) {
     const name = nameOf(doc) || kind;
     const rel = avatarRelPath(kind, name);
     const abs = join(REPO_ROOT, 'public', rel.replace(/^\//, ''));
 
+    // Local PNG doubles as the render cache for R2 uploads.
+    let png = null;
     if (existsSync(abs)) {
       reused++;
     } else {
+      png = renderPng(identiconSvg(name));
       mkdirSync(dirname(abs), { recursive: true });
-      writeFileSync(abs, renderPng(identiconSvg(name)));
+      writeFileSync(abs, png);
       generated++;
     }
 
-    if (doc.picture === rel) {
+    if (cdn) {
+      const key = rel.replace(/^\//, '');
+      if (!cdn.existingKeys.has(key)) {
+        cdn.existingKeys.add(key);
+        const put = cdn.s3
+          .send(
+            new PutObjectCommand({
+              Bucket: cdn.bucket,
+              Key: key,
+              Body: png ?? readFileSync(abs),
+              ContentType: 'image/png',
+            })
+          )
+          .then(() => {
+            uploaded++;
+            inflight.delete(put);
+          });
+        inflight.add(put);
+        if (inflight.size >= MAX_INFLIGHT) await Promise.race(inflight);
+      }
+    }
+
+    const publicPath = cdn ? `${cdn.base}${rel}` : rel;
+    if (doc.picture === publicPath) {
       // Already points at this seed avatar — nothing to do.
+    } else if (!cdn && typeof doc.picture === 'string' && doc.picture.startsWith('https://')) {
+      // Never downgrade a CDN-hosted picture to a local path just because
+      // this run lacks CDN config — the deployed dev app can't serve local
+      // files, so the repoint would break every avatar until re-run with R2.
+      skipped++;
     } else if (isReplaceablePicture(doc.picture)) {
-      await db.collection(collection).updateOne({ _id: doc._id }, { $set: { picture: rel } });
+      await db
+        .collection(collection)
+        .updateOne({ _id: doc._id }, { $set: { picture: publicPath } });
       repointed++;
     } else {
       // Custom/uploaded picture — never overwrite real data.
       skipped++;
     }
   }
+  await Promise.all(inflight);
   console.log(
-    `${collection}: ${generated} PNGs generated, ${reused} reused, ${repointed} repointed, ${skipped} custom pictures preserved`
+    `${collection}: ${generated} PNGs generated, ${reused} reused, ${uploaded} uploaded to R2, ${repointed} repointed, ${skipped} pictures preserved (custom or CDN-hosted)`
   );
 }
 
@@ -154,13 +243,32 @@ async function main() {
     process.exit(1);
   }
 
+  // When the CDN is configured, mirror every avatar into R2 and point the
+  // documents at CDN URLs (the deployed dev app can't see local files).
+  let cdn = null;
+  const env = r2Env();
+  if (env) {
+    const s3 = r2ClientFor(env);
+    cdn = {
+      s3,
+      bucket: env.R2_BUCKET,
+      base: env.CDN_URL.replace(/\/+$/, ''),
+      existingKeys: await listExistingKeys(s3, env.R2_BUCKET, 'uploads/seed-avatars/'),
+    };
+    console.log(`CDN configured — uploading avatars to R2 bucket '${env.R2_BUCKET}'`);
+  }
+
   const client = new MongoClient(uri);
   await client.connect();
   try {
     const db = process.env.MONGODB_DB ? client.db(process.env.MONGODB_DB) : client.db();
-    await processCollection(db, 'monsters', 'monster', (d) => d.name);
-    await processCollection(db, 'characters', 'character', (d) =>
-      `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim()
+    await processCollection(db, 'monsters', 'monster', (d) => d.name, cdn);
+    await processCollection(
+      db,
+      'characters',
+      'character',
+      (d) => `${d.firstName ?? ''} ${d.lastName ?? ''}`.trim(),
+      cdn
     );
   } finally {
     await client.close();

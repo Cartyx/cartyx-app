@@ -202,6 +202,38 @@ def test_transcript_ids_are_session_scoped():
             "ids must not collide across runs with different session ids"
 
 
+def test_public_url_cdn_toggle():
+    # Seed image URLs must flip between local paths (no CDN config — localhost
+    # dev and CI) and full CDN URLs (deployed dev, where local files 404).
+    import os
+    from unittest import mock
+
+    with mock.patch.dict(os.environ):  # restores the real env on exit
+        for k in seed.CDN_ENV_KEYS:
+            os.environ.pop(k, None)
+        assert seed.cdn_base() is None, "no CDN without full config"
+        assert seed.public_url("/uploads/campaigns/x.svg") == "/uploads/campaigns/x.svg"
+
+        os.environ.update({
+            "CDN_URL": "https://cdn-dev.example.io/",  # trailing slash on purpose
+            "R2_ACCOUNT_ID": "acct",
+            "R2_ACCESS_KEY_ID": "key",
+            "R2_SECRET_ACCESS_KEY": "secret",
+            "R2_BUCKET": "cartyx-dev",
+        })
+        assert seed.cdn_base() == "https://cdn-dev.example.io", "trailing slash stripped"
+        assert (seed.public_url("/uploads/campaigns/x.svg")
+                == "https://cdn-dev.example.io/uploads/campaigns/x.svg")
+        avatar = seed.local_avatar_path("character", "Test Person")
+        assert avatar.startswith("https://cdn-dev.example.io/uploads/seed-avatars/character/"), avatar
+
+        # Partial config (bucket missing) must fall back to local paths rather
+        # than emitting URLs nothing will ever upload to.
+        os.environ.pop("R2_BUCKET")
+        assert seed.cdn_base() is None, "partial R2 config must disable the CDN path"
+        assert seed.public_url("/uploads/campaigns/x.svg") == "/uploads/campaigns/x.svg"
+
+
 def run():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for t in tests:
