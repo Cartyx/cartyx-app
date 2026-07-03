@@ -354,7 +354,15 @@ interface UserDoc {
 
 export async function upsertUser(profile: OAuthProfile): Promise<SessionUser> {
   await connectDB();
-  if (!isDBConnected()) return toSessionUser(profile, 'unknown');
+  if (!isDBConnected()) {
+    // With no DB connection we can neither look up nor persist the account, so
+    // minting a session would log the user into an unpersisted, role-less
+    // "unknown" session. Fail loudly (consistent with the catch below) so the
+    // OAuth callback redirects to an error page instead of a broken login.
+    const e = new Error('upsertUser: database not connected');
+    serverCaptureException(e, profile.id, { action: 'upsertUser', provider: profile.provider });
+    throw e;
+  }
 
   try {
     const nameParts = (profile.name ?? '').split(' ');

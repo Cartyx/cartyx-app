@@ -234,6 +234,31 @@ describe('upsertUser', () => {
     });
   });
 
+  it('captures and rethrows when the DB is not connected (no broken session)', async () => {
+    mockIsDBConnected.mockReturnValue(false);
+
+    const { upsertUser } = await import('~/server/utils/oauth');
+    const profile = {
+      id: 'google_offline',
+      provider: 'google' as const,
+      name: 'Test User',
+      email: 'test@example.com',
+      avatar: null,
+      accessToken: 'tok',
+      refreshToken: null,
+      tokenIssuedAt: Date.now(),
+    };
+
+    // No DB means we can't persist the account: auth must fail rather than mint
+    // an unpersisted "unknown" session.
+    await expect(upsertUser(profile)).rejects.toThrow(/not connected/);
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+    expect(mockServerCaptureException).toHaveBeenCalledWith(expect.any(Error), 'google_offline', {
+      action: 'upsertUser',
+      provider: 'google',
+    });
+  });
+
   it('does not capture exception on successful upsert', async () => {
     mockFindOneAndUpdate.mockResolvedValue({
       email: 'test@example.com',
