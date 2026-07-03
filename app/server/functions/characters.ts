@@ -5,6 +5,7 @@ import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
 import { normalizeTags } from '../utils/helpers';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { pruneLoreLinks } from '../utils/pruneLoreLinks';
+import { pruneEventLinks } from '../utils/pruneEventLinks';
 import { ensureTags as ensureTagsFn } from './tags';
 import type { CharacterData, CharacterListItem, PictureCrop } from '~/types/character';
 import {
@@ -308,6 +309,7 @@ export const deleteCharacter = createServerFn({ method: 'POST' })
       );
 
       await pruneLoreLinks('character', data.id, data.campaignId);
+      await pruneEventLinks('character', data.id, data.campaignId);
 
       serverCaptureEvent(sessionUserId, 'character_deleted', {
         campaign_id: data.campaignId,

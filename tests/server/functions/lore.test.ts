@@ -32,6 +32,7 @@ vi.mock('~/server/db/models/Character', () => ({ Character: { findById: vi.fn() 
 vi.mock('~/server/db/models/Player', () => ({ Player: { findById: vi.fn() } }));
 vi.mock('~/server/db/models/Location', () => ({ Location: { findById: vi.fn() } }));
 vi.mock('~/server/db/models/Race', () => ({ Race: { findById: vi.fn() } }));
+vi.mock('~/server/db/models/Event', () => ({ Event: { updateMany: vi.fn() } }));
 
 import { getSession } from '~/server/session';
 import { User } from '~/server/db/models/User';

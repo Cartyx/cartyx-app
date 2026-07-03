@@ -73,6 +73,22 @@ vi.mock('~/components/wiki/monsters/MonstersPanel', () => ({
   ),
 }));
 
+vi.mock('~/components/wiki/calendar/CalendarPanel', () => ({
+  CalendarPanel: ({ onBack }: { onBack: () => void }) => (
+    <div data-testid="calendar-panel">
+      <button onClick={onBack}>Back</button>
+    </div>
+  ),
+}));
+
+vi.mock('~/components/wiki/calendar/EventsPanel', () => ({
+  EventsPanel: ({ onBack }: { onBack: () => void }) => (
+    <div data-testid="events-panel-stub">
+      <button onClick={onBack}>Back</button>
+    </div>
+  ),
+}));
+
 describe('WikiPanel', () => {
   it('renders the Characters category button (non-GM)', () => {
     useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
@@ -80,11 +96,11 @@ describe('WikiPanel', () => {
     expect(screen.getByRole('button', { name: 'Characters' })).toBeInTheDocument();
   });
 
-  it('shows only the six player categories when not GM (no Maps, no Monsters)', () => {
+  it('shows only the seven player categories when not GM (no Maps, no Monsters, no Events)', () => {
     useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
     render(<WikiPanel />);
 
-    expect(screen.getAllByRole('button')).toHaveLength(6);
+    expect(screen.getAllByRole('button')).toHaveLength(7);
     expect(screen.getByRole('button', { name: 'Characters' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Players' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Races' })).toBeInTheDocument();
@@ -92,18 +108,48 @@ describe('WikiPanel', () => {
     expect(screen.getByRole('button', { name: 'Locations' })).toBeInTheDocument();
     // Lore is visible to all members.
     expect(screen.getByRole('button', { name: 'Lore' })).toBeInTheDocument();
-    // Maps + Monsters are GM-only.
+    // Calendar is visible to all members.
+    expect(screen.getByRole('button', { name: 'Calendar' })).toBeInTheDocument();
+    // Maps + Monsters + Events are GM-only.
     expect(screen.queryByRole('button', { name: 'Maps' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Monsters' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Events' })).not.toBeInTheDocument();
   });
 
-  it('shows the GM-only Maps + Monsters categories when viewer is GM', () => {
+  it('shows the GM-only Maps + Monsters + Events categories when viewer is GM', () => {
     useCampaignMock.mockReturnValue({ campaign: { isGM: true } });
     render(<WikiPanel />);
 
-    expect(screen.getAllByRole('button')).toHaveLength(8);
+    expect(screen.getAllByRole('button')).toHaveLength(10);
     expect(screen.getByRole('button', { name: 'Maps' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Monsters' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Events' })).toBeInTheDocument();
+  });
+
+  it('Calendar category is visible to non-GM members', () => {
+    useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
+    render(<WikiPanel />);
+    expect(screen.getByRole('button', { name: 'Calendar' })).toBeInTheDocument();
+  });
+
+  it('clicking Calendar shows CalendarPanel', async () => {
+    useCampaignMock.mockReturnValue({ campaign: { isGM: false } });
+    const user = userEvent.setup();
+    render(<WikiPanel />);
+
+    await user.click(screen.getByRole('button', { name: 'Calendar' }));
+
+    expect(screen.getByTestId('calendar-panel')).toBeInTheDocument();
+  });
+
+  it('clicking Events shows EventsPanel for GM', async () => {
+    useCampaignMock.mockReturnValue({ campaign: { isGM: true } });
+    const user = userEvent.setup();
+    render(<WikiPanel />);
+
+    await user.click(screen.getByRole('button', { name: 'Events' }));
+
+    expect(screen.getByTestId('events-panel-stub')).toBeInTheDocument();
   });
 
   it('clicking Lore shows LorePanel', async () => {

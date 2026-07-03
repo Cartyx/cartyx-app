@@ -31,3 +31,31 @@ describe('lore is an accepted tabletop/GM-screen window collection', () => {
     expect(result.success).toBe(true);
   });
 });
+
+/**
+ * Regression guard: `'events'` must be an accepted window collection so that
+ * dragging an event card onto the tabletop / GM screens opens a window.
+ */
+describe('events is an accepted tabletop/GM-screen window collection', () => {
+  it('openTabletopWindowSchema accepts collection "events"', () => {
+    const result = openTabletopWindowSchema.safeParse({
+      screenId: 's1',
+      campaignId: 'c1',
+      collection: 'events',
+      documentId: 'e1',
+      x: 0,
+      y: 0,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('gmscreens openWindowSchema accepts collection "events"', () => {
+    const result = openWindowSchema.safeParse({
+      screenId: 's1',
+      campaignId: 'c1',
+      collection: 'events',
+      documentId: 'e1',
+    });
+    expect(result.success).toBe(true);
+  });
+});

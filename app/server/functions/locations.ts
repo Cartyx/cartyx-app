@@ -5,6 +5,7 @@ import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
 import { normalizeTags } from '../utils/helpers';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { pruneLoreLinks } from '../utils/pruneLoreLinks';
+import { pruneEventLinks } from '../utils/pruneEventLinks';
 import { ensureTags as ensureTagsFn } from './tags';
 import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import type { LocationData, LocationListItem, LocationRef } from '~/types/location';
@@ -360,6 +361,7 @@ export const deleteLocation = createServerFn({ method: 'POST' })
       }
 
       await pruneLoreLinks('location', data.id, data.campaignId);
+      await pruneEventLinks('location', data.id, data.campaignId);
 
       serverCaptureEvent(sessionUserId, 'location_deleted', {
         campaign_id: data.campaignId,

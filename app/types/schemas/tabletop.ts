@@ -53,6 +53,7 @@ const TABLETOP_COLLECTIONS: [string, ...string[]] = [
   'location',
   'monster',
   'lore',
+  'events',
 ];
 
 export const openTabletopWindowSchema = z.object({

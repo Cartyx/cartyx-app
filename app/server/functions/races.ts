@@ -5,6 +5,7 @@ import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
 import { normalizeTags } from '../utils/helpers';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { pruneLoreLinks } from '../utils/pruneLoreLinks';
+import { pruneEventLinks } from '../utils/pruneEventLinks';
 import { ensureTags as ensureTagsFn } from './tags';
 import type { RaceData, RaceListItem } from '~/types/race';
 import {
@@ -180,6 +181,7 @@ export const deleteRace = createServerFn({ method: 'POST' })
       }
 
       await pruneLoreLinks('race', data.id, data.campaignId);
+      await pruneEventLinks('race', data.id, data.campaignId);
 
       serverCaptureEvent(sessionUserId!, 'race_deleted', {
         campaign_id: data.campaignId,

@@ -12,6 +12,7 @@ import type { WindowState } from '~/types/gmscreen';
 import { MARKDOWN_PROSE_CLASSES } from '~/utils/markdownProseClasses';
 import { CharacterWindowWrapper, EditCharacterModalWrapper } from './CharacterWindowWrapper';
 import { LoreWindowWrapper, EditLoreModalWrapper } from './LoreWindowWrapper';
+import { EventWindowWrapper } from './EventWindowWrapper';
 import { RaceWindowWrapper, EditRaceModalWrapper } from '~/components/wiki/races/RaceWindowWrapper';
 import { RuleWindowWrapper, EditRuleModalWrapper } from './RuleWindowWrapper';
 import {
@@ -471,6 +472,8 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
               onEdit={() => setEditingLoreId(w.documentId)}
             />
           );
+        } else if (w.collection === 'events') {
+          windowContent = <EventWindowWrapper eventId={w.documentId} campaignId={campaignId} />;
         } else {
           windowContent = (
             <div className="p-4 overflow-auto h-full">

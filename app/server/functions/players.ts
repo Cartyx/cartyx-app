@@ -11,6 +11,7 @@ import { Lore } from '../db/models/Lore';
 import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { pruneLoreLinks } from '../utils/pruneLoreLinks';
+import { pruneEventLinks } from '../utils/pruneEventLinks';
 import type { PlayerData, PlayerListItem } from '~/types/player';
 import type { PictureCrop } from '~/types/character';
 import {
@@ -344,6 +345,7 @@ export const deletePlayer = createServerFn({ method: 'POST' })
       }
 
       await pruneLoreLinks('player', data.id, data.campaignId);
+      await pruneEventLinks('player', data.id, data.campaignId);
 
       serverCaptureEvent(sessionUserId, 'player_deleted', {
         campaign_id: data.campaignId,
