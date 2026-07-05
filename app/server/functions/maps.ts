@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/react-start';
+import { z } from 'zod';
 import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { Map as MapModel } from '../db/models/Map';
@@ -133,345 +133,329 @@ async function broadcastActiveMapChanged(
 // listMaps
 // ---------------------------------------------------------------------------
 
-export const listMaps = createServerFn({ method: 'GET' })
-  .inputValidator(listMapsSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      // The map listing is GM-only. Players reach the active map via
-      // getActiveMap, never the management list.
-      if (!member.isGM) throw new Error('Forbidden');
+export const listMaps = async ({ data }: { data: z.infer<typeof listMapsSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    // The map listing is GM-only. Players reach the active map via
+    // getActiveMap, never the management list.
+    if (!member.isGM) throw new Error('Forbidden');
 
-      const docs = await MapModel.find({ campaignId: data.campaignId })
-        .sort({ updatedAt: -1 })
-        // Bound the result set — a campaign's map library is small in practice.
-        .limit(500)
-        .lean();
+    const docs = await MapModel.find({ campaignId: data.campaignId })
+      .sort({ updatedAt: -1 })
+      // Bound the result set — a campaign's map library is small in practice.
+      .limit(500)
+      .lean();
 
-      return { maps: docs.map((d) => serializeMapListItem(d as MapDoc)) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'listMaps',
-        campaignId: data.campaignId,
-      });
-      throw e;
-    }
-  });
+    return { maps: docs.map((d) => serializeMapListItem(d as MapDoc)) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'listMaps',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // getMap
 // ---------------------------------------------------------------------------
 
-export const getMap = createServerFn({ method: 'GET' })
-  .inputValidator(getMapSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
+export const getMap = async ({ data }: { data: z.infer<typeof getMapSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
 
-      const doc = await MapModel.findOne({ _id: data.id, campaignId: data.campaignId }).lean();
-      if (!doc) throw new Error('Map not found');
+    const doc = await MapModel.findOne({ _id: data.id, campaignId: data.campaignId }).lean();
+    if (!doc) throw new Error('Map not found');
 
-      return { map: serializeMap(doc as MapDoc) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'getMap',
-        campaignId: data.campaignId,
-        mapId: data.id,
-      });
-      throw e;
-    }
-  });
+    return { map: serializeMap(doc as MapDoc) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'getMap',
+      campaignId: data.campaignId,
+      mapId: data.id,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // createMap (GM only) — called after presigned R2 upload completes
 // ---------------------------------------------------------------------------
 
-export const createMap = createServerFn({ method: 'POST' })
-  .inputValidator(createMapSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      if (!member.isGM) throw new Error('Forbidden');
+export const createMap = async ({ data }: { data: z.infer<typeof createMapSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    if (!member.isGM) throw new Error('Forbidden');
 
-      // If a locationId is supplied, verify it belongs to the campaign.
-      if (data.locationId) {
-        const loc = await Location.findOne(
-          { _id: data.locationId, campaignId: data.campaignId },
-          '_id'
-        ).lean();
-        if (!loc) throw new Error('Location not found in this campaign');
-      }
-
-      const now = new Date();
-      const doc = await MapModel.create({
-        campaignId: data.campaignId,
-        createdBy: member.userId,
-        name: data.name.trim(),
-        tags: data.tags ?? [],
-        imageKey: data.imageKey,
-        imageUrl: data.imageUrl,
-        imageWidth: data.imageWidth,
-        imageHeight: data.imageHeight,
-        locationId: data.locationId ?? null,
-        createdAt: now,
-        updatedAt: now,
-      });
-
-      serverCaptureEvent(sessionUserId, 'map_created', {
-        campaign_id: data.campaignId,
-        map_id: String(doc._id),
-      });
-
-      return { map: serializeMap(doc.toObject() as MapDoc) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'createMap',
-        campaignId: data.campaignId,
-      });
-      throw e;
+    // If a locationId is supplied, verify it belongs to the campaign.
+    if (data.locationId) {
+      const loc = await Location.findOne(
+        { _id: data.locationId, campaignId: data.campaignId },
+        '_id'
+      ).lean();
+      if (!loc) throw new Error('Location not found in this campaign');
     }
-  });
+
+    const now = new Date();
+    const doc = await MapModel.create({
+      campaignId: data.campaignId,
+      createdBy: member.userId,
+      name: data.name.trim(),
+      tags: data.tags ?? [],
+      imageKey: data.imageKey,
+      imageUrl: data.imageUrl,
+      imageWidth: data.imageWidth,
+      imageHeight: data.imageHeight,
+      locationId: data.locationId ?? null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    serverCaptureEvent(sessionUserId, 'map_created', {
+      campaign_id: data.campaignId,
+      map_id: String(doc._id),
+    });
+
+    return { map: serializeMap(doc.toObject() as MapDoc) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'createMap',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // updateMapScale (GM only) — step-2 of the upload modal
 // ---------------------------------------------------------------------------
 
-export const updateMapScale = createServerFn({ method: 'POST' })
-  .inputValidator(updateMapScaleSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      if (!member.isGM) throw new Error('Forbidden');
+export const updateMapScale = async ({ data }: { data: z.infer<typeof updateMapScaleSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    if (!member.isGM) throw new Error('Forbidden');
 
-      const doc = await MapModel.findOneAndUpdate(
-        { _id: data.id, campaignId: data.campaignId },
-        {
-          $set: {
-            'scale.gridType': data.gridType,
-            'scale.pixelsPerSquare': data.pixelsPerSquare,
-            'scale.feetPerSquare': data.feetPerSquare,
-            updatedAt: new Date(),
-          },
+    const doc = await MapModel.findOneAndUpdate(
+      { _id: data.id, campaignId: data.campaignId },
+      {
+        $set: {
+          'scale.gridType': data.gridType,
+          'scale.pixelsPerSquare': data.pixelsPerSquare,
+          'scale.feetPerSquare': data.feetPerSquare,
+          updatedAt: new Date(),
         },
-        { new: true }
-      ).lean();
-      if (!doc) throw new Error('Map not found');
+      },
+      { new: true }
+    ).lean();
+    if (!doc) throw new Error('Map not found');
 
-      return { map: serializeMap(doc as MapDoc) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'updateMapScale',
-        campaignId: data.campaignId,
-        mapId: data.id,
-      });
-      throw e;
-    }
-  });
+    return { map: serializeMap(doc as MapDoc) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'updateMapScale',
+      campaignId: data.campaignId,
+      mapId: data.id,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // updateMap (GM only)
 // ---------------------------------------------------------------------------
 
-export const updateMap = createServerFn({ method: 'POST' })
-  .inputValidator(updateMapSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      if (!member.isGM) throw new Error('Forbidden');
+export const updateMap = async ({ data }: { data: z.infer<typeof updateMapSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    if (!member.isGM) throw new Error('Forbidden');
 
-      if (data.locationId) {
-        const loc = await Location.findOne(
-          { _id: data.locationId, campaignId: data.campaignId },
-          '_id'
-        ).lean();
-        if (!loc) throw new Error('Location not found in this campaign');
-      }
-
-      const update: Record<string, unknown> = { updatedAt: new Date() };
-      if (data.name !== undefined) update.name = data.name.trim();
-      if (data.locationId !== undefined) update.locationId = data.locationId;
-      if (data.tags !== undefined) update.tags = data.tags;
-      if (data.gridOverlay !== undefined) {
-        update['gridOverlay.enabled'] = data.gridOverlay.enabled;
-        if (data.gridOverlay.color !== undefined) {
-          update['gridOverlay.color'] = data.gridOverlay.color;
-        }
-      }
-
-      const doc = await MapModel.findOneAndUpdate(
-        { _id: data.id, campaignId: data.campaignId },
-        { $set: update },
-        { new: true }
+    if (data.locationId) {
+      const loc = await Location.findOne(
+        { _id: data.locationId, campaignId: data.campaignId },
+        '_id'
       ).lean();
-      if (!doc) throw new Error('Map not found');
-
-      return { map: serializeMap(doc as MapDoc) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'updateMap',
-        campaignId: data.campaignId,
-        mapId: data.id,
-      });
-      throw e;
+      if (!loc) throw new Error('Location not found in this campaign');
     }
-  });
+
+    const update: Record<string, unknown> = { updatedAt: new Date() };
+    if (data.name !== undefined) update.name = data.name.trim();
+    if (data.locationId !== undefined) update.locationId = data.locationId;
+    if (data.tags !== undefined) update.tags = data.tags;
+    if (data.gridOverlay !== undefined) {
+      update['gridOverlay.enabled'] = data.gridOverlay.enabled;
+      if (data.gridOverlay.color !== undefined) {
+        update['gridOverlay.color'] = data.gridOverlay.color;
+      }
+    }
+
+    const doc = await MapModel.findOneAndUpdate(
+      { _id: data.id, campaignId: data.campaignId },
+      { $set: update },
+      { new: true }
+    ).lean();
+    if (!doc) throw new Error('Map not found');
+
+    return { map: serializeMap(doc as MapDoc) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'updateMap',
+      campaignId: data.campaignId,
+      mapId: data.id,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // deleteMap (GM only) — clears the map from any tab (TabletopScreen) that had
 // it active, best-effort R2 object delete.
 // ---------------------------------------------------------------------------
 
-export const deleteMap = createServerFn({ method: 'POST' })
-  .inputValidator(deleteMapSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      if (!member.isGM) throw new Error('Forbidden');
+export const deleteMap = async ({ data }: { data: z.infer<typeof deleteMapSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    if (!member.isGM) throw new Error('Forbidden');
 
-      const existing = await MapModel.findOne({
-        _id: data.id,
-        campaignId: data.campaignId,
-      }).lean();
-      if (!existing) throw new Error('Map not found');
+    const existing = await MapModel.findOne({
+      _id: data.id,
+      campaignId: data.campaignId,
+    }).lean();
+    if (!existing) throw new Error('Map not found');
 
-      await MapModel.deleteOne({ _id: data.id, campaignId: data.campaignId });
+    await MapModel.deleteOne({ _id: data.id, campaignId: data.campaignId });
 
-      // Clear this map from any tab that had it active.
-      const cleared = await TabletopScreen.updateMany(
-        { campaignId: data.campaignId, activeMapId: data.id },
-        { $set: { activeMapId: null } }
-      );
-      const activeCleared = cleared.modifiedCount > 0;
-      if (activeCleared) {
-        // Notify connected clients to stop rendering the now-deleted map.
-        // screenId null → clients invalidate the active-map query for any tab.
-        await broadcastActiveMapChanged(data.campaignId, null, null);
-      }
-
-      // Best-effort R2 delete.
-      const imageKey = (existing as { imageKey?: string }).imageKey;
-      if (imageKey) {
-        try {
-          const r2 = createR2Client();
-          if (r2) {
-            await r2.client
-              .send(new DeleteObjectCommand({ Bucket: r2.bucket, Key: imageKey }))
-              .catch(() => {});
-          }
-        } catch (cleanupError) {
-          serverCaptureException(cleanupError, sessionUserId, {
-            action: 'deleteMap.r2Cleanup',
-            campaignId: data.campaignId,
-            mapId: data.id,
-          });
-        }
-      }
-
-      serverCaptureEvent(sessionUserId, 'map_deleted', {
-        campaign_id: data.campaignId,
-        map_id: data.id,
-      });
-
-      return { success: true, activeCleared };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'deleteMap',
-        campaignId: data.campaignId,
-        mapId: data.id,
-      });
-      throw e;
+    // Clear this map from any tab that had it active.
+    const cleared = await TabletopScreen.updateMany(
+      { campaignId: data.campaignId, activeMapId: data.id },
+      { $set: { activeMapId: null } }
+    );
+    const activeCleared = cleared.modifiedCount > 0;
+    if (activeCleared) {
+      // Notify connected clients to stop rendering the now-deleted map.
+      // screenId null → clients invalidate the active-map query for any tab.
+      await broadcastActiveMapChanged(data.campaignId, null, null);
     }
-  });
+
+    // Best-effort R2 delete.
+    const imageKey = (existing as { imageKey?: string }).imageKey;
+    if (imageKey) {
+      try {
+        const r2 = createR2Client();
+        if (r2) {
+          await r2.client
+            .send(new DeleteObjectCommand({ Bucket: r2.bucket, Key: imageKey }))
+            .catch(() => {});
+        }
+      } catch (cleanupError) {
+        serverCaptureException(cleanupError, sessionUserId, {
+          action: 'deleteMap.r2Cleanup',
+          campaignId: data.campaignId,
+          mapId: data.id,
+        });
+      }
+    }
+
+    serverCaptureEvent(sessionUserId, 'map_deleted', {
+      campaign_id: data.campaignId,
+      map_id: data.id,
+    });
+
+    return { success: true, activeCleared };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'deleteMap',
+      campaignId: data.campaignId,
+      mapId: data.id,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // setActiveMap (GM only) — sets the per-tab TabletopScreen.activeMapId. Pass null to clear.
 // ---------------------------------------------------------------------------
 
-export const setActiveMap = createServerFn({ method: 'POST' })
-  .inputValidator(setActiveMapSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      if (!member.isGM) throw new Error('Forbidden');
+export const setActiveMap = async ({ data }: { data: z.infer<typeof setActiveMapSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    if (!member.isGM) throw new Error('Forbidden');
 
-      if (data.mapId !== null) {
-        const exists = await MapModel.findOne(
-          { _id: data.mapId, campaignId: data.campaignId },
-          '_id'
-        ).lean();
-        if (!exists) throw new Error('Map not found');
-      }
-
-      // Active map is per-tab: set it on the target screen, not the campaign.
-      const res = await TabletopScreen.updateOne(
-        { _id: data.screenId, campaignId: data.campaignId },
-        { $set: { activeMapId: data.mapId, updatedAt: new Date() } }
-      );
-      if (res.matchedCount === 0) throw new Error('Tab not found');
-
-      await broadcastActiveMapChanged(data.campaignId, data.mapId, data.screenId);
-
-      serverCaptureEvent(sessionUserId, 'map_set_active', {
-        campaign_id: data.campaignId,
-        screen_id: data.screenId,
-        map_id: data.mapId,
-      });
-
-      return { success: true, screenId: data.screenId, activeMapId: data.mapId };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'setActiveMap',
-        campaignId: data.campaignId,
-      });
-      throw e;
+    if (data.mapId !== null) {
+      const exists = await MapModel.findOne(
+        { _id: data.mapId, campaignId: data.campaignId },
+        '_id'
+      ).lean();
+      if (!exists) throw new Error('Map not found');
     }
-  });
+
+    // Active map is per-tab: set it on the target screen, not the campaign.
+    const res = await TabletopScreen.updateOne(
+      { _id: data.screenId, campaignId: data.campaignId },
+      { $set: { activeMapId: data.mapId, updatedAt: new Date() } }
+    );
+    if (res.matchedCount === 0) throw new Error('Tab not found');
+
+    await broadcastActiveMapChanged(data.campaignId, data.mapId, data.screenId);
+
+    serverCaptureEvent(sessionUserId, 'map_set_active', {
+      campaign_id: data.campaignId,
+      screen_id: data.screenId,
+      map_id: data.mapId,
+    });
+
+    return { success: true, screenId: data.screenId, activeMapId: data.mapId };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'setActiveMap',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // getActiveMap (read) — the active map for a specific tab (screen).
 // ---------------------------------------------------------------------------
 
-export const getActiveMap = createServerFn({ method: 'GET' })
-  .inputValidator(getActiveMapSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
+export const getActiveMap = async ({ data }: { data: z.infer<typeof getActiveMapSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
 
-      const screen = await TabletopScreen.findOne(
-        { _id: data.screenId, campaignId: data.campaignId },
-        'activeMapId'
-      ).lean();
-      const activeMapId = (screen as { activeMapId?: unknown } | null)?.activeMapId;
-      if (!activeMapId) return { map: null };
+    const screen = await TabletopScreen.findOne(
+      { _id: data.screenId, campaignId: data.campaignId },
+      'activeMapId'
+    ).lean();
+    const activeMapId = (screen as { activeMapId?: unknown } | null)?.activeMapId;
+    if (!activeMapId) return { map: null };
 
-      const doc = await MapModel.findOne({
-        _id: activeMapId,
-        campaignId: data.campaignId,
-      }).lean();
-      if (!doc) return { map: null };
+    const doc = await MapModel.findOne({
+      _id: activeMapId,
+      campaignId: data.campaignId,
+    }).lean();
+    if (!doc) return { map: null };
 
-      return { map: serializeMap(doc as MapDoc) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'getActiveMap',
-        campaignId: data.campaignId,
-      });
-      throw e;
-    }
-  });
+    return { map: serializeMap(doc as MapDoc) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'getActiveMap',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};

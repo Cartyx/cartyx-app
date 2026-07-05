@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/react-start';
+import { z } from 'zod';
 import { getSession } from '../session';
 import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
@@ -101,45 +101,43 @@ async function requireCampaignGM(
 
 export { createRuleSchema };
 
-export const createRule = createServerFn({ method: 'POST' })
-  .inputValidator(createRuleSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
-      const userId = gm.userId;
+export const createRule = async ({ data }: { data: z.infer<typeof createRuleSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
+    const userId = gm.userId;
 
-      const now = new Date();
-      const finalTags = normalizeTags(data.tags ?? []);
-      const ruleData: Record<string, unknown> = {
-        campaignId: data.campaignId,
-        createdBy: userId,
-        title: data.title.trim(),
-        content: data.content.trim(),
-        tags: finalTags,
-        isPublic: data.isPublic ?? false,
-        createdAt: now,
-        updatedAt: now,
-      };
-      const doc = await Rule.create(ruleData);
+    const now = new Date();
+    const finalTags = normalizeTags(data.tags ?? []);
+    const ruleData: Record<string, unknown> = {
+      campaignId: data.campaignId,
+      createdBy: userId,
+      title: data.title.trim(),
+      content: data.content.trim(),
+      tags: finalTags,
+      isPublic: data.isPublic ?? false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const doc = await Rule.create(ruleData);
 
-      await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
+    await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
 
-      serverCaptureEvent(sessionUserId, 'rule_created', {
-        campaign_id: data.campaignId,
-        rule_id: String(doc._id),
-      });
+    serverCaptureEvent(sessionUserId, 'rule_created', {
+      campaign_id: data.campaignId,
+      rule_id: String(doc._id),
+    });
 
-      return { success: true, rule: serializeRule(doc) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'createRule',
-        campaignId: data.campaignId,
-      });
-      throw e;
-    }
-  });
+    return { success: true, rule: serializeRule(doc) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'createRule',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // updateRule
@@ -147,43 +145,41 @@ export const createRule = createServerFn({ method: 'POST' })
 
 export { updateRuleSchema };
 
-export const updateRule = createServerFn({ method: 'POST' })
-  .inputValidator(updateRuleSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
-      const userId = gm.userId;
+export const updateRule = async ({ data }: { data: z.infer<typeof updateRuleSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
+    const userId = gm.userId;
 
-      const existing = await Rule.findById(data.id);
-      if (!existing) throw new Error('Rule not found');
-      if (String(existing.campaignId) !== data.campaignId) throw new Error('Forbidden');
+    const existing = await Rule.findById(data.id);
+    if (!existing) throw new Error('Rule not found');
+    if (String(existing.campaignId) !== data.campaignId) throw new Error('Forbidden');
 
-      const finalTags = normalizeTags(data.tags ?? []);
-      existing.title = data.title.trim();
-      existing.content = data.content.trim();
-      existing.tags = finalTags;
-      if (data.isPublic !== undefined) {
-        existing.isPublic = data.isPublic;
-      }
-      existing.updatedAt = new Date();
-      await existing.save();
-
-      await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
-
-      serverCaptureEvent(sessionUserId, 'rule_updated', {
-        campaign_id: data.campaignId,
-        rule_id: data.id,
-        updated_by: userId,
-      });
-
-      return { success: true, rule: serializeRule(existing) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'updateRule', ruleId: data.id });
-      throw e;
+    const finalTags = normalizeTags(data.tags ?? []);
+    existing.title = data.title.trim();
+    existing.content = data.content.trim();
+    existing.tags = finalTags;
+    if (data.isPublic !== undefined) {
+      existing.isPublic = data.isPublic;
     }
-  });
+    existing.updatedAt = new Date();
+    await existing.save();
+
+    await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
+
+    serverCaptureEvent(sessionUserId, 'rule_updated', {
+      campaign_id: data.campaignId,
+      rule_id: data.id,
+      updated_by: userId,
+    });
+
+    return { success: true, rule: serializeRule(existing) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'updateRule', ruleId: data.id });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // deleteRule
@@ -191,46 +187,44 @@ export const updateRule = createServerFn({ method: 'POST' })
 
 export { deleteRuleSchema };
 
-export const deleteRule = createServerFn({ method: 'POST' })
-  .inputValidator(deleteRuleSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
+export const deleteRule = async ({ data }: { data: z.infer<typeof deleteRuleSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
+    const userId = gm.userId;
+
+    const existing = await Rule.findById(data.id);
+    if (!existing) throw new Error('Rule not found');
+    if (String(existing.campaignId) !== data.campaignId) throw new Error('Forbidden');
+
+    await existing.deleteOne();
+
+    // Clean up GM Screen references to this rule.
+    // Best-effort: the rule is already deleted, so cleanup failure must not
+    // surface as a user-facing error — report it and move on.
     try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
-      const userId = gm.userId;
-
-      const existing = await Rule.findById(data.id);
-      if (!existing) throw new Error('Rule not found');
-      if (String(existing.campaignId) !== data.campaignId) throw new Error('Forbidden');
-
-      await existing.deleteOne();
-
-      // Clean up GM Screen references to this rule.
-      // Best-effort: the rule is already deleted, so cleanup failure must not
-      // surface as a user-facing error — report it and move on.
-      try {
-        await removeDocumentRefsFromScreens(data.campaignId, 'rule', data.id);
-      } catch (cleanupError) {
-        serverCaptureException(cleanupError, sessionUserId, {
-          action: 'deleteRule.cleanup',
-          campaignId: data.campaignId,
-          ruleId: data.id,
-        });
-      }
-
-      serverCaptureEvent(sessionUserId, 'rule_deleted', {
-        campaign_id: data.campaignId,
-        rule_id: data.id,
-        deleted_by: userId,
+      await removeDocumentRefsFromScreens(data.campaignId, 'rule', data.id);
+    } catch (cleanupError) {
+      serverCaptureException(cleanupError, sessionUserId, {
+        action: 'deleteRule.cleanup',
+        campaignId: data.campaignId,
+        ruleId: data.id,
       });
-
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'deleteRule', ruleId: data.id });
-      throw e;
     }
-  });
+
+    serverCaptureEvent(sessionUserId, 'rule_deleted', {
+      campaign_id: data.campaignId,
+      rule_id: data.id,
+      deleted_by: userId,
+    });
+
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'deleteRule', ruleId: data.id });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // listRules
@@ -238,59 +232,57 @@ export const deleteRule = createServerFn({ method: 'POST' })
 
 export { listRulesSchema };
 
-export const listRules = createServerFn({ method: 'GET' })
-  .inputValidator(listRulesSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
+export const listRules = async ({ data }: { data: z.infer<typeof listRulesSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
 
-      const filter: Record<string, unknown> = { campaignId: data.campaignId };
+    const filter: Record<string, unknown> = { campaignId: data.campaignId };
 
-      if (member.isGM) {
-        if (data.visibility === 'public') {
-          filter.isPublic = true;
-        } else if (data.visibility === 'private') {
-          filter.isPublic = false;
-        }
-      } else {
+    if (member.isGM) {
+      if (data.visibility === 'public') {
         filter.isPublic = true;
+      } else if (data.visibility === 'private') {
+        filter.isPublic = false;
       }
-
-      if (data.search && data.search.trim()) {
-        filter.$text = { $search: data.search.trim() };
-      }
-
-      if (data.tags && data.tags.length > 0) {
-        const normalizedTags = [...new Set(normalizeTags(data.tags))];
-        if (normalizedTags.length > 0) {
-          filter.tags = { $all: normalizedTags };
-        }
-      }
-
-      const docs = await Rule.find(filter).select('-content').sort({ updatedAt: -1 }).lean();
-
-      return (
-        docs as Array<{
-          _id: unknown;
-          campaignId: unknown;
-          createdBy: unknown;
-          title?: string;
-          tags?: string[];
-          isPublic?: boolean;
-          createdAt?: Date;
-          updatedAt?: Date;
-        }>
-      ).map(serializeRuleListItem);
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'listRules',
-        campaignId: data.campaignId,
-      });
-      throw e;
+    } else {
+      filter.isPublic = true;
     }
-  });
+
+    if (data.search && data.search.trim()) {
+      filter.$text = { $search: data.search.trim() };
+    }
+
+    if (data.tags && data.tags.length > 0) {
+      const normalizedTags = [...new Set(normalizeTags(data.tags))];
+      if (normalizedTags.length > 0) {
+        filter.tags = { $all: normalizedTags };
+      }
+    }
+
+    const docs = await Rule.find(filter).select('-content').sort({ updatedAt: -1 }).lean();
+
+    return (
+      docs as Array<{
+        _id: unknown;
+        campaignId: unknown;
+        createdBy: unknown;
+        title?: string;
+        tags?: string[];
+        isPublic?: boolean;
+        createdAt?: Date;
+        updatedAt?: Date;
+      }>
+    ).map(serializeRuleListItem);
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'listRules',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // getRule
@@ -298,25 +290,23 @@ export const listRules = createServerFn({ method: 'GET' })
 
 export { getRuleSchema };
 
-export const getRule = createServerFn({ method: 'GET' })
-  .inputValidator(getRuleSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
+export const getRule = async ({ data }: { data: z.infer<typeof getRuleSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
 
-      const doc = await Rule.findById(data.id);
-      if (!doc) return null;
-      if (String(doc.campaignId) !== data.campaignId) return null;
+    const doc = await Rule.findById(data.id);
+    if (!doc) return null;
+    if (String(doc.campaignId) !== data.campaignId) return null;
 
-      if (!doc.isPublic && !member.isGM) {
-        return null;
-      }
-
-      return serializeRule(doc);
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'getRule', ruleId: data.id });
-      throw e;
+    if (!doc.isPublic && !member.isGM) {
+      return null;
     }
-  });
+
+    return serializeRule(doc);
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'getRule', ruleId: data.id });
+    throw e;
+  }
+};

@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/react-start';
+import { z } from 'zod';
 import { getSession } from '../session';
 import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
@@ -40,28 +40,30 @@ async function requireCampaignMember(
 
 export { listTagsSchema };
 
-export const listTags = createServerFn({ method: 'GET' })
-  .inputValidator(listTagsSchema)
-  .handler(async ({ data }): Promise<TagListItem[]> => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
+export const listTags = async ({
+  data,
+}: {
+  data: z.infer<typeof listTagsSchema>;
+}): Promise<TagListItem[]> => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
 
-      const docs = await Tag.find({ campaignId: data.campaignId })
-        .select('name')
-        .sort({ name: 1 })
-        .lean();
+    const docs = await Tag.find({ campaignId: data.campaignId })
+      .select('name')
+      .sort({ name: 1 })
+      .lean();
 
-      return docs.map((d: { _id: unknown; name?: string }) => ({
-        id: String(d._id),
-        name: d.name ?? '',
-      }));
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'listTags', campaignId: data.campaignId });
-      throw e;
-    }
-  });
+    return docs.map((d: { _id: unknown; name?: string }) => ({
+      id: String(d._id),
+      name: d.name ?? '',
+    }));
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'listTags', campaignId: data.campaignId });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // ensureTags
@@ -69,41 +71,39 @@ export const listTags = createServerFn({ method: 'GET' })
 
 export { ensureTagsSchema };
 
-export const ensureTags = createServerFn({ method: 'POST' })
-  .inputValidator(ensureTagsSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      const userId = member.userId;
+export const ensureTags = async ({ data }: { data: z.infer<typeof ensureTagsSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    const userId = member.userId;
 
-      const normalized = normalizeTags(data.tags);
-      if (normalized.length === 0) return { success: true };
+    const normalized = normalizeTags(data.tags);
+    if (normalized.length === 0) return { success: true };
 
-      const ops = normalized.map((name) => ({
-        updateOne: {
-          filter: { campaignId: data.campaignId, name },
-          update: {
-            $setOnInsert: {
-              name,
-              campaignId: data.campaignId,
-              createdBy: userId,
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            },
+    const ops = normalized.map((name) => ({
+      updateOne: {
+        filter: { campaignId: data.campaignId, name },
+        update: {
+          $setOnInsert: {
+            name,
+            campaignId: data.campaignId,
+            createdBy: userId,
+            createdAt: new Date(),
+            updatedAt: new Date(),
           },
-          upsert: true,
         },
-      }));
+        upsert: true,
+      },
+    }));
 
-      await Tag.bulkWrite(ops, { ordered: false });
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'ensureTags',
-        campaignId: data.campaignId,
-      });
-      throw e;
-    }
-  });
+    await Tag.bulkWrite(ops, { ordered: false });
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'ensureTags',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};

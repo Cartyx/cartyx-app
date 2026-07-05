@@ -1,6 +1,6 @@
 import { createFileRoute, redirect } from '@tanstack/react-router';
 import { z } from 'zod';
-import { getMe } from '~/server/functions/auth';
+import { getMe } from '~/server/functions/rpc';
 import { JoinWizard } from '~/components/join-wizard/JoinWizard';
 
 export const joinSearchSchema = z.object({

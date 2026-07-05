@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/react-start';
+import { z } from 'zod';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { serverCaptureException } from '../utils/posthog';
@@ -109,223 +109,211 @@ async function resolveLinkLabels(links: EventLink[]): Promise<EventLink[]> {
 // listEvents
 // ---------------------------------------------------------------------------
 
-export const listEvents = createServerFn({ method: 'GET' })
-  .inputValidator(listEventsSchema)
-  .handler(async ({ data }) => {
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      const filter: Record<string, unknown> = { campaignId: data.campaignId };
+export const listEvents = async ({ data }: { data: z.infer<typeof listEventsSchema> }) => {
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    const filter: Record<string, unknown> = { campaignId: data.campaignId };
 
-      // Events are GM-owned (no player-authored events), so non-GMs see only public events — no "see your own" branch like lore.
-      if (!member.isGM) {
-        filter.isPublic = true;
-      } else if (data.visibility === 'public') {
-        filter.isPublic = true;
-      } else if (data.visibility === 'private') {
-        filter.isPublic = false;
-      }
-
-      if (data.epicOnly) filter.isEpic = true;
-      if (data.tags?.length) filter.tags = { $all: data.tags };
-      if (data.search) filter.$text = { $search: data.search };
-      if (data.linkedKind && data.linkedId) {
-        filter.links = { $elemMatch: { kind: data.linkedKind, id: data.linkedId } };
-      }
-
-      const docs = (await Event.find(filter).sort({ startOrdinal: 1 }).lean()) as AnyDoc[];
-      const items: EventListItem[] = docs.map((doc) => ({
-        ...baseSerialize(doc),
-        canEdit: member.isGM,
-      }));
-      return items;
-    } catch (e) {
-      serverCaptureException(e, undefined, { action: 'listEvents', campaignId: data.campaignId });
-      throw e;
+    // Events are GM-owned (no player-authored events), so non-GMs see only public events — no "see your own" branch like lore.
+    if (!member.isGM) {
+      filter.isPublic = true;
+    } else if (data.visibility === 'public') {
+      filter.isPublic = true;
+    } else if (data.visibility === 'private') {
+      filter.isPublic = false;
     }
-  });
+
+    if (data.epicOnly) filter.isEpic = true;
+    if (data.tags?.length) filter.tags = { $all: data.tags };
+    if (data.search) filter.$text = { $search: data.search };
+    if (data.linkedKind && data.linkedId) {
+      filter.links = { $elemMatch: { kind: data.linkedKind, id: data.linkedId } };
+    }
+
+    const docs = (await Event.find(filter).sort({ startOrdinal: 1 }).lean()) as AnyDoc[];
+    const items: EventListItem[] = docs.map((doc) => ({
+      ...baseSerialize(doc),
+      canEdit: member.isGM,
+    }));
+    return items;
+  } catch (e) {
+    serverCaptureException(e, undefined, { action: 'listEvents', campaignId: data.campaignId });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // getEvent
 // ---------------------------------------------------------------------------
 
-export const getEvent = createServerFn({ method: 'GET' })
-  .inputValidator(getEventSchema)
-  .handler(async ({ data }) => {
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      const doc = (await Event.findById(data.id).lean()) as AnyDoc | null;
-      if (!doc || String(doc.campaignId) !== data.campaignId) return null;
-      if (!member.isGM && !doc.isPublic) return null;
+export const getEvent = async ({ data }: { data: z.infer<typeof getEventSchema> }) => {
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    const doc = (await Event.findById(data.id).lean()) as AnyDoc | null;
+    if (!doc || String(doc.campaignId) !== data.campaignId) return null;
+    if (!member.isGM && !doc.isPublic) return null;
 
-      const links = await resolveLinkLabels(
-        ((doc.links as unknown[]) ?? []).map((l) => {
-          const lk = l as Record<string, unknown>;
-          return { kind: lk.kind as EventLink['kind'], id: String(lk.id) };
-        })
-      );
+    const links = await resolveLinkLabels(
+      ((doc.links as unknown[]) ?? []).map((l) => {
+        const lk = l as Record<string, unknown>;
+        return { kind: lk.kind as EventLink['kind'], id: String(lk.id) };
+      })
+    );
 
-      const result: EventData = {
-        ...baseSerialize(doc),
-        gmContent: member.isGM ? ((doc.gmContent as string) ?? '') : '',
-        links,
-        canEdit: member.isGM,
-      };
-      return result;
-    } catch (e) {
-      serverCaptureException(e, undefined, { action: 'getEvent', eventId: data.id });
-      throw e;
-    }
-  });
+    const result: EventData = {
+      ...baseSerialize(doc),
+      gmContent: member.isGM ? ((doc.gmContent as string) ?? '') : '',
+      links,
+      canEdit: member.isGM,
+    };
+    return result;
+  } catch (e) {
+    serverCaptureException(e, undefined, { action: 'getEvent', eventId: data.id });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // createEvent
 // ---------------------------------------------------------------------------
 
-export const createEvent = createServerFn({ method: 'POST' })
-  .inputValidator(createEventSchema)
-  .handler(async ({ data }) => {
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      if (!member.isGM) throw new Error('Forbidden');
+export const createEvent = async ({ data }: { data: z.infer<typeof createEventSchema> }) => {
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    if (!member.isGM) throw new Error('Forbidden');
 
-      const { cfg, id: calendarId } = await loadCalendar(data.campaignId);
-      const safeGmContent = member.isGM ? (data.gmContent ?? '') : '';
+    const { cfg, id: calendarId } = await loadCalendar(data.campaignId);
+    const safeGmContent = member.isGM ? (data.gmContent ?? '') : '';
 
-      const sv = validateDate(cfg, data.start);
-      if (!sv.ok) throw new Error(sv.error);
-      const startOrdinal = toOrdinal(cfg, data.start);
-      let endOrdinal = startOrdinal;
-      if (data.end) {
-        const ev = validateDate(cfg, data.end);
-        if (!ev.ok) throw new Error(ev.error);
-        endOrdinal = toOrdinal(cfg, data.end);
-        if (endOrdinal < startOrdinal)
-          throw new Error('Event end date must be on or after the start date.');
-      }
-
-      const doc = (await Event.create({
-        title: data.title,
-        content: data.content,
-        gmContent: safeGmContent,
-        isPublic: data.isPublic,
-        isEpic: data.isEpic,
-        start: data.start,
-        end: data.end,
-        startOrdinal,
-        endOrdinal,
-        links: data.links,
-        sessionId: data.sessionId,
-        images: data.images,
-        tags: data.tags,
-        color: data.color,
-        campaignId: data.campaignId,
-        calendarId: calendarId,
-        createdBy: member.userId,
-      })) as AnyDoc;
-
-      return {
-        success: true,
-        event: {
-          ...baseSerialize(doc),
-          gmContent: safeGmContent,
-          canEdit: true,
-        },
-      };
-    } catch (e) {
-      serverCaptureException(e, undefined, { action: 'createEvent', campaignId: data.campaignId });
-      throw e;
+    const sv = validateDate(cfg, data.start);
+    if (!sv.ok) throw new Error(sv.error);
+    const startOrdinal = toOrdinal(cfg, data.start);
+    let endOrdinal = startOrdinal;
+    if (data.end) {
+      const ev = validateDate(cfg, data.end);
+      if (!ev.ok) throw new Error(ev.error);
+      endOrdinal = toOrdinal(cfg, data.end);
+      if (endOrdinal < startOrdinal)
+        throw new Error('Event end date must be on or after the start date.');
     }
-  });
+
+    const doc = (await Event.create({
+      title: data.title,
+      content: data.content,
+      gmContent: safeGmContent,
+      isPublic: data.isPublic,
+      isEpic: data.isEpic,
+      start: data.start,
+      end: data.end,
+      startOrdinal,
+      endOrdinal,
+      links: data.links,
+      sessionId: data.sessionId,
+      images: data.images,
+      tags: data.tags,
+      color: data.color,
+      campaignId: data.campaignId,
+      calendarId: calendarId,
+      createdBy: member.userId,
+    })) as AnyDoc;
+
+    return {
+      success: true,
+      event: {
+        ...baseSerialize(doc),
+        gmContent: safeGmContent,
+        canEdit: true,
+      },
+    };
+  } catch (e) {
+    serverCaptureException(e, undefined, { action: 'createEvent', campaignId: data.campaignId });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // updateEvent
 // ---------------------------------------------------------------------------
 
-export const updateEvent = createServerFn({ method: 'POST' })
-  .inputValidator(updateEventSchema)
-  .handler(async ({ data }) => {
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      if (!member.isGM) throw new Error('Forbidden');
+export const updateEvent = async ({ data }: { data: z.infer<typeof updateEventSchema> }) => {
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    if (!member.isGM) throw new Error('Forbidden');
 
-      const existing = (await Event.findById(data.id).lean()) as AnyDoc | null;
-      if (!existing || String(existing.campaignId) !== data.campaignId)
-        throw new Error('Not found');
+    const existing = (await Event.findById(data.id).lean()) as AnyDoc | null;
+    if (!existing || String(existing.campaignId) !== data.campaignId) throw new Error('Not found');
 
-      const { cfg } = await loadCalendar(data.campaignId);
-      const safeGmContent = member.isGM ? (data.gmContent ?? '') : '';
+    const { cfg } = await loadCalendar(data.campaignId);
+    const safeGmContent = member.isGM ? (data.gmContent ?? '') : '';
 
-      const sv = validateDate(cfg, data.start);
-      if (!sv.ok) throw new Error(sv.error);
-      const startOrdinal = toOrdinal(cfg, data.start);
-      let endOrdinal = startOrdinal;
-      if (data.end) {
-        const ev = validateDate(cfg, data.end);
-        if (!ev.ok) throw new Error(ev.error);
-        endOrdinal = toOrdinal(cfg, data.end);
-        if (endOrdinal < startOrdinal)
-          throw new Error('Event end date must be on or after the start date.');
-      }
-
-      const updated = (await Event.findOneAndUpdate(
-        { _id: data.id, campaignId: data.campaignId },
-        {
-          $set: {
-            title: data.title,
-            content: data.content,
-            gmContent: safeGmContent,
-            isPublic: data.isPublic,
-            isEpic: data.isEpic,
-            start: data.start,
-            end: data.end,
-            startOrdinal,
-            endOrdinal,
-            links: data.links,
-            sessionId: data.sessionId,
-            images: data.images,
-            tags: data.tags,
-            color: data.color,
-            updatedAt: new Date(),
-          },
-        },
-        { new: true, lean: true }
-      )) as AnyDoc;
-
-      return {
-        success: true,
-        event: {
-          ...baseSerialize(updated),
-          gmContent: safeGmContent,
-          canEdit: true,
-        },
-      };
-    } catch (e) {
-      serverCaptureException(e, undefined, { action: 'updateEvent', eventId: data.id });
-      throw e;
+    const sv = validateDate(cfg, data.start);
+    if (!sv.ok) throw new Error(sv.error);
+    const startOrdinal = toOrdinal(cfg, data.start);
+    let endOrdinal = startOrdinal;
+    if (data.end) {
+      const ev = validateDate(cfg, data.end);
+      if (!ev.ok) throw new Error(ev.error);
+      endOrdinal = toOrdinal(cfg, data.end);
+      if (endOrdinal < startOrdinal)
+        throw new Error('Event end date must be on or after the start date.');
     }
-  });
+
+    const updated = (await Event.findOneAndUpdate(
+      { _id: data.id, campaignId: data.campaignId },
+      {
+        $set: {
+          title: data.title,
+          content: data.content,
+          gmContent: safeGmContent,
+          isPublic: data.isPublic,
+          isEpic: data.isEpic,
+          start: data.start,
+          end: data.end,
+          startOrdinal,
+          endOrdinal,
+          links: data.links,
+          sessionId: data.sessionId,
+          images: data.images,
+          tags: data.tags,
+          color: data.color,
+          updatedAt: new Date(),
+        },
+      },
+      { new: true, lean: true }
+    )) as AnyDoc;
+
+    return {
+      success: true,
+      event: {
+        ...baseSerialize(updated),
+        gmContent: safeGmContent,
+        canEdit: true,
+      },
+    };
+  } catch (e) {
+    serverCaptureException(e, undefined, { action: 'updateEvent', eventId: data.id });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // deleteEvent
 // ---------------------------------------------------------------------------
 
-export const deleteEvent = createServerFn({ method: 'POST' })
-  .inputValidator(deleteEventSchema)
-  .handler(async ({ data }) => {
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      if (!member.isGM) throw new Error('Forbidden');
+export const deleteEvent = async ({ data }: { data: z.infer<typeof deleteEventSchema> }) => {
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    if (!member.isGM) throw new Error('Forbidden');
 
-      const existing = (await Event.findById(data.id).lean()) as AnyDoc | null;
-      if (!existing || String(existing.campaignId) !== data.campaignId)
-        throw new Error('Not found');
+    const existing = (await Event.findById(data.id).lean()) as AnyDoc | null;
+    if (!existing || String(existing.campaignId) !== data.campaignId) throw new Error('Not found');
 
-      await Event.deleteOne({ _id: data.id, campaignId: data.campaignId });
-      // Signature: removeDocumentRefsFromScreens(campaignId, collection, documentId)
-      await removeDocumentRefsFromScreens(data.campaignId, 'events', data.id);
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, undefined, { action: 'deleteEvent', eventId: data.id });
-      throw e;
-    }
-  });
+    await Event.deleteOne({ _id: data.id, campaignId: data.campaignId });
+    // Signature: removeDocumentRefsFromScreens(campaignId, collection, documentId)
+    await removeDocumentRefsFromScreens(data.campaignId, 'events', data.id);
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, undefined, { action: 'deleteEvent', eventId: data.id });
+    throw e;
+  }
+};

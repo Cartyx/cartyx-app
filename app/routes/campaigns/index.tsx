@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, type FormEvent } from 'react';
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
-import { getMe } from '~/server/functions/auth';
-import { listCampaigns } from '~/server/functions/campaigns';
+import { getMe, listCampaigns } from '~/server/functions/rpc';
 import { getQueryClient } from '~/providers/QueryProvider';
 import { queryKeys } from '~/utils/queryKeys';
 import { Topbar } from '~/components/Topbar';
