@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/react-start';
+import { z } from 'zod';
 import { getSession } from '../session';
 import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
@@ -146,180 +146,170 @@ function serializeMonster(r: MonsterDoc): MonsterData {
 // listMonsters (GM only)
 // ---------------------------------------------------------------------------
 
-export const listMonsters = createServerFn({ method: 'GET' })
-  .inputValidator(listMonstersSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const ctx = await requireCampaignGM(data.campaignId);
-      sessionUserId = ctx.sessionUserId;
+export const listMonsters = async ({ data }: { data: z.infer<typeof listMonstersSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const ctx = await requireCampaignGM(data.campaignId);
+    sessionUserId = ctx.sessionUserId;
 
-      const filter: Record<string, unknown> = { campaignId: data.campaignId };
-      if (data.sessionId && data.sessionId.trim()) filter.sessionId = data.sessionId.trim();
-      if (data.tags && data.tags.length > 0) {
-        filter.tags = { $all: normalizeTags(data.tags) };
-      }
-      if (data.search && data.search.trim()) {
-        filter.$text = { $search: data.search.trim() };
-      }
-      if (data.minCr !== undefined || data.maxCr !== undefined) {
-        const crFilter: Record<string, number> = {};
-        if (data.minCr !== undefined) crFilter.$gte = data.minCr;
-        if (data.maxCr !== undefined) crFilter.$lte = data.maxCr;
-        filter['cr.value'] = crFilter;
-      }
-
-      const docs = await Monster.find(filter).sort({ updatedAt: -1 }).lean();
-      return { monsters: docs.map((d) => serializeMonsterListItem(d as MonsterDoc)) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'listMonsters',
-        campaignId: data.campaignId,
-      });
-      throw e;
+    const filter: Record<string, unknown> = { campaignId: data.campaignId };
+    if (data.sessionId && data.sessionId.trim()) filter.sessionId = data.sessionId.trim();
+    if (data.tags && data.tags.length > 0) {
+      filter.tags = { $all: normalizeTags(data.tags) };
     }
-  });
+    if (data.search && data.search.trim()) {
+      filter.$text = { $search: data.search.trim() };
+    }
+    if (data.minCr !== undefined || data.maxCr !== undefined) {
+      const crFilter: Record<string, number> = {};
+      if (data.minCr !== undefined) crFilter.$gte = data.minCr;
+      if (data.maxCr !== undefined) crFilter.$lte = data.maxCr;
+      filter['cr.value'] = crFilter;
+    }
+
+    const docs = await Monster.find(filter).sort({ updatedAt: -1 }).lean();
+    return { monsters: docs.map((d) => serializeMonsterListItem(d as MonsterDoc)) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'listMonsters',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // getMonster (GM only)
 // ---------------------------------------------------------------------------
 
-export const getMonster = createServerFn({ method: 'GET' })
-  .inputValidator(getMonsterSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const ctx = await requireCampaignGM(data.campaignId);
-      sessionUserId = ctx.sessionUserId;
-      const doc = await Monster.findOne({
-        _id: data.id,
-        campaignId: data.campaignId,
-      }).lean();
-      if (!doc) throw new Error('Monster not found');
-      return { monster: serializeMonster(doc as MonsterDoc) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'getMonster',
-        campaignId: data.campaignId,
-        monsterId: data.id,
-      });
-      throw e;
-    }
-  });
+export const getMonster = async ({ data }: { data: z.infer<typeof getMonsterSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const ctx = await requireCampaignGM(data.campaignId);
+    sessionUserId = ctx.sessionUserId;
+    const doc = await Monster.findOne({
+      _id: data.id,
+      campaignId: data.campaignId,
+    }).lean();
+    if (!doc) throw new Error('Monster not found');
+    return { monster: serializeMonster(doc as MonsterDoc) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'getMonster',
+      campaignId: data.campaignId,
+      monsterId: data.id,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // createMonster (GM only)
 // ---------------------------------------------------------------------------
 
-export const createMonster = createServerFn({ method: 'POST' })
-  .inputValidator(createMonsterSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const ctx = await requireCampaignGM(data.campaignId);
-      sessionUserId = ctx.sessionUserId;
+export const createMonster = async ({ data }: { data: z.infer<typeof createMonsterSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const ctx = await requireCampaignGM(data.campaignId);
+    sessionUserId = ctx.sessionUserId;
 
-      const now = new Date();
-      const finalTags = normalizeTags(data.tags ?? []);
-      const doc = await Monster.create({
-        ...data,
-        tags: finalTags,
-        source: 'custom',
-        isHomebrew: true,
-        createdBy: ctx.userId,
-        createdAt: now,
-        updatedAt: now,
-      });
+    const now = new Date();
+    const finalTags = normalizeTags(data.tags ?? []);
+    const doc = await Monster.create({
+      ...data,
+      tags: finalTags,
+      source: 'custom',
+      isHomebrew: true,
+      createdBy: ctx.userId,
+      createdAt: now,
+      updatedAt: now,
+    });
 
-      await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
+    await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
 
-      serverCaptureEvent(sessionUserId, 'monster_created', {
-        campaign_id: data.campaignId,
-        monster_id: String(doc._id),
-      });
+    serverCaptureEvent(sessionUserId, 'monster_created', {
+      campaign_id: data.campaignId,
+      monster_id: String(doc._id),
+    });
 
-      return { monster: serializeMonster(doc.toObject() as MonsterDoc) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'createMonster',
-        campaignId: data.campaignId,
-      });
-      throw e;
-    }
-  });
+    return { monster: serializeMonster(doc.toObject() as MonsterDoc) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'createMonster',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // updateMonster (GM only)
 // ---------------------------------------------------------------------------
 
-export const updateMonster = createServerFn({ method: 'POST' })
-  .inputValidator(updateMonsterSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const ctx = await requireCampaignGM(data.campaignId);
-      sessionUserId = ctx.sessionUserId;
+export const updateMonster = async ({ data }: { data: z.infer<typeof updateMonsterSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const ctx = await requireCampaignGM(data.campaignId);
+    sessionUserId = ctx.sessionUserId;
 
-      const { id, campaignId, tags, ...rest } = data;
-      const update: Record<string, unknown> = { ...rest, updatedAt: new Date() };
-      let finalTags: string[] | undefined;
-      if (tags !== undefined) {
-        finalTags = normalizeTags(tags);
-        update.tags = finalTags;
-      }
-
-      const doc = await Monster.findOneAndUpdate(
-        { _id: id, campaignId },
-        { $set: update },
-        { new: true }
-      ).lean();
-      if (!doc) throw new Error('Monster not found');
-
-      if (finalTags) {
-        await ensureTagsFn({ data: { campaignId, tags: finalTags } });
-      }
-
-      return { monster: serializeMonster(doc as MonsterDoc) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'updateMonster',
-        campaignId: data.campaignId,
-        monsterId: data.id,
-      });
-      throw e;
+    const { id, campaignId, tags, ...rest } = data;
+    const update: Record<string, unknown> = { ...rest, updatedAt: new Date() };
+    let finalTags: string[] | undefined;
+    if (tags !== undefined) {
+      finalTags = normalizeTags(tags);
+      update.tags = finalTags;
     }
-  });
+
+    const doc = await Monster.findOneAndUpdate(
+      { _id: id, campaignId },
+      { $set: update },
+      { new: true }
+    ).lean();
+    if (!doc) throw new Error('Monster not found');
+
+    if (finalTags) {
+      await ensureTagsFn({ data: { campaignId, tags: finalTags } });
+    }
+
+    return { monster: serializeMonster(doc as MonsterDoc) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'updateMonster',
+      campaignId: data.campaignId,
+      monsterId: data.id,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // deleteMonster (GM only)
 // ---------------------------------------------------------------------------
 
-export const deleteMonster = createServerFn({ method: 'POST' })
-  .inputValidator(deleteMonsterSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const ctx = await requireCampaignGM(data.campaignId);
-      sessionUserId = ctx.sessionUserId;
+export const deleteMonster = async ({ data }: { data: z.infer<typeof deleteMonsterSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const ctx = await requireCampaignGM(data.campaignId);
+    sessionUserId = ctx.sessionUserId;
 
-      const result = await Monster.deleteOne({
-        _id: data.id,
-        campaignId: data.campaignId,
-      });
-      if (result.deletedCount === 0) throw new Error('Monster not found');
+    const result = await Monster.deleteOne({
+      _id: data.id,
+      campaignId: data.campaignId,
+    });
+    if (result.deletedCount === 0) throw new Error('Monster not found');
 
-      serverCaptureEvent(sessionUserId, 'monster_deleted', {
-        campaign_id: data.campaignId,
-        monster_id: data.id,
-      });
+    serverCaptureEvent(sessionUserId, 'monster_deleted', {
+      campaign_id: data.campaignId,
+      monster_id: data.id,
+    });
 
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'deleteMonster',
-        campaignId: data.campaignId,
-        monsterId: data.id,
-      });
-      throw e;
-    }
-  });
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'deleteMonster',
+      campaignId: data.campaignId,
+      monsterId: data.id,
+    });
+    throw e;
+  }
+};

@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/react-start';
+import { z } from 'zod';
 import type { AnyBulkWriteOperation } from 'mongoose';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { serverCaptureException } from '../utils/posthog';
@@ -57,153 +57,145 @@ function serialize(doc: AnyDoc, canEdit: boolean): CalendarData {
 // getCalendar
 // ---------------------------------------------------------------------------
 
-export const getCalendar = createServerFn({ method: 'GET' })
-  .inputValidator(getCalendarSchema)
-  .handler(async ({ data }) => {
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      const doc = (await Calendar.findOne({ campaignId: data.campaignId }).lean()) as AnyDoc | null;
-      if (!doc) return null;
-      return serialize(doc, member.isGM);
-    } catch (e) {
-      serverCaptureException(e, undefined, { action: 'getCalendar', campaignId: data.campaignId });
-      throw e;
-    }
-  });
+export const getCalendar = async ({ data }: { data: z.infer<typeof getCalendarSchema> }) => {
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    const doc = (await Calendar.findOne({ campaignId: data.campaignId }).lean()) as AnyDoc | null;
+    if (!doc) return null;
+    return serialize(doc, member.isGM);
+  } catch (e) {
+    serverCaptureException(e, undefined, { action: 'getCalendar', campaignId: data.campaignId });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // upsertCalendar
 // ---------------------------------------------------------------------------
 
-export const upsertCalendar = createServerFn({ method: 'POST' })
-  .inputValidator(upsertCalendarSchema)
-  .handler(async ({ data }) => {
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      if (!member.isGM) throw new Error('Forbidden');
+export const upsertCalendar = async ({ data }: { data: z.infer<typeof upsertCalendarSchema> }) => {
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    if (!member.isGM) throw new Error('Forbidden');
 
-      const cfg = toConfig(data);
-      const cd = validateDate(cfg, data.currentDate);
-      if (!cd.ok) throw new Error(cd.error ?? 'Current date is invalid for this calendar');
-      const doc = (await Calendar.findOneAndUpdate(
-        { campaignId: data.campaignId },
-        {
-          $set: {
-            name: data.name,
-            description: data.description,
-            months: data.months,
-            weekdays: data.weekdays,
-            weekdayMode: data.weekdayMode,
-            epoch: data.epoch,
-            yearSuffix: data.yearSuffix,
-            namedYears: data.namedYears,
-            leapDays: data.leapDays,
-            moons: data.moons,
-            seasons: data.seasons,
-            holidays: data.holidays,
-            currentDate: data.currentDate,
-            updatedAt: new Date(),
-          },
-          $setOnInsert: {
-            campaignId: data.campaignId,
-            createdBy: member.userId,
-            createdAt: new Date(),
-          },
+    const cfg = toConfig(data);
+    const cd = validateDate(cfg, data.currentDate);
+    if (!cd.ok) throw new Error(cd.error ?? 'Current date is invalid for this calendar');
+    const doc = (await Calendar.findOneAndUpdate(
+      { campaignId: data.campaignId },
+      {
+        $set: {
+          name: data.name,
+          description: data.description,
+          months: data.months,
+          weekdays: data.weekdays,
+          weekdayMode: data.weekdayMode,
+          epoch: data.epoch,
+          yearSuffix: data.yearSuffix,
+          namedYears: data.namedYears,
+          leapDays: data.leapDays,
+          moons: data.moons,
+          seasons: data.seasons,
+          holidays: data.holidays,
+          currentDate: data.currentDate,
+          updatedAt: new Date(),
         },
-        { new: true, upsert: true, lean: true }
-      )) as AnyDoc;
+        $setOnInsert: {
+          campaignId: data.campaignId,
+          createdBy: member.userId,
+          createdAt: new Date(),
+        },
+      },
+      { new: true, upsert: true, lean: true }
+    )) as AnyDoc;
 
-      // Re-validate every event against the new config and recompute ordinals.
-      const events = (await Event.find(
-        { campaignId: data.campaignId },
-        { start: 1, end: 1 }
-      ).lean()) as AnyDoc[];
-      const invalidEventIds: string[] = [];
-      const ops: AnyBulkWriteOperation[] = [];
-      for (const ev of events) {
-        const start = ev.start as CalDate;
-        const end = (ev.end as CalDate | null) ?? null;
-        const startOk = validateDate(cfg, start).ok;
-        const endOk = end ? validateDate(cfg, end).ok : true;
-        if (!startOk || !endOk) {
-          invalidEventIds.push(String(ev._id));
-          continue;
-        }
-        const startOrd = toOrdinal(cfg, start);
-        ops.push({
-          updateOne: {
-            filter: { _id: ev._id },
-            update: {
-              $set: {
-                startOrdinal: startOrd,
-                endOrdinal: end ? toOrdinal(cfg, end) : startOrd,
-              },
+    // Re-validate every event against the new config and recompute ordinals.
+    const events = (await Event.find(
+      { campaignId: data.campaignId },
+      { start: 1, end: 1 }
+    ).lean()) as AnyDoc[];
+    const invalidEventIds: string[] = [];
+    const ops: AnyBulkWriteOperation[] = [];
+    for (const ev of events) {
+      const start = ev.start as CalDate;
+      const end = (ev.end as CalDate | null) ?? null;
+      const startOk = validateDate(cfg, start).ok;
+      const endOk = end ? validateDate(cfg, end).ok : true;
+      if (!startOk || !endOk) {
+        invalidEventIds.push(String(ev._id));
+        continue;
+      }
+      const startOrd = toOrdinal(cfg, start);
+      ops.push({
+        updateOne: {
+          filter: { _id: ev._id },
+          update: {
+            $set: {
+              startOrdinal: startOrd,
+              endOrdinal: end ? toOrdinal(cfg, end) : startOrd,
             },
           },
-        });
-      }
-      if (ops.length) await Event.bulkWrite(ops);
-
-      return { success: true, calendar: serialize(doc, true), invalidEventIds };
-    } catch (e) {
-      serverCaptureException(e, undefined, {
-        action: 'upsertCalendar',
-        campaignId: data.campaignId,
+        },
       });
-      throw e;
     }
-  });
+    if (ops.length) await Event.bulkWrite(ops);
+
+    return { success: true, calendar: serialize(doc, true), invalidEventIds };
+  } catch (e) {
+    serverCaptureException(e, undefined, {
+      action: 'upsertCalendar',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // setCurrentDate
 // ---------------------------------------------------------------------------
 
-export const setCurrentDate = createServerFn({ method: 'POST' })
-  .inputValidator(setCurrentDateSchema)
-  .handler(async ({ data }) => {
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      if (!member.isGM) throw new Error('Forbidden');
-      const existing = (await Calendar.findOne({
-        campaignId: data.campaignId,
-      }).lean()) as AnyDoc | null;
-      if (!existing) throw new Error('Not found');
-      const cfg = toConfig(existing);
-      const cd = validateDate(cfg, data.currentDate);
-      if (!cd.ok) throw new Error(cd.error ?? 'Current date is invalid for this calendar');
-      const doc = (await Calendar.findOneAndUpdate(
-        { campaignId: data.campaignId },
-        { $set: { currentDate: data.currentDate, updatedAt: new Date() } },
-        { new: true, lean: true }
-      )) as AnyDoc | null;
-      if (!doc) throw new Error('Not found');
-      return { success: true, calendar: serialize(doc, true) };
-    } catch (e) {
-      serverCaptureException(e, undefined, {
-        action: 'setCurrentDate',
-        campaignId: data.campaignId,
-      });
-      throw e;
-    }
-  });
+export const setCurrentDate = async ({ data }: { data: z.infer<typeof setCurrentDateSchema> }) => {
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    if (!member.isGM) throw new Error('Forbidden');
+    const existing = (await Calendar.findOne({
+      campaignId: data.campaignId,
+    }).lean()) as AnyDoc | null;
+    if (!existing) throw new Error('Not found');
+    const cfg = toConfig(existing);
+    const cd = validateDate(cfg, data.currentDate);
+    if (!cd.ok) throw new Error(cd.error ?? 'Current date is invalid for this calendar');
+    const doc = (await Calendar.findOneAndUpdate(
+      { campaignId: data.campaignId },
+      { $set: { currentDate: data.currentDate, updatedAt: new Date() } },
+      { new: true, lean: true }
+    )) as AnyDoc | null;
+    if (!doc) throw new Error('Not found');
+    return { success: true, calendar: serialize(doc, true) };
+  } catch (e) {
+    serverCaptureException(e, undefined, {
+      action: 'setCurrentDate',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // deleteCalendar
 // ---------------------------------------------------------------------------
 
-export const deleteCalendar = createServerFn({ method: 'POST' })
-  .inputValidator(deleteCalendarSchema)
-  .handler(async ({ data }) => {
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      if (!member.isGM) throw new Error('Forbidden');
-      await Calendar.deleteOne({ campaignId: data.campaignId });
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, undefined, {
-        action: 'deleteCalendar',
-        campaignId: data.campaignId,
-      });
-      throw e;
-    }
-  });
+export const deleteCalendar = async ({ data }: { data: z.infer<typeof deleteCalendarSchema> }) => {
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    if (!member.isGM) throw new Error('Forbidden');
+    await Calendar.deleteOne({ campaignId: data.campaignId });
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, undefined, {
+      action: 'deleteCalendar',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};

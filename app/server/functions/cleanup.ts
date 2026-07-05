@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/react-start';
+import { z } from 'zod';
 import {
   DeleteObjectCommand,
   ListObjectsV2Command,
@@ -150,62 +150,64 @@ async function requireGmOfCampaign(campaignId: string): Promise<{ sessionUserId:
 
 export { scanOrphanImagesSchema };
 
-export const scanOrphanImages = createServerFn({ method: 'GET' })
-  .inputValidator(scanOrphanImagesSchema)
-  .handler(async ({ data }): Promise<ScanOrphanImagesResult> => {
-    let sessionUserId: string | undefined;
-    try {
-      const auth = await requireGmOfCampaign(data.campaignId);
-      sessionUserId = auth.sessionUserId;
+export const scanOrphanImages = async ({
+  data,
+}: {
+  data: z.infer<typeof scanOrphanImagesSchema>;
+}): Promise<ScanOrphanImagesResult> => {
+  let sessionUserId: string | undefined;
+  try {
+    const auth = await requireGmOfCampaign(data.campaignId);
+    sessionUserId = auth.sessionUserId;
 
-      const r2 = createR2Client();
-      if (!r2) {
-        return { orphans: [], scannedKeyCount: 0, inUseKeyCount: 0, r2Disabled: true };
-      }
-
-      const inUseKeys = await collectInUseKeys(r2.cdnUrl);
-
-      const allKeys: _Object[] = [];
-      for (const prefix of TRACKED_PREFIXES) {
-        const page = await listAllR2Objects(r2.client, r2.bucket, prefix);
-        allKeys.push(...page);
-      }
-
-      const orphans: OrphanImage[] = [];
-      for (const obj of allKeys) {
-        if (!obj.Key) continue;
-        if (inUseKeys.has(obj.Key)) continue;
-        orphans.push({
-          imageKey: obj.Key,
-          sizeBytes: obj.Size ?? 0,
-          lastModified: obj.LastModified ? obj.LastModified.toISOString() : null,
-        });
-      }
-
-      // Stable order: oldest first so the UI shows the longest-lived orphans first.
-      orphans.sort((a, b) => (a.lastModified ?? '').localeCompare(b.lastModified ?? ''));
-
-      serverCaptureEvent(sessionUserId, 'orphan_image_scan', {
-        campaign_id: data.campaignId,
-        orphan_count: orphans.length,
-        scanned_key_count: allKeys.length,
-        in_use_key_count: inUseKeys.size,
-      });
-
-      return {
-        orphans,
-        scannedKeyCount: allKeys.length,
-        inUseKeyCount: inUseKeys.size,
-        r2Disabled: false,
-      };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'scanOrphanImages',
-        campaignId: data.campaignId,
-      });
-      throw e;
+    const r2 = createR2Client();
+    if (!r2) {
+      return { orphans: [], scannedKeyCount: 0, inUseKeyCount: 0, r2Disabled: true };
     }
-  });
+
+    const inUseKeys = await collectInUseKeys(r2.cdnUrl);
+
+    const allKeys: _Object[] = [];
+    for (const prefix of TRACKED_PREFIXES) {
+      const page = await listAllR2Objects(r2.client, r2.bucket, prefix);
+      allKeys.push(...page);
+    }
+
+    const orphans: OrphanImage[] = [];
+    for (const obj of allKeys) {
+      if (!obj.Key) continue;
+      if (inUseKeys.has(obj.Key)) continue;
+      orphans.push({
+        imageKey: obj.Key,
+        sizeBytes: obj.Size ?? 0,
+        lastModified: obj.LastModified ? obj.LastModified.toISOString() : null,
+      });
+    }
+
+    // Stable order: oldest first so the UI shows the longest-lived orphans first.
+    orphans.sort((a, b) => (a.lastModified ?? '').localeCompare(b.lastModified ?? ''));
+
+    serverCaptureEvent(sessionUserId, 'orphan_image_scan', {
+      campaign_id: data.campaignId,
+      orphan_count: orphans.length,
+      scanned_key_count: allKeys.length,
+      in_use_key_count: inUseKeys.size,
+    });
+
+    return {
+      orphans,
+      scannedKeyCount: allKeys.length,
+      inUseKeyCount: inUseKeys.size,
+      r2Disabled: false,
+    };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'scanOrphanImages',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // deleteOrphanImages
@@ -213,66 +215,68 @@ export const scanOrphanImages = createServerFn({ method: 'GET' })
 
 export { deleteOrphanImagesSchema };
 
-export const deleteOrphanImages = createServerFn({ method: 'POST' })
-  .inputValidator(deleteOrphanImagesSchema)
-  .handler(async ({ data }): Promise<DeleteOrphanImagesResult> => {
-    let sessionUserId: string | undefined;
-    try {
-      const auth = await requireGmOfCampaign(data.campaignId);
-      sessionUserId = auth.sessionUserId;
+export const deleteOrphanImages = async ({
+  data,
+}: {
+  data: z.infer<typeof deleteOrphanImagesSchema>;
+}): Promise<DeleteOrphanImagesResult> => {
+  let sessionUserId: string | undefined;
+  try {
+    const auth = await requireGmOfCampaign(data.campaignId);
+    sessionUserId = auth.sessionUserId;
 
-      const r2 = createR2Client();
-      if (!r2) {
-        return {
-          deleted: [],
-          failed: data.imageKeys.map((k) => ({ imageKey: k, error: 'R2 not configured' })),
-        };
-      }
-
-      // Re-verify each key really is orphan right now — guards against a race
-      // where another GM uploaded a file referencing the same key between the
-      // GM's Scan and Delete clicks.
-      const inUseKeys = await collectInUseKeys(r2.cdnUrl);
-
-      // Also guard the prefix: refuse to delete anything outside the tracked
-      // upload roots even if the client asks for it. Defence in depth — the
-      // schema already accepts arbitrary strings.
-      const allowed = data.imageKeys.filter(
-        (k) => TRACKED_PREFIXES.some((p) => k.startsWith(p)) && !inUseKeys.has(k)
-      );
-      const rejected = data.imageKeys.filter((k) => !allowed.includes(k));
-
-      const deleted: string[] = [];
-      const failed: Array<{ imageKey: string; error: string }> = rejected.map((k) => ({
-        imageKey: k,
-        error: inUseKeys.has(k)
-          ? 'Image is now referenced — re-scan'
-          : 'Key outside tracked prefixes',
-      }));
-
-      // Sequential delete — R2 typically caps concurrent ops per connection;
-      // sequential keeps the per-key error reporting clean.
-      for (const key of allowed) {
-        try {
-          await r2.client.send(new DeleteObjectCommand({ Bucket: r2.bucket, Key: key }));
-          deleted.push(key);
-        } catch (e) {
-          failed.push({ imageKey: key, error: e instanceof Error ? e.message : String(e) });
-        }
-      }
-
-      serverCaptureEvent(sessionUserId, 'orphan_image_delete', {
-        campaign_id: data.campaignId,
-        deleted_count: deleted.length,
-        failed_count: failed.length,
-      });
-
-      return { deleted, failed };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'deleteOrphanImages',
-        campaignId: data.campaignId,
-      });
-      throw e;
+    const r2 = createR2Client();
+    if (!r2) {
+      return {
+        deleted: [],
+        failed: data.imageKeys.map((k) => ({ imageKey: k, error: 'R2 not configured' })),
+      };
     }
-  });
+
+    // Re-verify each key really is orphan right now — guards against a race
+    // where another GM uploaded a file referencing the same key between the
+    // GM's Scan and Delete clicks.
+    const inUseKeys = await collectInUseKeys(r2.cdnUrl);
+
+    // Also guard the prefix: refuse to delete anything outside the tracked
+    // upload roots even if the client asks for it. Defence in depth — the
+    // schema already accepts arbitrary strings.
+    const allowed = data.imageKeys.filter(
+      (k) => TRACKED_PREFIXES.some((p) => k.startsWith(p)) && !inUseKeys.has(k)
+    );
+    const rejected = data.imageKeys.filter((k) => !allowed.includes(k));
+
+    const deleted: string[] = [];
+    const failed: Array<{ imageKey: string; error: string }> = rejected.map((k) => ({
+      imageKey: k,
+      error: inUseKeys.has(k)
+        ? 'Image is now referenced — re-scan'
+        : 'Key outside tracked prefixes',
+    }));
+
+    // Sequential delete — R2 typically caps concurrent ops per connection;
+    // sequential keeps the per-key error reporting clean.
+    for (const key of allowed) {
+      try {
+        await r2.client.send(new DeleteObjectCommand({ Bucket: r2.bucket, Key: key }));
+        deleted.push(key);
+      } catch (e) {
+        failed.push({ imageKey: key, error: e instanceof Error ? e.message : String(e) });
+      }
+    }
+
+    serverCaptureEvent(sessionUserId, 'orphan_image_delete', {
+      campaign_id: data.campaignId,
+      deleted_count: deleted.length,
+      failed_count: failed.length,
+    });
+
+    return { deleted, failed };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'deleteOrphanImages',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};

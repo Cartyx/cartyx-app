@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/react-start';
+import { z } from 'zod';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { Race } from '../db/models/Race';
 import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
@@ -64,42 +64,40 @@ function serializeRaceListItem(r: {
 
 export { createRaceSchema };
 
-export const createRace = createServerFn({ method: 'POST' })
-  .inputValidator(createRaceSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      if (!member.isGM) throw new Error('Forbidden');
+export const createRace = async ({ data }: { data: z.infer<typeof createRaceSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    if (!member.isGM) throw new Error('Forbidden');
 
-      const finalTags = normalizeTags(data.tags ?? []);
-      const race = new Race({
-        campaignId: data.campaignId,
-        createdBy: member.userId,
-        title: data.title.trim(),
-        content: data.content.trim(),
-        tags: finalTags,
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      });
-      await race.save();
+    const finalTags = normalizeTags(data.tags ?? []);
+    const race = new Race({
+      campaignId: data.campaignId,
+      createdBy: member.userId,
+      title: data.title.trim(),
+      content: data.content.trim(),
+      tags: finalTags,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await race.save();
 
-      if (finalTags.length > 0) {
-        await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
-      }
-
-      serverCaptureEvent(sessionUserId!, 'race_created', {
-        campaign_id: data.campaignId,
-        race_id: String(race._id),
-      });
-
-      return { ...serializeRace(race), canEdit: true } as RaceData;
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'createRace' });
-      throw e;
+    if (finalTags.length > 0) {
+      await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
     }
-  });
+
+    serverCaptureEvent(sessionUserId!, 'race_created', {
+      campaign_id: data.campaignId,
+      race_id: String(race._id),
+    });
+
+    return { ...serializeRace(race), canEdit: true } as RaceData;
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'createRace' });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // updateRace
@@ -107,46 +105,44 @@ export const createRace = createServerFn({ method: 'POST' })
 
 export { updateRaceSchema };
 
-export const updateRace = createServerFn({ method: 'POST' })
-  .inputValidator(updateRaceSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      if (!member.isGM) throw new Error('Forbidden');
+export const updateRace = async ({ data }: { data: z.infer<typeof updateRaceSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    if (!member.isGM) throw new Error('Forbidden');
 
-      const finalTags = normalizeTags(data.tags ?? []);
-      const race = await Race.findOneAndUpdate(
-        { _id: data.id, campaignId: data.campaignId },
-        {
-          $set: {
-            title: data.title.trim(),
-            content: data.content.trim(),
-            tags: finalTags,
-            updatedAt: new Date(),
-          },
+    const finalTags = normalizeTags(data.tags ?? []);
+    const race = await Race.findOneAndUpdate(
+      { _id: data.id, campaignId: data.campaignId },
+      {
+        $set: {
+          title: data.title.trim(),
+          content: data.content.trim(),
+          tags: finalTags,
+          updatedAt: new Date(),
         },
-        { new: true }
-      );
+      },
+      { new: true }
+    );
 
-      if (!race) throw new Error('Race not found');
+    if (!race) throw new Error('Race not found');
 
-      if (finalTags.length > 0) {
-        await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
-      }
-
-      serverCaptureEvent(sessionUserId!, 'race_updated', {
-        campaign_id: data.campaignId,
-        race_id: data.id,
-      });
-
-      return { ...serializeRace(race), canEdit: true } as RaceData;
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'updateRace' });
-      throw e;
+    if (finalTags.length > 0) {
+      await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
     }
-  });
+
+    serverCaptureEvent(sessionUserId!, 'race_updated', {
+      campaign_id: data.campaignId,
+      race_id: data.id,
+    });
+
+    return { ...serializeRace(race), canEdit: true } as RaceData;
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'updateRace' });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // deleteRace
@@ -154,46 +150,44 @@ export const updateRace = createServerFn({ method: 'POST' })
 
 export { deleteRaceSchema };
 
-export const deleteRace = createServerFn({ method: 'POST' })
-  .inputValidator(deleteRaceSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
+export const deleteRace = async ({ data }: { data: z.infer<typeof deleteRaceSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    if (!member.isGM) throw new Error('Forbidden');
+
+    const race = await Race.findOne({ _id: data.id, campaignId: data.campaignId });
+    if (!race) throw new Error('Race not found');
+
+    await race.deleteOne();
+
+    // Best-effort cleanup of GM screen references — the race is already deleted,
+    // so cleanup failure must not surface as a user-facing error; report it and move on.
     try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      if (!member.isGM) throw new Error('Forbidden');
-
-      const race = await Race.findOne({ _id: data.id, campaignId: data.campaignId });
-      if (!race) throw new Error('Race not found');
-
-      await race.deleteOne();
-
-      // Best-effort cleanup of GM screen references — the race is already deleted,
-      // so cleanup failure must not surface as a user-facing error; report it and move on.
-      try {
-        await removeDocumentRefsFromScreens(data.campaignId, 'race', data.id);
-      } catch (cleanupError) {
-        serverCaptureException(cleanupError, sessionUserId, {
-          action: 'deleteRace.cleanup',
-          campaign_id: data.campaignId,
-          race_id: data.id,
-        });
-      }
-
-      await pruneLoreLinks('race', data.id, data.campaignId);
-      await pruneEventLinks('race', data.id, data.campaignId);
-
-      serverCaptureEvent(sessionUserId!, 'race_deleted', {
+      await removeDocumentRefsFromScreens(data.campaignId, 'race', data.id);
+    } catch (cleanupError) {
+      serverCaptureException(cleanupError, sessionUserId, {
+        action: 'deleteRace.cleanup',
         campaign_id: data.campaignId,
         race_id: data.id,
       });
-
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'deleteRace' });
-      throw e;
     }
-  });
+
+    await pruneLoreLinks('race', data.id, data.campaignId);
+    await pruneEventLinks('race', data.id, data.campaignId);
+
+    serverCaptureEvent(sessionUserId!, 'race_deleted', {
+      campaign_id: data.campaignId,
+      race_id: data.id,
+    });
+
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'deleteRace' });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // listRaces
@@ -201,38 +195,36 @@ export const deleteRace = createServerFn({ method: 'POST' })
 
 export { listRacesSchema };
 
-export const listRaces = createServerFn({ method: 'GET' })
-  .inputValidator(listRacesSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
+export const listRaces = async ({ data }: { data: z.infer<typeof listRacesSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
 
-      const filter: Record<string, unknown> = { campaignId: data.campaignId };
+    const filter: Record<string, unknown> = { campaignId: data.campaignId };
 
-      if (data.search) {
-        filter.$text = { $search: data.search };
-      }
-
-      if (data.tags && data.tags.length > 0) {
-        const normalizedTags = [...new Set(normalizeTags(data.tags))];
-        if (normalizedTags.length > 0) {
-          filter.tags = { $all: normalizedTags };
-        }
-      }
-
-      const races = await Race.find(filter).select('-content').sort({ updatedAt: -1 }).lean();
-
-      return races.map((r) => ({
-        ...serializeRaceListItem(r),
-        canEdit: member.isGM,
-      })) as RaceListItem[];
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'listRaces' });
-      throw e;
+    if (data.search) {
+      filter.$text = { $search: data.search };
     }
-  });
+
+    if (data.tags && data.tags.length > 0) {
+      const normalizedTags = [...new Set(normalizeTags(data.tags))];
+      if (normalizedTags.length > 0) {
+        filter.tags = { $all: normalizedTags };
+      }
+    }
+
+    const races = await Race.find(filter).select('-content').sort({ updatedAt: -1 }).lean();
+
+    return races.map((r) => ({
+      ...serializeRaceListItem(r),
+      canEdit: member.isGM,
+    })) as RaceListItem[];
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'listRaces' });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // getRace
@@ -240,20 +232,18 @@ export const listRaces = createServerFn({ method: 'GET' })
 
 export { getRaceSchema };
 
-export const getRace = createServerFn({ method: 'GET' })
-  .inputValidator(getRaceSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
+export const getRace = async ({ data }: { data: z.infer<typeof getRaceSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
 
-      const race = await Race.findOne({ _id: data.id, campaignId: data.campaignId }).lean();
-      if (!race) return null;
+    const race = await Race.findOne({ _id: data.id, campaignId: data.campaignId }).lean();
+    if (!race) return null;
 
-      return { ...serializeRace(race), canEdit: member.isGM } as RaceData;
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'getRace' });
-      throw e;
-    }
-  });
+    return { ...serializeRace(race), canEdit: member.isGM } as RaceData;
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'getRace' });
+    throw e;
+  }
+};

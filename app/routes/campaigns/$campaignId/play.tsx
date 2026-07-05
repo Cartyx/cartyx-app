@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { Plus } from 'lucide-react';
-import { getMe } from '~/server/functions/auth';
+import { getMe } from '~/server/functions/rpc';
 import { useCampaign } from '~/hooks/useCampaigns';
 import { useActivePlayerContext } from '~/providers/ActivePlayerProvider';
 import { CampaignHeader } from '~/components/mainview/CampaignHeader';
