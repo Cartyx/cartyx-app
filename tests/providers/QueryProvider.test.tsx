@@ -41,10 +41,12 @@ describe('QueryProvider defaults', () => {
     // The cache config callbacks are invoked by TanStack internals; call them
     // directly here to verify the wiring without spinning up real fetches.
     client.getQueryCache().config.onError?.(err, {} as never);
-    client.getMutationCache().config.onError?.(err, undefined, undefined, {} as never);
+    client.getMutationCache().config.onError?.(err, undefined, undefined, {} as never, {} as never);
     expect(mockReportFailure).toHaveBeenCalledTimes(2);
     client.getQueryCache().config.onSuccess?.({}, {} as never);
-    client.getMutationCache().config.onSuccess?.({}, undefined, undefined, {} as never);
+    client
+      .getMutationCache()
+      .config.onSuccess?.({}, undefined, undefined, {} as never, {} as never);
     expect(mockReportSuccess).toHaveBeenCalledTimes(2);
   });
 });
