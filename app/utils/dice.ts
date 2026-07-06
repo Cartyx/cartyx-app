@@ -1,3 +1,5 @@
+import type { ParsedDiceRoll } from '~/hooks/useBeyond20';
+
 export type DieSides = 4 | 6 | 8 | 10 | 12 | 20 | 100;
 
 export const DIE_SIDES_DESC: readonly DieSides[] = [100, 20, 12, 10, 8, 6, 4];
@@ -107,5 +109,35 @@ export function rollDice(input: {
     keptIndex,
     total: sets[keptIndex]!.total,
     formula: formatPool(pool, modifier),
+  };
+}
+
+/**
+ * Map an interactive roll onto the existing Beyond20-compatible DICE wire
+ * shape so it renders in the Dice feed via DiceRollCard with zero server
+ * changes. `character` is intentionally blank — the broadcast consumer
+ * (InspectorSidebar) fills in the authenticated user's name.
+ */
+export function toParsedDiceRoll(result: DiceRollResult): ParsedDiceRoll {
+  return {
+    character: '',
+    title: result.formula,
+    rollType: 'custom',
+    attackRolls: result.sets.map((set) => ({
+      roll: set.total,
+      type: 'hit' as const,
+      total: set.total,
+      formula: result.formula,
+      discarded: set.discarded,
+      dice: set.dice.map((d) => d.value),
+    })),
+    damageRolls: [],
+    totalDamages: {},
+    rollInfo:
+      result.mode === 'normal'
+        ? []
+        : [['Mode', result.mode === 'advantage' ? 'Advantage' : 'Disadvantage']],
+    description: '',
+    channel: 'general',
   };
 }

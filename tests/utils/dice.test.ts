@@ -4,9 +4,11 @@ import {
   formatPool,
   rollDice,
   rollDie,
+  toParsedDiceRoll,
   type DicePoolEntry,
   type DieSides,
 } from '~/utils/dice';
+import { saveDiceRollSchema } from '~/types/schemas/diceRolls';
 
 /** Deterministic rng that returns queued values in order (each in [0,1)). */
 function seqRng(values: number[]): () => number {
@@ -109,5 +111,63 @@ describe('rollDice', () => {
       /count/i
     );
     expect(() => rollDice({ pool: d20, mode: 'normal', modifier: 1.5 })).toThrow(/integer/i);
+  });
+});
+
+describe('toParsedDiceRoll', () => {
+  it('maps a normal roll to one non-discarded attackRoll with all die values', () => {
+    const rng = seqRng([0.5, 0.4, 0.99]); // 3d6 -> 4, 3, 6
+    const result = rollDice({ pool: [{ sides: 6, count: 3 }], mode: 'normal', modifier: 3, rng });
+    const parsed = toParsedDiceRoll(result);
+    expect(parsed.rollType).toBe('custom');
+    expect(parsed.channel).toBe('general');
+    expect(parsed.title).toBe('3d6 + 3');
+    expect(parsed.attackRolls).toHaveLength(1);
+    expect(parsed.attackRolls[0]).toEqual({
+      roll: 16,
+      type: 'hit',
+      total: 16,
+      formula: '3d6 + 3',
+      discarded: false,
+      dice: [4, 3, 6],
+    });
+    expect(parsed.damageRolls).toEqual([]);
+    expect(parsed.rollInfo).toEqual([]);
+  });
+
+  it('maps advantage to two attackRolls with the loser discarded and a Mode chip', () => {
+    const rng = seqRng([0.2, 0.7]); // d20 -> 5, then 15
+    const result = rollDice({
+      pool: [{ sides: 20, count: 1 }],
+      mode: 'advantage',
+      modifier: 0,
+      rng,
+    });
+    const parsed = toParsedDiceRoll(result);
+    expect(parsed.attackRolls).toHaveLength(2);
+    expect(parsed.attackRolls[0]!.discarded).toBe(true);
+    expect(parsed.attackRolls[1]!.discarded).toBe(false);
+    expect(parsed.rollInfo).toEqual([['Mode', 'Advantage']]);
+  });
+
+  it('produces a payload the Mongo save schema accepts once identity fields are added', () => {
+    const result = rollDice({
+      pool: [{ sides: 8, count: 2 }],
+      mode: 'disadvantage',
+      modifier: -1,
+      rng: seqRng([0.1, 0.9]),
+    });
+    const parsed = toParsedDiceRoll(result);
+    const candidate = {
+      ...parsed,
+      character: 'Tester',
+      id: 'roll-1',
+      seq: 1,
+      sessionId: 's1',
+      campaignId: 'c1',
+      timestamp: 1720000000000,
+    };
+    // channel is part of both shapes; schema must parse cleanly
+    expect(() => saveDiceRollSchema.parse(candidate)).not.toThrow();
   });
 });
