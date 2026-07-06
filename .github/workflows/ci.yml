@@ -113,7 +113,14 @@ jobs:
       # Reuse the same throwaway value pattern as the unit-test job; this is a
       # test fixture, not a secret.
       SESSION_SECRET: ci-test-secret-at-least-32-characters-long
-      MONGODB_URI: mongodb://localhost:27017
+      # The db name must be in the URI path: the app's connectDB() calls
+      # mongoose.connect(uri) WITHOUT a dbName option, so a bare host URI
+      # sends the app to mongoose's default `test` database while globalSetup,
+      # seed-gm.cjs, dev_seed.py, and the specs all honor MONGODB_DB — a
+      # split-brain where the app can't see any seeded/provisioned data.
+      # MONGODB_DB stays for the tooling that reads it; both resolve to the
+      # same database.
+      MONGODB_URI: mongodb://localhost:27017/cartyx_e2e
       MONGODB_DB: cartyx_e2e
       NODE_ENV: test
       # The dev server reads BASE_URL when building OAuth redirect URIs and for
