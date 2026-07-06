@@ -82,7 +82,7 @@
   },
   "devDependencies": {
     "@chromatic-com/storybook": "^5.1.1",
-    "@playwright/test": "^1.59.1",
+    "@playwright/test": "^1.61.1",
     "@resvg/resvg-js": "^2.6.2",
     "@storybook/addon-a11y": "^10.4.6",
     "@storybook/addon-docs": "^10.4.6",
