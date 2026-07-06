@@ -79,7 +79,10 @@ test.describe('Event drag-and-drop onto tabletop', () => {
 
     // Drill into the GM-only Events category (EventsPanel lists all events to
     // the GM as draggable EventCards).
-    await page.getByRole('button', { name: 'Events' }).click();
+    // Scope to the inspector panel: event windows dropped by earlier runs
+    // persist on the shared E2E screen, and their title-bar buttons make an
+    // unscoped 'Events' button ambiguous.
+    await page.getByTestId('inspector-panel').getByRole('button', { name: 'Events' }).click();
 
     // Wait for the first event card to appear (requires seeded event data).
     const firstCard = page.getByTestId('event-card').first();
@@ -102,13 +105,26 @@ test.describe('Event drag-and-drop onto tabletop', () => {
     // intercepting a dragstart event.
     const payload = { collection: 'events', documentId, title };
 
-    // Drop onto the workspace centre.
-    await dropOnWorkspace(page, payload, { dx: 0, dy: 0 });
+    // Drop onto the workspace centre. Re-dropping is idempotent (windows
+    // dedupe by collection+documentId in TabletopView.handleDrop), so
+    // poll-drop to absorb the screen-detail load race — handleDrop silently
+    // no-ops until the active screen's detail query has resolved. Same
+    // pattern as tabletop-monster-window.spec.ts.
+    const eventWindow = page.getByTestId('event-window');
+    await expect
+      .poll(
+        async () => {
+          await dropOnWorkspace(page, payload, { dx: 0, dy: 0 });
+          return eventWindow.count();
+        },
+        { timeout: 25_000, intervals: [250, 500, 750, 1000] }
+      )
+      .toBeGreaterThan(0);
 
     // A floating event window should appear on the workspace. Use .first() —
     // the E2E screen persists across runs and may already hold event windows
     // from earlier drops, so more than one event-window can be present.
-    await expect(page.getByTestId('event-window').first()).toBeVisible({ timeout: 10_000 });
+    await expect(eventWindow.first()).toBeVisible({ timeout: 10_000 });
 
     // The FloatingWindow title bar should also contain the event's title
     // (server now hydrates events so the title resolves, not "events:<id>").

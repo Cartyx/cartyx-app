@@ -69,6 +69,10 @@ test.describe('Calendar & Events', () => {
     // date), so title + submit is enough to create the event.
     await page.getByRole('button', { name: /Create Event/i }).click();
 
+    // Creation is confirmed by the modal closing — wait for that first so the
+    // list assertion gets its own full timeout on slow CI runners.
+    await expect(page.getByRole('dialog')).toBeHidden({ timeout: 10_000 });
+
     // The new event should appear. .first() because re-runs accumulate events
     // with the same title in the dev DB.
     await expect(page.getByText('E2E Festival').first()).toBeVisible({ timeout: 10_000 });

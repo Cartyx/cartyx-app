@@ -78,7 +78,10 @@ test.describe('Lore drag-and-drop onto tabletop', () => {
     await page.getByRole('tab', { name: 'Wiki' }).click();
 
     // Drill into the Lore category.
-    await page.getByRole('button', { name: 'Lore' }).click();
+    // Scope to the inspector panel: lore windows dropped by earlier runs
+    // persist on the shared E2E screen, and their title-bar buttons
+    // ("Minimize/Close <title>") make an unscoped 'Lore' button ambiguous.
+    await page.getByTestId('inspector-panel').getByRole('button', { name: 'Lore' }).click();
 
     // Wait for the first lore card to appear (requires seeded lore data).
     const firstCard = page.getByTestId('lore-card').first();
@@ -101,13 +104,26 @@ test.describe('Lore drag-and-drop onto tabletop', () => {
     // intercepting a dragstart event.
     const payload = { collection: 'lore', documentId, title };
 
-    // Drop onto the workspace centre.
-    await dropOnWorkspace(page, payload, { dx: 0, dy: 0 });
+    // Drop onto the workspace centre. Re-dropping is idempotent (windows
+    // dedupe by collection+documentId in TabletopView.handleDrop), so
+    // poll-drop to absorb the screen-detail load race — handleDrop silently
+    // no-ops until the active screen's detail query has resolved. Same
+    // pattern as tabletop-monster-window.spec.ts.
+    const loreWindow = page.getByTestId('lore-window');
+    await expect
+      .poll(
+        async () => {
+          await dropOnWorkspace(page, payload, { dx: 0, dy: 0 });
+          return loreWindow.count();
+        },
+        { timeout: 25_000, intervals: [250, 500, 750, 1000] }
+      )
+      .toBeGreaterThan(0);
 
     // A floating lore window should appear on the workspace. Use .first() —
     // the E2E screen persists across runs and may already hold lore windows
     // from earlier drops, so more than one lore-window can be present.
-    await expect(page.getByTestId('lore-window').first()).toBeVisible({ timeout: 10_000 });
+    await expect(loreWindow.first()).toBeVisible({ timeout: 10_000 });
 
     // The FloatingWindow title bar should also contain the lore entry's title
     // (server now hydrates lore so the title resolves, not "lore:<id>").
