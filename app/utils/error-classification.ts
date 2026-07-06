@@ -17,6 +17,21 @@ export class BackendUnavailableError extends Error {
 
 const NETWORK_ERROR_PATTERN = /failed to fetch|load failed|networkerror/i;
 
+/**
+ * Message patterns for infrastructure failures that can arrive as plain
+ * `Error`s — i.e. without a `status` we can check — because they crossed a
+ * boundary that discards it:
+ *  - the TanStack start-client-core server-fn fetcher deserializes a 500 into
+ *    a plain rethrown Error, and a non-serialized proxy/platform response
+ *    (nginx/ALB/Cloudflare) arrives as `new Error(await response.text())`;
+ *  - a deploy in progress can make the client reference a server-fn manifest
+ *    entry that no longer exists on the new deployment;
+ *  - the Mongo driver can throw mid-query on a disconnect without the
+ *    server-fn layer having a chance to tag `status` on it.
+ */
+const TRANSPORT_ERROR_PATTERN =
+  /502 bad gateway|503 service unavailable|504 gateway time-?out|gateway timeout|server function info not found|server selection timed out|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|getaddrinfo|socket hang up|topology .*(closed|destroyed)/i;
+
 export function isInfrastructureFailure(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
   if (error instanceof BackendUnavailableError) return false;
@@ -24,5 +39,6 @@ export function isInfrastructureFailure(error: unknown): boolean {
   if (error.name === 'TimeoutError') return true;
   const status = (error as { status?: unknown }).status;
   if (typeof status === 'number' && status >= 500) return true;
+  if (TRANSPORT_ERROR_PATTERN.test(error.message)) return true;
   return false;
 }
