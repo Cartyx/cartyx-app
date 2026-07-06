@@ -160,4 +160,11 @@ describe('dice tool feature flag', () => {
     renderToolBar();
     expect(screen.getByTestId('tool-dice')).toBeInTheDocument();
   });
+
+  it('hides the dice tool when the flag env var is unset', () => {
+    vi.stubEnv('VITE_PUBLIC_FF_DICE', '');
+    diceFlagEnabled = true; // flag would be on, but no flag name is configured
+    renderToolBar();
+    expect(screen.queryByTestId('tool-dice')).not.toBeInTheDocument();
+  });
 });
