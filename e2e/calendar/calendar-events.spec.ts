@@ -37,8 +37,14 @@ test.describe('Calendar & Events', () => {
     // The calendar defaults to the list view, which renders event-list.
     await expect(page.getByTestId('event-list')).toBeVisible({ timeout: 10_000 });
 
-    // The seeded epic event should be present in the list.
-    await expect(page.getByText('The Siege of Phandalin').first()).toBeVisible();
+    // The seeded epic event should be present in the list. Scope to the list:
+    // the dashboard's CampaignTimelineWidget stays mounted behind the wiki
+    // panel and renders the same title in a mobile-only (display:none) copy,
+    // which an unscoped getByText().first() matches by DOM order and then
+    // waits forever for it to become visible.
+    await expect(
+      page.getByTestId('event-list').getByText('The Siege of Phandalin').first()
+    ).toBeVisible();
   });
 
   test('GM can create an event via the Events manager', async ({ page, campaignUrl }) => {
