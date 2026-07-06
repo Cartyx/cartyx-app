@@ -59,7 +59,7 @@ describe('DiceRollCard', () => {
               total: 20,
               formula: '1d20 + 3',
               discarded: false,
-              dice: [17],
+              dice: [17, 3],
             },
           ],
         })}
@@ -67,6 +67,7 @@ describe('DiceRollCard', () => {
     );
     expect(screen.getByText(/To Hit/)).toBeInTheDocument();
     expect(screen.getByText(/\(17\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/\(17 \+ 3\)/)).not.toBeInTheDocument();
   });
 
   it('shows the ADV badge and strikes through the discarded custom set', () => {
