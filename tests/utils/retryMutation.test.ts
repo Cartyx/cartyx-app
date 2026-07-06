@@ -19,6 +19,7 @@ vi.mock('~/utils/backend-health', () => ({
 
 import { withRetry } from '~/utils/retryMutation';
 import type { RetryContext } from '~/utils/retryMutation';
+import { captureEvent as captureEventMock } from '~/utils/posthog-client';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -171,5 +172,81 @@ describe('withRetry backoff', () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(fn).toHaveBeenCalledTimes(1);
     await expect(promise).resolves.toBe('ok');
+  });
+});
+
+describe('withRetry breaker-wait deadline', () => {
+  it('exhausts after ~120s if the breaker never recovers, without ever calling fn', async () => {
+    mockIsBackendDown.mockReturnValue(true);
+    mockWhenBackendUp.mockReturnValue(new Promise<void>(() => {})); // never resolves
+    const fn = vi.fn();
+    const onExhausted = vi.fn();
+
+    const promise = withRetry(fn, ctx, onExhausted);
+    await vi.advanceTimersByTimeAsync(120_000);
+    const result = await promise;
+
+    expect(result).toBeNull();
+    expect(fn).not.toHaveBeenCalled();
+    expect(onExhausted).toHaveBeenCalledWith(ctx, expect.any(Error));
+    expect(captureEventMock).toHaveBeenCalledWith(
+      'party.mongo_save_failed',
+      expect.objectContaining({
+        sessionId: ctx.sessionId,
+        campaignId: ctx.campaignId,
+        messageType: ctx.messageType,
+        messageId: ctx.messageId,
+      })
+    );
+  });
+
+  it('proceeds and succeeds if the breaker recovers before the deadline (30s)', async () => {
+    mockIsBackendDown.mockReturnValue(true);
+    let releaseBackend!: () => void;
+    mockWhenBackendUp.mockReturnValue(new Promise<void>((r) => (releaseBackend = r)));
+    const fn = vi.fn().mockResolvedValue('ok');
+
+    const promise = withRetry(fn, ctx);
+    await vi.advanceTimersByTimeAsync(30_000);
+    mockIsBackendDown.mockReturnValue(false);
+    releaseBackend();
+    await vi.advanceTimersByTimeAsync(0);
+
+    await expect(promise).resolves.toBe('ok');
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the healthy path unchanged', async () => {
+    mockIsBackendDown.mockReturnValue(false);
+    const fn = vi.fn().mockResolvedValue('ok');
+
+    const result = await withRetry(fn, ctx);
+
+    expect(result).toBe('ok');
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(mockWhenBackendUp).not.toHaveBeenCalled();
+  });
+
+  it('ignores a stale whenBackendUp resolution that arrives after the deadline already exhausted', async () => {
+    mockIsBackendDown.mockReturnValue(true);
+    let releaseBackend!: () => void;
+    mockWhenBackendUp.mockReturnValue(new Promise<void>((r) => (releaseBackend = r)));
+    const fn = vi.fn().mockResolvedValue('ok');
+    const onExhausted = vi.fn();
+
+    const promise = withRetry(fn, ctx, onExhausted);
+    await vi.advanceTimersByTimeAsync(120_000); // deadline hits, exhausts
+
+    const result = await promise;
+    expect(result).toBeNull();
+    expect(fn).not.toHaveBeenCalled();
+    expect(onExhausted).toHaveBeenCalledTimes(1);
+
+    // Backend "recovers" after the fact — must not resume/resurrect the loop.
+    mockIsBackendDown.mockReturnValue(false);
+    releaseBackend();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fn).not.toHaveBeenCalled();
+    expect(onExhausted).toHaveBeenCalledTimes(1);
   });
 });
