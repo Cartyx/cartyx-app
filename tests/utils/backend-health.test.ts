@@ -125,4 +125,41 @@ describe('createBackendHealth', () => {
     expect(b).toEqual({ down: true, downSinceMs: 0 });
     expect(health.getSnapshot()).toBe(b);
   });
+
+  describe('browser online events while the breaker is open', () => {
+    it('re-asserts offline when the browser fires online while the breaker is open', () => {
+      let onlineListener: ((online: boolean) => void) | undefined;
+      const deps = makeDeps({
+        subscribeOnline: (listener) => {
+          onlineListener = listener;
+        },
+      });
+      const health = createBackendHealth(deps);
+
+      for (let i = 0; i < 5; i++) health.reportFailure(networkError());
+      expect(deps.setOnline).toHaveBeenLastCalledWith(false);
+      (deps.setOnline as ReturnType<typeof vi.fn>).mockClear();
+
+      // Simulate a laptop wake / Wi-Fi switch firing the browser's online event.
+      onlineListener?.(true);
+
+      expect(deps.setOnline).toHaveBeenCalledWith(false);
+      expect(health.isDown()).toBe(true);
+    });
+
+    it('does not force offline from the online subscription when the breaker is closed', () => {
+      let onlineListener: ((online: boolean) => void) | undefined;
+      const deps = makeDeps({
+        subscribeOnline: (listener) => {
+          onlineListener = listener;
+        },
+      });
+      const health = createBackendHealth(deps);
+
+      onlineListener?.(true);
+
+      expect(deps.setOnline).not.toHaveBeenCalled();
+      expect(health.isDown()).toBe(false);
+    });
+  });
 });

@@ -29,6 +29,13 @@ export interface BackendHealthDeps {
   setOnline: (online: boolean) => void;
   capture: (event: string, properties?: Record<string, unknown>) => void;
   now: () => number;
+  /**
+   * Optional hook into the browser's online/offline signal (e.g. TanStack
+   * Query's onlineManager). A laptop wake / Wi-Fi switch fires `online` even
+   * while the breaker is open, which would otherwise un-pause queries and
+   * mutations against a backend we already know is down.
+   */
+  subscribeOnline?: (listener: (online: boolean) => void) => void;
 }
 
 export interface BackendHealth {
@@ -59,28 +66,41 @@ export function createBackendHealth(
   }
 
   async function runProbe() {
-    breaker.beginProbe();
-    let ok = false;
     try {
-      await deps.probe();
-      ok = true;
+      breaker.beginProbe();
+      let ok = false;
+      try {
+        await deps.probe();
+        ok = true;
+      } catch {
+        ok = false;
+      }
+      if (breaker.resolveProbe(ok) === 'closed') {
+        deps.capture('backend_circuit_closed', {
+          downtime_ms: snapshot.downSinceMs === null ? 0 : deps.now() - snapshot.downSinceMs,
+          probe_attempts: breaker.probeAttempts(),
+        });
+        snapshot = { down: false, downSinceMs: null };
+        deps.setOnline(true);
+        const waiters = upWaiters;
+        upWaiters = [];
+        for (const resolve of waiters) resolve();
+        notify();
+      } else {
+        scheduleProbe();
+      }
     } catch {
-      ok = false;
-    }
-    if (breaker.resolveProbe(ok) === 'closed') {
-      deps.capture('backend_circuit_closed', {
-        downtime_ms: snapshot.downSinceMs === null ? 0 : deps.now() - snapshot.downSinceMs,
-        probe_attempts: breaker.probeAttempts(),
-      });
-      snapshot = { down: false, downSinceMs: null };
-      deps.setOnline(true);
-      const waiters = upWaiters;
-      upWaiters = [];
-      for (const resolve of waiters) resolve();
-      notify();
-    } else {
+      // A throwing side effect (capture/setOnline/breaker call) must not
+      // become an unhandled rejection that strands the breaker open with no
+      // probe scheduled — fall back to rescheduling on the existing backoff.
       scheduleProbe();
     }
+  }
+
+  if (deps.subscribeOnline) {
+    deps.subscribeOnline((online) => {
+      if (online && snapshot.down) deps.setOnline(false);
+    });
   }
 
   return {
@@ -135,6 +155,9 @@ function getBackendHealth(): BackendHealth {
       setOnline: (online) => onlineManager.setOnline(online),
       capture: captureEvent,
       now: () => Date.now(),
+      subscribeOnline: (listener) => {
+        onlineManager.subscribe(() => listener(onlineManager.isOnline()));
+      },
     });
   }
   return singleton;
