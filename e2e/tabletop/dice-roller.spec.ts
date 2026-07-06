@@ -39,7 +39,7 @@ async function provision(db: Db): Promise<string> {
     const ids = stale.map((c) => c._id);
     await db.collection('tabletopscreen').deleteMany({ campaignId: { $in: ids } });
     await db.collection('sessions').deleteMany({ campaignId: { $in: ids } });
-    await db.collection('dicerolls').deleteMany({ campaignId: { $in: ids.map(String) } });
+    await db.collection('dicerolls').deleteMany({ campaignId: { $in: ids } });
     await db.collection('campaigns').deleteMany({ _id: { $in: ids } });
   }
 
@@ -114,7 +114,7 @@ test.afterAll(async () => {
     const cid = new ObjectId(campaignId);
     await db.collection('tabletopscreen').deleteMany({ campaignId: cid });
     await db.collection('sessions').deleteMany({ campaignId: cid });
-    await db.collection('dicerolls').deleteMany({ campaignId });
+    await db.collection('dicerolls').deleteMany({ campaignId: cid });
     await db.collection('campaigns').deleteMany({ _id: cid });
   }
   await client.close();
