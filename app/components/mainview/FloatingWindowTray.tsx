@@ -1,21 +1,28 @@
 export interface FloatingWindowTrayItem {
-  id: string
-  title: string
+  id: string;
+  title: string;
 }
 
 export interface FloatingWindowTrayProps {
-  windows: FloatingWindowTrayItem[]
-  onRestore: (id: string) => void
+  windows: FloatingWindowTrayItem[];
+  onRestore: (id: string) => void;
 }
 
 export function FloatingWindowTray({ windows, onRestore }: FloatingWindowTrayProps) {
   if (windows.length === 0) {
-    return null
+    return null;
   }
 
   return (
-    <div className="absolute bottom-4 left-4 z-30 flex flex-row gap-2" role="toolbar" aria-label="Minimized windows">
-      {windows.map(window => (
+    // pointer-events-auto opts back in to clicks: FloatingWindowManager sets
+    // pointer-events-none on its wrapper so empty space passes through to
+    // content below, which would otherwise make these buttons unclickable.
+    <div
+      className="pointer-events-auto absolute bottom-4 left-4 z-30 flex flex-row gap-2"
+      role="toolbar"
+      aria-label="Minimized windows"
+    >
+      {windows.map((window) => (
         <button
           key={window.id}
           type="button"
@@ -27,5 +34,5 @@ export function FloatingWindowTray({ windows, onRestore }: FloatingWindowTrayPro
         </button>
       ))}
     </div>
-  )
+  );
 }
