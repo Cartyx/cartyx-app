@@ -40,6 +40,9 @@ export async function connectDB(): Promise<void> {
   } catch (e) {
     connectPromise = null;
     serverCaptureException(e, undefined, { action: 'connectDB' });
+    // Still useful server-side (logging, any in-process caller), but this
+    // does NOT survive server-fn serialization — the client-side circuit
+    // breaker classifier matches on the error message instead.
     if (e instanceof Error && !Object.prototype.hasOwnProperty.call(e, 'status')) {
       Object.assign(e, { status: 503 });
     }

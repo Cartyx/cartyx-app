@@ -70,6 +70,11 @@ describe('isInfrastructureFailure', () => {
     expect(isInfrastructureFailure(new Error('Topology is destroyed'))).toBe(true);
   });
 
+  it('classifies DB-disconnected messages that cross the wire untagged (status is dropped by seroval)', () => {
+    expect(isInfrastructureFailure(new Error('Database not connected'))).toBe(true);
+    expect(isInfrastructureFailure(new Error('upsertUser: database not connected'))).toBe(true);
+  });
+
   it('still does NOT classify ordinary app errors after the pattern extension', () => {
     expect(isInfrastructureFailure(new Error('Screen 42 not found in this campaign'))).toBe(false);
     expect(isInfrastructureFailure(new Error('unauthorized'))).toBe(false);

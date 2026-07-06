@@ -5,6 +5,15 @@
  * unhealthy) count toward tripping the breaker and are worth retrying.
  * Application errors thrown by server-fn code (validation, not-found, auth)
  * cannot heal on retry and must never trip the breaker.
+ *
+ * Server-fn errors cross the wire as plain `Error`s: TanStack Start's
+ * serialization (seroval) does NOT preserve own props on `Error` instances,
+ * so a handler throwing `Object.assign(new Error(...), { status: 503 })`
+ * arrives client-side with only `name`/`message` — `status` is gone.
+ * Classification of server-thrown failures therefore relies entirely on
+ * message patterns below; the `status >= 500` branch only ever fires for
+ * errors constructed client-side (e.g. from a fetch Response), never for
+ * ones that came back through a server function.
  */
 
 /** Thrown by guarded callers when the circuit breaker is open. */
@@ -27,10 +36,12 @@ const NETWORK_ERROR_PATTERN = /failed to fetch|load failed|networkerror/i;
  *  - a deploy in progress can make the client reference a server-fn manifest
  *    entry that no longer exists on the new deployment;
  *  - the Mongo driver can throw mid-query on a disconnect without the
- *    server-fn layer having a chance to tag `status` on it.
+ *    server-fn layer having a chance to tag `status` on it;
+ *  - our own DB-layer guards (health.ts, oauth.ts upsertUser) throw
+ *    "database not connected" messages when the connection is down.
  */
 const TRANSPORT_ERROR_PATTERN =
-  /502 bad gateway|503 service unavailable|504 gateway time-?out|gateway timeout|server function info not found|server selection timed out|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|getaddrinfo|socket hang up|topology .*(closed|destroyed)/i;
+  /502 bad gateway|503 service unavailable|504 gateway time-?out|gateway timeout|server function info not found|server selection timed out|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|getaddrinfo|socket hang up|topology .*(closed|destroyed)|database not connected/i;
 
 export function isInfrastructureFailure(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
