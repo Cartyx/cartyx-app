@@ -30,3 +30,8 @@ export const getCampaign = createServerFn({ method: 'GET' })
     const { getCampaign } = await import('~/server/functions/campaigns');
     return getCampaign({ data });
   });
+
+export const healthCheck = createServerFn({ method: 'GET' }).handler(async () => {
+  const { healthCheck } = await import('~/server/functions/health');
+  return healthCheck();
+});
