@@ -121,6 +121,9 @@ jobs:
       # code path throws on a missing BASE_URL even though e2e uses a pre-minted
       # session cookie rather than the live OAuth flow.
       BASE_URL: http://localhost:3000
+      # Dice roller e2e: the flag NAME must be present for the client to query
+      # PostHog; the e2e PostHog mock then reports it enabled.
+      VITE_PUBLIC_FF_DICE: cartyx-dice-dev
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
