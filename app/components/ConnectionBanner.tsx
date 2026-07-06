@@ -31,7 +31,7 @@ export function ConnectionBanner() {
     return (
       <div
         role="status"
-        className="fixed inset-x-0 top-0 z-50 border-b-2 border-red-700 bg-red-900 py-1 text-center text-sm text-red-100"
+        className="fixed inset-x-0 top-14 z-40 border-b-2 border-red-700 bg-red-900 py-1 text-center text-sm text-red-100"
       >
         Connection lost — reconnecting…
       </div>
@@ -42,7 +42,7 @@ export function ConnectionBanner() {
     return (
       <div
         role="status"
-        className="fixed inset-x-0 top-0 z-50 border-b-2 border-green-700 bg-green-900 py-1 text-center text-sm text-green-100"
+        className="fixed inset-x-0 top-14 z-40 border-b-2 border-green-700 bg-green-900 py-1 text-center text-sm text-green-100"
       >
         Reconnected
       </div>
