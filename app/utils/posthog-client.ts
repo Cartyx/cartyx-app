@@ -8,6 +8,8 @@
  * PostHogProvider calls `setPostHogInstance` once initialised;
  * all capture helpers are safe to call before that (they no-op).
  */
+import type { CaptureResult } from 'posthog-js';
+import { createExceptionThrottle } from '~/utils/exception-throttle';
 
 let posthogInstance: typeof import('posthog-js').default | null = null;
 let initialized = false;
@@ -50,21 +52,37 @@ function getClientEnvironment(currentUrl: string = window.location.href): string
 }
 
 // ---------------------------------------------------------------------------
-// Exception capture throttling.
-//
-// A single recurring client error (e.g. a failing server function hit by a
-// high-frequency mutation like token drag, or a refetch-on-focus loop) can
-// otherwise emit tens of thousands of identical PostHog exceptions — one
-// incident once produced ~183K events. We keep enough signal to diagnose
-// (first hit + periodic repeats + a recurrence count) while hard-capping the
-// volume per unique error per page session.
+// Exception throttling lives in the posthog-js `before_send` pipeline hook so
+// it gates every $exception event — both manual captureException calls and
+// posthog-js exception autocapture (capture_exceptions: true), which bypasses
+// the wrapper below. See ~/utils/exception-throttle for the semantics.
 // ---------------------------------------------------------------------------
-const EXCEPTION_THROTTLE_MS = 5_000;
-const EXCEPTION_MAX_PER_KEY = 20;
-const exceptionThrottle = new Map<string, { count: number; lastCaptureMs: number }>();
+const exceptionThrottle = createExceptionThrottle();
 
-function exceptionKey(error: Error): string {
-  return `${error.name}:${error.message}`.slice(0, 200);
+function exceptionEventKey(event: CaptureResult): string | null {
+  const props = event.properties ?? {};
+  const first = Array.isArray(props.$exception_list) ? props.$exception_list[0] : undefined;
+  const type = first?.type ?? props.$exception_type;
+  const message = first?.value ?? props.$exception_message;
+  if (type == null && message == null) return null;
+  return `${type ?? 'Error'}:${message ?? ''}`.slice(0, 200);
+}
+
+export function throttleExceptionEvent(event: CaptureResult | null): CaptureResult | null {
+  if (!event || event.event !== '$exception') return event;
+
+  const key = exceptionEventKey(event);
+  if (key === null) return event; // fail open: never lose an event we can't identify
+
+  const decision = exceptionThrottle.check(key, Date.now());
+  if (!decision.capture) return null;
+
+  event.properties = {
+    ...event.properties,
+    recurrence_count: decision.occurrences,
+    ...(decision.capped && { exception_throttle_capped: true }),
+  };
+  return event;
 }
 
 export function captureException(
@@ -72,26 +90,8 @@ export function captureException(
   additionalProperties?: Record<string, unknown>
 ): void {
   if (!initialized || !posthogInstance) return;
-
-  const err = error instanceof Error ? error : new Error(String(error));
-  const key = exceptionKey(err);
-  const now = Date.now();
-  const rec = exceptionThrottle.get(key);
-
-  if (!rec) {
-    exceptionThrottle.set(key, { count: 1, lastCaptureMs: now });
-  } else {
-    rec.count++;
-    // Hard cap: stop reporting this error entirely once it's clearly a storm.
-    if (rec.count > EXCEPTION_MAX_PER_KEY) return;
-    // Otherwise drop rapid repeats, but keep counting them.
-    if (now - rec.lastCaptureMs < EXCEPTION_THROTTLE_MS) return;
-    rec.lastCaptureMs = now;
-  }
-
-  posthogInstance.captureException(err, {
+  posthogInstance.captureException(error instanceof Error ? error : new Error(String(error)), {
     environment: getClientEnvironment(),
-    recurrence_count: exceptionThrottle.get(key)?.count ?? 1,
     ...additionalProperties,
   });
 }

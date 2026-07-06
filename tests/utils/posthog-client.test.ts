@@ -1,12 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { setPostHogInstance, captureException } from '~/utils/posthog-client';
+import {
+  setPostHogInstance,
+  captureException,
+  throttleExceptionEvent,
+} from '~/utils/posthog-client';
 
-// Stub the posthog instance so we can assert how often the real (throttled)
-// captureException forwards to it. Unique error messages per test keep the
-// module-level throttle map from leaking between cases.
+// Throttling lives in the before_send hook (throttleExceptionEvent) so it also
+// covers posthog-js exception autocapture; the captureException wrapper itself
+// forwards every call. Unique error messages per test keep the module-level
+// throttle state from leaking between cases.
 const captureExceptionSpy = vi.fn();
- 
+
 const stub = { captureException: captureExceptionSpy } as any;
+
+function exceptionEvent(type: string, value: string, extra?: Record<string, unknown>) {
+  return {
+    event: '$exception',
+    properties: { $exception_list: [{ type, value }], ...extra },
+  } as any;
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -19,46 +31,89 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe('captureException throttling', () => {
-  it('forwards the first occurrence of an error', () => {
-    captureException(new Error('first-A'));
-    expect(captureExceptionSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('drops rapid repeats of the same error within the throttle window', () => {
-    for (let i = 0; i < 500; i++) captureException(new Error('storm-B'));
-    // Only the first of the burst is forwarded.
-    expect(captureExceptionSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it('captures again after the throttle window elapses', () => {
-    captureException(new Error('window-C'));
-    expect(captureExceptionSpy).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(5001);
-    captureException(new Error('window-C'));
+describe('captureException wrapper', () => {
+  it('forwards every call with environment and additional properties', () => {
+    captureException(new Error('wrapper-A'), { action: 'save' });
+    captureException(new Error('wrapper-A'), { action: 'save' });
     expect(captureExceptionSpy).toHaveBeenCalledTimes(2);
+    const [err, props] = captureExceptionSpy.mock.calls[0];
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toBe('wrapper-A');
+    expect(props.action).toBe('save');
+    expect(props.environment).toBeDefined();
   });
 
-  it('hard-caps a persistently recurring error at 20 captures per session', () => {
-    // Advance past the throttle window each time so only the hard cap limits it.
-    for (let i = 0; i < 100; i++) {
-      captureException(new Error('persistent-D'));
-      vi.advanceTimersByTime(6000);
+  it('wraps non-Error values', () => {
+    captureException('wrapper-B');
+    const [err] = captureExceptionSpy.mock.calls[0];
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toBe('wrapper-B');
+  });
+});
+
+describe('throttleExceptionEvent (before_send hook)', () => {
+  it('passes null and non-exception events through untouched', () => {
+    expect(throttleExceptionEvent(null)).toBeNull();
+    const pageview = { event: '$pageview', properties: {} } as any;
+    expect(throttleExceptionEvent(pageview)).toBe(pageview);
+  });
+
+  it('forwards the first occurrence of an exception', () => {
+    expect(throttleExceptionEvent(exceptionEvent('Error', 'hook-first'))).not.toBeNull();
+  });
+
+  it('drops rapid repeats of the same exception within the throttle window', () => {
+    let forwarded = 0;
+    for (let i = 0; i < 500; i++) {
+      if (throttleExceptionEvent(exceptionEvent('Error', 'hook-storm'))) forwarded++;
     }
-    expect(captureExceptionSpy).toHaveBeenCalledTimes(20);
+    expect(forwarded).toBe(1);
   });
 
-  it('throttles distinct errors independently', () => {
-    captureException(new Error('distinct-E'));
-    captureException(new Error('distinct-F'));
-    expect(captureExceptionSpy).toHaveBeenCalledTimes(2);
+  it('still reports a recurring error after an initial burst exhausts the throttle window', () => {
+    // Regression for the storm scenario: >20 occurrences in the first seconds
+    // must not permanently silence the error for the session.
+    for (let i = 0; i < 100; i++) throttleExceptionEvent(exceptionEvent('Error', 'hook-burst'));
+    vi.advanceTimersByTime(60_000);
+    expect(throttleExceptionEvent(exceptionEvent('Error', 'hook-burst'))).not.toBeNull();
   });
 
-  it('reports a recurrence_count so recurring errors are visible', () => {
-    captureException(new Error('count-G'));
-    vi.advanceTimersByTime(6000);
-    captureException(new Error('count-G'));
-    const lastCall = captureExceptionSpy.mock.calls.at(-1)!;
-    expect(lastCall[1].recurrence_count).toBeGreaterThan(1);
+  it('caps forwarded events per window and flags the last one', () => {
+    const results = [];
+    for (let i = 0; i < 100; i++) {
+      results.push(throttleExceptionEvent(exceptionEvent('Error', 'hook-cap')));
+      vi.advanceTimersByTime(6_000);
+    }
+    const forwarded = results.filter(Boolean);
+    expect(forwarded).toHaveLength(20);
+    expect(forwarded[19]!.properties.exception_throttle_capped).toBe(true);
+  });
+
+  it('annotates forwarded events with a recurrence count', () => {
+    throttleExceptionEvent(exceptionEvent('Error', 'hook-count'));
+    for (let i = 0; i < 5; i++) throttleExceptionEvent(exceptionEvent('Error', 'hook-count'));
+    vi.advanceTimersByTime(6_000);
+    const result = throttleExceptionEvent(exceptionEvent('Error', 'hook-count'));
+    expect(result!.properties.recurrence_count).toBe(7);
+  });
+
+  it('throttles distinct exceptions independently', () => {
+    expect(throttleExceptionEvent(exceptionEvent('Error', 'hook-x'))).not.toBeNull();
+    expect(throttleExceptionEvent(exceptionEvent('TypeError', 'hook-x'))).not.toBeNull();
+  });
+
+  it('falls back to $exception_message when $exception_list is missing', () => {
+    const legacy = {
+      event: '$exception',
+      properties: { $exception_type: 'Error', $exception_message: 'hook-legacy' },
+    } as any;
+    expect(throttleExceptionEvent(legacy)).not.toBeNull();
+    expect(throttleExceptionEvent(legacy)).toBeNull();
+  });
+
+  it('fails open when no key can be derived', () => {
+    const opaque = { event: '$exception', properties: {} } as any;
+    expect(throttleExceptionEvent(opaque)).not.toBeNull();
+    expect(throttleExceptionEvent(opaque)).not.toBeNull();
   });
 });

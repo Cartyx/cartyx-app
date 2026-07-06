@@ -63,6 +63,7 @@ vi.mock('~/utils/posthog-client', () => ({
   getPostHogInstance: mockGetPostHogInstance,
   isPostHogReady: vi.fn(() => posthogReady),
   setPostHogInstance: mockSetPostHogInstance,
+  throttleExceptionEvent: vi.fn((event: unknown) => event),
 }));
 
 describe('PostHogProvider', () => {
@@ -97,6 +98,7 @@ describe('PostHogProvider', () => {
         capture_pageview: false,
         persistence: 'localStorage+cookie',
         capture_exceptions: true,
+        before_send: expect.any(Function),
       });
     });
 

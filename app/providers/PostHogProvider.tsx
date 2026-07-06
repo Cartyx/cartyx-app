@@ -1,92 +1,96 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { useRouter } from '@tanstack/react-router'
-import { useAuthContext } from './AuthProvider'
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useRouter } from '@tanstack/react-router';
+import { useAuthContext } from './AuthProvider';
 import {
   getPostHogInstance,
   setPostHogInstance,
   isPostHogReady,
   capturePageView,
-} from '~/utils/posthog-client'
+  throttleExceptionEvent,
+} from '~/utils/posthog-client';
 
 // Re-export capture helpers so existing imports from PostHogProvider still work
-export { captureException, captureEvent, capturePageView } from '~/utils/posthog-client'
+export { captureException, captureEvent, capturePageView } from '~/utils/posthog-client';
 
-type PostHogClient = typeof import('posthog-js').default
-type PostHogProviderComponent = typeof import('@posthog/react').PostHogProvider
+type PostHogClient = typeof import('posthog-js').default;
+type PostHogProviderComponent = typeof import('@posthog/react').PostHogProvider;
 
 export function PostHogProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuthContext()
-  const router = useRouter()
-  const unsubRef = useRef<(() => void) | null>(null)
+  const { user } = useAuthContext();
+  const router = useRouter();
+  const unsubRef = useRef<(() => void) | null>(null);
   const [client, setClient] = useState<PostHogClient | null>(() =>
     typeof window === 'undefined' ? null : getPostHogInstance()
-  )
-  const [ProviderComponent, setProviderComponent] = useState<PostHogProviderComponent | null>(null)
+  );
+  const [ProviderComponent, setProviderComponent] = useState<PostHogProviderComponent | null>(null);
 
   useEffect(() => {
-    const key = import.meta.env.VITE_PUBLIC_POSTHOG_KEY
-    const host = import.meta.env.VITE_PUBLIC_POSTHOG_HOST || 'https://app.posthog.com'
-    const shouldLoadProvider = isPostHogReady() || Boolean(key)
-    let cancelled = false
+    const key = import.meta.env.VITE_PUBLIC_POSTHOG_KEY;
+    const host = import.meta.env.VITE_PUBLIC_POSTHOG_HOST || 'https://app.posthog.com';
+    const shouldLoadProvider = isPostHogReady() || Boolean(key);
+    let cancelled = false;
 
-    if (typeof window === 'undefined') return
+    if (typeof window === 'undefined') return;
 
     if (shouldLoadProvider) {
       void import('@posthog/react').then(({ PostHogProvider: PostHogReactProvider }) => {
-        if (!cancelled) setProviderComponent(() => PostHogReactProvider)
-      })
+        if (!cancelled) setProviderComponent(() => PostHogReactProvider);
+      });
     }
 
     if (isPostHogReady()) {
-      const existingClient = getPostHogInstance()
+      const existingClient = getPostHogInstance();
 
-      if (existingClient) setClient(existingClient)
+      if (existingClient) setClient(existingClient);
 
       return () => {
-        cancelled = true
-      }
+        cancelled = true;
+      };
     }
 
     if (!key) {
       return () => {
-        cancelled = true
-      }
+        cancelled = true;
+      };
     }
 
     void import('posthog-js').then(({ default: posthog }) => {
-      if (cancelled) return
+      if (cancelled) return;
 
       posthog.init(key, {
         api_host: host,
         capture_pageview: false, // we capture manually on navigation
         persistence: 'localStorage+cookie',
         capture_exceptions: true,
-      })
-      setPostHogInstance(posthog)
-      setClient(posthog)
-      capturePageView(window.location.href)
-    })
+        // Gate every $exception (manual captures AND autocapture) through the
+        // shared throttle so a recurring error can't storm PostHog.
+        before_send: throttleExceptionEvent,
+      });
+      setPostHogInstance(posthog);
+      setClient(posthog);
+      capturePageView(window.location.href);
+    });
 
     return () => {
-      cancelled = true
-    }
-  }, [])
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
-    if (!client) return
+    if (!client) return;
 
     unsubRef.current = router.subscribe('onResolved', (event) => {
-      capturePageView(window.location.origin + event.toLocation.href)
-    })
+      capturePageView(window.location.origin + event.toLocation.href);
+    });
 
     return () => {
-      unsubRef.current?.()
-      unsubRef.current = null
-    }
-  }, [client, router])
+      unsubRef.current?.();
+      unsubRef.current = null;
+    };
+  }, [client, router]);
 
   useEffect(() => {
-    if (!client || !isPostHogReady()) return
+    if (!client || !isPostHogReady()) return;
 
     if (user) {
       client.identify(user.id, {
@@ -94,17 +98,17 @@ export function PostHogProvider({ children }: { children: ReactNode }) {
         email: user.email,
         provider: user.provider,
         role: user.role,
-      })
-      client.reloadFeatureFlags()
+      });
+      client.reloadFeatureFlags();
     } else {
-      client.reset()
-      client.reloadFeatureFlags()
+      client.reset();
+      client.reloadFeatureFlags();
     }
-  }, [client, user])
+  }, [client, user]);
 
   if (client && ProviderComponent) {
-    return <ProviderComponent client={client}>{children}</ProviderComponent>
+    return <ProviderComponent client={client}>{children}</ProviderComponent>;
   }
 
-  return <>{children}</>
+  return <>{children}</>;
 }
