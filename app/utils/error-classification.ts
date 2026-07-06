@@ -39,9 +39,17 @@ const NETWORK_ERROR_PATTERN = /failed to fetch|load failed|networkerror/i;
  *    server-fn layer having a chance to tag `status` on it;
  *  - our own DB-layer guards (health.ts, oauth.ts upsertUser) throw
  *    "database not connected" messages when the connection is down.
+ *  - a mid-session Mongo disconnect surfaces as mongoose command-buffering
+ *    timeouts, driver `MongoNetworkError`/`PoolClearedError` drops, or
+ *    "MongoClient must be connected" guard messages;
+ *  - Vercel's platform-level failures (as opposed to our own handler code)
+ *    arrive as `FUNCTION_INVOCATION_FAILED`/`FUNCTION_INVOCATION_TIMEOUT`
+ *    error bodies. The generic "A server error has occurred" text Vercel
+ *    pairs with those codes is deliberately NOT matched on its own — it's
+ *    too generic and would false-positive on unrelated app copy.
  */
 const TRANSPORT_ERROR_PATTERN =
-  /502 bad gateway|503 service unavailable|504 gateway time-?out|gateway timeout|server function info not found|server selection timed out|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|getaddrinfo|socket hang up|topology .*(closed|destroyed)|database not connected/i;
+  /502 bad gateway|503 service unavailable|504 gateway time-?out|gateway timeout|server function info not found|server selection timed out|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|getaddrinfo|socket hang up|topology .*(closed|destroyed)|database not connected|buffering timed out|connection \d+ to .* closed|pool .*(was )?cleared|client must be connected|FUNCTION_INVOCATION_FAILED|FUNCTION_INVOCATION_TIMEOUT/i;
 
 export function isInfrastructureFailure(error: unknown): boolean {
   if (!(error instanceof Error)) return false;

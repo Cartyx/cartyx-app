@@ -107,16 +107,27 @@ export function createBackendHealth(
       breaker.beginProbe();
       const ok = await raceProbeWithTimeout();
       if (breaker.resolveProbe(ok) === 'closed') {
-        deps.capture('backend_circuit_closed', {
-          downtime_ms: snapshot.downSinceMs === null ? 0 : deps.now() - snapshot.downSinceMs,
-          probe_attempts: breaker.probeAttempts(),
-        });
+        // Compute downtime before mutating the snapshot below, then run all
+        // state/side effects before telemetry: a throwing `capture` must not
+        // strand the breaker resolved-closed while our own snapshot/
+        // onlineManager/waiters still think it's down.
+        const downtimeMs = snapshot.downSinceMs === null ? 0 : deps.now() - snapshot.downSinceMs;
+        const probeAttempts = breaker.probeAttempts();
         snapshot = { down: false, downSinceMs: null };
         deps.setOnline(true);
         const waiters = upWaiters;
         upWaiters = [];
         for (const resolve of waiters) resolve();
         notify();
+        try {
+          deps.capture('backend_circuit_closed', {
+            downtime_ms: downtimeMs,
+            probe_attempts: probeAttempts,
+          });
+        } catch {
+          // Telemetry failures must not affect breaker state; the breaker is
+          // already resolved-closed and its side effects already ran above.
+        }
       } else {
         scheduleProbe();
       }
@@ -185,7 +196,7 @@ function getBackendHealth(): BackendHealth {
   if (typeof window === 'undefined') return NOOP_HEALTH;
   if (!singleton) {
     singleton = createBackendHealth({
-      probe: () => healthCheck(),
+      probe: () => healthCheck({ signal: AbortSignal.timeout(10_000) }),
       setOnline: (online) => onlineManager.setOnline(online),
       capture: captureEvent,
       now: () => Date.now(),

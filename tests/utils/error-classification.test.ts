@@ -84,6 +84,40 @@ describe('isInfrastructureFailure', () => {
       )
     ).toBe(false);
   });
+
+  it('classifies a mid-session Mongo disconnect as infrastructure', () => {
+    expect(
+      isInfrastructureFailure(
+        new Error('Operation `campaigns.findOne()` buffering timed out after 10000ms')
+      )
+    ).toBe(true);
+    expect(
+      isInfrastructureFailure(new Error('MongoNetworkError: connection 4 to host:27017 closed'))
+    ).toBe(true);
+    expect(
+      isInfrastructureFailure(
+        new Error(
+          'PoolClearedError: connection pool for host:27017 was cleared because another operation failed with a network error'
+        )
+      )
+    ).toBe(true);
+    expect(isInfrastructureFailure(new Error('MongoClient must be connected'))).toBe(true);
+  });
+
+  it('classifies Vercel platform failure bodies as infrastructure', () => {
+    expect(isInfrastructureFailure(new Error('FUNCTION_INVOCATION_FAILED'))).toBe(true);
+    expect(isInfrastructureFailure(new Error('FUNCTION_INVOCATION_TIMEOUT'))).toBe(true);
+    expect(
+      isInfrastructureFailure(
+        new Error('A server error has occurred\n\nFUNCTION_INVOCATION_FAILED')
+      )
+    ).toBe(true);
+  });
+
+  it('does NOT classify the generic Vercel error text on its own, or unrelated "closed" copy', () => {
+    expect(isInfrastructureFailure(new Error('A server error has occurred'))).toBe(false);
+    expect(isInfrastructureFailure(new Error('The user closed the dialog'))).toBe(false);
+  });
 });
 
 describe('BackendUnavailableError', () => {
