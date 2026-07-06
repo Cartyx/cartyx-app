@@ -1,21 +1,21 @@
-import mongoose from 'mongoose'
-import { bootstrapDB, isBootstrapped } from './bootstrap'
-import { getBootstrapPolicy } from './policy'
-import { serverCaptureException } from '../utils/posthog'
+import mongoose from 'mongoose';
+import { bootstrapDB, isBootstrapped } from './bootstrap';
+import { getBootstrapPolicy } from './policy';
+import { serverCaptureException } from '../utils/posthog';
 
-let connectPromise: Promise<typeof mongoose> | null = null
+let connectPromise: Promise<typeof mongoose> | null = null;
 
 export async function connectDB(): Promise<void> {
-  const uri = process.env.MONGODB_URI
-  if (!uri) return
+  const uri = process.env.MONGODB_URI;
+  if (!uri) return;
 
-  const policy = getBootstrapPolicy()
+  const policy = getBootstrapPolicy();
 
   try {
     if (connectPromise) {
       // A connection attempt is already in flight — wait for it regardless
       // of readyState, so concurrent callers always share one attempt.
-      await connectPromise
+      await connectPromise;
     } else if (mongoose.connection.readyState === 0) {
       // Disconnected — start a new connection and track the promise so
       // concurrent callers can await it.
@@ -26,29 +26,35 @@ export async function connectDB(): Promise<void> {
       // In development autoIndex stays on for convenience.
       connectPromise = mongoose.connect(uri, {
         autoIndex: policy.autoIndex,
-      })
-      await connectPromise
-      connectPromise = null
+      });
+      await connectPromise;
+      connectPromise = null;
     }
     // readyState 1 (connected) with no in-flight promise — nothing to do
 
     // Always attempt bootstrap — it's idempotent and must succeed even if
     // a previous connect succeeded but bootstrap failed partway through.
     if (!isBootstrapped()) {
-      await bootstrapDB(policy)
+      await bootstrapDB(policy);
     }
   } catch (e) {
-    connectPromise = null
-    serverCaptureException(e, undefined, { action: 'connectDB' })
-    throw e
+    connectPromise = null;
+    serverCaptureException(e, undefined, { action: 'connectDB' });
+    // Still useful server-side (logging, any in-process caller), but this
+    // does NOT survive server-fn serialization — the client-side circuit
+    // breaker classifier matches on the error message instead.
+    if (e instanceof Error && !Object.prototype.hasOwnProperty.call(e, 'status')) {
+      Object.assign(e, { status: 503 });
+    }
+    throw e;
   }
 }
 
 export function isDBConnected(): boolean {
-  return mongoose.connection.readyState === 1
+  return mongoose.connection.readyState === 1;
 }
 
 /** @internal Reset module state — test-only. */
 export function __resetConnectPromiseForTests(): void {
-  connectPromise = null
+  connectPromise = null;
 }
