@@ -1,5 +1,6 @@
 import { captureEvent } from '~/utils/posthog-client';
-import { isBackendDown, whenBackendUp } from '~/utils/backend-health';
+import { isBackendDown, reportBackendFailure, whenBackendUp } from '~/utils/backend-health';
+import { isInfrastructureFailure } from '~/utils/error-classification';
 
 const INITIAL_RETRY_DELAY_MS = 1_000;
 const MAX_RETRY_DELAY_MS = 30_000;
@@ -22,6 +23,31 @@ function retryDelayMs(attempt: number): number {
   return Math.round(base * jitterFactor);
 }
 
+function exhaust(
+  context: RetryContext,
+  err: unknown,
+  onExhausted: OnRetriesExhausted | undefined
+): null {
+  console.error(
+    `[Save] Failed after ${MAX_RETRIES} retries`,
+    context.messageType,
+    context.messageId,
+    err
+  );
+
+  captureEvent('party.mongo_save_failed', {
+    sessionId: context.sessionId,
+    campaignId: context.campaignId,
+    messageType: context.messageType,
+    messageId: context.messageId,
+    errorMessage: err instanceof Error ? err.message : String(err),
+    errorName: err instanceof Error ? err.name : undefined,
+  });
+
+  onExhausted?.(context, err);
+  return null;
+}
+
 export async function withRetry<T>(
   fn: () => Promise<T>,
   context: RetryContext,
@@ -34,25 +60,17 @@ export async function withRetry<T>(
     try {
       return await fn();
     } catch (err) {
+      reportBackendFailure(err);
+
+      // Application errors (validation, not-found, auth, ...) cannot heal on
+      // retry — burning the backoff schedule on them only delays the
+      // inevitable failure. Go straight to the exhaustion path.
+      if (!isInfrastructureFailure(err)) {
+        return exhaust(context, err, onExhausted);
+      }
+
       if (attempt === MAX_RETRIES) {
-        console.error(
-          `[Save] Failed after ${MAX_RETRIES} retries`,
-          context.messageType,
-          context.messageId,
-          err
-        );
-
-        captureEvent('party.mongo_save_failed', {
-          sessionId: context.sessionId,
-          campaignId: context.campaignId,
-          messageType: context.messageType,
-          messageId: context.messageId,
-          errorMessage: err instanceof Error ? err.message : String(err),
-          errorName: err instanceof Error ? err.name : undefined,
-        });
-
-        onExhausted?.(context, err);
-        return null;
+        return exhaust(context, err, onExhausted);
       }
 
       const delay = retryDelayMs(attempt);

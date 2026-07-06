@@ -1,7 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import { captureException } from '~/providers/PostHogProvider';
 import { getUploadUrlSchema } from '~/types/schemas/uploads';
-import { isBackendDown } from '~/utils/backend-health';
+import { isBackendDown, reportBackendFailure } from '~/utils/backend-health';
 import { BackendUnavailableError } from '~/utils/error-classification';
 
 const getUploadUrlFn = createServerFn({ method: 'POST' })
@@ -33,6 +33,7 @@ export async function uploadToR2(
 
     return { imageKey, publicUrl };
   } catch (e) {
+    reportBackendFailure(e);
     captureException(e, { action: 'uploadToR2', fileName: file.name, fileSize: file.size });
     throw e;
   }

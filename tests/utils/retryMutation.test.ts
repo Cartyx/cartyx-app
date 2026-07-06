@@ -5,14 +5,16 @@ vi.mock('~/utils/posthog-client', () => ({
   captureEvent: vi.fn(),
 }));
 
-const { mockIsBackendDown, mockWhenBackendUp } = vi.hoisted(() => ({
+const { mockIsBackendDown, mockWhenBackendUp, mockReportBackendFailure } = vi.hoisted(() => ({
   mockIsBackendDown: vi.fn(() => false),
   mockWhenBackendUp: vi.fn(() => Promise.resolve()),
+  mockReportBackendFailure: vi.fn(),
 }));
 
 vi.mock('~/utils/backend-health', () => ({
   isBackendDown: mockIsBackendDown,
   whenBackendUp: mockWhenBackendUp,
+  reportBackendFailure: mockReportBackendFailure,
 }));
 
 import { withRetry } from '~/utils/retryMutation';
@@ -46,7 +48,10 @@ describe('withRetry', () => {
   });
 
   it('retries on failure and succeeds', async () => {
-    const fn = vi.fn().mockRejectedValueOnce(new Error('fail')).mockResolvedValue('ok');
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValue('ok');
 
     const promise = withRetry(fn, ctx);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -54,10 +59,11 @@ describe('withRetry', () => {
 
     expect(result).toBe('ok');
     expect(fn).toHaveBeenCalledTimes(2);
+    expect(mockReportBackendFailure).toHaveBeenCalledWith(expect.any(TypeError));
   });
 
   it('returns null and calls onExhausted after max retries', async () => {
-    const fn = vi.fn().mockRejectedValue(new Error('fail'));
+    const fn = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
     const onExhausted = vi.fn();
 
     const promise = withRetry(fn, ctx, onExhausted);
@@ -72,6 +78,34 @@ describe('withRetry', () => {
     expect(result).toBeNull();
     expect(fn).toHaveBeenCalledTimes(13);
     expect(onExhausted).toHaveBeenCalledWith(ctx, expect.any(Error));
+    expect(mockReportBackendFailure).toHaveBeenCalledWith(expect.any(TypeError));
+  });
+});
+
+describe('withRetry error classification', () => {
+  it('does not retry application errors — fails fast to the exhaustion path', async () => {
+    const fn = vi.fn().mockRejectedValue(new Error('validation failed'));
+    const onExhausted = vi.fn();
+
+    const result = await withRetry(fn, ctx, onExhausted);
+
+    expect(result).toBeNull();
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(onExhausted).toHaveBeenCalledWith(ctx, expect.any(Error));
+    expect(mockReportBackendFailure).toHaveBeenCalledWith(expect.any(Error));
+  });
+
+  it('still retries infrastructure errors with backoff', async () => {
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValue('ok');
+
+    const promise = withRetry(fn, ctx);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    await expect(promise).resolves.toBe('ok');
+    expect(fn).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -79,9 +113,9 @@ describe('withRetry backoff', () => {
   it('uses exponential backoff between attempts (1s, 2s, 4s with jitter pinned to 1.0)', async () => {
     const fn = vi
       .fn()
-      .mockRejectedValueOnce(new Error('fail'))
-      .mockRejectedValueOnce(new Error('fail'))
-      .mockRejectedValueOnce(new Error('fail'))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       .mockResolvedValue('ok');
     const promise = withRetry(fn, ctx);
 
@@ -97,7 +131,7 @@ describe('withRetry backoff', () => {
   });
 
   it('caps the backoff at 30s', async () => {
-    const fn = vi.fn().mockRejectedValue(new Error('fail'));
+    const fn = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
     void withRetry(fn, ctx);
     // Attempts 1..12 fail; delays: 1,2,4,8,16,30,30,30,30,30,30,30 (s)
     await vi.advanceTimersByTimeAsync(0);
@@ -109,7 +143,10 @@ describe('withRetry backoff', () => {
 
   it('applies jitter within ±20% of the base delay', async () => {
     (Math.random as ReturnType<typeof vi.fn>).mockReturnValue(0); // jitter factor = 0.8
-    const fn = vi.fn().mockRejectedValueOnce(new Error('fail')).mockResolvedValue('ok');
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValue('ok');
     const promise = withRetry(fn, ctx);
     await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(799);

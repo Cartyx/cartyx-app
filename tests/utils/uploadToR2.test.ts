@@ -1,12 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockIsBackendDown, mockCaptureException, mockGetUploadUrl } = vi.hoisted(() => ({
-  mockIsBackendDown: vi.fn(() => false),
-  mockCaptureException: vi.fn(),
-  mockGetUploadUrl: vi.fn(),
-}));
+const { mockIsBackendDown, mockCaptureException, mockGetUploadUrl, mockReportBackendFailure } =
+  vi.hoisted(() => ({
+    mockIsBackendDown: vi.fn(() => false),
+    mockCaptureException: vi.fn(),
+    mockGetUploadUrl: vi.fn(),
+    mockReportBackendFailure: vi.fn(),
+  }));
 
-vi.mock('~/utils/backend-health', () => ({ isBackendDown: mockIsBackendDown }));
+vi.mock('~/utils/backend-health', () => ({
+  isBackendDown: mockIsBackendDown,
+  reportBackendFailure: mockReportBackendFailure,
+}));
 vi.mock('~/providers/PostHogProvider', () => ({ captureException: mockCaptureException }));
 vi.mock('@tanstack/react-start', () => ({
   createServerFn: () => ({
@@ -46,5 +51,19 @@ describe('uploadToR2 breaker guard', () => {
       publicUrl: 'https://cdn.example/k',
     });
     fetchSpy.mockRestore();
+  });
+
+  it('reports the failure to the circuit breaker before capturing the exception', async () => {
+    const error = new TypeError('Failed to fetch');
+    mockGetUploadUrl.mockRejectedValue(error);
+
+    await expect(uploadToR2(file)).rejects.toBe(error);
+
+    expect(mockReportBackendFailure).toHaveBeenCalledWith(error);
+    expect(mockCaptureException).toHaveBeenCalledWith(error, {
+      action: 'uploadToR2',
+      fileName: file.name,
+      fileSize: file.size,
+    });
   });
 });
