@@ -8,9 +8,9 @@ import { connectDB, isDBConnected } from '../db/connection';
  */
 export async function healthCheck(): Promise<{ ok: true }> {
   await connectDB();
-  if (!isDBConnected()) throw new Error('Database not connected');
+  if (!isDBConnected()) throw Object.assign(new Error('Database not connected'), { status: 503 });
   const db = mongoose.connection.db;
-  if (!db) throw new Error('Database not connected');
+  if (!db) throw Object.assign(new Error('Database not connected'), { status: 503 });
   await db.admin().command({ ping: 1 });
   return { ok: true };
 }

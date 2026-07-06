@@ -1,16 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockCommand, mockConnectDB, mockIsDBConnected } = vi.hoisted(() => ({
+const { mockCommand, mockConnectDB, mockIsDBConnected, mongooseState } = vi.hoisted(() => ({
   mockCommand: vi.fn(),
   mockConnectDB: vi.fn(),
   mockIsDBConnected: vi.fn(),
+  mongooseState: { db: undefined as unknown },
 }));
 
 vi.mock('mongoose', () => ({
   default: {
     connection: {
       get db() {
-        return { admin: () => ({ command: mockCommand }) };
+        return mongooseState.db;
       },
     },
   },
@@ -27,6 +28,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockIsDBConnected.mockReturnValue(true);
   mockCommand.mockResolvedValue({ ok: 1 });
+  mongooseState.db = { admin: () => ({ command: mockCommand }) };
 });
 
 describe('healthCheck', () => {
@@ -40,6 +42,22 @@ describe('healthCheck', () => {
     mockIsDBConnected.mockReturnValue(false);
     await expect(healthCheck()).rejects.toThrow('Database not connected');
     expect(mockCommand).not.toHaveBeenCalled();
+  });
+
+  it('tags the "not connected" error with status 503 when isDBConnected is false', async () => {
+    mockIsDBConnected.mockReturnValue(false);
+    await expect(healthCheck()).rejects.toMatchObject({
+      status: 503,
+      message: 'Database not connected',
+    });
+  });
+
+  it('tags the "not connected" error with status 503 when mongoose.connection.db is undefined', async () => {
+    mongooseState.db = undefined;
+    await expect(healthCheck()).rejects.toMatchObject({
+      status: 503,
+      message: 'Database not connected',
+    });
   });
 
   it('propagates ping failures', async () => {
