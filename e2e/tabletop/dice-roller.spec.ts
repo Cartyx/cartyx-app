@@ -181,10 +181,23 @@ test('public roll appears in the Dice tab feed like a Beyond20 card', async ({ p
   await openRoller(page);
 
   await page.getByTestId('dice-roller-die-20').click();
-  // Public is the default.
+  // Public is the default. On a cold CI dev server the PartyKit socket
+  // (server-fn token fetch + connect) can still be handshaking when we roll,
+  // which surfaces the "not connected" notice and keeps the roll local.
+  // Re-roll until one is delivered — refused attempts broadcast nothing, so
+  // exactly one card reaches the feed regardless of how many tries this takes.
   await page.getByTestId('dice-roller-roll').click();
   await expect(page.getByTestId('dice-roller-result')).toBeVisible();
-  await expect(page.getByTestId('dice-roller-notice')).toHaveCount(0);
+  await expect
+    .poll(
+      async () => {
+        if ((await page.getByTestId('dice-roller-notice').count()) === 0) return 0;
+        await page.getByTestId('dice-roller-roll').click();
+        return page.getByTestId('dice-roller-notice').count();
+      },
+      { timeout: 30_000, intervals: [500, 1000, 2000] }
+    )
+    .toBe(0);
 
   await page.getByTestId('inspector-tab-dice').click();
   const feed = page.getByTestId('inspector-panel');
