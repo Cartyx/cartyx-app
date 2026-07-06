@@ -557,12 +557,22 @@ export const deleteLocationImage = async ({
     const imageExists = images.some((img) => img.imageKey === data.imageKey);
     if (!imageExists) throw new Error('Image not found');
 
-    // Delete from R2
-    const r2Client = createR2Client();
-    if (r2Client) {
-      await r2Client.client.send(
-        new DeleteObjectCommand({ Bucket: r2Client.bucket, Key: data.imageKey })
-      );
+    // Best-effort delete from R2 — mirrors deleteLocation's image cleanup. A
+    // storage failure must not block removing the image from the gallery;
+    // orphaned R2 objects are reconciled by the cleanup job (cleanup.ts).
+    try {
+      const r2Client = createR2Client();
+      if (r2Client) {
+        await r2Client.client.send(
+          new DeleteObjectCommand({ Bucket: r2Client.bucket, Key: data.imageKey })
+        );
+      }
+    } catch (r2Error) {
+      serverCaptureException(r2Error, sessionUserId, {
+        action: 'deleteLocationImage.r2Delete',
+        locationId: data.id,
+        imageKey: data.imageKey,
+      });
     }
 
     // Remove from MongoDB

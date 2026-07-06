@@ -183,6 +183,50 @@ describe('createEvent', () => {
     ).rejects.toThrow(/on or after the start date/);
     expect(Event.create).not.toHaveBeenCalled();
   });
+  it('returns seroval-safe plain objects even from a live mongoose document', async () => {
+    // Event.create returns a hydrated document whose subdocuments (start/end)
+    // and arrays (tags) are class instances, not plain objects. The server-fn
+    // response is serialized by seroval, which throws
+    // SerovalUnsupportedTypeError on non-plain prototypes — the exact failure
+    // that made the calendar e2e's "create event" modal report
+    // "Failed to create event" while the insert itself succeeded.
+    class SubDoc {
+      constructor(
+        public year: number,
+        public monthIndex: number,
+        public day: number
+      ) {}
+    }
+    class FakeMongooseArray extends Array<string> {}
+    const tags = new FakeMongooseArray();
+    tags.push('festival');
+    vi.mocked(Event.create).mockImplementation(
+      async (doc: Record<string, unknown>) =>
+        ({
+          _id: 'e1',
+          ...doc,
+          start: new SubDoc(1, 0, 2),
+          end: new SubDoc(1, 0, 3),
+          tags,
+        }) as never
+    );
+    const result = await _create({
+      data: {
+        campaignId: 'camp-1',
+        title: 'T',
+        start: { year: 1, monthIndex: 0, day: 2 },
+        end: { year: 1, monthIndex: 0, day: 3 },
+        tags: ['festival'],
+      },
+    });
+    const event = result.event as Record<string, unknown>;
+    expect(event.start).toEqual({ year: 1, monthIndex: 0, day: 2 });
+    expect(Object.getPrototypeOf(event.start)).toBe(Object.prototype);
+    expect(event.end).toEqual({ year: 1, monthIndex: 0, day: 3 });
+    expect(Object.getPrototypeOf(event.end)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(event.tags)).toBe(Array.prototype);
+    expect(event.tags).toEqual(['festival']);
+  });
 });
 
 // ---------------------------------------------------------------------------
