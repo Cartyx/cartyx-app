@@ -126,6 +126,83 @@ describe('createBackendHealth', () => {
     expect(health.getSnapshot()).toBe(b);
   });
 
+  describe('probe timeout', () => {
+    it('treats a probe that never settles as failed after probeTimeoutMs, then backs off and stays open', async () => {
+      const releaseProbes: Array<() => void> = [];
+      const probe = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            releaseProbes.push(() => resolve({ ok: true }));
+          })
+      );
+      const deps = makeDeps({ probe, probeTimeoutMs: 10_000 });
+      const health = createBackendHealth(deps);
+      for (let i = 0; i < 5; i++) health.reportFailure(networkError());
+
+      await vi.advanceTimersByTimeAsync(5_000); // first probe fires (hangs)
+      expect(probe).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(10_000); // probe timeout elapses -> treated as failed
+      expect(health.isDown()).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(10_000); // next probe scheduled per backoff (10s)
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(health.isDown()).toBe(true);
+
+      // The stale first probe resolving after its timeout must not close the
+      // breaker, even though a second probe is now legitimately in flight.
+      releaseProbes[0]?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(health.isDown()).toBe(true);
+    });
+
+    it('behaves normally when the probe settles well within the timeout (2s)', async () => {
+      const probe = vi.fn(
+        () => new Promise((resolve) => setTimeout(() => resolve({ ok: true }), 2_000))
+      );
+      const deps = makeDeps({ probe, probeTimeoutMs: 10_000 });
+      const health = createBackendHealth(deps);
+      for (let i = 0; i < 5; i++) health.reportFailure(networkError());
+
+      await vi.advanceTimersByTimeAsync(5_000); // probe begins
+      await vi.advanceTimersByTimeAsync(2_000); // probe resolves well before the timeout
+      expect(health.isDown()).toBe(false);
+    });
+
+    it('defaults probeTimeoutMs to 10s when not provided', async () => {
+      const probe = vi.fn(() => new Promise(() => {})); // never settles
+      const deps = makeDeps({ probe });
+      const health = createBackendHealth(deps);
+      for (let i = 0; i < 5; i++) health.reportFailure(networkError());
+
+      await vi.advanceTimersByTimeAsync(5_000); // probe begins
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(probe).toHaveBeenCalledTimes(1); // still within default timeout, no reschedule yet
+      await vi.advanceTimersByTimeAsync(1);
+      // timeout elapsed -> probe treated as failed -> resolveProbe(false) -> stays open,
+      // backoff reschedules (10s) without throwing.
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(health.isDown()).toBe(true);
+    });
+
+    it('does not reschedule when a side effect throws after the breaker already closed (freebie)', async () => {
+      const probe = vi.fn().mockResolvedValue({ ok: true });
+      const capture = vi.fn((event: string) => {
+        if (event === 'backend_circuit_closed') throw new Error('capture boom');
+      });
+      const deps = makeDeps({ probe, capture });
+      const health = createBackendHealth(deps);
+      for (let i = 0; i < 5; i++) health.reportFailure(networkError());
+
+      await vi.advanceTimersByTimeAsync(5_000); // probe fires, succeeds, capture throws
+      expect(probe).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(60_000); // no perpetual reschedule
+      expect(probe).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('browser online events while the breaker is open', () => {
     it('re-asserts offline when the browser fires online while the breaker is open', () => {
       let onlineListener: ((online: boolean) => void) | undefined;

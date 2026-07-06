@@ -36,6 +36,13 @@ export interface BackendHealthDeps {
    * mutations against a backend we already know is down.
    */
   subscribeOnline?: (listener: (online: boolean) => void) => void;
+  /**
+   * Upper bound on how long a recovery probe is allowed to hang before it's
+   * treated as failed. A probe stuck on a dead connection (no timeout of its
+   * own) would otherwise stall the breaker's entire backoff schedule.
+   * Defaults to 10s.
+   */
+  probeTimeoutMs?: number;
 }
 
 export interface BackendHealth {
@@ -56,6 +63,7 @@ export function createBackendHealth(
   const listeners = new Set<() => void>();
   let upWaiters: Array<() => void> = [];
   let snapshot: BackendHealthSnapshot = UP_SNAPSHOT;
+  const probeTimeoutMs = deps.probeTimeoutMs ?? 10_000;
 
   function notify() {
     for (const listener of listeners) listener();
@@ -65,16 +73,39 @@ export function createBackendHealth(
     setTimeout(() => void runProbe(), breaker.probeDelayMs());
   }
 
+  // Races the probe against a deadline. If the deadline wins, the probe is
+  // treated as failed; a stale probe that later settles is ignored (guarded
+  // by `settled`) so it can't resolve twice or flip breaker state after the
+  // fact.
+  function raceProbeWithTimeout(): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const deadline = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve(false);
+      }, probeTimeoutMs);
+      deps.probe().then(
+        () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(deadline);
+          resolve(true);
+        },
+        () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(deadline);
+          resolve(false);
+        }
+      );
+    });
+  }
+
   async function runProbe() {
     try {
       breaker.beginProbe();
-      let ok = false;
-      try {
-        await deps.probe();
-        ok = true;
-      } catch {
-        ok = false;
-      }
+      const ok = await raceProbeWithTimeout();
       if (breaker.resolveProbe(ok) === 'closed') {
         deps.capture('backend_circuit_closed', {
           downtime_ms: snapshot.downSinceMs === null ? 0 : deps.now() - snapshot.downSinceMs,
@@ -93,7 +124,10 @@ export function createBackendHealth(
       // A throwing side effect (capture/setOnline/breaker call) must not
       // become an unhandled rejection that strands the breaker open with no
       // probe scheduled — fall back to rescheduling on the existing backoff.
-      scheduleProbe();
+      // Only do so if the breaker is still open: if it already closed, a
+      // side effect throwing after the fact must not spin up a perpetual
+      // no-op probe timer.
+      if (breaker.state() === 'open') scheduleProbe();
     }
   }
 
