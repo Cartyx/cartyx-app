@@ -16,10 +16,12 @@ function RollBreakdown({
   attackRolls,
   damageRolls,
   rollInfo,
+  variant = 'beyond20',
 }: {
   attackRolls: DiceRollMessage['attackRolls'];
   damageRolls: DiceRollMessage['damageRolls'];
   rollInfo: DiceRollMessage['rollInfo'];
+  variant?: 'beyond20' | 'custom';
 }) {
   return (
     <div className="mt-2 space-y-1.5">
@@ -64,7 +66,8 @@ function RollBreakdown({
                 {roll.total}
               </span>
               <span className="font-sans text-[11px] text-slate-500">
-                To Hit{isDiscarded ? ' (dropped)' : ''}
+                {variant === 'custom' ? 'Result' : 'To Hit'}
+                {isDiscarded ? ' (dropped)' : ''}
               </span>
               {formula && <span className="font-mono text-[11px] text-slate-400">{formula}</span>}
               {!isDiscarded && roll.type === 'crit' && (
@@ -76,8 +79,8 @@ function RollBreakdown({
             </div>
             {dice.length > 0 && !isDiscarded && (
               <div className="pl-2 font-mono text-[10px] text-slate-500">
-                ({dice[0]}){bonus !== 0 && ` ${bonus > 0 ? '+' : '-'} ${Math.abs(bonus)}`} ={' '}
-                {roll.total}
+                ({variant === 'custom' ? dice.join(' + ') : dice[0]})
+                {bonus !== 0 && ` ${bonus > 0 ? '+' : '-'} ${Math.abs(bonus)}`} = {roll.total}
               </div>
             )}
           </div>
@@ -117,7 +120,7 @@ function RollBreakdown({
   );
 }
 
-function DiceRollCard({ roll }: { roll: DiceRollMessage }) {
+export function DiceRollCard({ roll }: { roll: DiceRollMessage }) {
   const d = new Date(roll.timestamp);
   const time = `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
 
@@ -155,6 +158,7 @@ function DiceRollCard({ roll }: { roll: DiceRollMessage }) {
         attackRolls={roll.attackRolls}
         damageRolls={roll.damageRolls}
         rollInfo={roll.rollInfo}
+        variant={roll.rollType === 'custom' ? 'custom' : 'beyond20'}
       />
       {Object.keys(roll.totalDamages).length > 0 && (
         <div className="mt-2 pt-2 border-t border-white/[0.05] flex items-baseline gap-2 flex-wrap">
