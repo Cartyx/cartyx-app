@@ -138,16 +138,6 @@ jobs:
       VITE_PUBLIC_FF_WIKI: inspector-wiki-dev
       VITE_PUBLIC_FF_NOTES: inspector-notepad-dev
       VITE_PUBLIC_FF_SETTINGS: inspector-settings-dev
-      # Image uploads: the gallery always uses the direct-to-R2 path, which
-      # requires CDN_URL + all four R2 vars just to MINT a presigned URL
-      # (offline HMAC — no network). The actual PUT to
-      # *.r2.cloudflarestorage.com is intercepted by mockR2DirectUpload, so
-      # dummy values complete the flow; thumbnails 404 but stay in the DOM.
-      CDN_URL: https://cdn-e2e.example.invalid
-      R2_ACCOUNT_ID: e2e-dummy-account
-      R2_ACCESS_KEY_ID: e2e-dummy-key
-      R2_SECRET_ACCESS_KEY: e2e-dummy-secret
-      R2_BUCKET: e2e-dummy-bucket
       # posthog-js only initializes when a key is present (PostHogProvider.tsx
       # returns early without one), and feature flags never resolve without an
       # initialized client — so flag-gated UI (e.g. the dice toolbar button)
@@ -192,6 +182,20 @@ jobs:
       - name: Run Playwright tests
         # Retries (2) and webServer timeout are configured in playwright.config.ts
         # so a slow cold first-route compile of the dev server doesn't flake the run.
+        #
+        # The dummy R2/CDN env lives on THIS step only (the Playwright-spawned
+        # dev server needs it): the gallery upload flow requires CDN_URL + all
+        # four R2 vars just to MINT a presigned URL (offline HMAC — no
+        # network); the browser PUT is intercepted by mockR2DirectUpload.
+        # Keep these OFF the job env — dev_seed.py syncs seed images against
+        # R2 whenever credentials are present, and a fake account id dies on
+        # the TLS handshake, killing the seed step.
+        env:
+          CDN_URL: https://cdn-e2e.example.invalid
+          R2_ACCOUNT_ID: e2e-dummy-account
+          R2_ACCESS_KEY_ID: e2e-dummy-key
+          R2_SECRET_ACCESS_KEY: e2e-dummy-secret
+          R2_BUCKET: e2e-dummy-bucket
         run: npx playwright test
 
       - name: Upload Playwright report
