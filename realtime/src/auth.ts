@@ -3,8 +3,9 @@ import { jwtVerify } from 'jose';
 export type ConnectionAuth = { userId: string; role: string };
 export type PartyName = 'main' | 'tabletop' | 'tabletop_map';
 
-// Room-binding rules ported verbatim from party/index.ts, party/tabletop.ts,
-// and party/tabletop-map.ts onBeforeConnect.
+// Room-binding rules ported from party/index.ts, party/tabletop.ts, and
+// party/tabletop-map.ts onBeforeConnect, with uniform claim trimming applied
+// (the originals trim the sessionId claim for tabletop/tabletop_map only).
 const ROOM_BINDING: Record<PartyName, (claim: string, roomId: string) => boolean> = {
   main: (claim, roomId) => claim === '' || roomId === '' || claim === roomId,
   tabletop: (claim, roomId) => claim !== '' && roomId === `tabletop-${claim}`,
