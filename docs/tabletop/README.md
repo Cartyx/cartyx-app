@@ -40,6 +40,7 @@ defined in the type system but not yet rendered.
 | [data-flow.md](./data-flow.md)             | State ownership, persistence, reconnect  |
 | [real-time-sync.md](./real-time-sync.md)   | PartyKit setup, message types, conflicts |
 | [adding-features.md](./adding-features.md) | How to extend the tabletop               |
+| [dice-roller.md](./dice-roller.md)         | Dice roller feature, architecture, flow  |
 
 ## Phased Implementation
 

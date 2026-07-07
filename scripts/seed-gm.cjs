@@ -28,7 +28,13 @@ async function seed() {
   // Honor MONGODB_DB the same way dev_seed.py and globalSetup.ts do, so all
   // three target the same database (e.g. cartyx_e2e in CI). Without this the
   // GM would be written to the URI's default database instead.
-  await mongoose.connect(uri, { dbName: process.env.MONGODB_DB });
+  //
+  // autoIndex:false — index definitions belong to the app (app/server/db/
+  // models/User.ts builds email_1 as {unique, sparse}). If this throwaway
+  // schema auto-builds its own variant first (unique, non-sparse), the app's
+  // later autoIndex hits "existing index has the same name" and every
+  // connectDB() call fails, 500ing the whole app in e2e.
+  await mongoose.connect(uri, { dbName: process.env.MONGODB_DB, autoIndex: false });
   const gm = await User.findOneAndUpdate(
     { email: 'alabeau@gmail.com' },
     {

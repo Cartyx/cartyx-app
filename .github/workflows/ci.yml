@@ -113,7 +113,14 @@ jobs:
       # Reuse the same throwaway value pattern as the unit-test job; this is a
       # test fixture, not a secret.
       SESSION_SECRET: ci-test-secret-at-least-32-characters-long
-      MONGODB_URI: mongodb://localhost:27017
+      # The db name must be in the URI path: the app's connectDB() calls
+      # mongoose.connect(uri) WITHOUT a dbName option, so a bare host URI
+      # sends the app to mongoose's default `test` database while globalSetup,
+      # seed-gm.cjs, dev_seed.py, and the specs all honor MONGODB_DB — a
+      # split-brain where the app can't see any seeded/provisioned data.
+      # MONGODB_DB stays for the tooling that reads it; both resolve to the
+      # same database.
+      MONGODB_URI: mongodb://localhost:27017/cartyx_e2e
       MONGODB_DB: cartyx_e2e
       NODE_ENV: test
       # The dev server reads BASE_URL when building OAuth redirect URIs and for
@@ -121,6 +128,24 @@ jobs:
       # code path throws on a missing BASE_URL even though e2e uses a pre-minted
       # session cookie rather than the live OAuth flow.
       BASE_URL: http://localhost:3000
+      # Feature-flag NAMES must be present for the client to query PostHog;
+      # the e2e PostHog mock (e2e/fixtures/network-mocks.ts) then reports them
+      # enabled. Without a name the gated UI never renders — the inspector
+      # Wiki tab being absent is what timed out every calendar/locations/lore
+      # spec in CI (they all start by clicking the Wiki tab).
+      VITE_PUBLIC_FF_DICE: cartyx-dice-dev
+      VITE_PUBLIC_FF_CHAT: inspector-chat-dev
+      VITE_PUBLIC_FF_WIKI: inspector-wiki-dev
+      VITE_PUBLIC_FF_NOTES: inspector-notepad-dev
+      VITE_PUBLIC_FF_SETTINGS: inspector-settings-dev
+      # posthog-js only initializes when a key is present (PostHogProvider.tsx
+      # returns early without one), and feature flags never resolve without an
+      # initialized client — so flag-gated UI (e.g. the dice toolbar button)
+      # would never render in e2e. Dummy key; the host must contain "posthog"
+      # so mockPostHog's route matcher intercepts the flags request. Specs that
+      # don't mock PostHog just get fast 401s from the real host.
+      VITE_PUBLIC_POSTHOG_KEY: phc_e2e_dummy_key_not_a_secret
+      VITE_PUBLIC_POSTHOG_HOST: https://app.posthog.com
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -157,6 +182,20 @@ jobs:
       - name: Run Playwright tests
         # Retries (2) and webServer timeout are configured in playwright.config.ts
         # so a slow cold first-route compile of the dev server doesn't flake the run.
+        #
+        # The dummy R2/CDN env lives on THIS step only (the Playwright-spawned
+        # dev server needs it): the gallery upload flow requires CDN_URL + all
+        # four R2 vars just to MINT a presigned URL (offline HMAC — no
+        # network); the browser PUT is intercepted by mockR2DirectUpload.
+        # Keep these OFF the job env — dev_seed.py syncs seed images against
+        # R2 whenever credentials are present, and a fake account id dies on
+        # the TLS handshake, killing the seed step.
+        env:
+          CDN_URL: https://cdn-e2e.example.invalid
+          R2_ACCOUNT_ID: e2e-dummy-account
+          R2_ACCESS_KEY_ID: e2e-dummy-key
+          R2_SECRET_ACCESS_KEY: e2e-dummy-secret
+          R2_BUCKET: e2e-dummy-bucket
         run: npx playwright test
 
       - name: Upload Playwright report

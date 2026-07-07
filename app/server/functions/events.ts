@@ -39,6 +39,19 @@ async function loadCalendar(campaignId: string): Promise<{ cfg: CalendarConfig; 
   return { cfg, id: cal._id };
 }
 
+/**
+ * Rebuild a calendar date as a plain object. Documents returned by
+ * Event.create() are hydrated mongoose documents whose subdocuments are class
+ * instances — seroval (the server-fn response serializer) throws
+ * SerovalUnsupportedTypeError on anything with a non-plain prototype, so
+ * every nested value must be reconstructed, not passed through.
+ */
+function toPlainDate(d: unknown): CalDate | null {
+  if (!d) return null;
+  const date = d as { year?: unknown; monthIndex?: unknown; day?: unknown };
+  return { year: Number(date.year), monthIndex: Number(date.monthIndex), day: Number(date.day) };
+}
+
 function baseSerialize(doc: AnyDoc) {
   return {
     id: String(doc._id),
@@ -49,8 +62,8 @@ function baseSerialize(doc: AnyDoc) {
     content: (doc.content as string) ?? '',
     isPublic: Boolean(doc.isPublic),
     isEpic: Boolean(doc.isEpic),
-    start: doc.start as CalDate,
-    end: (doc.end as CalDate | null) ?? null,
+    start: toPlainDate(doc.start) as CalDate,
+    end: toPlainDate(doc.end),
     startOrdinal: Number(doc.startOrdinal ?? 0),
     endOrdinal: Number(doc.endOrdinal ?? 0),
     links: ((doc.links as unknown[]) ?? []).map((l) => {
@@ -66,7 +79,8 @@ function baseSerialize(doc: AnyDoc) {
         crop: (img.crop as EventData['images'][number]['crop']) ?? null,
       };
     }),
-    tags: (doc.tags as string[]) ?? [],
+    // Array.from → plain Array (mongoose arrays are class instances too)
+    tags: Array.from((doc.tags as string[]) ?? [], String),
     color: (doc.color as string | null) ?? null,
     createdAt: (doc.createdAt as Date)?.toISOString?.() ?? '',
     updatedAt: (doc.updatedAt as Date)?.toISOString?.() ?? '',
