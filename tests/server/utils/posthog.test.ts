@@ -21,6 +21,7 @@ describe('server posthog utilities', () => {
 
   afterEach(() => {
     delete process.env.POSTHOG_KEY;
+    delete process.env.APP_ENV;
   });
 
   describe('serverCaptureException', () => {
@@ -113,6 +114,21 @@ describe('server posthog utilities', () => {
         event: 'campaign_created',
         properties: expect.objectContaining({ name: 'Test', environment: expect.any(String) }),
       });
+    });
+  });
+
+  describe('environment labeling', () => {
+    it('labels events with the APP_ENV-derived environment', async () => {
+      process.env.POSTHOG_KEY = 'test-key';
+      process.env.APP_ENV = 'staging';
+      const { serverCaptureEvent } = await import('~/server/utils/posthog');
+      await serverCaptureEvent('user_123', 'dice_rolled');
+
+      expect(mockCapture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          properties: expect.objectContaining({ environment: 'staging' }),
+        })
+      );
     });
   });
 

@@ -1,5 +1,6 @@
 import { PostHog } from 'posthog-node';
 import { createExceptionThrottle } from '~/utils/exception-throttle';
+import { resolveEnvironment } from '../db/policy';
 
 let client: PostHog | null = null;
 
@@ -8,9 +9,7 @@ let client: PostHog | null = null;
 const exceptionThrottle = createExceptionThrottle();
 
 function getEnvironment(): string {
-  if (process.env.VERCEL_ENV) return process.env.VERCEL_ENV; // 'production', 'preview', 'development'
-  if (process.env.VERCEL) return 'vercel';
-  return process.env.NODE_ENV ?? 'unknown';
+  return resolveEnvironment();
 }
 
 function getClient(): PostHog | null {
