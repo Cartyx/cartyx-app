@@ -100,15 +100,30 @@ function createR2Client(): { client: S3Client; bucket: string } | null {
  * PartyKit room so every connected client invalidates/refetches the active map
  * right away, regardless of which UI triggered the mutation. A party outage
  * must never fail the DB write, so all errors are swallowed.
+ *
+ * Host resolution: `REALTIME_INTERNAL_HOST` is the server-side runtime var —
+ * set it when the server and the realtime service aren't reachable at the
+ * same address (e.g. containers, where `VITE_PUBLIC_PARTYKIT_HOST` is the
+ * browser-facing host/port and is either unset at server runtime or points
+ * back at the web container itself). Falls back to
+ * `VITE_PUBLIC_PARTYKIT_HOST` to preserve today's local-dev behavior where
+ * `localhost:1999` is correct for both browser and server.
  */
-async function broadcastActiveMapChanged(
+export async function broadcastActiveMapChanged(
   campaignId: string,
   mapId: string | null,
   screenId: string | null
 ): Promise<void> {
-  const host = process.env.VITE_PUBLIC_PARTYKIT_HOST;
+  const internalHost = process.env.REALTIME_INTERNAL_HOST;
+  const host = internalHost ?? process.env.VITE_PUBLIC_PARTYKIT_HOST;
   if (!host) return;
-  const isLocal = host.startsWith('localhost') || host.startsWith('127.0.0.1');
+  // REALTIME_INTERNAL_HOST always names a same-network service (compose
+  // service name, Kubernetes Service DNS) that is never TLS-terminated at
+  // this hop, so treat it as "local" regardless of hostname. The
+  // VITE_PUBLIC_PARTYKIT_HOST fallback keeps the existing heuristic for
+  // browser-facing hosts (localhost in dev, a real TLS hostname otherwise).
+  const isLocal =
+    Boolean(internalHost) || host.startsWith('localhost') || host.startsWith('127.0.0.1');
   const protocol = isLocal ? 'http' : 'https';
   // Mirrors `useTabletopMapParty`: party `tabletop_map` (underscore — the
   // partykit.json key), room `tabletop-map-<campaignId>`.

@@ -52,6 +52,11 @@ services:
       APP_ENV: development
       PORT: '3000'
       BASE_URL: http://localhost:3100
+      # Server-side broadcasts (map:active-changed) run inside the web
+      # container and must reach the realtime container by its compose
+      # service name — VITE_PUBLIC_PARTYKIT_HOST (localhost:1999) is the
+      # browser-facing host and resolves to the web container itself here.
+      REALTIME_INTERNAL_HOST: realtime:1999
     depends_on:
       realtime:
         condition: service_healthy
