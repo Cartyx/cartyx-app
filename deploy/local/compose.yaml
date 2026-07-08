@@ -1,0 +1,28 @@
+# Quick local path: run the realtime service directly, no Kubernetes.
+#   docker compose -f deploy/local/compose.yaml up --build
+# Env (SESSION_SECRET, MONGODB_URI) comes from the repo-root .env.
+services:
+  realtime:
+    build:
+      context: ../../realtime
+    image: cartyx-realtime:local
+    ports:
+      - '1999:1999'
+    env_file:
+      - ../../.env
+    environment:
+      PORT: '1999'
+    healthcheck:
+      # node:22-alpine has no curl/wget; Node 22 ships a global fetch.
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://localhost:1999/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped

@@ -1,0 +1,11 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: cartyx-local
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # Host localhost:1999 -> Service NodePort 30199 -> container 1999.
+      # Lets the web app reach the realtime service at localhost:1999 with no port-forward.
+      - containerPort: 30199
+        hostPort: 1999
+        protocol: TCP
