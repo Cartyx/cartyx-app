@@ -16,6 +16,7 @@ spec:
     spec:
       securityContext:
         runAsNonRoot: true
+        runAsUser: 1000
       containers:
         - name: realtime
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
