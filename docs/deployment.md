@@ -457,11 +457,11 @@ Both commands require `MONGODB_URI` to be set.
 On every first database access, the app runs a lightweight bootstrap pass. The
 behaviour is **environment-aware** — each environment gets a different policy:
 
-| Environment     | Detection                                        | Collections | Indexes | Critical check | Failure mode      |
-| --------------- | ------------------------------------------------ | ----------- | ------- | -------------- | ----------------- |
-| **production**  | `VERCEL_ENV=production` or `NODE_ENV=production` | ensure      | —       | yes            | **abort startup** |
-| **staging**     | `VERCEL_ENV=preview` (dev branch + PR previews)  | ensure      | —       | yes            | warn only         |
-| **development** | local dev (`NODE_ENV != production`, no Vercel)  | ensure      | sync    | —              | —                 |
+| Environment     | Detection                                                           | Collections | Indexes | Critical check | Failure mode      |
+| --------------- | ------------------------------------------------------------------- | ----------- | ------- | -------------- | ----------------- |
+| **production**  | `APP_ENV=production` (or `NODE_ENV=production` fallback)            | ensure      | —       | yes            | **abort startup** |
+| **staging**     | `APP_ENV=staging`                                                   | ensure      | —       | yes            | warn only         |
+| **development** | `APP_ENV=development`, or unset (`NODE_ENV != production` fallback) | ensure      | sync    | —              | —                 |
 
 **Production** — the lightweight path ensures collections exist, then verifies
 that all critical indexes (uniqueness constraints, auth lookups) are present.
@@ -484,12 +484,12 @@ error.
 
 #### Overriding the environment
 
-Set `BOOTSTRAP_ENV` to `production`, `staging`, or `development` to override
+Set `APP_ENV` to `production`, `staging`, or `development` to override
 automatic detection. This is useful for testing production bootstrap behaviour
 locally:
 
 ```bash
-BOOTSTRAP_ENV=production npm run dev
+APP_ENV=production npm run dev
 ```
 
 ### Production index rollout
