@@ -94,8 +94,6 @@ export default [
       'coverage',
       'storybook-static',
       'app/routeTree.gen.ts',
-      'server.cjs',
-      'prod-server.js',
       'jest.config.cjs',
       'scripts/**',
     ],
