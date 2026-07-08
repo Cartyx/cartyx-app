@@ -1,15 +1,26 @@
-# Running Cartyx Realtime Locally
+# Running Cartyx Locally
 
-Two ways to run the `realtime/` WebSocket service (the PartyKit replacement) on your
-machine, both against Docker Desktop:
+Two ways to run the stack against Docker Desktop:
 
-| Path               | Use when                                                                                                   |
-| ------------------ | ---------------------------------------------------------------------------------------------------------- |
-| **docker-compose** | You just want the service running, no Kubernetes. Fastest.                                                 |
-| **kind**           | You want to test the real Kubernetes manifests, probes, and the Helm chart before they hit a real cluster. |
+| Path               | Use when                                                                                                                                |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| **docker-compose** | You want the web app + realtime service running together, no Kubernetes. Fastest.                                                       |
+| **kind**           | You want to test the real Kubernetes manifests, probes, and the Helm chart before they hit a real cluster. Realtime-only until Phase 3. |
 
-Both run the same image built from `realtime/Dockerfile` and both read secrets from
-the repo-root `.env`.
+The docker-compose path runs **two services**: `web` (built from the repo-root
+`Dockerfile.web`, served on host port **3100**) and `realtime` (built from
+`realtime/Dockerfile`, served on host port **1999**, unchanged from before). The `web`
+container depends on `realtime` passing its healthcheck before it starts. The kind
+path still only deploys `realtime` — it is unchanged.
+
+Both paths read secrets from the repo-root `.env`. For docker-compose specifically,
+you must run the command from the **repo root** with `--env-file .env` so the
+`VITE_PUBLIC_*` build args (feature flags, PostHog keys) interpolate into the `web`
+image at build time — running it any other way, or omitting `--env-file .env`, builds
+`web` with those flags unset.
+
+`npm run e2e:container` (added in the next task) is the scripted way to bring this
+stack up, exercise it, and tear it down — see that task for details.
 
 ## Prerequisites
 
@@ -37,20 +48,23 @@ Both paths read the repo-root `.env`. Two variables matter:
 
 ## Path A — docker-compose
 
+Run from the repo root:
+
 ```bash
-docker compose -f deploy/local/compose.yaml up --build
+docker compose --env-file .env -f deploy/local/compose.yaml up --build
 ```
 
 Verify in another terminal:
 
 ```bash
+curl http://localhost:3100/healthz   # -> {"status":"ok"}
 curl http://localhost:1999/healthz   # -> ok
 ```
 
 Stop:
 
 ```bash
-docker compose -f deploy/local/compose.yaml down
+docker compose --env-file .env -f deploy/local/compose.yaml down
 ```
 
 ## Path B — kind
@@ -71,8 +85,14 @@ Tear down (deletes the cluster):
 
 ## Connect the web app
 
-The realtime service is reachable at `localhost:1999` in both paths, which is already
-the web app's default (`VITE_PUBLIC_PARTYKIT_HOST=localhost:1999`). Just run the app:
+In the docker-compose path, the `web` service is already wired to the composed
+`realtime` service via `localhost:1999` (the host port mapping), so no extra
+configuration is needed — just open `http://localhost:3100`.
+
+If instead you're running the web app outside of compose (e.g. `npm run dev`) against
+a realtime service from either path, the realtime service is reachable at
+`localhost:1999`, which is already the web app's default
+(`VITE_PUBLIC_PARTYKIT_HOST=localhost:1999`):
 
 ```bash
 npm run dev
@@ -84,7 +104,8 @@ between them, and chat history should return on reload (when `MONGODB_URI` is se
 ## Verify
 
 ```bash
-curl http://localhost:1999/healthz            # -> ok (200)
+curl http://localhost:3100/healthz            # -> {"status":"ok"} (200, web, docker-compose only)
+curl http://localhost:1999/healthz            # -> ok (200, realtime, both paths)
 ```
 
 For an authenticated WebSocket smoke test you need a valid party token signed with the
@@ -92,7 +113,7 @@ same `SESSION_SECRET`; the easiest full check is the two-browser flow above.
 
 ## Teardown
 
-- compose: `docker compose -f deploy/local/compose.yaml down`
+- compose: `docker compose --env-file .env -f deploy/local/compose.yaml down`
 - kind: `./deploy/local/deploy-kind.sh down`
 
 ## Troubleshooting
@@ -102,5 +123,7 @@ same `SESSION_SECRET`; the easiest full check is the two-browser flow above.
 | Every connection returns `401`                       | `SESSION_SECRET` in `.env` doesn't match the app's. Make them identical and redeploy.                                                                                  |
 | Pod stuck `ErrImageNeverPull`                        | kind didn't get the image. Re-run `./deploy/local/deploy-kind.sh` (it rebuilds and `kind load`s); the chart uses `pullPolicy: Never` so the image must be side-loaded. |
 | `port 1999 already in use`                           | The compose path and the kind path both bind host `1999`. Stop one before starting the other (`docker compose ... down` / `deploy-kind.sh down`).                      |
+| `port 3100 already in use`                           | Another compose stack (or leftover container) is holding the port. `docker compose --env-file .env -f deploy/local/compose.yaml down` and retry.                       |
 | Rollout times out                                    | Inspect logs: `kubectl -n cartyx-local logs deploy/cartyx-realtime`.                                                                                                   |
 | `SESSION_SECRET is empty or missing` from the script | The repo-root `.env` has no `SESSION_SECRET`. Add it (matching the app's).                                                                                             |
+| `web` build args come out empty/false                | You ran compose without `--env-file .env`, or not from the repo root. `VITE_PUBLIC_*` args only interpolate when both are true.                                        |
