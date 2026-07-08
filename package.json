@@ -21,6 +21,8 @@
     "test:watch": "vitest --project unit",
     "test:coverage": "vitest run --project unit --coverage",
     "test:ci": "vitest run --project unit --coverage --reporter=verbose",
+    "e2e": "playwright test",
+    "e2e:container": "bash deploy/local/e2e-container.sh",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "build-storybook:full": "node scripts/build-storybook-with-iframe.mjs",
