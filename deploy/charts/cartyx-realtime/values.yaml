@@ -1,4 +1,11 @@
 # Production-shaped defaults. Local overrides live in values-local.yaml.
+# MUST stay 1: rooms and relay state live in per-pod in-memory maps with no
+# cross-pod sharing or sticky session routing yet. Scaling this out today
+# silently splits clients into disjoint rooms depending on which pod they
+# land on. Raising this requires either sticky routing (e.g. an
+# ip-hash/consistent-hash Service or session-affinity) or moving room state
+# out of process (e.g. Redis) first. The deployment template enforces this
+# with a `fail` guard.
 replicaCount: 1
 
 image:

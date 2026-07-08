@@ -31,10 +31,18 @@ require_tools() {
 }
 
 # Read KEY=value from the repo-root .env without exporting the whole file.
+# Mirrors dotenv/compose semantics: tolerates an optional leading "export ",
+# strips a trailing " #comment" from unquoted values (but never from inside
+# quotes, and never when the "#" isn't preceded by whitespace), then strips
+# a single layer of surrounding quotes. Last occurrence of KEY wins.
 read_env_value() {
   local key="$1"
   [ -f "$ENV_FILE" ] || return 1
-  sed -n "s/^[[:space:]]*${key}=//p" "$ENV_FILE" | tr -d '\r' | tail -n1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+  sed -n "s/^[[:space:]]*\(export[[:space:]][[:space:]]*\)\{0,1\}${key}=//p" "$ENV_FILE" \
+    | tr -d '\r' \
+    | tail -n1 \
+    | sed "/^[\"']/!s/[[:space:]]\\{1,\\}#.*\$//" \
+    | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
 }
 
 down() {
@@ -56,6 +64,16 @@ up() {
   mongodb_uri=$(read_env_value MONGODB_URI || true)
   if [ -z "${mongodb_uri:-}" ]; then
     log "MONGODB_URI not set in .env — the service will use in-memory history (lost on restart)."
+  else
+    # Redact credentials before logging: only print what follows the last
+    # "@" (host/db/params). If there's no "@" the whole string could be an
+    # unauthenticated URI *or* a credential with no host separator, so don't
+    # print any of it.
+    if [[ "$mongodb_uri" == *@* ]]; then
+      log "MONGODB_URI set — persisting history to ...@${mongodb_uri##*@}"
+    else
+      log "MONGODB_URI set — persisting history to the configured database."
+    fi
   fi
 
   if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER"; then

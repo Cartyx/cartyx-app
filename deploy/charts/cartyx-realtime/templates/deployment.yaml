@@ -5,12 +5,17 @@ metadata:
   labels:
     {{- include "cartyx-realtime.labels" . | nindent 4 }}
 spec:
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- fail "replicaCount > 1 is not supported: rooms are per-pod in-memory state with no sticky routing" }}
+{{- end }}
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
       {{- include "cartyx-realtime.selectorLabels" . | nindent 6 }}
   template:
     metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
       labels:
         {{- include "cartyx-realtime.selectorLabels" . | nindent 8 }}
     spec:
