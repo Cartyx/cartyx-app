@@ -1,7 +1,7 @@
 # Self-Host Migration Roadmap (Vercel + PartyKit → k3s home lab)
 
 > **This is the master roadmap.** Each phase gets its own detailed implementation plan when it starts.
-> Phase 1's plan exists: `2026-07-07-realtime-service.md`. Architecture reference: the full-system
+> Phase 1's plan exists: `2026-07-07-realtime-service-plan.md`. Architecture reference: the full-system
 > diagram artifact (https://claude.ai/code/artifact/cff4cb15-5032-4fc2-857a-39a774e5b185).
 
 **Goal:** Run Cartyx (prod + dev) entirely on a single-node k3s cluster on the home-lab Linux box, keeping MongoDB Atlas and Cloudflare R2, eliminating Vercel, PartyKit, and PostHog.
@@ -49,7 +49,7 @@ No repo code. Checklist:
 
 ### Phase 1 — Realtime service (replaces PartyKit) ✅ plan written
 
-Detailed plan: `docs/superpowers/plans/2026-07-07-realtime-service.md`.
+Detailed plan: `docs/specs/2026-07-07-realtime-service-plan.md`.
 
 New `realtime/` package: Node 22 + `ws` + `jose` + `mongodb`. Ports the three parties (`main` chat/dice with Mongo-persisted 50-message history, `tabletop` relay, `tabletop_map` gated relay + authenticated POST broadcast). Speaks partysocket's `/parties/:party/:room` convention on port 1999 — zero client changes. Ends with a Dockerfile.
 

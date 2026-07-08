@@ -120,6 +120,14 @@ export function createRealtimeServer(opts: RealtimeServerOptions): Server {
       const room = rooms.get(target.party, target.roomId);
       const peer = room.addPeer(ws, auth);
       const handler = opts.handlers[target.party];
+      ws.on('error', (err) => {
+        console.error(`[realtime] socket error (peer ${peer.id}):`, err);
+        try {
+          ws.terminate();
+        } catch {
+          // already closed
+        }
+      });
       invokeSafely('onConnect', () => handler.onConnect?.(peer, room));
       ws.on('message', (data) => {
         invokeSafely('onMessage', () => handler.onMessage(data.toString(), peer, room));

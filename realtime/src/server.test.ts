@@ -109,4 +109,25 @@ describe('realtime server core', () => {
     expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
     ws.close();
   });
+
+  it('survives a malformed (invalid-UTF-8) text frame from an authenticated peer', async () => {
+    server = makeServer();
+    const port = await listen(server);
+    const token = await makeToken({ sub: 'a', sessionId: 'room-1' });
+    const ws = await connect(port, 'main', 'room-1', token);
+    // Invalid UTF-8 in a text frame → ws emits 'error' on this socket.
+    ws.send(Buffer.from([0xc3, 0x28]), { binary: false });
+    await new Promise((r) => setTimeout(r, 50));
+    // The offending socket is torn down, but the server stays up.
+    expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+    // A fresh client can still connect and get a WELCOME.
+    const ws2 = await connect(
+      port,
+      'main',
+      'room-1',
+      await makeToken({ sub: 'b', sessionId: 'room-1' })
+    );
+    expect(JSON.parse(await nextMessage(ws2))).toMatchObject({ type: 'WELCOME' });
+    ws2.close();
+  });
 });

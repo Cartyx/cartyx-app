@@ -49,3 +49,10 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     setTimeout(() => process.exit(0), 5000).unref();
   });
 }
+
+process.on('uncaughtException', (err) => {
+  console.error('[realtime] uncaughtException:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[realtime] unhandledRejection:', reason);
+});
