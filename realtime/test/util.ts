@@ -19,6 +19,11 @@ export function listen(server: Server): Promise<number> {
   });
 }
 
+type BufferedSocket = WebSocket & {
+  __queue: string[];
+  __waiters: Array<(msg: string) => void>;
+};
+
 export function connect(
   port: number,
   party: string,
@@ -28,12 +33,25 @@ export function connect(
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(
       `ws://127.0.0.1:${port}/parties/${party}/${room}?token=${encodeURIComponent(token)}&_pk=test`
-    );
+    ) as BufferedSocket;
+    ws.__queue = [];
+    ws.__waiters = [];
+    // Buffer every frame from the start so a message can never be lost
+    // between connection and the first nextMessage() call.
+    ws.on('message', (d) => {
+      const msg = d.toString();
+      const waiter = ws.__waiters.shift();
+      if (waiter) waiter(msg);
+      else ws.__queue.push(msg);
+    });
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
   });
 }
 
 export function nextMessage(ws: WebSocket): Promise<string> {
-  return new Promise((resolve) => ws.once('message', (d) => resolve(d.toString())));
+  const buffered = ws as BufferedSocket;
+  const queued = buffered.__queue.shift();
+  if (queued !== undefined) return Promise.resolve(queued);
+  return new Promise((resolve) => buffered.__waiters.push(resolve));
 }

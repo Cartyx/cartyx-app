@@ -58,7 +58,7 @@ export function createRealtimeServer(opts: RealtimeServerOptions): Server {
     res.end();
   });
 
-  server.on('upgrade', (req: IncomingMessage, socket, head) => {
+  server.on('upgrade', async (req: IncomingMessage, socket, head) => {
     const target = parsePartyUrl(req.url);
     if (!target) {
       socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
@@ -66,43 +66,29 @@ export function createRealtimeServer(opts: RealtimeServerOptions): Server {
       return;
     }
     const token = new URL(req.url ?? '/', 'http://internal').searchParams.get('token');
-
-    // Quick validation: reject obviously invalid tokens before upgrade
-    if (!token || typeof token !== 'string' || !token.includes('.')) {
-      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-      socket.destroy();
-      return;
-    }
-
-    const authPromise = verifyConnectionToken(
+    const auth = await verifyConnectionToken(
       target.party,
       target.roomId,
       token,
       opts.sessionSecret
     );
-
+    if (!auth) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      authPromise
-        .then((auth) => {
-          if (!auth) {
-            ws.terminate();
-            return;
-          }
-          const room = rooms.get(target.party, target.roomId);
-          const peer = room.addPeer(ws, auth);
-          const handler = opts.handlers[target.party];
-          handler.onConnect?.(peer, room);
-          ws.on('message', (data) => {
-            void handler.onMessage(data.toString(), peer, room);
-          });
-          ws.on('close', () => {
-            room.removePeer(peer);
-            rooms.releaseIfEmpty(room);
-          });
-        })
-        .catch(() => {
-          ws.terminate();
-        });
+      const room = rooms.get(target.party, target.roomId);
+      const peer = room.addPeer(ws, auth);
+      const handler = opts.handlers[target.party];
+      void handler.onConnect?.(peer, room);
+      ws.on('message', (data) => {
+        void handler.onMessage(data.toString(), peer, room);
+      });
+      ws.on('close', () => {
+        room.removePeer(peer);
+        rooms.releaseIfEmpty(room);
+      });
     });
   });
 
