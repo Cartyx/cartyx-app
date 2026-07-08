@@ -10,6 +10,7 @@ import {
   generateCodeVerifier,
   deriveCodeChallenge,
 } from '~/server/utils/oauth';
+import { resolveEnvironment } from '~/server/db/policy';
 
 const VALID_PROVIDERS = ['google', 'github', 'apple'] as const;
 
@@ -36,7 +37,7 @@ const initiateOAuth = createServerFn({ method: 'GET' })
     // Same mechanism/lifetime: created at authorize, consumed at callback.
     const cookieOpts = {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: resolveEnvironment() !== 'development',
       sameSite: 'lax' as const,
       maxAge: 600,
       path: '/',
