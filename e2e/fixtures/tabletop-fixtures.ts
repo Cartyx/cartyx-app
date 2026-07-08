@@ -1,6 +1,6 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { test as base, expect } from '@playwright/test';
+import { test as base, expect, type Page } from '@playwright/test';
 
 interface SeedData {
   campaignId: string;
@@ -55,3 +55,29 @@ export const test = base.extend<{
 });
 
 export { expect };
+
+/**
+ * Click the Wiki inspector tab and wait for it to actually take effect.
+ *
+ * On a cold `vite dev` server the client bundle can take many seconds to
+ * hydrate. A click fired before React attaches its event listeners lands on
+ * inert SSR markup: no error, no state change, and the test has no way to
+ * tell the difference from a normal click — it just silently does nothing,
+ * and everything that depends on the Wiki panel being active times out much
+ * later with a confusing error.
+ *
+ * Instead of a fixed sleep (which would either be too short under load or
+ * needlessly slow otherwise), retry the click until the tab is provably
+ * selected. Once hydration completes, the very next retry's click succeeds
+ * immediately, so this only costs real wall-clock time on genuinely slow
+ * cold starts.
+ */
+export async function openWikiTab(page: Page): Promise<void> {
+  const wikiTab = page.getByRole('tab', { name: 'Wiki' });
+  await expect(wikiTab).toBeVisible();
+
+  await expect(async () => {
+    await wikiTab.click();
+    await expect(wikiTab).toHaveAttribute('aria-selected', 'true', { timeout: 1000 });
+  }).toPass({ timeout: 20_000 });
+}
