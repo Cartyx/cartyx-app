@@ -1,10 +1,11 @@
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
+ENV MONGOMS_DISABLE_POSTINSTALL=1
 RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
-RUN npm run build && npm prune --omit=dev
+RUN npm run build && npm prune --omit=dev && rm -rf node_modules/.cache
 
 FROM node:22-alpine
 ENV NODE_ENV=production
