@@ -1389,13 +1389,15 @@ describe('openWindow', () => {
     expect(result.window.x).toBeNull();
     expect(result.window.y).toBeNull();
 
-    // The dedupe guarantee lives in the filter shape: assert the atomic
-    // update excludes any document that already has a window for this ref.
+    // The dedupe AND cap guarantees live in the filter shape: assert the
+    // atomic update excludes any document that already has a window for this
+    // ref, and any document already at the window cap.
     const [filter, update] = vi.mocked(GMScreen.updateOne).mock.calls[0]!;
     expect(filter).toMatchObject({
       _id: 'screen-1',
       campaignId: 'camp-1',
       $nor: [{ windows: { $elemMatch: { collection: 'note', documentId: 'note-2' } } }],
+      $expr: { $lt: [{ $size: { $ifNull: ['$windows', []] } }, 20] },
     });
     expect(update).toMatchObject({
       $push: { windows: expect.objectContaining({ collection: 'note', documentId: 'note-2' }) },
@@ -1435,6 +1437,8 @@ describe('openWindow', () => {
     expect(result.window.state).toBe('open');
     expect(result.window.zIndex).toBe(6); // max(1,5) + 1
     expect(screen.save).toHaveBeenCalled();
+    // The focus path never attempts the atomic create push.
+    expect(GMScreen.updateOne).not.toHaveBeenCalled();
   });
 
   it('enforces the 20-window cap', async () => {
@@ -1768,6 +1772,97 @@ describe('openWindow', () => {
     // "created".
     expect(GMScreen.updateOne).toHaveBeenCalledTimes(2);
     expect(existedFlags).toEqual([false, true]);
+  });
+
+  it('closes the cap race: two concurrent opens of DIFFERENT refs at length cap-1 — exactly one succeeds, the loser gets the cap error', async () => {
+    // Both calls read the screen at 19 windows (one below the cap), so both
+    // pass the early app-level length check. Without the cap folded into the
+    // atomic filter, both pushes would land and the screen would end up with
+    // 21 windows (the schema validator doesn't run on updateOne pushes).
+    const nineteenWindows = Array.from({ length: 19 }, (_, i) => ({
+      _id: `win-${i}`,
+      collection: 'note',
+      documentId: `note-${i}`,
+      state: 'open',
+      zIndex: i,
+    }));
+    const screenA = makeScreenWithWindows([...nineteenWindows]);
+    const screenB = makeScreenWithWindows([...nineteenWindows]);
+    vi.mocked(GMScreen.findOne)
+      .mockResolvedValueOnce(screenA as never) // call A's initial read
+      .mockResolvedValueOnce(screenB as never); // call B's initial read
+
+    // A's atomic push wins (filter matched: dedupe clear AND size 19 < 20).
+    mockSuccessfulAtomicPush({
+      _id: 'win-a',
+      collection: 'note',
+      documentId: 'note-a',
+      state: 'open',
+      x: null,
+      y: null,
+      width: null,
+      height: null,
+      zIndex: 20,
+    });
+    // B's push loses: the $expr size condition no longer matches (the
+    // document now has 20 windows). B re-fetches canonical state, does NOT
+    // find its own ref (different ref from A's — this is a cap loss, not a
+    // dedupe loss), sees length >= cap, and must throw the cap error.
+    vi.mocked(GMScreen.updateOne).mockResolvedValueOnce({
+      acknowledged: true,
+      matchedCount: 0,
+      modifiedCount: 0,
+      upsertedCount: 0,
+      upsertedId: null,
+    } as never);
+    const refreshedAtCap = makeScreenWithWindows([
+      ...nineteenWindows,
+      {
+        _id: 'win-a',
+        collection: 'note',
+        documentId: 'note-a',
+        state: 'open',
+        zIndex: 20,
+      },
+    ]);
+    vi.mocked(GMScreen.findOne).mockResolvedValueOnce(refreshedAtCap as never);
+
+    const [resultA, resultB] = await Promise.allSettled([
+      _openWindow({
+        data: {
+          screenId: 'screen-1',
+          campaignId: 'camp-1',
+          collection: 'note',
+          documentId: 'note-a',
+        },
+      }),
+      _openWindow({
+        data: {
+          screenId: 'screen-1',
+          campaignId: 'camp-1',
+          collection: 'note',
+          documentId: 'note-b',
+        },
+      }),
+    ]);
+
+    expect(resultA.status).toBe('fulfilled');
+    if (resultA.status === 'fulfilled') {
+      expect(resultA.value.existed).toBe(false);
+      expect(resultA.value.window.documentId).toBe('note-a');
+    }
+    expect(resultB.status).toBe('rejected');
+    if (resultB.status === 'rejected') {
+      expect(String(resultB.reason)).toContain('A screen cannot have more than 20 windows');
+    }
+
+    // Both pushes carried the cap condition in their filter — the guarantee
+    // is enforced by Mongo at write time, not by the stale app-level read.
+    for (const call of vi.mocked(GMScreen.updateOne).mock.calls) {
+      expect(call[0]).toMatchObject({
+        $expr: { $lt: [{ $size: { $ifNull: ['$windows', []] } }, 20] },
+      });
+    }
   });
 
   it('fires gmscreen_window_focused analytics event for existing window', async () => {

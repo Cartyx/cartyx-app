@@ -399,6 +399,7 @@ describe('openTabletopWindow (handler)', () => {
       _id: 'screen-1',
       campaignId: 'camp-1',
       $nor: [{ windows: { $elemMatch: { collection: 'note', documentId: 'note-2' } } }],
+      $expr: { $lt: [{ $size: { $ifNull: ['$windows', []] } }, 20] },
     });
     expect(update).toMatchObject({
       $push: { windows: expect.objectContaining({ collection: 'note', documentId: 'note-2' }) },
@@ -640,5 +641,87 @@ describe('openTabletopWindow (handler)', () => {
     const existedFlags = [resultA.existed, resultB.existed].sort();
     expect(TabletopScreen.updateOne).toHaveBeenCalledTimes(2);
     expect(existedFlags).toEqual([false, true]);
+  });
+
+  it('closes the cap race: two concurrent opens of DIFFERENT refs at length cap-1 — exactly one succeeds, the loser gets the cap error', async () => {
+    // Mirrors the gmscreens cap-race test — see that file for the fuller
+    // rationale. Both calls read 19 windows (below the cap), both pass the
+    // early length check; the cap folded into the atomic filter is what
+    // stops the second push from landing a 21st window.
+    const nineteenWindows = Array.from({ length: 19 }, (_, i) => ({
+      _id: `win-${i}`,
+      collection: 'note',
+      documentId: `note-${i}`,
+      state: 'open',
+      zIndex: i,
+    }));
+    const screenA = makeScreenWithWindows([...nineteenWindows]);
+    const screenB = makeScreenWithWindows([...nineteenWindows]);
+    vi.mocked(TabletopScreen.findOne)
+      .mockResolvedValueOnce(screenA as never)
+      .mockResolvedValueOnce(screenB as never);
+
+    // A's atomic push wins.
+    mockSuccessfulAtomicPush({
+      _id: 'win-a',
+      collection: 'note',
+      documentId: 'note-a',
+      state: 'open',
+      x: null,
+      y: null,
+      width: null,
+      height: null,
+      zIndex: 20,
+    });
+    // B's push loses on the $expr size condition (doc now has 20 windows);
+    // B's re-fetch does not contain B's ref → cap error, not a focus.
+    vi.mocked(TabletopScreen.updateOne).mockResolvedValueOnce({
+      acknowledged: true,
+      matchedCount: 0,
+      modifiedCount: 0,
+      upsertedCount: 0,
+      upsertedId: null,
+    } as never);
+    const refreshedAtCap = makeScreenWithWindows([
+      ...nineteenWindows,
+      { _id: 'win-a', collection: 'note', documentId: 'note-a', state: 'open', zIndex: 20 },
+    ]);
+    vi.mocked(TabletopScreen.findOne).mockResolvedValueOnce(refreshedAtCap as never);
+
+    const [resultA, resultB] = await Promise.allSettled([
+      _openTabletopWindow({
+        data: {
+          screenId: 'screen-1',
+          campaignId: 'camp-1',
+          collection: 'note',
+          documentId: 'note-a',
+        },
+      }),
+      _openTabletopWindow({
+        data: {
+          screenId: 'screen-1',
+          campaignId: 'camp-1',
+          collection: 'note',
+          documentId: 'note-b',
+        },
+      }),
+    ]);
+
+    expect(resultA.status).toBe('fulfilled');
+    if (resultA.status === 'fulfilled') {
+      expect(resultA.value.existed).toBe(false);
+      expect(resultA.value.window.documentId).toBe('note-a');
+    }
+    expect(resultB.status).toBe('rejected');
+    if (resultB.status === 'rejected') {
+      expect(String(resultB.reason)).toContain('A screen cannot have more than 20 windows');
+    }
+
+    // Both pushes carried the cap condition in their filter.
+    for (const call of vi.mocked(TabletopScreen.updateOne).mock.calls) {
+      expect(call[0]).toMatchObject({
+        $expr: { $lt: [{ $size: { $ifNull: ['$windows', []] } }, 20] },
+      });
+    }
   });
 });

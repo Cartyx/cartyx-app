@@ -689,7 +689,9 @@ export const openTabletopWindow = async ({
       return { success: true, window: serializeWindow(existing), existed: true };
     }
 
-    // Enforce cap
+    // Enforce cap — fast-path only. Like the `existing` check above, this
+    // reads a possibly-stale snapshot; the authoritative cap enforcement is
+    // the $expr size condition in the atomic filter below.
     if (windows.length >= TABLETOP_LIMITS.MAX_WINDOWS) {
       throw new Error(`A screen cannot have more than ${TABLETOP_LIMITS.MAX_WINDOWS} windows`);
     }
@@ -711,12 +713,14 @@ export const openTabletopWindow = async ({
     };
 
     // Atomic conditional push — this is the fix for the create/create race:
-    // two concurrent calls can both pass the `existing` check above (both
-    // read the array before either write lands), but this filter is
+    // two concurrent calls can both pass the `existing` and cap checks above
+    // (both read the array before either write lands), but this filter is
     // re-evaluated by Mongo against the *current* document at write time.
-    // Only one of the two updates can match (the array either does or
-    // doesn't contain a window for this ref at that instant), so at most
-    // one push ever lands — no duplicate sub-document.
+    // The $nor clause rejects the push when a window for this ref already
+    // exists (dedupe); the $expr size clause rejects it when the array is
+    // already at the cap — needed because schema validators don't run on
+    // updateOne pushes, so without it two concurrent opens of *different*
+    // refs at length cap-1 would land cap+1 windows.
     const pushResult = await TabletopScreen.updateOne(
       {
         _id: data.screenId,
@@ -728,6 +732,11 @@ export const openTabletopWindow = async ({
             },
           },
         ],
+        // $ifNull guards legacy documents that predate the windows field —
+        // $size on a missing field errors inside $expr instead of not matching.
+        $expr: {
+          $lt: [{ $size: { $ifNull: ['$windows', []] } }, TABLETOP_LIMITS.MAX_WINDOWS],
+        },
       },
       {
         $push: { windows: newWindow },
@@ -735,7 +744,7 @@ export const openTabletopWindow = async ({
       }
     );
 
-    if (pushResult && pushResult.modifiedCount > 0) {
+    if (pushResult.modifiedCount > 0) {
       // Re-fetch just the pushed sub-doc so we can return its Mongoose-assigned _id.
       const refetched = (await TabletopScreen.findOne(
         { _id: data.screenId, campaignId: data.campaignId },
@@ -765,10 +774,11 @@ export const openTabletopWindow = async ({
       return { success: true, window: serializeWindow(created), existed: false };
     }
 
-    // Lost the race: another concurrent call already created a window for
-    // this ref between our read above and this write (or it was closed
-    // meanwhile, or the cap was hit by another writer). Re-fetch canonical
-    // state and focus the winner instead of creating a duplicate.
+    // The filter didn't match: either another concurrent call created a
+    // window for this ref first (dedupe loss), or a concurrent open of a
+    // *different* ref filled the last cap slot ($expr loss), or the screen
+    // was deleted. Re-fetch canonical state to tell these apart: ref present
+    // → focus the winner; ref absent at cap → cap error; otherwise not found.
     const refreshed = await TabletopScreen.findOne({
       _id: data.screenId,
       campaignId: data.campaignId,
