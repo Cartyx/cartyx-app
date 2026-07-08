@@ -34,9 +34,22 @@ function invokeSafely(label: string, fn: () => void | Promise<void>): void {
   }
 }
 
+type LiveSocket = import('ws').WebSocket & { isAlive?: boolean };
+
 export function createRealtimeServer(opts: RealtimeServerOptions): Server {
   const rooms = new RoomManager();
   const wss = new WebSocketServer({ noServer: true });
+
+  const heartbeat = setInterval(() => {
+    for (const client of wss.clients as Set<LiveSocket>) {
+      if (client.isAlive === false) {
+        client.terminate();
+        continue;
+      }
+      client.isAlive = false;
+      client.ping();
+    }
+  }, 30_000);
 
   const server = createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://internal');
@@ -102,6 +115,8 @@ export function createRealtimeServer(opts: RealtimeServerOptions): Server {
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
+      (ws as LiveSocket).isAlive = true;
+      ws.on('pong', () => ((ws as LiveSocket).isAlive = true));
       const room = rooms.get(target.party, target.roomId);
       const peer = room.addPeer(ws, auth);
       const handler = opts.handlers[target.party];
@@ -117,6 +132,7 @@ export function createRealtimeServer(opts: RealtimeServerOptions): Server {
   });
 
   server.on('close', () => {
+    clearInterval(heartbeat);
     for (const ws of wss.clients) ws.terminate();
   });
 
