@@ -1,0 +1,32 @@
+# Production-shaped defaults. Local overrides live in values-local.yaml.
+replicaCount: 1
+
+image:
+  repository: cartyx-realtime
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 1999
+  nodePort: null # only honored when type is NodePort
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi # no CPU limit — avoids event-loop throttling
+
+env:
+  PORT: "1999"
+
+# Secret values are injected at deploy time (helm --set-string) from .env.
+# Empty by default and never committed. An empty mongodbUri makes the
+# service fall back to in-memory history.
+secret:
+  sessionSecret: ""
+  mongodbUri: ""
+
+nameOverride: ""
+fullnameOverride: ""
