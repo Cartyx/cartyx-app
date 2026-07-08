@@ -62,6 +62,15 @@ describe('broadcastActiveMapChanged — REALTIME_INTERNAL_HOST resolution', () =
     expect(url).toBe('http://localhost:1999/parties/tabletop_map/tabletop-map-campaign-1');
   });
 
+  it('treats an empty REALTIME_INTERNAL_HOST (dotenv "VAR=" line) as unset and falls through to the fallback host', async () => {
+    process.env.REALTIME_INTERNAL_HOST = '';
+    process.env.VITE_PUBLIC_PARTYKIT_HOST = 'localhost:1999';
+    await broadcastActiveMapChanged('campaign-1', 'map-1', 'screen-1');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url).toBe('http://localhost:1999/parties/tabletop_map/tabletop-map-campaign-1');
+  });
+
   it('prefers REALTIME_INTERNAL_HOST over VITE_PUBLIC_PARTYKIT_HOST when both are set', async () => {
     process.env.REALTIME_INTERNAL_HOST = 'realtime:1999';
     process.env.VITE_PUBLIC_PARTYKIT_HOST = 'localhost:1999';

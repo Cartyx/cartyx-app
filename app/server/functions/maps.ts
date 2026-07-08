@@ -114,8 +114,11 @@ export async function broadcastActiveMapChanged(
   mapId: string | null,
   screenId: string | null
 ): Promise<void> {
+  // `||` (not `??`): a dotenv/--env-file `REALTIME_INTERNAL_HOST=` line yields
+  // '' — non-nullish but useless — and must fall through to the fallback
+  // instead of silently no-oping the broadcast via the `!host` guard below.
   const internalHost = process.env.REALTIME_INTERNAL_HOST;
-  const host = internalHost ?? process.env.VITE_PUBLIC_PARTYKIT_HOST;
+  const host = internalHost || process.env.VITE_PUBLIC_PARTYKIT_HOST;
   if (!host) return;
   // REALTIME_INTERNAL_HOST always names a same-network service (compose
   // service name, Kubernetes Service DNS) that is never TLS-terminated at
