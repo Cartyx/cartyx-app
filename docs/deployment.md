@@ -346,10 +346,11 @@ These are only needed in your local `.env` file:
 | Variable                 | Value                                    |
 | ------------------------ | ---------------------------------------- |
 | `PORT`                   | `3001` (or any open port)                |
-| `NODE_ENV`               | `development`                            |
 | `APPLE_PRIVATE_KEY_PATH` | `keys/apple.p8` (if using Apple Sign-In) |
 
-> **Note:** When `CDN_URL` is not set (local dev), image uploads fall back to the local filesystem (`public/uploads/`). No R2 credentials needed for local development.
+> **Note:** Don't set `NODE_ENV` in your local `.env`. `vite dev` sets `development` itself, and `npm run build` now forces `NODE_ENV=production` — `APP_ENV` (see above) is what controls runtime environment semantics (DB bootstrap policy, analytics labels, upload fallback). A stray `NODE_ENV=development` in `.env` used to leak into `vite build` and produce a broken `.output` that 500s on every route.
+>
+> When `CDN_URL` is not set (local dev), image uploads fall back to the local filesystem (`public/uploads/`). No R2 credentials needed for local development.
 
 ---
 

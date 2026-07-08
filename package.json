@@ -9,7 +9,7 @@
   "scripts": {
     "prepare": "node -e \"const fs=require('fs'); if (fs.existsSync('.git')) require('child_process').execFileSync(process.platform === 'win32' ? 'npx.cmd' : 'npx', ['lefthook', 'install'], { stdio: 'inherit' });\"",
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "NODE_ENV=production vite build",
     "start": "node --env-file-if-exists=.env .output/server/index.mjs",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
