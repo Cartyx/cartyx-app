@@ -1,0 +1,39 @@
+# Production-shaped defaults. Local overrides live in values-local.yaml.
+# MUST stay 1: rooms and relay state live in per-pod in-memory maps with no
+# cross-pod sharing or sticky session routing yet. Scaling this out today
+# silently splits clients into disjoint rooms depending on which pod they
+# land on. Raising this requires either sticky routing (e.g. an
+# ip-hash/consistent-hash Service or session-affinity) or moving room state
+# out of process (e.g. Redis) first. The deployment template enforces this
+# with a `fail` guard.
+replicaCount: 1
+
+image:
+  repository: cartyx-realtime
+  tag: latest
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 1999
+  nodePort: null # only honored when type is NodePort
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi # no CPU limit — avoids event-loop throttling
+
+env:
+  PORT: "1999"
+
+# Secret values are injected at deploy time (helm --set-string) from .env.
+# Empty by default and never committed. An empty mongodbUri makes the
+# service fall back to in-memory history.
+secret:
+  sessionSecret: ""
+  mongodbUri: ""
+
+nameOverride: ""
+fullnameOverride: ""

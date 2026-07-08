@@ -1,0 +1,8 @@
+# Local kind overrides layered on top of values.yaml.
+image:
+  tag: local
+  pullPolicy: Never # use the kind-loaded image; never attempt a pull
+
+service:
+  type: NodePort
+  nodePort: 30199 # paired with deploy/local/kind-config.yaml host mapping 1999 -> 30199

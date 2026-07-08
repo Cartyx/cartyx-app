@@ -25,6 +25,7 @@
     "build-storybook": "storybook build",
     "build-storybook:full": "node scripts/build-storybook-with-iframe.mjs",
     "party:dev": "npx partykit dev",
+    "realtime:dev": "npm --prefix realtime run dev",
     "check:deps-age": "node scripts/check-package-age.mjs",
     "db:verify": "tsx scripts/mongo-admin.ts verify",
     "db:sync": "tsx scripts/mongo-admin.ts sync",

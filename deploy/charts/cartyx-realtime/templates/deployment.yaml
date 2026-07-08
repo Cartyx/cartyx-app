@@ -1,0 +1,58 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cartyx-realtime.fullname" . }}
+  labels:
+    {{- include "cartyx-realtime.labels" . | nindent 4 }}
+spec:
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- fail "replicaCount > 1 is not supported: rooms are per-pod in-memory state with no sticky routing" }}
+{{- end }}
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "cartyx-realtime.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "cartyx-realtime.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+      containers:
+        - name: realtime
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: ws
+              containerPort: {{ .Values.env.PORT | int }}
+          env:
+            - name: PORT
+              value: {{ .Values.env.PORT | quote }}
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cartyx-realtime.fullname" . }}
+                  key: sessionSecret
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cartyx-realtime.fullname" . }}
+                  key: mongodbUri
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: ws
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: ws
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
