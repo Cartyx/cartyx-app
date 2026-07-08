@@ -21,7 +21,7 @@ die() { printf '\033[1;31m[kind-deploy] ERROR:\033[0m %s\n' "$1" >&2; exit 1; }
 
 require_tools() {
   local missing=0 tool
-  for tool in docker kind kubectl helm; do
+  for tool in docker kind kubectl helm curl; do
     if ! command -v "$tool" >/dev/null 2>&1; then
       printf 'Missing required tool: %s\n' "$tool" >&2
       missing=1
@@ -34,7 +34,7 @@ require_tools() {
 read_env_value() {
   local key="$1"
   [ -f "$ENV_FILE" ] || return 1
-  sed -n "s/^[[:space:]]*${key}=//p" "$ENV_FILE" | tail -n1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
+  sed -n "s/^[[:space:]]*${key}=//p" "$ENV_FILE" | tr -d '\r' | tail -n1 | sed -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/"
 }
 
 down() {
@@ -71,12 +71,29 @@ up() {
   log "Loading image into kind..."
   kind load docker-image "$IMAGE" --name "$CLUSTER"
 
+  # helm's --set-string parser treats commas and backslashes as structural
+  # (list/nested-key separators), so escape them before passing values like a
+  # replica-set URI (mongodb://h1:27017,h2:27017/db).
+  local session_secret_esc mongodb_uri_esc
+  session_secret_esc="${session_secret//\\/\\\\}"
+  session_secret_esc="${session_secret_esc//,/\\,}"
+  mongodb_uri_esc="${mongodb_uri:-}"
+  mongodb_uri_esc="${mongodb_uri_esc//\\/\\\\}"
+  mongodb_uri_esc="${mongodb_uri_esc//,/\\,}"
+
   log "Deploying with Helm..."
   helm upgrade --install "$RELEASE" "$CHART_DIR" \
     -f "$CHART_DIR/values-local.yaml" \
     --namespace "$NAMESPACE" --create-namespace \
-    --set-string secret.sessionSecret="$session_secret" \
-    --set-string secret.mongodbUri="${mongodb_uri:-}"
+    --set-string secret.sessionSecret="$session_secret_esc" \
+    --set-string secret.mongodbUri="$mongodb_uri_esc"
+
+  # Image tag is the constant "local" with pullPolicy: Never, so a second `up`
+  # with a changed .env renders a byte-identical manifest and helm won't roll
+  # a new ReplicaSet on its own. Force a restart so the pod always picks up
+  # the freshly-loaded image and current secret values.
+  log "Restarting pods to pick up latest image/secrets..."
+  kubectl -n "$NAMESPACE" rollout restart "deploy/$RELEASE"
 
   log "Waiting for rollout..."
   kubectl -n "$NAMESPACE" rollout status "deploy/$RELEASE" --timeout=90s
