@@ -16,7 +16,22 @@ function parsePartyUrl(url: string | undefined): { party: PartyName; roomId: str
   const { pathname } = new URL(url, 'http://internal');
   const match = PARTY_PATH.exec(pathname);
   if (!match) return null;
-  return { party: match[1] as PartyName, roomId: decodeURIComponent(match[2]) };
+  try {
+    return { party: match[1] as PartyName, roomId: decodeURIComponent(match[2]) };
+  } catch {
+    return null; // malformed percent-encoding → treated as unknown path (404)
+  }
+}
+
+function invokeSafely(label: string, fn: () => void | Promise<void>): void {
+  try {
+    const result = fn();
+    if (result instanceof Promise) {
+      result.catch((err) => console.error(`[realtime] ${label} failed:`, err));
+    }
+  } catch (err) {
+    console.error(`[realtime] ${label} failed:`, err);
+  }
 }
 
 export function createRealtimeServer(opts: RealtimeServerOptions): Server {
@@ -45,13 +60,22 @@ export function createRealtimeServer(opts: RealtimeServerOptions): Server {
       }
       const chunks: Buffer[] = [];
       for await (const chunk of req) chunks.push(chunk as Buffer);
-      const [status, body] = await handler.onRequest(
-        rooms.get(target.party, target.roomId),
-        req.headers,
-        Buffer.concat(chunks).toString('utf8')
-      );
-      res.writeHead(status, { 'content-type': 'text/plain' });
-      res.end(body);
+      const room = rooms.get(target.party, target.roomId);
+      try {
+        const [status, body] = await handler.onRequest(
+          room,
+          req.headers,
+          Buffer.concat(chunks).toString('utf8')
+        );
+        res.writeHead(status, { 'content-type': 'text/plain' });
+        res.end(body);
+      } catch (err) {
+        console.error('[realtime] onRequest failed:', err);
+        res.writeHead(500, { 'content-type': 'text/plain' });
+        res.end('Internal error');
+      } finally {
+        rooms.releaseIfEmpty(room);
+      }
       return;
     }
     res.writeHead(404);
@@ -81,9 +105,9 @@ export function createRealtimeServer(opts: RealtimeServerOptions): Server {
       const room = rooms.get(target.party, target.roomId);
       const peer = room.addPeer(ws, auth);
       const handler = opts.handlers[target.party];
-      void handler.onConnect?.(peer, room);
+      invokeSafely('onConnect', () => handler.onConnect?.(peer, room));
       ws.on('message', (data) => {
-        void handler.onMessage(data.toString(), peer, room);
+        invokeSafely('onMessage', () => handler.onMessage(data.toString(), peer, room));
       });
       ws.on('close', () => {
         room.removePeer(peer);

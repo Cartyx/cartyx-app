@@ -77,4 +77,36 @@ describe('realtime server core', () => {
     expect(ws3got).toBe(false);
     for (const ws of [ws1, ws2, ws3]) ws.close();
   });
+
+  it('survives a malformed percent-encoded room id and keeps serving', async () => {
+    server = makeServer();
+    const port = await listen(server);
+    await expect(
+      new Promise((_, reject) => {
+        const bad = new RawWebSocket(`ws://127.0.0.1:${port}/parties/main/%zz`);
+        bad.once('error', reject);
+      })
+    ).rejects.toThrow(/404/);
+    expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+  });
+
+  it('survives a handler that throws in onMessage', async () => {
+    const throwing: PartyHandler = {
+      onMessage() {
+        throw new Error('handler boom');
+      },
+    };
+    server = createRealtimeServer({
+      sessionSecret: TEST_SECRET,
+      handlers: { main: throwing, tabletop: throwing, tabletop_map: throwing },
+    });
+    const port = await listen(server);
+    const token = await makeToken({ sub: 'a', sessionId: 'room-1' });
+    const ws = await connect(port, 'main', 'room-1', token);
+    ws.send('trigger');
+    await new Promise((r) => setTimeout(r, 50));
+    expect(ws.readyState).toBe(ws.OPEN); // connection survived
+    expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
+    ws.close();
+  });
 });
