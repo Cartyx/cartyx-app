@@ -35,14 +35,13 @@ function hostnameMatches(hostname: string, domain: string): boolean {
   return hostname === domain || hostname.endsWith(`.${domain}`);
 }
 
-function getClientEnvironment(currentUrl: string = window.location.href): string {
+export function getClientEnvironment(currentUrl: string = window.location.href): string {
   try {
     const url = new URL(currentUrl, window.location.origin);
     const { hostname } = url;
 
-    if (hostnameMatches(hostname, 'dev.cartyx.io')) return 'preview';
+    if (hostnameMatches(hostname, 'dev.cartyx.io')) return 'staging';
     if (hostnameMatches(hostname, 'cartyx.io')) return 'production';
-    if (hostnameMatches(hostname, 'vercel.app')) return 'preview';
     if (hostname === 'localhost' || hostname.endsWith('.localhost')) return 'development';
   } catch {
     return 'unknown';
