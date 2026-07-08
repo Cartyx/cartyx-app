@@ -58,10 +58,10 @@ export function createRealtimeServer(opts: RealtimeServerOptions): Server {
         res.end('Method not allowed');
         return;
       }
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) chunks.push(chunk as Buffer);
       const room = rooms.get(target.party, target.roomId);
       try {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(chunk as Buffer);
         const [status, body] = await handler.onRequest(
           room,
           req.headers,
