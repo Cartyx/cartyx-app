@@ -19,8 +19,8 @@ you must run the command from the **repo root** with `--env-file .env` so the
 image at build time — running it any other way, or omitting `--env-file .env`, builds
 `web` with those flags unset.
 
-`npm run e2e:container` (added in the next task) is the scripted way to bring this
-stack up, exercise it, and tear it down — see that task for details.
+`npm run e2e:container` is the scripted way to bring this stack up, run the
+Playwright suite against it, and tear it down.
 
 ## Prerequisites
 
