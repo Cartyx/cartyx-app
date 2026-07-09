@@ -3,6 +3,7 @@ import {
   setPostHogInstance,
   captureException,
   throttleExceptionEvent,
+  getClientEnvironment,
 } from '~/utils/posthog-client';
 
 // Throttling lives in the before_send hook (throttleExceptionEvent) so it also
@@ -115,5 +116,19 @@ describe('throttleExceptionEvent (before_send hook)', () => {
     const opaque = { event: '$exception', properties: {} } as any;
     expect(throttleExceptionEvent(opaque)).not.toBeNull();
     expect(throttleExceptionEvent(opaque)).not.toBeNull();
+  });
+});
+
+describe('getClientEnvironment', () => {
+  it.each([
+    ['https://cartyx.io/campaigns', 'production'],
+    ['https://www.cartyx.io/', 'production'],
+    ['https://dev.cartyx.io/campaigns', 'staging'],
+    ['http://localhost:3000/', 'development'],
+    ['http://app.localhost:3000/', 'development'],
+    ['https://cartyx-app.vercel.app/', 'unknown'],
+    ['https://evil-cartyx.io.example.com/', 'unknown'],
+  ])('maps %s to %s', (url, expected) => {
+    expect(getClientEnvironment(url)).toBe(expected);
   });
 });

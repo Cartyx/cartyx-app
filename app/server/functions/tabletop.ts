@@ -621,10 +621,34 @@ export const updateTabletopScreenSettings = async ({
  * **Duplicate rule:** If a window with the same `collection + documentId` already
  * exists on this screen, the existing window is focused (state -> 'open', zIndex
  * bumped to max + 1) and returned with `existed: true`.  No second window is
- * created for the same ref.
+ * created for the same ref — enforced atomically via a conditional
+ * `updateOne` filter (`$nor: [{ windows: { $elemMatch: {...} } }]`) so that
+ * two concurrent calls for the same ref cannot both create a window.
  */
 
 export { openTabletopWindowSchema };
+
+/**
+ * Focuses an already-open (or just-raced-open) window sub-doc: bumps its
+ * zIndex above the current max and sets state back to 'open', then persists
+ * via `.save()`. Shared by the "already existed on read" path and the
+ * "lost the atomic create race" fallback path in `openTabletopWindow`.
+ */
+async function focusWindowAndSave(
+  screen: { updatedAt: Date; save: () => Promise<unknown> },
+  windows: Array<{ zIndex?: number }>,
+  existing: { _id: unknown; state?: string; zIndex?: number }
+) {
+  const maxZ = windows.reduce(
+    (max: number, w: { zIndex?: number }) => Math.max(max, w.zIndex ?? 0),
+    0
+  );
+  existing.state = 'open';
+  existing.zIndex = maxZ + 1;
+  screen.updatedAt = new Date();
+  await screen.save();
+  return existing;
+}
 
 export const openTabletopWindow = async ({
   data,
@@ -654,15 +678,7 @@ export const openTabletopWindow = async ({
     );
 
     if (existing) {
-      // Focus existing: set state to open, bump zIndex
-      const maxZ = windows.reduce(
-        (max: number, w: { zIndex?: number }) => Math.max(max, w.zIndex ?? 0),
-        0
-      );
-      existing.state = 'open';
-      existing.zIndex = maxZ + 1;
-      screen.updatedAt = new Date();
-      await screen.save();
+      await focusWindowAndSave(screen, windows, existing);
 
       serverCaptureEvent(sessionUserId, 'tabletop_window_focused', {
         campaign_id: data.campaignId,
@@ -673,7 +689,9 @@ export const openTabletopWindow = async ({
       return { success: true, window: serializeWindow(existing), existed: true };
     }
 
-    // Enforce cap
+    // Enforce cap — fast-path only. Like the `existing` check above, this
+    // reads a possibly-stale snapshot; the authoritative cap enforcement is
+    // the $expr size condition in the atomic filter below.
     if (windows.length >= TABLETOP_LIMITS.MAX_WINDOWS) {
       throw new Error(`A screen cannot have more than ${TABLETOP_LIMITS.MAX_WINDOWS} windows`);
     }
@@ -693,20 +711,100 @@ export const openTabletopWindow = async ({
       height: null,
       zIndex: maxZ + 1,
     };
-    windows.push(newWindow);
-    screen.updatedAt = new Date();
-    await screen.save();
 
-    // The pushed sub-doc now has an _id assigned by Mongoose
-    const created = windows[windows.length - 1];
+    // Atomic conditional push — this is the fix for the create/create race:
+    // two concurrent calls can both pass the `existing` and cap checks above
+    // (both read the array before either write lands), but this filter is
+    // re-evaluated by Mongo against the *current* document at write time.
+    // The $nor clause rejects the push when a window for this ref already
+    // exists (dedupe); the $expr size clause rejects it when the array is
+    // already at the cap — needed because schema validators don't run on
+    // updateOne pushes, so without it two concurrent opens of *different*
+    // refs at length cap-1 would land cap+1 windows.
+    const pushResult = await TabletopScreen.updateOne(
+      {
+        _id: data.screenId,
+        campaignId: data.campaignId,
+        $nor: [
+          {
+            windows: {
+              $elemMatch: { collection: data.collection, documentId: data.documentId },
+            },
+          },
+        ],
+        // $ifNull guards legacy documents that predate the windows field —
+        // $size on a missing field errors inside $expr instead of not matching.
+        $expr: {
+          $lt: [{ $size: { $ifNull: ['$windows', []] } }, TABLETOP_LIMITS.MAX_WINDOWS],
+        },
+      },
+      {
+        $push: { windows: newWindow },
+        $set: { updatedAt: new Date() },
+      }
+    );
 
-    serverCaptureEvent(sessionUserId, 'tabletop_window_opened', {
+    if (pushResult.modifiedCount > 0) {
+      // Re-fetch just the pushed sub-doc so we can return its Mongoose-assigned _id.
+      const refetched = (await TabletopScreen.findOne(
+        { _id: data.screenId, campaignId: data.campaignId },
+        { windows: { $elemMatch: { collection: data.collection, documentId: data.documentId } } }
+      ).lean()) as {
+        windows?: Array<{
+          _id: unknown;
+          collection?: string;
+          documentId: unknown;
+          state?: string;
+          x?: number | null;
+          y?: number | null;
+          width?: number | null;
+          height?: number | null;
+          zIndex?: number;
+        }>;
+      } | null;
+      const created = refetched?.windows?.[0];
+      if (!created) throw new Error('Window not found after creation');
+
+      serverCaptureEvent(sessionUserId, 'tabletop_window_opened', {
+        campaign_id: data.campaignId,
+        screen_id: data.screenId,
+        window_id: String(created._id),
+      });
+
+      return { success: true, window: serializeWindow(created), existed: false };
+    }
+
+    // The filter didn't match: either another concurrent call created a
+    // window for this ref first (dedupe loss), or a concurrent open of a
+    // *different* ref filled the last cap slot ($expr loss), or the screen
+    // was deleted. Re-fetch canonical state to tell these apart: ref present
+    // → focus the winner; ref absent at cap → cap error; otherwise not found.
+    const refreshed = await TabletopScreen.findOne({
+      _id: data.screenId,
+      campaignId: data.campaignId,
+    });
+    if (!refreshed) throw new Error('Screen not found');
+    if (!refreshed.windows) refreshed.windows = [];
+    const race = refreshed.windows.find(
+      (w: { collection?: string; documentId?: unknown }) =>
+        w.collection === data.collection && String(w.documentId) === data.documentId
+    );
+    if (!race) {
+      if (refreshed.windows.length >= TABLETOP_LIMITS.MAX_WINDOWS) {
+        throw new Error(`A screen cannot have more than ${TABLETOP_LIMITS.MAX_WINDOWS} windows`);
+      }
+      throw new Error('Screen not found');
+    }
+
+    await focusWindowAndSave(refreshed, refreshed.windows, race);
+
+    serverCaptureEvent(sessionUserId, 'tabletop_window_focused', {
       campaign_id: data.campaignId,
       screen_id: data.screenId,
-      window_id: String(created._id),
+      window_id: String(race._id),
     });
 
-    return { success: true, window: serializeWindow(created), existed: false };
+    return { success: true, window: serializeWindow(race), existed: true };
   } catch (e) {
     serverCaptureException(e, sessionUserId, {
       action: 'openTabletopWindow',

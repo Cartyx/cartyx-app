@@ -1,6 +1,8 @@
-# Quick local path: run the realtime service directly, no Kubernetes.
-#   docker compose -f deploy/local/compose.yaml up --build
-# Env (SESSION_SECRET, MONGODB_URI) comes from the repo-root .env.
+# Quick local path: run the web app + realtime service, no Kubernetes.
+# Run from the REPO ROOT so ${VITE_PUBLIC_*} build args interpolate from .env:
+#   docker compose --env-file .env -f deploy/local/compose.yaml up --build
+# Env (SESSION_SECRET, MONGODB_URI, ...) comes from the repo-root .env.
+# Web is on host port 3100 (3000 stays free for `vite dev`).
 services:
   realtime:
     build:
@@ -25,4 +27,49 @@ services:
       timeout: 3s
       retries: 3
       start_period: 5s
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.web
+      args:
+        VITE_PUBLIC_POSTHOG_KEY: ${VITE_PUBLIC_POSTHOG_KEY:-}
+        VITE_PUBLIC_POSTHOG_HOST: ${VITE_PUBLIC_POSTHOG_HOST:-}
+        VITE_PUBLIC_FF_CHAT: ${VITE_PUBLIC_FF_CHAT:-}
+        VITE_PUBLIC_FF_DICE: ${VITE_PUBLIC_FF_DICE:-}
+        VITE_PUBLIC_FF_WIKI: ${VITE_PUBLIC_FF_WIKI:-}
+        VITE_PUBLIC_FF_NOTES: ${VITE_PUBLIC_FF_NOTES:-}
+        VITE_PUBLIC_FF_SETTINGS: ${VITE_PUBLIC_FF_SETTINGS:-}
+        # The browser connects to realtime via the HOST port mapping.
+        VITE_PUBLIC_PARTYKIT_HOST: localhost:1999
+    image: cartyx-web:local
+    ports:
+      - '3100:3000'
+    env_file:
+      - ../../.env
+    environment:
+      APP_ENV: development
+      PORT: '3000'
+      BASE_URL: http://localhost:3100
+      # Server-side broadcasts (map:active-changed) run inside the web
+      # container and must reach the realtime container by its compose
+      # service name — VITE_PUBLIC_PARTYKIT_HOST (localhost:1999) is the
+      # browser-facing host and resolves to the web container itself here.
+      REALTIME_INTERNAL_HOST: realtime:1999
+    depends_on:
+      realtime:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "fetch('http://localhost:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SignJWT } from 'jose';
 
 // Mock PostHog server capture for testing exception logging
@@ -15,15 +15,28 @@ describe('session', () => {
   let setCookieMock: ReturnType<typeof vi.fn>;
   let deleteCookieMock: ReturnType<typeof vi.fn>;
 
+  const savedEnv: Record<string, string | undefined> = {};
+
   beforeEach(async () => {
     vi.resetModules();
     mockServerCaptureException.mockClear();
+    savedEnv.APP_ENV = process.env.APP_ENV;
+    savedEnv.NODE_ENV = process.env.NODE_ENV;
     process.env.SESSION_SECRET = 'test-secret-for-unit-tests-at-least-32-chars';
+    delete process.env.APP_ENV;
+    delete process.env.NODE_ENV;
 
     const startServer = await import('@tanstack/react-start/server');
     getCookieMock = vi.mocked(startServer.getCookie);
     setCookieMock = vi.mocked(startServer.setCookie);
     deleteCookieMock = vi.mocked(startServer.deleteCookie);
+  });
+
+  afterEach(() => {
+    for (const [key, val] of Object.entries(savedEnv)) {
+      if (val === undefined) delete process.env[key];
+      else process.env[key] = val;
+    }
   });
 
   it('getSession returns null when no cookie', async () => {
@@ -140,6 +153,82 @@ describe('session', () => {
     const { clearSession } = await import('~/server/session');
     await clearSession();
     expect(deleteCookieMock).toHaveBeenCalledWith('cartyx_session', { path: '/' });
+  });
+
+  describe('cookie security keyed to APP_ENV', () => {
+    const user = {
+      id: 'google_123',
+      provider: 'google',
+      name: 'Test User',
+      email: null,
+      avatar: null,
+      role: 'gm',
+      tokenIssuedAt: Date.now(),
+    };
+
+    it('sets secure:false when APP_ENV/NODE_ENV are unset (dev default)', async () => {
+      const { setSession } = await import('~/server/session');
+      await setSession(user);
+      expect(setCookieMock).toHaveBeenCalledWith(
+        'cartyx_session',
+        expect.any(String),
+        expect.objectContaining({ secure: false })
+      );
+    });
+
+    it('sets secure:true when APP_ENV=production', async () => {
+      process.env.APP_ENV = 'production';
+      const { setSession } = await import('~/server/session');
+      await setSession(user);
+      expect(setCookieMock).toHaveBeenCalledWith(
+        'cartyx_session',
+        expect.any(String),
+        expect.objectContaining({ secure: true })
+      );
+    });
+
+    it('sets secure:true when APP_ENV=staging', async () => {
+      process.env.APP_ENV = 'staging';
+      const { setSession } = await import('~/server/session');
+      await setSession(user);
+      expect(setCookieMock).toHaveBeenCalledWith(
+        'cartyx_session',
+        expect.any(String),
+        expect.objectContaining({ secure: true })
+      );
+    });
+
+    it('does NOT depend on NODE_ENV alone: bare-metal npm start (NODE_ENV=production, APP_ENV unset) still gets secure:true via fallback', async () => {
+      process.env.NODE_ENV = 'production';
+      const { setSession } = await import('~/server/session');
+      await setSession(user);
+      expect(setCookieMock).toHaveBeenCalledWith(
+        'cartyx_session',
+        expect.any(String),
+        expect.objectContaining({ secure: true })
+      );
+    });
+
+    it('enforces the 32-char SESSION_SECRET minimum when APP_ENV=production', async () => {
+      process.env.APP_ENV = 'production';
+      process.env.SESSION_SECRET = 'too-short';
+      const { setSession } = await import('~/server/session');
+      await expect(setSession(user)).rejects.toThrow(/32 characters/);
+    });
+
+    it('enforces the 32-char SESSION_SECRET minimum when APP_ENV=staging', async () => {
+      process.env.APP_ENV = 'staging';
+      process.env.SESSION_SECRET = 'too-short';
+      const { setSession } = await import('~/server/session');
+      await expect(setSession(user)).rejects.toThrow(/32 characters/);
+    });
+
+    it('does not enforce the secret-length check in development', async () => {
+      process.env.APP_ENV = 'development';
+      process.env.SESSION_SECRET = 'too-short';
+      const { setSession } = await import('~/server/session');
+      await expect(setSession(user)).resolves.toBeUndefined();
+    });
   });
 });
 

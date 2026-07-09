@@ -3,3 +3,4 @@ public/
 coverage/
 package-lock.json
 deploy/charts/
+app/routeTree.gen.ts

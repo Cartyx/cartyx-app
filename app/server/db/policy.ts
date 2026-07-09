@@ -9,9 +9,8 @@
  * ## Environment detection
  *
  * Resolution order (first match wins):
- * 1. `BOOTSTRAP_ENV` — explicit override (`production`, `staging`, `development`)
- * 2. `VERCEL_ENV` — Vercel sets this to `production` or `preview`
- * 3. `NODE_ENV` — `production` maps to production; everything else → development
+ * 1. `APP_ENV` — explicit (`production`, `staging`, `development`)
+ * 2. `NODE_ENV` — `production` maps to production; everything else → development
  *
  * ## Policy summary
  *
@@ -22,21 +21,21 @@
  * | development | ensure      | sync    | —              | —            |
  */
 
-export type BootstrapEnvironment = 'production' | 'staging' | 'development'
+export type BootstrapEnvironment = 'production' | 'staging' | 'development';
 
 export interface BootstrapPolicy {
   /** Environment name for logging and diagnostics. */
-  environment: BootstrapEnvironment
+  environment: BootstrapEnvironment;
   /** Create missing indexes on startup (heavy — development only). */
-  syncIndexes: boolean
+  syncIndexes: boolean;
   /** Check that critical indexes exist after ensuring collections. */
-  verifyCriticalIndexes: boolean
+  verifyCriticalIndexes: boolean;
   /** Abort startup when critical drift is detected. */
-  failOnCriticalDrift: boolean
+  failOnCriticalDrift: boolean;
   /** Mongoose autoIndex setting passed to the connection. */
-  autoIndex: boolean
+  autoIndex: boolean;
   /** Maximum time (ms) for the entire bootstrap phase. 0 = no limit. */
-  timeoutMs: number
+  timeoutMs: number;
 }
 
 const POLICIES: Record<BootstrapEnvironment, BootstrapPolicy> = {
@@ -64,32 +63,27 @@ const POLICIES: Record<BootstrapEnvironment, BootstrapPolicy> = {
     autoIndex: true,
     timeoutMs: 30_000,
   },
-}
+};
 
 /**
  * Detect the current deployment environment.
  *
  * Resolution order:
- * 1. Explicit `BOOTSTRAP_ENV` override (useful for testing / custom setups)
- * 2. Vercel's `VERCEL_ENV` (`production` | `preview`)
- * 3. Fallback: `NODE_ENV === 'production'` → production, else development
+ * 1. Explicit `APP_ENV` (`production` | `staging` | `development`)
+ * 2. Fallback: `NODE_ENV === 'production'` → production, else development
  */
 export function resolveEnvironment(): BootstrapEnvironment {
-  const explicit = process.env.BOOTSTRAP_ENV
+  const explicit = process.env.APP_ENV;
   if (explicit === 'production' || explicit === 'staging' || explicit === 'development') {
-    return explicit
+    return explicit;
   }
 
-  const vercelEnv = process.env.VERCEL_ENV
-  if (vercelEnv === 'production') return 'production'
-  if (vercelEnv === 'preview') return 'staging'
+  if (process.env.NODE_ENV === 'production') return 'production';
 
-  if (process.env.NODE_ENV === 'production') return 'production'
-
-  return 'development'
+  return 'development';
 }
 
 /** Return the bootstrap policy for the given (or auto-detected) environment. */
 export function getBootstrapPolicy(env?: BootstrapEnvironment): BootstrapPolicy {
-  return POLICIES[env ?? resolveEnvironment()]
+  return POLICIES[env ?? resolveEnvironment()];
 }

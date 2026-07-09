@@ -16,8 +16,17 @@
  * "Calendar of Harptos" with its events (Task 19). Do NOT run this spec against
  * a production database.
  */
-import { test, expect } from '../fixtures/tabletop-fixtures';
+import { test, expect, openWikiTab } from '../fixtures/tabletop-fixtures';
 import { mockPostHog, blockPartyKit } from '../fixtures/network-mocks';
+import type { Page } from '@playwright/test';
+
+/** Navigate to the campaign play page and open the Wiki inspector tab. */
+async function openCalendarWikiPanel(page: Page, campaignUrl: string): Promise<void> {
+  await page.goto(campaignUrl);
+
+  // Open the Wiki tab in the InspectorSidebar (waits out cold-start hydration).
+  await openWikiTab(page);
+}
 
 test.describe('Calendar & Events', () => {
   test.beforeEach(async ({ page }) => {
@@ -26,10 +35,7 @@ test.describe('Calendar & Events', () => {
   });
 
   test('GM sees seeded events on the calendar list', async ({ page, campaignUrl }) => {
-    await page.goto(campaignUrl);
-
-    // Open the Wiki tab in the InspectorSidebar.
-    await page.getByRole('tab', { name: 'Wiki' }).click();
+    await openCalendarWikiPanel(page, campaignUrl);
 
     // Drill into the Calendar category (visible to all members).
     await page.getByRole('button', { name: 'Calendar' }).click();
@@ -48,10 +54,7 @@ test.describe('Calendar & Events', () => {
   });
 
   test('GM can create an event via the Events manager', async ({ page, campaignUrl }) => {
-    await page.goto(campaignUrl);
-
-    // Open the Wiki tab in the InspectorSidebar.
-    await page.getByRole('tab', { name: 'Wiki' }).click();
+    await openCalendarWikiPanel(page, campaignUrl);
 
     // Drill into the GM-only Events category.
     await page.getByRole('button', { name: 'Events' }).click();

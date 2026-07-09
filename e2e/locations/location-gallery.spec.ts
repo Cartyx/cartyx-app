@@ -4,7 +4,7 @@
  * Lightbox open/close is covered in location-lightbox.spec.ts (via the tabletop
  * floating window flow, since the GM edit modal doesn't render LocationGallery).
  */
-import { test, expect } from '../fixtures/tabletop-fixtures';
+import { test, expect, openWikiTab } from '../fixtures/tabletop-fixtures';
 import { mockPostHog, mockR2DirectUpload } from '../fixtures/network-mocks';
 import type { Page } from '@playwright/test';
 
@@ -17,8 +17,8 @@ const TINY_PNG = Buffer.from(
 async function openLocationAsGm(page: Page, campaignUrl: string, locationName: string) {
   await page.goto(campaignUrl);
 
-  // Open the Wiki tab in the InspectorSidebar.
-  await page.getByRole('tab', { name: 'Wiki' }).click();
+  // Open the Wiki tab in the InspectorSidebar (waits out cold-start hydration).
+  await openWikiTab(page);
 
   // Drill into the Locations category.
   await page.getByRole('button', { name: 'Locations' }).click();

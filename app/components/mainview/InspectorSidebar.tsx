@@ -56,17 +56,17 @@ export function InspectorSidebar({
   campaignId,
   sessions,
 }: InspectorSidebarProps) {
-  const chatFlagName = import.meta.env.VITE_PUBLIC_FF_CHAT ?? '';
-  const diceFlagName = import.meta.env.VITE_PUBLIC_FF_DICE ?? '';
-  const wikiFlagName = import.meta.env.VITE_PUBLIC_FF_WIKI ?? '';
-  const notesFlagName = import.meta.env.VITE_PUBLIC_FF_NOTES ?? '';
-  const settingsFlagName = import.meta.env.VITE_PUBLIC_FF_SETTINGS ?? '';
+  const chatFlagValue = import.meta.env.VITE_PUBLIC_FF_CHAT ?? '';
+  const diceFlagValue = import.meta.env.VITE_PUBLIC_FF_DICE ?? '';
+  const wikiFlagValue = import.meta.env.VITE_PUBLIC_FF_WIKI ?? '';
+  const notesFlagValue = import.meta.env.VITE_PUBLIC_FF_NOTES ?? '';
+  const settingsFlagValue = import.meta.env.VITE_PUBLIC_FF_SETTINGS ?? '';
 
-  const chatFlag = useOptionalFeatureFlag(chatFlagName);
-  const diceFlag = useOptionalFeatureFlag(diceFlagName);
-  const wikiFlag = useOptionalFeatureFlag(wikiFlagName);
-  const notesFlag = useOptionalFeatureFlag(notesFlagName);
-  const settingsFlag = useOptionalFeatureFlag(settingsFlagName);
+  const chatFlag = useOptionalFeatureFlag(chatFlagValue);
+  const diceFlag = useOptionalFeatureFlag(diceFlagValue);
+  const wikiFlag = useOptionalFeatureFlag(wikiFlagValue);
+  const notesFlag = useOptionalFeatureFlag(notesFlagValue);
+  const settingsFlag = useOptionalFeatureFlag(settingsFlagValue);
 
   const tabs = useMemo(
     () =>

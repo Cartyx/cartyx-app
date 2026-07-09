@@ -1,4 +1,69 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// ---------------------------------------------------------------------------
+// Mocks for the openTabletopWindow handler-level tests below. These only
+// affect the `describe('openTabletopWindow (handler)', ...)` block further
+// down — the schema-only tests above use dynamic `import()` of the zod
+// schemas directly and are unaffected by mocking the server modules.
+// ---------------------------------------------------------------------------
+
+vi.mock('@tanstack/react-start', () => ({
+  createServerFn: () => ({
+    inputValidator: () => ({
+      handler: (fn: unknown) => fn,
+    }),
+    handler: (fn: unknown) => fn,
+  }),
+}));
+
+vi.mock('~/server/session', () => ({ getSession: vi.fn() }));
+vi.mock('~/server/db/connection', () => ({
+  connectDB: vi.fn(),
+  isDBConnected: vi.fn(() => true),
+}));
+vi.mock('~/server/db/models/User', () => ({
+  User: { findOne: vi.fn() },
+}));
+vi.mock('~/server/db/models/Campaign', () => ({
+  Campaign: { findById: vi.fn() },
+}));
+vi.mock('~/server/db/models/TabletopScreen', () => ({
+  TabletopScreen: {
+    find: vi.fn(),
+    findOne: vi.fn(),
+    findById: vi.fn(),
+    create: vi.fn(),
+    countDocuments: vi.fn(),
+    updateOne: vi.fn(),
+    updateMany: vi.fn(),
+    deleteOne: vi.fn(),
+  },
+  TABLETOP_LIMITS: { MAX_WINDOWS: 20 },
+}));
+vi.mock('~/server/db/models/TabletopPlayerState', () => ({
+  TabletopPlayerState: {
+    findOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
+  },
+}));
+vi.mock('~/server/db/models/Note', () => ({ Note: { find: vi.fn() } }));
+vi.mock('~/server/db/models/Character', () => ({ Character: { find: vi.fn() } }));
+vi.mock('~/server/db/models/Race', () => ({ Race: { find: vi.fn() } }));
+vi.mock('~/server/db/models/Rule', () => ({ Rule: { find: vi.fn() } }));
+vi.mock('~/server/utils/posthog', () => ({
+  serverCaptureException: vi.fn(),
+  serverCaptureEvent: vi.fn(),
+}));
+vi.mock('mongoose', () => ({
+  default: { startSession: vi.fn() },
+}));
+
+import { getSession } from '~/server/session';
+import { User } from '~/server/db/models/User';
+import { Campaign } from '~/server/db/models/Campaign';
+import { TabletopScreen } from '~/server/db/models/TabletopScreen';
+import { openTabletopWindow } from '~/server/functions/tabletop';
+import { serverCaptureEvent } from '~/server/utils/posthog';
 
 // ---------------------------------------------------------------------------
 // Schema-only tests — validate Zod schemas from ~/types/schemas/tabletop
@@ -213,5 +278,450 @@ describe('tabletop schemas', () => {
       });
       expect(result.success).toBe(false);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// openTabletopWindow (handler) — mirrors the atomic dedupe fix + tests in
+// tests/server/functions/gmscreens.test.ts's `describe('openWindow', ...)`.
+// See that file for the fuller rationale comments; kept terser here to
+// avoid duplicating the same essay twice.
+// ---------------------------------------------------------------------------
+
+describe('openTabletopWindow (handler)', () => {
+  const mockSession = {
+    id: 'session-user-1',
+    provider: 'google',
+    name: 'Test User',
+    email: 'test@example.com',
+    avatar: null,
+    role: 'gm',
+    accessToken: null,
+    refreshToken: null,
+    tokenIssuedAt: 0,
+  };
+  const mockDbUser = { _id: 'dbuser-1', firstName: 'Test', lastName: 'User' };
+  const mockCampaign = {
+    _id: 'camp-1',
+    gameMasterId: 'dbuser-1',
+    members: [{ userId: 'dbuser-1', role: 'gm' }],
+  };
+
+  const _openTabletopWindow = openTabletopWindow as unknown as (args: {
+    data: Record<string, unknown>;
+  }) => Promise<{
+    success: boolean;
+    window: {
+      id: string;
+      collection: string;
+      documentId: string;
+      state: string;
+      zIndex: number;
+      x: number | null;
+      y: number | null;
+    };
+    existed: boolean;
+  }>;
+
+  function makeScreenWithWindows(windows: Array<Record<string, unknown>> = []) {
+    return {
+      _id: 'screen-1',
+      campaignId: 'camp-1',
+      windows,
+      updatedAt: new Date('2026-03-01'),
+      save: vi.fn(),
+    };
+  }
+
+  function mockSuccessfulAtomicPush(createdWindow: Record<string, unknown>) {
+    vi.mocked(TabletopScreen.updateOne).mockResolvedValueOnce({
+      acknowledged: true,
+      matchedCount: 1,
+      modifiedCount: 1,
+      upsertedCount: 0,
+      upsertedId: null,
+    } as never);
+    vi.mocked(TabletopScreen.findOne).mockReturnValueOnce({
+      lean: vi.fn().mockResolvedValue({ windows: [createdWindow] }),
+    } as never);
+  }
+
+  function mockLostAtomicPushRace(refreshedScreen: Record<string, unknown>) {
+    vi.mocked(TabletopScreen.updateOne).mockResolvedValueOnce({
+      acknowledged: true,
+      matchedCount: 0,
+      modifiedCount: 0,
+      upsertedCount: 0,
+      upsertedId: null,
+    } as never);
+    vi.mocked(TabletopScreen.findOne).mockResolvedValueOnce(refreshedScreen as never);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getSession).mockResolvedValue(mockSession);
+    vi.mocked(User.findOne).mockResolvedValue(mockDbUser as never);
+    vi.mocked(Campaign.findById).mockResolvedValue(mockCampaign as never);
+  });
+
+  it('creates a new window with zIndex bumped above existing', async () => {
+    const screen = makeScreenWithWindows([
+      { _id: 'win-1', collection: 'note', documentId: 'note-1', state: 'open', zIndex: 3 },
+    ]);
+    vi.mocked(TabletopScreen.findOne).mockResolvedValueOnce(screen as never);
+    mockSuccessfulAtomicPush({
+      _id: 'win-2',
+      collection: 'note',
+      documentId: 'note-2',
+      state: 'open',
+      x: null,
+      y: null,
+      width: null,
+      height: null,
+      zIndex: 4,
+    });
+
+    const result = await _openTabletopWindow({
+      data: {
+        screenId: 'screen-1',
+        campaignId: 'camp-1',
+        collection: 'note',
+        documentId: 'note-2',
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.existed).toBe(false);
+    expect(result.window.zIndex).toBe(4);
+
+    const [filter, update] = vi.mocked(TabletopScreen.updateOne).mock.calls[0]!;
+    expect(filter).toMatchObject({
+      _id: 'screen-1',
+      campaignId: 'camp-1',
+      $nor: [{ windows: { $elemMatch: { collection: 'note', documentId: 'note-2' } } }],
+      $expr: { $lt: [{ $size: { $ifNull: ['$windows', []] } }, 20] },
+    });
+    expect(update).toMatchObject({
+      $push: { windows: expect.objectContaining({ collection: 'note', documentId: 'note-2' }) },
+    });
+  });
+
+  it('focuses existing window instead of creating a duplicate', async () => {
+    const existingWin = {
+      _id: 'win-1',
+      collection: 'note',
+      documentId: 'note-1',
+      state: 'minimized',
+      zIndex: 1,
+    };
+    const screen = makeScreenWithWindows([existingWin]);
+    vi.mocked(TabletopScreen.findOne).mockResolvedValueOnce(screen as never);
+
+    const result = await _openTabletopWindow({
+      data: {
+        screenId: 'screen-1',
+        campaignId: 'camp-1',
+        collection: 'note',
+        documentId: 'note-1',
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.existed).toBe(true);
+    expect(result.window.id).toBe('win-1');
+    expect(result.window.zIndex).toBe(2);
+    expect(screen.save).toHaveBeenCalled();
+    expect(TabletopScreen.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('enforces the 20-window cap', async () => {
+    const windows = Array.from({ length: 20 }, (_, i) => ({
+      _id: `win-${i}`,
+      collection: 'note',
+      documentId: `note-${i}`,
+      state: 'open',
+      zIndex: i,
+    }));
+    const screen = makeScreenWithWindows(windows);
+    vi.mocked(TabletopScreen.findOne).mockResolvedValueOnce(screen as never);
+
+    await expect(
+      _openTabletopWindow({
+        data: {
+          screenId: 'screen-1',
+          campaignId: 'camp-1',
+          collection: 'note',
+          documentId: 'note-new',
+        },
+      })
+    ).rejects.toThrow('A screen cannot have more than 20 windows');
+  });
+
+  it('throws when screen is not found', async () => {
+    vi.mocked(TabletopScreen.findOne).mockResolvedValueOnce(null as never);
+
+    await expect(
+      _openTabletopWindow({
+        data: {
+          screenId: 'nonexistent',
+          campaignId: 'camp-1',
+          collection: 'note',
+          documentId: 'note-1',
+        },
+      })
+    ).rejects.toThrow('Screen not found');
+  });
+
+  it('fires tabletop_window_opened analytics event for new window', async () => {
+    const screen = makeScreenWithWindows([]);
+    vi.mocked(TabletopScreen.findOne).mockResolvedValueOnce(screen as never);
+    mockSuccessfulAtomicPush({
+      _id: 'win-1',
+      collection: 'note',
+      documentId: 'note-1',
+      state: 'open',
+      x: null,
+      y: null,
+      width: null,
+      height: null,
+      zIndex: 1,
+    });
+
+    await _openTabletopWindow({
+      data: {
+        screenId: 'screen-1',
+        campaignId: 'camp-1',
+        collection: 'note',
+        documentId: 'note-1',
+      },
+    });
+
+    expect(serverCaptureEvent).toHaveBeenCalledWith(
+      'session-user-1',
+      'tabletop_window_opened',
+      expect.objectContaining({ campaign_id: 'camp-1', screen_id: 'screen-1' })
+    );
+  });
+
+  // -------------------------------------------------------------------
+  // Atomicity / dedupe-race pinning (mirrors gmscreens.test.ts)
+  // -------------------------------------------------------------------
+
+  it('does not create a duplicate on a sequential double-call for the same ref', async () => {
+    const screenRead1 = makeScreenWithWindows([]);
+    vi.mocked(TabletopScreen.findOne).mockResolvedValueOnce(screenRead1 as never);
+    const createdWindow = {
+      _id: 'win-1',
+      collection: 'note',
+      documentId: 'note-1',
+      state: 'open',
+      x: null,
+      y: null,
+      width: null,
+      height: null,
+      zIndex: 1,
+    };
+    mockSuccessfulAtomicPush(createdWindow);
+
+    const first = await _openTabletopWindow({
+      data: {
+        screenId: 'screen-1',
+        campaignId: 'camp-1',
+        collection: 'note',
+        documentId: 'note-1',
+      },
+    });
+    expect(first.existed).toBe(false);
+
+    const screenRead2 = makeScreenWithWindows([createdWindow]);
+    vi.mocked(TabletopScreen.findOne).mockResolvedValueOnce(screenRead2 as never);
+
+    const second = await _openTabletopWindow({
+      data: {
+        screenId: 'screen-1',
+        campaignId: 'camp-1',
+        collection: 'note',
+        documentId: 'note-1',
+      },
+    });
+
+    expect(second.existed).toBe(true);
+    expect(second.window.id).toBe('win-1');
+    expect(TabletopScreen.updateOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the create/create race: a second call that read stale (empty) state is rejected by the atomic filter and focuses the winner instead of duplicating', async () => {
+    const screenRead = makeScreenWithWindows([]);
+    vi.mocked(TabletopScreen.findOne).mockResolvedValueOnce(screenRead as never);
+
+    const createdWindow = {
+      _id: 'win-1',
+      collection: 'note',
+      documentId: 'note-1',
+      state: 'open',
+      x: null,
+      y: null,
+      width: null,
+      height: null,
+      zIndex: 1,
+    };
+    mockSuccessfulAtomicPush(createdWindow);
+
+    const first = await _openTabletopWindow({
+      data: {
+        screenId: 'screen-1',
+        campaignId: 'camp-1',
+        collection: 'note',
+        documentId: 'note-1',
+      },
+    });
+    expect(first.existed).toBe(false);
+
+    const screenRead2 = makeScreenWithWindows([]);
+    vi.mocked(TabletopScreen.findOne).mockResolvedValueOnce(screenRead2 as never);
+    const refreshedScreen = makeScreenWithWindows([{ ...createdWindow }]);
+    mockLostAtomicPushRace(refreshedScreen);
+
+    const second = await _openTabletopWindow({
+      data: {
+        screenId: 'screen-1',
+        campaignId: 'camp-1',
+        collection: 'note',
+        documentId: 'note-1',
+      },
+    });
+
+    expect(second.existed).toBe(true);
+    expect(second.window.id).toBe('win-1');
+    expect(refreshedScreen.windows).toHaveLength(1);
+    expect(refreshedScreen.save).toHaveBeenCalled();
+  });
+
+  it('fires two concurrent opens for the same ref via Promise.all and asserts exactly one "created" result', async () => {
+    const screenA = makeScreenWithWindows([]);
+    const screenB = makeScreenWithWindows([]);
+    vi.mocked(TabletopScreen.findOne)
+      .mockResolvedValueOnce(screenA as never)
+      .mockResolvedValueOnce(screenB as never);
+
+    const createdWindow = {
+      _id: 'win-1',
+      collection: 'note',
+      documentId: 'note-1',
+      state: 'open',
+      x: null,
+      y: null,
+      width: null,
+      height: null,
+      zIndex: 1,
+    };
+    mockSuccessfulAtomicPush(createdWindow);
+    const refreshedForB = makeScreenWithWindows([{ ...createdWindow }]);
+    mockLostAtomicPushRace(refreshedForB);
+
+    const [resultA, resultB] = await Promise.all([
+      _openTabletopWindow({
+        data: {
+          screenId: 'screen-1',
+          campaignId: 'camp-1',
+          collection: 'note',
+          documentId: 'note-1',
+        },
+      }),
+      _openTabletopWindow({
+        data: {
+          screenId: 'screen-1',
+          campaignId: 'camp-1',
+          collection: 'note',
+          documentId: 'note-1',
+        },
+      }),
+    ]);
+
+    const existedFlags = [resultA.existed, resultB.existed].sort();
+    expect(TabletopScreen.updateOne).toHaveBeenCalledTimes(2);
+    expect(existedFlags).toEqual([false, true]);
+  });
+
+  it('closes the cap race: two concurrent opens of DIFFERENT refs at length cap-1 — exactly one succeeds, the loser gets the cap error', async () => {
+    // Mirrors the gmscreens cap-race test — see that file for the fuller
+    // rationale. Both calls read 19 windows (below the cap), both pass the
+    // early length check; the cap folded into the atomic filter is what
+    // stops the second push from landing a 21st window.
+    const nineteenWindows = Array.from({ length: 19 }, (_, i) => ({
+      _id: `win-${i}`,
+      collection: 'note',
+      documentId: `note-${i}`,
+      state: 'open',
+      zIndex: i,
+    }));
+    const screenA = makeScreenWithWindows([...nineteenWindows]);
+    const screenB = makeScreenWithWindows([...nineteenWindows]);
+    vi.mocked(TabletopScreen.findOne)
+      .mockResolvedValueOnce(screenA as never)
+      .mockResolvedValueOnce(screenB as never);
+
+    // A's atomic push wins.
+    mockSuccessfulAtomicPush({
+      _id: 'win-a',
+      collection: 'note',
+      documentId: 'note-a',
+      state: 'open',
+      x: null,
+      y: null,
+      width: null,
+      height: null,
+      zIndex: 20,
+    });
+    // B's push loses on the $expr size condition (doc now has 20 windows);
+    // B's re-fetch does not contain B's ref → cap error, not a focus.
+    vi.mocked(TabletopScreen.updateOne).mockResolvedValueOnce({
+      acknowledged: true,
+      matchedCount: 0,
+      modifiedCount: 0,
+      upsertedCount: 0,
+      upsertedId: null,
+    } as never);
+    const refreshedAtCap = makeScreenWithWindows([
+      ...nineteenWindows,
+      { _id: 'win-a', collection: 'note', documentId: 'note-a', state: 'open', zIndex: 20 },
+    ]);
+    vi.mocked(TabletopScreen.findOne).mockResolvedValueOnce(refreshedAtCap as never);
+
+    const [resultA, resultB] = await Promise.allSettled([
+      _openTabletopWindow({
+        data: {
+          screenId: 'screen-1',
+          campaignId: 'camp-1',
+          collection: 'note',
+          documentId: 'note-a',
+        },
+      }),
+      _openTabletopWindow({
+        data: {
+          screenId: 'screen-1',
+          campaignId: 'camp-1',
+          collection: 'note',
+          documentId: 'note-b',
+        },
+      }),
+    ]);
+
+    expect(resultA.status).toBe('fulfilled');
+    if (resultA.status === 'fulfilled') {
+      expect(resultA.value.existed).toBe(false);
+      expect(resultA.value.window.documentId).toBe('note-a');
+    }
+    expect(resultB.status).toBe('rejected');
+    if (resultB.status === 'rejected') {
+      expect(String(resultB.reason)).toContain('A screen cannot have more than 20 windows');
+    }
+
+    // Both pushes carried the cap condition in their filter.
+    for (const call of vi.mocked(TabletopScreen.updateOne).mock.calls) {
+      expect(call[0]).toMatchObject({
+        $expr: { $lt: [{ $size: { $ifNull: ['$windows', []] } }, 20] },
+      });
+    }
   });
 });

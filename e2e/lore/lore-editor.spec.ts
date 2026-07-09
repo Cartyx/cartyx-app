@@ -9,7 +9,7 @@
  * cookie and campaign data exist in the dev DB.  Do NOT run this spec against
  * a production database.
  */
-import { test, expect } from '../fixtures/tabletop-fixtures';
+import { test, expect, openWikiTab } from '../fixtures/tabletop-fixtures';
 import { mockPostHog, blockPartyKit } from '../fixtures/network-mocks';
 
 const LORE_TITLE = 'E2E Lore Editor Fixture';
@@ -21,8 +21,8 @@ async function openLorePanel(
 ): Promise<void> {
   await page.goto(campaignUrl);
 
-  // Open the Wiki tab in the InspectorSidebar.
-  await page.getByRole('tab', { name: 'Wiki' }).click();
+  // Open the Wiki tab in the InspectorSidebar (waits out cold-start hydration).
+  await openWikiTab(page);
 
   // Drill into the Lore category.
   await page.getByRole('button', { name: 'Lore' }).click();

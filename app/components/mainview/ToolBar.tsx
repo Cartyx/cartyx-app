@@ -53,7 +53,7 @@ export function ToolBar({
   onToggleCollapse,
   isGM = false,
 }: ToolBarProps) {
-  // The interactive dice roller ships behind the same flag as the Dice feed tab.
+  // The interactive dice roller ships behind the same boolean flag as the Dice feed tab.
   const diceFlag = useOptionalFeatureFlag(import.meta.env.VITE_PUBLIC_FF_DICE ?? '');
   const visibleTools = tools.filter(
     (t) => (!t.gmOnly || isGM) && (t.id !== 'dice' || diceFlag.isEnabled)
