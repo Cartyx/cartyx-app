@@ -94,6 +94,20 @@ assert_fails "missing realtime tag is a render error" "realtime.image.tag" $filt
 assert_contains "realtime NodePort honored" "nodePort: 30199" \
   --set realtime.service.type=NodePort --set realtime.service.nodePort=30199
 
+# --- Task 4: web deployment + service ---
+assert_contains "web deployment exists" "name: cartyx-web"
+assert_contains "web readiness hits /readyz" "path: /readyz"
+assert_contains "web readiness timeout above the 2s mongo bound" "timeoutSeconds: 5"
+assert_contains "web gets in-cluster realtime host" "value: \"cartyx-realtime:1999\""
+assert_contains "web APP_ENV from values" "name: APP_ENV"
+assert_not_contains "empty web env values are omitted" "name: CDN_URL"
+assert_contains "non-empty web env values render" "value: \"https://cdn.test\"" \
+  --set web.env.CDN_URL=https://cdn.test
+assert_contains "web reads r2 secret" "key: r2SecretAccessKey"
+filtered_args=$(args_without web.image.tag)
+# shellcheck disable=SC2086
+assert_fails "missing web tag is a render error" "web.image.tag" $filtered_args
+
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
