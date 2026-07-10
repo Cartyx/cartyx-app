@@ -1,0 +1,41 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "cartyx.fullname" . }}
+  labels:
+    {{- include "cartyx.labels" . | nindent 4 }}
+  annotations:
+    # Match the cartyx-infrastructure convention: TLS-only via the websecure
+    # entrypoint (cloudflared forwards to Traefik over https with SNI).
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: 'true'
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+    - hosts:
+        - {{ required "ingress.webHost is required when ingress.enabled" .Values.ingress.webHost }}
+        - {{ required "ingress.wsHost is required when ingress.enabled" .Values.ingress.wsHost }}
+      secretName: {{ .Values.tls.secretName }}
+  rules:
+    - host: {{ .Values.ingress.webHost }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "cartyx.fullname" . }}-web
+                port:
+                  number: {{ .Values.web.env.PORT | int }}
+    - host: {{ .Values.ingress.wsHost }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "cartyx.fullname" . }}-realtime
+                port:
+                  number: {{ .Values.realtime.env.PORT | int }}
+{{- end }}

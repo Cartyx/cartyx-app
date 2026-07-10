@@ -108,6 +108,27 @@ filtered_args=$(args_without web.image.tag)
 # shellcheck disable=SC2086
 assert_fails "missing web tag is a render error" "web.image.tag" $filtered_args
 
+# --- Task 5: ingress + health block + certificate ---
+assert_contains "ingress has web host rule" "host: web.test"
+assert_contains "ingress has ws host rule" "host: ws.test"
+assert_contains "ingress tls secret" "secretName: cartyx-tls"
+assert_contains "ingress uses websecure entrypoint" "router.entrypoints: websecure"
+assert_contains "health block middleware rendered" "kind: Middleware"
+assert_contains "health block route matches both paths" "/readyz"
+assert_not_contains "health block toggles off" "kind: Middleware" \
+  --set ingress.blockHealthEndpoints=false
+assert_not_contains "ingress toggles off" "kind: Ingress" \
+  --set ingress.enabled=false
+assert_contains "certificate covers both hosts" "kind: Certificate"
+assert_not_contains "certificate toggles off" "kind: Certificate" \
+  --set tls.certificate.enabled=false
+filtered_args=$(args_without tls.certificate.clusterIssuer)
+# shellcheck disable=SC2086
+assert_fails "missing clusterIssuer is a render error" "clusterIssuer" $filtered_args
+filtered_args=$(args_without ingress.webHost)
+# shellcheck disable=SC2086
+assert_fails "missing webHost is a render error" "webHost" $filtered_args
+
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
