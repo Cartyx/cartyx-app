@@ -1,6 +1,0 @@
-apiVersion: v2
-name: cartyx-realtime
-description: Self-hosted realtime WebSocket service for Cartyx (PartyKit replacement)
-type: application
-version: 0.1.0
-appVersion: "0.1.0"

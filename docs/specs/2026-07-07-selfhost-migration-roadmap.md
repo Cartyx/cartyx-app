@@ -6,7 +6,7 @@
 
 **Goal:** Run Cartyx (prod + dev) entirely on a single-node k3s cluster on the home-lab Linux box, keeping MongoDB Atlas and Cloudflare R2, eliminating Vercel, PartyKit, and PostHog.
 
-**End state:** ~21 pods across `kube-system`, `cartyx-prod`, `cartyx-dev`, `platform`; three Helm releases; GitHub Actions → ghcr.io → `helm upgrade` over Tailscale; Traefik on 443 routing by hostname with a wildcard cert.
+**End state:** ~21 pods across `kube-system`, `dev`, `prod`, `platform`; app + platform Helm releases reconciled by Flux from github.com/biozal/cartyx-infrastructure; GitHub Actions → ghcr.io → CI-committed tag bumps in that repo; Traefik on 443 behind a Cloudflare Tunnel, routing by hostname with per-environment certificates.
 
 ## Decisions already made (do not re-litigate)
 
@@ -68,17 +68,18 @@ New `realtime/` package: Node 22 + `ws` + `jose` + `mongodb`. Ports the three pa
 
 ### Phase 3 — Helm chart for the app
 
+Design: `2026-07-09-app-helm-chart-design.md`; plan: `2026-07-09-app-helm-chart-plan.md`. Scope grew during design: the auto-deploy moved here from Phase 4 as GitOps — Flux on the cluster (github.com/biozal/cartyx-infrastructure) consumes the chart from this repo; CI pushes images + bumps tags in the infra repo. Hostnames are app/ws/dev/dev-ws.cartyx.io; namespaces dev/prod; ingress via Cloudflare Tunnel.
+
 - `deploy/charts/cartyx/`: two Deployments (web, realtime), two Services, one Ingress (hosts: web + ws), Secret template (MONGODB*URI, SESSION_SECRET, R2 keys), configurable `VITE_PUBLIC*\*` build-time note (these are baked at image build — document that flag changes for the client need an image rebuild; server-read env is live)
 - `values-prod.yaml` / `values-dev.yaml`: hostnames, image tags, memory limits (web 512Mi/384Mi, realtime 256Mi/192Mi), no CPU limits
 - Feature flags: `VITE_PUBLIC_FF_*` become plain `true`/`false` in values (client-baked) — remove PostHog flag-name indirection
-- Install both releases on the cluster manually first (`helm install` from laptop over Tailscale)
+- Deploys are Flux-reconciled from cartyx-infrastructure; CI only pushes images and commits tag bumps there — no cluster credentials outside the box
 
 **Acceptance:** prod + dev sites both live on their hostnames from the box, WebSockets working through Traefik, dice rolls relay in prod.
 
 ### Phase 4 — CI/CD + cutover
 
-- `.github/workflows/deploy.yml`: build web + realtime images → push ghcr → `tailscale/github-action` → `helm upgrade` (dev on push to `dev`, prod on push to `main`)
-- Secrets as GitHub Actions secrets injected via `--set`/`--set-file`
+- deploy.yml (image build + infra-repo tag bump) shipped in Phase 3 — this phase is cutover + teardown only
 - Cutover: point production DNS at the box, watch traffic, then retire `partykit-deploy.yml`, remove `partykit`/`y-partyserver` deps and `party/` directory, delete Vercel project
 - Update CLAUDE-relevant docs: README deploy section, `.env.example`
 

@@ -128,22 +128,23 @@ jobs:
       # code path throws on a missing BASE_URL even though e2e uses a pre-minted
       # session cookie rather than the live OAuth flow.
       BASE_URL: http://localhost:3000
-      # Feature-flag NAMES must be present for the client to query PostHog;
-      # the e2e PostHog mock (e2e/fixtures/network-mocks.ts) then reports them
-      # enabled. Without a name the gated UI never renders — the inspector
-      # Wiki tab being absent is what timed out every calendar/locations/lore
-      # spec in CI (they all start by clicking the Wiki tab).
-      VITE_PUBLIC_FF_DICE: cartyx-dice-dev
-      VITE_PUBLIC_FF_CHAT: inspector-chat-dev
-      VITE_PUBLIC_FF_WIKI: inspector-wiki-dev
-      VITE_PUBLIC_FF_NOTES: inspector-notepad-dev
-      VITE_PUBLIC_FF_SETTINGS: inspector-settings-dev
+      # Inspector feature flags are plain booleans baked in at build time
+      # since #490 (parseBooleanFlag in app/utils/featureFlags.tsx accepts
+      # only 'true'/'1'). They must be 'true' here or the gated inspector
+      # tabs never render — the Wiki tab being absent is what times out
+      # every calendar/locations/lore spec.
+      VITE_PUBLIC_FF_DICE: 'true'
+      VITE_PUBLIC_FF_CHAT: 'true'
+      VITE_PUBLIC_FF_WIKI: 'true'
+      VITE_PUBLIC_FF_NOTES: 'true'
+      VITE_PUBLIC_FF_SETTINGS: 'true'
       # posthog-js only initializes when a key is present (PostHogProvider.tsx
-      # returns early without one), and feature flags never resolve without an
-      # initialized client — so flag-gated UI (e.g. the dice toolbar button)
-      # would never render in e2e. Dummy key; the host must contain "posthog"
-      # so mockPostHog's route matcher intercepts the flags request. Specs that
-      # don't mock PostHog just get fast 401s from the real host.
+      # returns early without one), PostHog no longer gates feature flags
+      # (they are baked booleans since #490), but specs that exercise
+      # analytics mocking still need an initialized client. Dummy key; the
+      # host must contain "posthog" so mockPostHog's route matcher
+      # intercepts the flags request. Specs that don't mock PostHog just get
+      # fast 401s from the real host.
       VITE_PUBLIC_POSTHOG_KEY: phc_e2e_dummy_key_not_a_secret
       VITE_PUBLIC_POSTHOG_HOST: https://app.posthog.com
     steps:
@@ -207,3 +208,16 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 7
+
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Chart render tests (includes helm lint)
+        # helm ships preinstalled on ubuntu-latest runners.
+        run: bash deploy/charts/cartyx/tests/render-tests.sh

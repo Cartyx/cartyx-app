@@ -1,0 +1,16 @@
+{{- if .Values.tls.certificate.enabled }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "cartyx.fullname" . }}
+  labels:
+    {{- include "cartyx.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Values.tls.secretName }}
+  issuerRef:
+    kind: ClusterIssuer
+    name: {{ required "tls.certificate.clusterIssuer is required when tls.certificate.enabled — find it with: kubectl get clusterissuer" .Values.tls.certificate.clusterIssuer }}
+  dnsNames:
+    - {{ required "ingress.webHost is required" .Values.ingress.webHost }}
+    - {{ required "ingress.wsHost is required" .Values.ingress.wsHost }}
+{{- end }}

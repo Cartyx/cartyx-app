@@ -1,8 +1,8 @@
-{{- define "cartyx-realtime.name" -}}
+{{- define "cartyx.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "cartyx-realtime.fullname" -}}
+{{- define "cartyx.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
@@ -15,14 +15,29 @@
 {{- end -}}
 {{- end -}}
 
-{{- define "cartyx-realtime.labels" -}}
-app.kubernetes.io/name: {{ include "cartyx-realtime.name" . }}
+{{- define "cartyx.labels" -}}
+app.kubernetes.io/name: {{ include "cartyx.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" }}
 {{- end -}}
 
-{{- define "cartyx-realtime.selectorLabels" -}}
-app.kubernetes.io/name: {{ include "cartyx-realtime.name" . }}
+{{- define "cartyx.web.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "cartyx.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: web
+{{- end -}}
+
+{{- define "cartyx.realtime.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "cartyx.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: realtime
+{{- end -}}
+
+{{- define "cartyx.secretName" -}}
+{{- if .Values.secret.existingSecret -}}
+{{- .Values.secret.existingSecret -}}
+{{- else -}}
+{{- include "cartyx.fullname" . -}}
+{{- end -}}
 {{- end -}}
