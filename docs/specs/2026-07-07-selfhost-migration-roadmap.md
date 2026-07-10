@@ -6,7 +6,7 @@
 
 **Goal:** Run Cartyx (prod + dev) entirely on a single-node k3s cluster on the home-lab Linux box, keeping MongoDB Atlas and Cloudflare R2, eliminating Vercel, PartyKit, and PostHog.
 
-**End state:** ~21 pods across `kube-system`, `cartyx-prod`, `cartyx-dev`, `platform`; three Helm releases; GitHub Actions → ghcr.io → `helm upgrade` over Tailscale; Traefik on 443 routing by hostname with a wildcard cert.
+**End state:** ~21 pods across `kube-system`, `dev`, `prod`, `platform`; app + platform Helm releases reconciled by Flux from github.com/biozal/cartyx-infrastructure; GitHub Actions → ghcr.io → CI-committed tag bumps in that repo; Traefik on 443 behind a Cloudflare Tunnel, routing by hostname with per-environment certificates.
 
 ## Decisions already made (do not re-litigate)
 
