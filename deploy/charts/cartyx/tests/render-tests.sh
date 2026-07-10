@@ -79,6 +79,21 @@ filtered_args=$(args_without secret.values.mongodbUri)
 # shellcheck disable=SC2086
 assert_fails "missing mongodbUri is a render error" "mongodbUri" $filtered_args
 
+# --- Task 3: realtime deployment + service ---
+assert_contains "realtime deployment exists" "name: cartyx-realtime"
+assert_contains "realtime uses Recreate" "type: Recreate"
+assert_contains "realtime checksum annotation" "checksum/secret:"
+assert_contains "realtime drops capabilities" "drop:"
+assert_contains "realtime seccomp profile" "type: RuntimeDefault"
+assert_contains "realtime probe timeout tuned" "timeoutSeconds: 3"
+assert_fails "realtime replicas>1 refused" "not supported" \
+  "${BASE_ARGS[@]}" --set=realtime.replicaCount=2
+filtered_args=$(args_without realtime.image.tag)
+# shellcheck disable=SC2086
+assert_fails "missing realtime tag is a render error" "realtime.image.tag" $filtered_args
+assert_contains "realtime NodePort honored" "nodePort: 30199" \
+  --set realtime.service.type=NodePort --set realtime.service.nodePort=30199
+
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

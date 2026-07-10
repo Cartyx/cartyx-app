@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "cartyx.fullname" . }}-realtime
+  labels:
+    {{- include "cartyx.labels" . | nindent 4 }}
+    app.kubernetes.io/component: realtime
+spec:
+  type: {{ .Values.realtime.service.type }}
+  selector:
+    {{- include "cartyx.realtime.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: ws
+      port: {{ .Values.realtime.env.PORT | int }}
+      targetPort: ws
+      {{- if and (eq .Values.realtime.service.type "NodePort") .Values.realtime.service.nodePort }}
+      nodePort: {{ .Values.realtime.service.nodePort }}
+      {{- end }}
