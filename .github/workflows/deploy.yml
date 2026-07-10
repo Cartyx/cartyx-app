@@ -74,6 +74,10 @@ jobs:
           git clone --depth 1 "https://x-access-token:${INFRA_TOKEN}@github.com/biozal/cartyx-infrastructure.git" /tmp/infra
           cd /tmp/infra
           F="apps/$DEPLOY_ENV/helmrelease.yaml"
+          # A missing marker would make both seds no-ops and the no-diff
+          # early-exit would report success forever — fail loudly instead.
+          grep -q '# ci:web-tag' "$F" && grep -q '# ci:realtime-tag' "$F" \
+            || { echo "ci:*-tag marker comments missing in $F — cannot bump" >&2; exit 1; }
           sed -i -E "s|(tag: ).*( # ci:web-tag)|\1${{ steps.tags.outputs.webtag }}\2|" "$F"
           sed -i -E "s|(tag: ).*( # ci:realtime-tag)|\1'${{ steps.tags.outputs.sha }}'\2|" "$F"
           git diff --exit-code --quiet && { echo "tags unchanged — nothing to deploy"; exit 0; }
