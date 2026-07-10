@@ -66,6 +66,19 @@ args_without() {
 if helm lint "$CHART_DIR" "${BASE_ARGS[@]}" >/dev/null 2>&1; then ok; else bad "helm lint"; fi
 assert_contains "chart renders at least one object" "^kind:"
 
+# --- Task 2: helpers + secret ---
+assert_contains "secret rendered with session key" "sessionSecret:"
+assert_contains "secret rendered with mongo key" "mongodbUri:"
+assert_contains "secret carries all seven keys" "posthogKey:"
+assert_not_contains "existingSecret suppresses managed Secret" "kind: Secret" \
+  --set secret.existingSecret=my-secret
+filtered_args=$(args_without secret.values.sessionSecret)
+# shellcheck disable=SC2086
+assert_fails "missing sessionSecret is a render error" "sessionSecret" $filtered_args
+filtered_args=$(args_without secret.values.mongodbUri)
+# shellcheck disable=SC2086
+assert_fails "missing mongodbUri is a render error" "mongodbUri" $filtered_args
+
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
