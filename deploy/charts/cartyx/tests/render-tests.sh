@@ -155,6 +155,15 @@ echo "$prod_out" | grep -q "kind: Secret" && bad "values-prod must not manage th
 esrel_out=$(helm template esrel "$CHART_DIR" $prod_args -f "$CHART_DIR/values-prod.yaml" 2>&1)
 echo "$esrel_out" | grep -A2 "secretKeyRef:" | grep -qE "name: cartyx$" && ok || bad "values-prod refs existingSecret cartyx"
 
+# --- Task 9: values-local ---
+local_args=$(args_without ingress.)
+# shellcheck disable=SC2086
+if helm template cartyx "$CHART_DIR" $local_args -f "$CHART_DIR/values-local.yaml" 2>&1 |
+  grep -q "nodePort: 30320"; then ok; else bad "values-local web NodePort"; fi
+# shellcheck disable=SC2086
+if helm template cartyx "$CHART_DIR" $local_args -f "$CHART_DIR/values-local.yaml" 2>&1 |
+  grep -qE "kind: (Ingress|Certificate|Middleware)"; then bad "values-local disables ingress stack"; else ok; fi
+
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

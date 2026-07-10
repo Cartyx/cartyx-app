@@ -1,0 +1,29 @@
+# Local kind overrides (deploy/local/deploy-kind.sh). Images are built
+# locally and side-loaded with `kind load`; never pulled.
+web:
+  image:
+    repository: cartyx-web
+    tag: local
+    pullPolicy: Never
+  service:
+    type: NodePort
+    nodePort: 30320 # paired with deploy/local/kind-config.yaml: host 3200 -> 30320
+  env:
+    APP_ENV: development
+    BASE_URL: http://localhost:3200
+
+realtime:
+  image:
+    repository: cartyx-realtime
+    tag: local
+    pullPolicy: Never
+  service:
+    type: NodePort
+    nodePort: 30199 # paired with kind-config.yaml: host 1999 -> 30199
+
+# No Traefik / cert-manager in kind — NodePort access only.
+ingress:
+  enabled: false
+tls:
+  certificate:
+    enabled: false

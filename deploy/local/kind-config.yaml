@@ -9,3 +9,8 @@ nodes:
       - containerPort: 30199
         hostPort: 1999
         protocol: TCP
+      # Host localhost:3200 -> Service NodePort 30320 -> web container 3000.
+      # 3000 stays free for `vite dev`, 3100 for the compose stack.
+      - containerPort: 30320
+        hostPort: 3200
+        protocol: TCP
