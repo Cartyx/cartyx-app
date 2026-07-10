@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/react-start';
+import { z } from 'zod';
 import mongoose from 'mongoose';
 import { getSession } from '../session';
 import { connectDB, isDBConnected } from '../db/connection';
@@ -198,6 +198,36 @@ const COLLECTION_REGISTRY: Record<string, CollectionFetcher> = {
       >;
     },
   },
+  lore: {
+    async fetch(ids: string[], campaignId: string) {
+      const { Lore } = await import('../db/models/Lore');
+      return Lore.find({ _id: { $in: ids }, campaignId }, '_id title content isPublic')
+        .lean()
+        .then((docs) =>
+          docs.map((d) => ({
+            _id: d._id,
+            title: (d as { title?: string }).title,
+            content: (d as { content?: string }).content,
+            isPublic: (d as { isPublic?: boolean }).isPublic,
+          }))
+        ) as Promise<Array<{ _id: unknown; title?: string; content?: string; isPublic?: boolean }>>;
+    },
+  },
+  events: {
+    async fetch(ids: string[], campaignId: string) {
+      const { Event } = await import('../db/models/Event');
+      return Event.find({ _id: { $in: ids }, campaignId }, '_id title content isPublic')
+        .lean()
+        .then((docs) =>
+          docs.map((d) => ({
+            _id: d._id,
+            title: (d as { title?: string }).title,
+            content: (d as { content?: string }).content,
+            isPublic: (d as { isPublic?: boolean }).isPublic,
+          }))
+        ) as Promise<Array<{ _id: unknown; title?: string; content?: string; isPublic?: boolean }>>;
+    },
+  },
   location: {
     async fetch(ids: string[], campaignId: string) {
       const { Location } = await import('../db/models/Location');
@@ -361,40 +391,38 @@ async function requireCampaignGM(
 
 export { listGMScreensSchema };
 
-export const listGMScreens = createServerFn({ method: 'GET' })
-  .inputValidator(listGMScreensSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+export const listGMScreens = async ({ data }: { data: z.infer<typeof listGMScreensSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      const docs = await GMScreen.find(
-        { campaignId: data.campaignId },
-        '_id campaignId name tabOrder createdBy createdAt updatedAt'
-      )
-        .sort({ tabOrder: 1 })
-        .lean();
+    const docs = await GMScreen.find(
+      { campaignId: data.campaignId },
+      '_id campaignId name tabOrder createdBy createdAt updatedAt'
+    )
+      .sort({ tabOrder: 1 })
+      .lean();
 
-      return (
-        docs as Array<{
-          _id: unknown;
-          campaignId: unknown;
-          name?: string;
-          tabOrder?: number;
-          createdBy: unknown;
-          createdAt?: Date;
-          updatedAt?: Date;
-        }>
-      ).map(serializeGMScreen);
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'listGMScreens',
-        campaignId: data.campaignId,
-      });
-      throw e;
-    }
-  });
+    return (
+      docs as Array<{
+        _id: unknown;
+        campaignId: unknown;
+        name?: string;
+        tabOrder?: number;
+        createdBy: unknown;
+        createdAt?: Date;
+        updatedAt?: Date;
+      }>
+    ).map(serializeGMScreen);
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'listGMScreens',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // createGMScreen
@@ -404,95 +432,93 @@ export { createGMScreenSchema };
 
 const MAX_TAB_ORDER_RETRIES = 3;
 
-export const createGMScreen = createServerFn({ method: 'POST' })
-  .inputValidator(createGMScreenSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+export const createGMScreen = async ({ data }: { data: z.infer<typeof createGMScreenSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      let doc: {
-        _id: unknown;
-        campaignId: unknown;
-        name?: string;
-        tabOrder?: number;
-        createdBy: unknown;
-        createdAt?: Date;
-        updatedAt?: Date;
-      };
+    let doc: {
+      _id: unknown;
+      campaignId: unknown;
+      name?: string;
+      tabOrder?: number;
+      createdBy: unknown;
+      createdAt?: Date;
+      updatedAt?: Date;
+    };
 
-      for (let attempt = 0; attempt < MAX_TAB_ORDER_RETRIES; attempt++) {
-        const mongoSession = await mongoose.startSession();
-        try {
-          doc = (await mongoSession.withTransaction(async () => {
-            const last = (await GMScreen.findOne({ campaignId: data.campaignId })
-              .sort({ tabOrder: -1 })
-              .select('tabOrder')
-              .session(mongoSession)
-              .lean()) as { tabOrder?: number } | null;
+    for (let attempt = 0; attempt < MAX_TAB_ORDER_RETRIES; attempt++) {
+      const mongoSession = await mongoose.startSession();
+      try {
+        doc = (await mongoSession.withTransaction(async () => {
+          const last = (await GMScreen.findOne({ campaignId: data.campaignId })
+            .sort({ tabOrder: -1 })
+            .select('tabOrder')
+            .session(mongoSession)
+            .lean()) as { tabOrder?: number } | null;
 
-            const nextOrder = (last?.tabOrder ?? -1) + 1;
+          const nextOrder = (last?.tabOrder ?? -1) + 1;
 
-            const now = new Date();
-            const createdDocs = (await GMScreen.create(
-              [
-                {
-                  campaignId: data.campaignId,
-                  name: data.name.trim(),
-                  tabOrder: nextOrder,
-                  createdBy: gm.userId,
-                  createdAt: now,
-                  updatedAt: now,
-                },
-              ],
-              { session: mongoSession }
-            )) as unknown as unknown[];
-            const created = createdDocs[0];
+          const now = new Date();
+          const createdDocs = (await GMScreen.create(
+            [
+              {
+                campaignId: data.campaignId,
+                name: data.name.trim(),
+                tabOrder: nextOrder,
+                createdBy: gm.userId,
+                createdAt: now,
+                updatedAt: now,
+              },
+            ],
+            { session: mongoSession }
+          )) as unknown as unknown[];
+          const created = createdDocs[0];
 
-            return created;
-          })) as typeof doc;
-        } catch (e) {
-          if (isDuplicateKeyError(e, 'tabOrder')) {
-            continue;
-          }
-          throw e;
-        } finally {
-          await mongoSession.endSession();
+          return created;
+        })) as typeof doc;
+      } catch (e) {
+        if (isDuplicateKeyError(e, 'tabOrder')) {
+          continue;
         }
-
-        serverCaptureEvent(sessionUserId, 'gmscreen_created', {
-          campaign_id: data.campaignId,
-          screen_id: String(doc._id),
-        });
-
-        return { success: true, screen: serializeGMScreen(doc) };
+        throw e;
+      } finally {
+        await mongoSession.endSession();
       }
 
-      const exhaustionError = new Error('Failed to allocate tabOrder after retries');
-      serverCaptureException(exhaustionError, sessionUserId, {
+      serverCaptureEvent(sessionUserId, 'gmscreen_created', {
+        campaign_id: data.campaignId,
+        screen_id: String(doc._id),
+      });
+
+      return { success: true, screen: serializeGMScreen(doc) };
+    }
+
+    const exhaustionError = new Error('Failed to allocate tabOrder after retries');
+    serverCaptureException(exhaustionError, sessionUserId, {
+      action: 'createGMScreen',
+      campaignId: data.campaignId,
+      retries: MAX_TAB_ORDER_RETRIES,
+    });
+    throw new AlreadyReportedError(
+      'Could not create the screen due to a conflict. Please try again.'
+    );
+  } catch (e) {
+    if (isDuplicateKeyError(e, 'name')) {
+      throw new Error('A screen with that name already exists in this campaign');
+    }
+    // Avoid double-reporting: the retry exhaustion path already captured
+    // the internal error above — only capture genuinely unexpected failures.
+    if (!(e instanceof AlreadyReportedError)) {
+      serverCaptureException(e, sessionUserId, {
         action: 'createGMScreen',
         campaignId: data.campaignId,
-        retries: MAX_TAB_ORDER_RETRIES,
       });
-      throw new AlreadyReportedError(
-        'Could not create the screen due to a conflict. Please try again.'
-      );
-    } catch (e) {
-      if (isDuplicateKeyError(e, 'name')) {
-        throw new Error('A screen with that name already exists in this campaign');
-      }
-      // Avoid double-reporting: the retry exhaustion path already captured
-      // the internal error above — only capture genuinely unexpected failures.
-      if (!(e instanceof AlreadyReportedError)) {
-        serverCaptureException(e, sessionUserId, {
-          action: 'createGMScreen',
-          campaignId: data.campaignId,
-        });
-      }
-      throw e;
     }
-  });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // renameGMScreen
@@ -500,36 +526,34 @@ export const createGMScreen = createServerFn({ method: 'POST' })
 
 export { renameGMScreenSchema };
 
-export const renameGMScreen = createServerFn({ method: 'POST' })
-  .inputValidator(renameGMScreenSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+export const renameGMScreen = async ({ data }: { data: z.infer<typeof renameGMScreenSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      const screen = await GMScreen.findById(data.id);
-      if (!screen) throw new Error('Screen not found');
-      if (String(screen.campaignId) !== data.campaignId) throw new Error('Forbidden');
+    const screen = await GMScreen.findById(data.id);
+    if (!screen) throw new Error('Screen not found');
+    if (String(screen.campaignId) !== data.campaignId) throw new Error('Forbidden');
 
-      screen.name = data.name.trim();
-      screen.updatedAt = new Date();
-      await screen.save();
+    screen.name = data.name.trim();
+    screen.updatedAt = new Date();
+    await screen.save();
 
-      serverCaptureEvent(sessionUserId, 'gmscreen_renamed', {
-        campaign_id: data.campaignId,
-        screen_id: data.id,
-      });
+    serverCaptureEvent(sessionUserId, 'gmscreen_renamed', {
+      campaign_id: data.campaignId,
+      screen_id: data.id,
+    });
 
-      return { success: true, screen: serializeGMScreen(screen) };
-    } catch (e) {
-      if ((e as { code?: number })?.code === 11000) {
-        throw new Error('A screen with that name already exists in this campaign');
-      }
-      serverCaptureException(e, sessionUserId, { action: 'renameGMScreen', screenId: data.id });
-      throw e;
+    return { success: true, screen: serializeGMScreen(screen) };
+  } catch (e) {
+    if ((e as { code?: number })?.code === 11000) {
+      throw new Error('A screen with that name already exists in this campaign');
     }
-  });
+    serverCaptureException(e, sessionUserId, { action: 'renameGMScreen', screenId: data.id });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // deleteGMScreen
@@ -537,74 +561,72 @@ export const renameGMScreen = createServerFn({ method: 'POST' })
 
 export { deleteGMScreenSchema };
 
-export const deleteGMScreen = createServerFn({ method: 'POST' })
-  .inputValidator(deleteGMScreenSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
+export const deleteGMScreen = async ({ data }: { data: z.infer<typeof deleteGMScreenSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
+
+    // Use a transaction so the count-check + delete is atomic
+    const mongoSession = await mongoose.startSession();
+    let deletedTabOrder: number;
     try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+      deletedTabOrder = await mongoSession.withTransaction(async () => {
+        const screen = await GMScreen.findOne({
+          _id: data.id,
+          campaignId: data.campaignId,
+        }).session(mongoSession);
+        if (!screen) throw new Error('Screen not found');
 
-      // Use a transaction so the count-check + delete is atomic
-      const mongoSession = await mongoose.startSession();
-      let deletedTabOrder: number;
-      try {
-        deletedTabOrder = await mongoSession.withTransaction(async () => {
-          const screen = await GMScreen.findOne({
-            _id: data.id,
-            campaignId: data.campaignId,
-          }).session(mongoSession);
-          if (!screen) throw new Error('Screen not found');
+        const count = await GMScreen.countDocuments({
+          campaignId: data.campaignId,
+        }).session(mongoSession);
+        if (count <= 1) throw new Error('Cannot delete the last screen');
 
-          const count = await GMScreen.countDocuments({
-            campaignId: data.campaignId,
-          }).session(mongoSession);
-          if (count <= 1) throw new Error('Cannot delete the last screen');
+        const tabOrder = typeof screen.tabOrder === 'number' ? screen.tabOrder : 0;
+        await GMScreen.deleteOne({ _id: data.id, campaignId: data.campaignId }).session(
+          mongoSession
+        );
 
-          const tabOrder = typeof screen.tabOrder === 'number' ? screen.tabOrder : 0;
-          await GMScreen.deleteOne({ _id: data.id, campaignId: data.campaignId }).session(
-            mongoSession
-          );
-
-          return tabOrder;
-        });
-      } finally {
-        await mongoSession.endSession();
-      }
-
-      // Return the remaining screens so the client can resolve the next active screen
-      const remaining = await GMScreen.find(
-        { campaignId: data.campaignId },
-        '_id campaignId name tabOrder createdBy createdAt updatedAt'
-      )
-        .sort({ tabOrder: 1 })
-        .lean();
-
-      serverCaptureEvent(sessionUserId, 'gmscreen_deleted', {
-        campaign_id: data.campaignId,
-        screen_id: data.id,
+        return tabOrder;
       });
-
-      return {
-        success: true,
-        deletedTabOrder,
-        remaining: (
-          remaining as Array<{
-            _id: unknown;
-            campaignId: unknown;
-            name?: string;
-            tabOrder?: number;
-            createdBy: unknown;
-            createdAt?: Date;
-            updatedAt?: Date;
-          }>
-        ).map(serializeGMScreen),
-      };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'deleteGMScreen', screenId: data.id });
-      throw e;
+    } finally {
+      await mongoSession.endSession();
     }
-  });
+
+    // Return the remaining screens so the client can resolve the next active screen
+    const remaining = await GMScreen.find(
+      { campaignId: data.campaignId },
+      '_id campaignId name tabOrder createdBy createdAt updatedAt'
+    )
+      .sort({ tabOrder: 1 })
+      .lean();
+
+    serverCaptureEvent(sessionUserId, 'gmscreen_deleted', {
+      campaign_id: data.campaignId,
+      screen_id: data.id,
+    });
+
+    return {
+      success: true,
+      deletedTabOrder,
+      remaining: (
+        remaining as Array<{
+          _id: unknown;
+          campaignId: unknown;
+          name?: string;
+          tabOrder?: number;
+          createdBy: unknown;
+          createdAt?: Date;
+          updatedAt?: Date;
+        }>
+      ).map(serializeGMScreen),
+    };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'deleteGMScreen', screenId: data.id });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // reorderGMScreens
@@ -612,103 +634,105 @@ export const deleteGMScreen = createServerFn({ method: 'POST' })
 
 export { reorderGMScreensSchema };
 
-export const reorderGMScreens = createServerFn({ method: 'POST' })
-  .inputValidator(reorderGMScreensSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
+export const reorderGMScreens = async ({
+  data,
+}: {
+  data: z.infer<typeof reorderGMScreensSchema>;
+}) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
+
+    // Use a transaction for atomic read + bulkWrite
+    const mongoSession = await mongoose.startSession();
     try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+      await mongoSession.withTransaction(async () => {
+        const screens = (await GMScreen.find({ campaignId: data.campaignId }, '_id')
+          .session(mongoSession)
+          .lean()) as Array<{ _id: unknown }>;
 
-      // Use a transaction for atomic read + bulkWrite
-      const mongoSession = await mongoose.startSession();
-      try {
-        await mongoSession.withTransaction(async () => {
-          const screens = (await GMScreen.find({ campaignId: data.campaignId }, '_id')
-            .session(mongoSession)
-            .lean()) as Array<{ _id: unknown }>;
+        const existingIds = new Set(screens.map((s) => String(s._id)));
 
-          const existingIds = new Set(screens.map((s) => String(s._id)));
-
-          // Validate input is a full permutation: no duplicates, no missing screens
-          const inputIds = new Set(data.screenIds);
-          if (inputIds.size !== data.screenIds.length) {
-            throw new Error('Duplicate screen IDs in reorder request');
+        // Validate input is a full permutation: no duplicates, no missing screens
+        const inputIds = new Set(data.screenIds);
+        if (inputIds.size !== data.screenIds.length) {
+          throw new Error('Duplicate screen IDs in reorder request');
+        }
+        for (const id of data.screenIds) {
+          if (!existingIds.has(id)) {
+            throw new Error(`Screen ${id} not found in this campaign`);
           }
-          for (const id of data.screenIds) {
-            if (!existingIds.has(id)) {
-              throw new Error(`Screen ${id} not found in this campaign`);
-            }
+        }
+        for (const id of existingIds) {
+          if (!inputIds.has(id)) {
+            throw new Error(`Missing screen ${id} in reorder request`);
           }
-          for (const id of existingIds) {
-            if (!inputIds.has(id)) {
-              throw new Error(`Missing screen ${id} in reorder request`);
-            }
-          }
+        }
 
-          // Two-phase reorder to avoid transient unique-index collisions:
-          // Phase 1 — move all screens to negative tabOrder values
-          const now = new Date();
-          await GMScreen.bulkWrite(
-            data.screenIds.map((id, index) => ({
-              updateOne: {
-                filter: { _id: id, campaignId: data.campaignId },
-                update: { $set: { tabOrder: -(index + 1), updatedAt: now } },
-              },
-            })),
-            { session: mongoSession }
-          );
+        // Two-phase reorder to avoid transient unique-index collisions:
+        // Phase 1 — move all screens to negative tabOrder values
+        const now = new Date();
+        await GMScreen.bulkWrite(
+          data.screenIds.map((id, index) => ({
+            updateOne: {
+              filter: { _id: id, campaignId: data.campaignId },
+              update: { $set: { tabOrder: -(index + 1), updatedAt: now } },
+            },
+          })),
+          { session: mongoSession }
+        );
 
-          // Phase 2 — assign final tabOrder values (all non-negative, no collisions)
-          await GMScreen.bulkWrite(
-            data.screenIds.map((id, index) => ({
-              updateOne: {
-                filter: { _id: id, campaignId: data.campaignId },
-                update: { $set: { tabOrder: index } },
-              },
-            })),
-            { session: mongoSession }
-          );
-        });
-      } finally {
-        await mongoSession.endSession();
-      }
-
-      serverCaptureEvent(sessionUserId, 'gmscreens_reordered', {
-        campaign_id: data.campaignId,
-        screen_count: data.screenIds.length,
+        // Phase 2 — assign final tabOrder values (all non-negative, no collisions)
+        await GMScreen.bulkWrite(
+          data.screenIds.map((id, index) => ({
+            updateOne: {
+              filter: { _id: id, campaignId: data.campaignId },
+              update: { $set: { tabOrder: index } },
+            },
+          })),
+          { session: mongoSession }
+        );
       });
-
-      // Return the freshly ordered screens
-      const ordered = await GMScreen.find(
-        { campaignId: data.campaignId },
-        '_id campaignId name tabOrder createdBy createdAt updatedAt'
-      )
-        .sort({ tabOrder: 1 })
-        .lean();
-
-      return {
-        success: true,
-        screens: (
-          ordered as Array<{
-            _id: unknown;
-            campaignId: unknown;
-            name?: string;
-            tabOrder?: number;
-            createdBy: unknown;
-            createdAt?: Date;
-            updatedAt?: Date;
-          }>
-        ).map(serializeGMScreen),
-      };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'reorderGMScreens',
-        campaignId: data.campaignId,
-      });
-      throw e;
+    } finally {
+      await mongoSession.endSession();
     }
-  });
+
+    serverCaptureEvent(sessionUserId, 'gmscreens_reordered', {
+      campaign_id: data.campaignId,
+      screen_count: data.screenIds.length,
+    });
+
+    // Return the freshly ordered screens
+    const ordered = await GMScreen.find(
+      { campaignId: data.campaignId },
+      '_id campaignId name tabOrder createdBy createdAt updatedAt'
+    )
+      .sort({ tabOrder: 1 })
+      .lean();
+
+    return {
+      success: true,
+      screens: (
+        ordered as Array<{
+          _id: unknown;
+          campaignId: unknown;
+          name?: string;
+          tabOrder?: number;
+          createdBy: unknown;
+          createdAt?: Date;
+          updatedAt?: Date;
+        }>
+      ).map(serializeGMScreen),
+    };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'reorderGMScreens',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // getGMScreen — fetch a single screen with hydrated referenced content
@@ -716,74 +740,76 @@ export const reorderGMScreens = createServerFn({ method: 'POST' })
 
 export { getGMScreenSchema };
 
-export const getGMScreen = createServerFn({ method: 'GET' })
-  .inputValidator(getGMScreenSchema)
-  .handler(async ({ data }): Promise<GMScreenDetailData> => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+export const getGMScreen = async ({
+  data,
+}: {
+  data: z.infer<typeof getGMScreenSchema>;
+}): Promise<GMScreenDetailData> => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      const doc = (await GMScreen.findOne({
-        _id: data.id,
-        campaignId: data.campaignId,
-      }).lean()) as {
+    const doc = (await GMScreen.findOne({
+      _id: data.id,
+      campaignId: data.campaignId,
+    }).lean()) as {
+      _id: unknown;
+      campaignId: unknown;
+      name?: string;
+      tabOrder?: number;
+      createdBy: unknown;
+      createdAt?: Date;
+      updatedAt?: Date;
+      windows?: Array<{
         _id: unknown;
-        campaignId: unknown;
+        collection?: string;
+        documentId: unknown;
+        state?: string;
+        x?: number | null;
+        y?: number | null;
+        width?: number | null;
+        height?: number | null;
+        zIndex?: number;
+      }>;
+      stacks?: Array<{
+        _id: unknown;
         name?: string;
-        tabOrder?: number;
-        createdBy: unknown;
-        createdAt?: Date;
-        updatedAt?: Date;
-        windows?: Array<{
-          _id: unknown;
-          collection?: string;
-          documentId: unknown;
-          state?: string;
-          x?: number | null;
-          y?: number | null;
-          width?: number | null;
-          height?: number | null;
-          zIndex?: number;
-        }>;
-        stacks?: Array<{
-          _id: unknown;
-          name?: string;
-          x?: number | null;
-          y?: number | null;
-          items?: Array<{ _id: unknown; collection?: string; documentId: unknown; label?: string }>;
-        }>;
-      } | null;
+        x?: number | null;
+        y?: number | null;
+        items?: Array<{ _id: unknown; collection?: string; documentId: unknown; label?: string }>;
+      }>;
+    } | null;
 
-      if (!doc) throw new Error('Screen not found');
+    if (!doc) throw new Error('Screen not found');
 
-      const windows = (doc.windows ?? []).map(serializeWindow);
-      const stacks = (doc.stacks ?? []).map(serializeStack);
+    const windows = (doc.windows ?? []).map(serializeWindow);
+    const stacks = (doc.stacks ?? []).map(serializeStack);
 
-      // Collect all refs from windows and stack items
-      const refs: Array<{ collection: string; documentId: string }> = [];
-      for (const w of windows) {
-        refs.push({ collection: w.collection, documentId: w.documentId });
-      }
-      for (const s of stacks) {
-        for (const item of s.items) {
-          refs.push({ collection: item.collection, documentId: item.documentId });
-        }
-      }
-
-      const hydrated = await hydrateRefs(refs, data.campaignId);
-
-      return {
-        ...serializeGMScreen(doc),
-        windows,
-        stacks,
-        hydrated,
-      };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'getGMScreen', screenId: data.id });
-      throw e;
+    // Collect all refs from windows and stack items
+    const refs: Array<{ collection: string; documentId: string }> = [];
+    for (const w of windows) {
+      refs.push({ collection: w.collection, documentId: w.documentId });
     }
-  });
+    for (const s of stacks) {
+      for (const item of s.items) {
+        refs.push({ collection: item.collection, documentId: item.documentId });
+      }
+    }
+
+    const hydrated = await hydrateRefs(refs, data.campaignId);
+
+    return {
+      ...serializeGMScreen(doc),
+      windows,
+      stacks,
+      hydrated,
+    };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'getGMScreen', screenId: data.id });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // openWindow — open a wiki ref as a window (or focus existing duplicate)
@@ -793,154 +819,130 @@ export const getGMScreen = createServerFn({ method: 'GET' })
  * **Duplicate rule:** If a window with the same `collection + documentId` already
  * exists on this screen, the existing window is focused (state → 'open', zIndex
  * bumped to max + 1) and returned with `existed: true`.  No second window is
- * created for the same ref.
+ * created for the same ref — enforced atomically via a conditional
+ * `updateOne` filter (`$nor: [{ windows: { $elemMatch: {...} } }]`) so that
+ * two concurrent calls for the same ref cannot both create a window.
  */
 
 export { openWindowSchema };
 
-export const openWindow = createServerFn({ method: 'POST' })
-  .inputValidator(openWindowSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+/**
+ * Focuses an already-open (or just-raced-open) window sub-doc: bumps its
+ * zIndex above the current max and sets state back to 'open', then persists
+ * via `.save()`. Shared by the "already existed on read" path and the
+ * "lost the atomic create race" fallback path in `openWindow`.
+ */
+async function focusWindowAndSave(
+  screen: { updatedAt: Date; save: () => Promise<unknown> },
+  windows: Array<{ zIndex?: number }>,
+  existing: { _id: unknown; state?: string; zIndex?: number }
+) {
+  const maxZ = windows.reduce(
+    (max: number, w: { zIndex?: number }) => Math.max(max, w.zIndex ?? 0),
+    0
+  );
+  existing.state = 'open';
+  existing.zIndex = maxZ + 1;
+  screen.updatedAt = new Date();
+  await screen.save();
+  return existing;
+}
 
-      const screen = await GMScreen.findOne({
-        _id: data.screenId,
-        campaignId: data.campaignId,
-      });
-      if (!screen) throw new Error('Screen not found');
+export const openWindow = async ({ data }: { data: z.infer<typeof openWindowSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      if (!screen.windows) {
-        screen.windows = [];
-      }
-      const windows = screen.windows;
+    const screen = await GMScreen.findOne({
+      _id: data.screenId,
+      campaignId: data.campaignId,
+    });
+    if (!screen) throw new Error('Screen not found');
 
-      // Check for existing window with same ref
-      const existing = windows.find(
-        (w: { collection?: string; documentId?: unknown }) =>
-          w.collection === data.collection && String(w.documentId) === data.documentId
-      );
+    if (!screen.windows) {
+      screen.windows = [];
+    }
+    const windows = screen.windows;
 
-      if (existing) {
-        // Focus existing: set state to open, bump zIndex
-        const maxZ = windows.reduce(
-          (max: number, w: { zIndex?: number }) => Math.max(max, w.zIndex ?? 0),
-          0
-        );
-        existing.state = 'open';
-        existing.zIndex = maxZ + 1;
-        screen.updatedAt = new Date();
-        await screen.save();
+    // Check for existing window with same ref
+    const existing = windows.find(
+      (w: { collection?: string; documentId?: unknown }) =>
+        w.collection === data.collection && String(w.documentId) === data.documentId
+    );
 
-        serverCaptureEvent(sessionUserId, 'gmscreen_window_focused', {
-          campaign_id: data.campaignId,
-          screen_id: data.screenId,
-          window_id: String(existing._id),
-        });
+    if (existing) {
+      await focusWindowAndSave(screen, windows, existing);
 
-        return { success: true, window: serializeWindow(existing), existed: true };
-      }
-
-      // Enforce cap
-      if (windows.length >= GMSCREEN_LIMITS.MAX_WINDOWS) {
-        throw new Error(`A screen cannot have more than ${GMSCREEN_LIMITS.MAX_WINDOWS} windows`);
-      }
-
-      // Create new window
-      const maxZ = windows.reduce(
-        (max: number, w: { zIndex?: number }) => Math.max(max, w.zIndex ?? 0),
-        0
-      );
-      const newWindow = {
-        collection: data.collection,
-        documentId: data.documentId,
-        state: 'open' as const,
-        x: data.x ?? null,
-        y: data.y ?? null,
-        width: null,
-        height: null,
-        zIndex: maxZ + 1,
-      };
-      windows.push(newWindow);
-      screen.updatedAt = new Date();
-      await screen.save();
-
-      // The pushed sub-doc now has an _id assigned by Mongoose
-      const created = windows[windows.length - 1];
-
-      serverCaptureEvent(sessionUserId, 'gmscreen_window_opened', {
+      serverCaptureEvent(sessionUserId, 'gmscreen_window_focused', {
         campaign_id: data.campaignId,
         screen_id: data.screenId,
-        window_id: String(created._id),
+        window_id: String(existing._id),
       });
 
-      return { success: true, window: serializeWindow(created), existed: false };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'openWindow',
-        screenId: data.screenId,
-        campaignId: data.campaignId,
-      });
-      throw e;
+      return { success: true, window: serializeWindow(existing), existed: true };
     }
-  });
 
-// ---------------------------------------------------------------------------
-// updateWindow — batch-update layout/state fields on a single window
-// ---------------------------------------------------------------------------
+    // Enforce cap — fast-path only. Like the `existing` check above, this
+    // reads a possibly-stale snapshot; the authoritative cap enforcement is
+    // the $expr size condition in the atomic filter below.
+    if (windows.length >= GMSCREEN_LIMITS.MAX_WINDOWS) {
+      throw new Error(`A screen cannot have more than ${GMSCREEN_LIMITS.MAX_WINDOWS} windows`);
+    }
 
-/**
- * Accepts any subset of `{ x, y, width, height, zIndex, state }`.
- * Only provided fields are persisted — the rest stay untouched.
- * This lets the client debounce drag/resize and send one update.
- */
+    // Create new window
+    const maxZ = windows.reduce(
+      (max: number, w: { zIndex?: number }) => Math.max(max, w.zIndex ?? 0),
+      0
+    );
+    const newWindow = {
+      collection: data.collection,
+      documentId: data.documentId,
+      state: 'open' as const,
+      x: data.x ?? null,
+      y: data.y ?? null,
+      width: null,
+      height: null,
+      zIndex: maxZ + 1,
+    };
 
-export { updateWindowSchema };
-
-export const updateWindow = createServerFn({ method: 'POST' })
-  .inputValidator(updateWindowSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
-
-      // Build $set for only the fields that were provided
-      const setFields: Record<string, unknown> = { updatedAt: new Date() };
-      if (data.x !== undefined) setFields['windows.$.x'] = data.x;
-      if (data.y !== undefined) setFields['windows.$.y'] = data.y;
-      if (data.width !== undefined) setFields['windows.$.width'] = data.width;
-      if (data.height !== undefined) setFields['windows.$.height'] = data.height;
-      if (data.zIndex !== undefined) setFields['windows.$.zIndex'] = data.zIndex;
-      if (data.state !== undefined) setFields['windows.$.state'] = data.state;
-
-      const result = await GMScreen.updateOne(
-        {
-          _id: data.screenId,
-          campaignId: data.campaignId,
-          'windows._id': data.windowId,
+    // Atomic conditional push — this is the fix for the create/create race:
+    // two concurrent calls can both pass the `existing` and cap checks above
+    // (both read the array before either write lands), but this filter is
+    // re-evaluated by Mongo against the *current* document at write time.
+    // The $nor clause rejects the push when a window for this ref already
+    // exists (dedupe); the $expr size clause rejects it when the array is
+    // already at the cap — needed because schema validators don't run on
+    // updateOne pushes, so without it two concurrent opens of *different*
+    // refs at length cap-1 would land cap+1 windows.
+    const pushResult = await GMScreen.updateOne(
+      {
+        _id: data.screenId,
+        campaignId: data.campaignId,
+        $nor: [
+          {
+            windows: {
+              $elemMatch: { collection: data.collection, documentId: data.documentId },
+            },
+          },
+        ],
+        // $ifNull guards legacy documents that predate the windows field —
+        // $size on a missing field errors inside $expr instead of not matching.
+        $expr: {
+          $lt: [{ $size: { $ifNull: ['$windows', []] } }, GMSCREEN_LIMITS.MAX_WINDOWS],
         },
-        { $set: setFields }
-      );
-
-      if (result.matchedCount === 0) {
-        // Distinguish screen-not-found from window-not-found
-        const screenExists = await GMScreen.countDocuments({
-          _id: data.screenId,
-          campaignId: data.campaignId,
-        });
-        if (screenExists === 0) {
-          throw new Error('Screen not found');
-        }
-        throw new Error('Window not found');
+      },
+      {
+        $push: { windows: newWindow },
+        $set: { updatedAt: new Date() },
       }
+    );
 
-      // Fetch the updated window to return
-      const screen = (await GMScreen.findOne(
+    if (pushResult.modifiedCount > 0) {
+      // Re-fetch just the pushed sub-doc so we can return its Mongoose-assigned _id.
+      const refetched = (await GMScreen.findOne(
         { _id: data.screenId, campaignId: data.campaignId },
-        { windows: { $elemMatch: { _id: data.windowId } } }
+        { windows: { $elemMatch: { collection: data.collection, documentId: data.documentId } } }
       ).lean()) as {
         windows?: Array<{
           _id: unknown;
@@ -954,21 +956,139 @@ export const updateWindow = createServerFn({ method: 'POST' })
           zIndex?: number;
         }>;
       } | null;
+      const created = refetched?.windows?.[0];
+      if (!created) throw new Error('Window not found after creation');
 
-      const updated = screen?.windows?.[0];
-      if (!updated) throw new Error('Window not found after update');
-
-      return { success: true, window: serializeWindow(updated) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'updateWindow',
-        campaignId: data.campaignId,
-        screenId: data.screenId,
-        windowId: data.windowId,
+      serverCaptureEvent(sessionUserId, 'gmscreen_window_opened', {
+        campaign_id: data.campaignId,
+        screen_id: data.screenId,
+        window_id: String(created._id),
       });
-      throw e;
+
+      return { success: true, window: serializeWindow(created), existed: false };
     }
-  });
+
+    // The filter didn't match: either another concurrent call created a
+    // window for this ref first (dedupe loss), or a concurrent open of a
+    // *different* ref filled the last cap slot ($expr loss), or the screen
+    // was deleted. Re-fetch canonical state to tell these apart: ref present
+    // → focus the winner; ref absent at cap → cap error; otherwise not found.
+    const refreshed = await GMScreen.findOne({
+      _id: data.screenId,
+      campaignId: data.campaignId,
+    });
+    if (!refreshed) throw new Error('Screen not found');
+    if (!refreshed.windows) refreshed.windows = [];
+    const race = refreshed.windows.find(
+      (w: { collection?: string; documentId?: unknown }) =>
+        w.collection === data.collection && String(w.documentId) === data.documentId
+    );
+    if (!race) {
+      if (refreshed.windows.length >= GMSCREEN_LIMITS.MAX_WINDOWS) {
+        throw new Error(`A screen cannot have more than ${GMSCREEN_LIMITS.MAX_WINDOWS} windows`);
+      }
+      throw new Error('Screen not found');
+    }
+
+    await focusWindowAndSave(refreshed, refreshed.windows, race);
+
+    serverCaptureEvent(sessionUserId, 'gmscreen_window_focused', {
+      campaign_id: data.campaignId,
+      screen_id: data.screenId,
+      window_id: String(race._id),
+    });
+
+    return { success: true, window: serializeWindow(race), existed: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'openWindow',
+      screenId: data.screenId,
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// updateWindow — batch-update layout/state fields on a single window
+// ---------------------------------------------------------------------------
+
+/**
+ * Accepts any subset of `{ x, y, width, height, zIndex, state }`.
+ * Only provided fields are persisted — the rest stay untouched.
+ * This lets the client debounce drag/resize and send one update.
+ */
+
+export { updateWindowSchema };
+
+export const updateWindow = async ({ data }: { data: z.infer<typeof updateWindowSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
+
+    // Build $set for only the fields that were provided
+    const setFields: Record<string, unknown> = { updatedAt: new Date() };
+    if (data.x !== undefined) setFields['windows.$.x'] = data.x;
+    if (data.y !== undefined) setFields['windows.$.y'] = data.y;
+    if (data.width !== undefined) setFields['windows.$.width'] = data.width;
+    if (data.height !== undefined) setFields['windows.$.height'] = data.height;
+    if (data.zIndex !== undefined) setFields['windows.$.zIndex'] = data.zIndex;
+    if (data.state !== undefined) setFields['windows.$.state'] = data.state;
+
+    const result = await GMScreen.updateOne(
+      {
+        _id: data.screenId,
+        campaignId: data.campaignId,
+        'windows._id': data.windowId,
+      },
+      { $set: setFields }
+    );
+
+    if (result.matchedCount === 0) {
+      // Distinguish screen-not-found from window-not-found
+      const screenExists = await GMScreen.countDocuments({
+        _id: data.screenId,
+        campaignId: data.campaignId,
+      });
+      if (screenExists === 0) {
+        throw new Error('Screen not found');
+      }
+      throw new Error('Window not found');
+    }
+
+    // Fetch the updated window to return
+    const screen = (await GMScreen.findOne(
+      { _id: data.screenId, campaignId: data.campaignId },
+      { windows: { $elemMatch: { _id: data.windowId } } }
+    ).lean()) as {
+      windows?: Array<{
+        _id: unknown;
+        collection?: string;
+        documentId: unknown;
+        state?: string;
+        x?: number | null;
+        y?: number | null;
+        width?: number | null;
+        height?: number | null;
+        zIndex?: number;
+      }>;
+    } | null;
+
+    const updated = screen?.windows?.[0];
+    if (!updated) throw new Error('Window not found after update');
+
+    return { success: true, window: serializeWindow(updated) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'updateWindow',
+      campaignId: data.campaignId,
+      screenId: data.screenId,
+      windowId: data.windowId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // closeWindow — remove a window from a screen
@@ -976,58 +1096,56 @@ export const updateWindow = createServerFn({ method: 'POST' })
 
 export { closeWindowSchema };
 
-export const closeWindow = createServerFn({ method: 'POST' })
-  .inputValidator(closeWindowSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+export const closeWindow = async ({ data }: { data: z.infer<typeof closeWindowSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      // Include window ID in the filter so the update is a true no-op
-      // (no updatedAt churn, no analytics) when the window isn't present.
-      const result = await GMScreen.updateOne(
-        {
-          _id: data.screenId,
-          campaignId: data.campaignId,
-          'windows._id': data.windowId,
-        },
-        {
-          $pull: { windows: { _id: data.windowId } },
-          $set: { updatedAt: new Date() },
-        }
-      );
-
-      if (result.matchedCount === 0) {
-        // Distinguish screen-not-found from window-not-found
-        const screenExists = await GMScreen.countDocuments({
-          _id: data.screenId,
-          campaignId: data.campaignId,
-        });
-        if (screenExists === 0) {
-          throw new Error('Screen not found');
-        }
-        // Window wasn't present — true no-op
-        return { success: true };
-      }
-
-      serverCaptureEvent(sessionUserId, 'gmscreen_window_closed', {
-        campaign_id: data.campaignId,
-        screen_id: data.screenId,
-        window_id: data.windowId,
-      });
-
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'closeWindow',
+    // Include window ID in the filter so the update is a true no-op
+    // (no updatedAt churn, no analytics) when the window isn't present.
+    const result = await GMScreen.updateOne(
+      {
+        _id: data.screenId,
         campaignId: data.campaignId,
-        screenId: data.screenId,
-        windowId: data.windowId,
+        'windows._id': data.windowId,
+      },
+      {
+        $pull: { windows: { _id: data.windowId } },
+        $set: { updatedAt: new Date() },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      // Distinguish screen-not-found from window-not-found
+      const screenExists = await GMScreen.countDocuments({
+        _id: data.screenId,
+        campaignId: data.campaignId,
       });
-      throw e;
+      if (screenExists === 0) {
+        throw new Error('Screen not found');
+      }
+      // Window wasn't present — true no-op
+      return { success: true };
     }
-  });
+
+    serverCaptureEvent(sessionUserId, 'gmscreen_window_closed', {
+      campaign_id: data.campaignId,
+      screen_id: data.screenId,
+      window_id: data.windowId,
+    });
+
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'closeWindow',
+      campaignId: data.campaignId,
+      screenId: data.screenId,
+      windowId: data.windowId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // createStack — add a named stack to a screen
@@ -1035,55 +1153,53 @@ export const closeWindow = createServerFn({ method: 'POST' })
 
 export { createStackSchema };
 
-export const createStack = createServerFn({ method: 'POST' })
-  .inputValidator(createStackSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+export const createStack = async ({ data }: { data: z.infer<typeof createStackSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      const screen = await GMScreen.findOne({
-        _id: data.screenId,
-        campaignId: data.campaignId,
-      });
-      if (!screen) throw new Error('Screen not found');
+    const screen = await GMScreen.findOne({
+      _id: data.screenId,
+      campaignId: data.campaignId,
+    });
+    if (!screen) throw new Error('Screen not found');
 
-      if (!screen.stacks) {
-        screen.stacks = [];
-      }
-
-      if (screen.stacks.length >= GMSCREEN_LIMITS.MAX_STACKS) {
-        throw new Error(`A screen cannot have more than ${GMSCREEN_LIMITS.MAX_STACKS} stacks`);
-      }
-
-      screen.stacks.push({
-        name: data.name.trim(),
-        x: null,
-        y: null,
-        items: [],
-      });
-      screen.updatedAt = new Date();
-      await screen.save();
-
-      const created = screen.stacks[screen.stacks.length - 1];
-
-      serverCaptureEvent(sessionUserId, 'gmscreen_stack_created', {
-        campaign_id: data.campaignId,
-        screen_id: data.screenId,
-        stack_id: String(created._id),
-      });
-
-      return { success: true, stack: serializeStack(created) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'createStack',
-        screenId: data.screenId,
-        campaignId: data.campaignId,
-      });
-      throw e;
+    if (!screen.stacks) {
+      screen.stacks = [];
     }
-  });
+
+    if (screen.stacks.length >= GMSCREEN_LIMITS.MAX_STACKS) {
+      throw new Error(`A screen cannot have more than ${GMSCREEN_LIMITS.MAX_STACKS} stacks`);
+    }
+
+    screen.stacks.push({
+      name: data.name.trim(),
+      x: null,
+      y: null,
+      items: [],
+    });
+    screen.updatedAt = new Date();
+    await screen.save();
+
+    const created = screen.stacks[screen.stacks.length - 1];
+
+    serverCaptureEvent(sessionUserId, 'gmscreen_stack_created', {
+      campaign_id: data.campaignId,
+      screen_id: data.screenId,
+      stack_id: String(created._id),
+    });
+
+    return { success: true, stack: serializeStack(created) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'createStack',
+      screenId: data.screenId,
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // renameStack — rename a stack on a screen
@@ -1091,56 +1207,54 @@ export const createStack = createServerFn({ method: 'POST' })
 
 export { renameStackSchema };
 
-export const renameStack = createServerFn({ method: 'POST' })
-  .inputValidator(renameStackSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+export const renameStack = async ({ data }: { data: z.infer<typeof renameStackSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      const result = await GMScreen.updateOne(
-        {
-          _id: data.screenId,
-          campaignId: data.campaignId,
-          'stacks._id': data.stackId,
-        },
-        {
-          $set: {
-            'stacks.$.name': data.name.trim(),
-            updatedAt: new Date(),
-          },
-        }
-      );
-
-      if (result.matchedCount === 0) {
-        const screenExists = await GMScreen.countDocuments({
-          _id: data.screenId,
-          campaignId: data.campaignId,
-        });
-        if (screenExists === 0) {
-          throw new Error('Screen not found');
-        }
-        throw new Error('Stack not found');
-      }
-
-      serverCaptureEvent(sessionUserId, 'gmscreen_stack_renamed', {
-        campaign_id: data.campaignId,
-        screen_id: data.screenId,
-        stack_id: data.stackId,
-      });
-
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'renameStack',
-        screenId: data.screenId,
+    const result = await GMScreen.updateOne(
+      {
+        _id: data.screenId,
         campaignId: data.campaignId,
-        stackId: data.stackId,
+        'stacks._id': data.stackId,
+      },
+      {
+        $set: {
+          'stacks.$.name': data.name.trim(),
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      const screenExists = await GMScreen.countDocuments({
+        _id: data.screenId,
+        campaignId: data.campaignId,
       });
-      throw e;
+      if (screenExists === 0) {
+        throw new Error('Screen not found');
+      }
+      throw new Error('Stack not found');
     }
-  });
+
+    serverCaptureEvent(sessionUserId, 'gmscreen_stack_renamed', {
+      campaign_id: data.campaignId,
+      screen_id: data.screenId,
+      stack_id: data.stackId,
+    });
+
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'renameStack',
+      screenId: data.screenId,
+      campaignId: data.campaignId,
+      stackId: data.stackId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // moveStack — update a stack's x/y position
@@ -1148,57 +1262,55 @@ export const renameStack = createServerFn({ method: 'POST' })
 
 export { moveStackSchema };
 
-export const moveStack = createServerFn({ method: 'POST' })
-  .inputValidator(moveStackSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+export const moveStack = async ({ data }: { data: z.infer<typeof moveStackSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      const result = await GMScreen.updateOne(
-        {
-          _id: data.screenId,
-          campaignId: data.campaignId,
-          'stacks._id': data.stackId,
-        },
-        {
-          $set: {
-            'stacks.$.x': data.x,
-            'stacks.$.y': data.y,
-            updatedAt: new Date(),
-          },
-        }
-      );
-
-      if (result.matchedCount === 0) {
-        const screenExists = await GMScreen.countDocuments({
-          _id: data.screenId,
-          campaignId: data.campaignId,
-        });
-        if (screenExists === 0) {
-          throw new Error('Screen not found');
-        }
-        throw new Error('Stack not found');
-      }
-
-      serverCaptureEvent(sessionUserId, 'gmscreen_stack_moved', {
-        campaign_id: data.campaignId,
-        screen_id: data.screenId,
-        stack_id: data.stackId,
-      });
-
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'moveStack',
-        screenId: data.screenId,
+    const result = await GMScreen.updateOne(
+      {
+        _id: data.screenId,
         campaignId: data.campaignId,
-        stackId: data.stackId,
+        'stacks._id': data.stackId,
+      },
+      {
+        $set: {
+          'stacks.$.x': data.x,
+          'stacks.$.y': data.y,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      const screenExists = await GMScreen.countDocuments({
+        _id: data.screenId,
+        campaignId: data.campaignId,
       });
-      throw e;
+      if (screenExists === 0) {
+        throw new Error('Screen not found');
+      }
+      throw new Error('Stack not found');
     }
-  });
+
+    serverCaptureEvent(sessionUserId, 'gmscreen_stack_moved', {
+      campaign_id: data.campaignId,
+      screen_id: data.screenId,
+      stack_id: data.stackId,
+    });
+
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'moveStack',
+      screenId: data.screenId,
+      campaignId: data.campaignId,
+      stackId: data.stackId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // deleteStack — remove a stack from a screen
@@ -1206,55 +1318,53 @@ export const moveStack = createServerFn({ method: 'POST' })
 
 export { deleteStackSchema };
 
-export const deleteStack = createServerFn({ method: 'POST' })
-  .inputValidator(deleteStackSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+export const deleteStack = async ({ data }: { data: z.infer<typeof deleteStackSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      const result = await GMScreen.updateOne(
-        {
-          _id: data.screenId,
-          campaignId: data.campaignId,
-          'stacks._id': data.stackId,
-        },
-        {
-          $pull: { stacks: { _id: data.stackId } },
-          $set: { updatedAt: new Date() },
-        }
-      );
-
-      if (result.matchedCount === 0) {
-        const screenExists = await GMScreen.countDocuments({
-          _id: data.screenId,
-          campaignId: data.campaignId,
-        });
-        if (screenExists === 0) {
-          throw new Error('Screen not found');
-        }
-        // Stack wasn't present — true no-op
-        return { success: true };
-      }
-
-      serverCaptureEvent(sessionUserId, 'gmscreen_stack_deleted', {
-        campaign_id: data.campaignId,
-        screen_id: data.screenId,
-        stack_id: data.stackId,
-      });
-
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'deleteStack',
-        screenId: data.screenId,
+    const result = await GMScreen.updateOne(
+      {
+        _id: data.screenId,
         campaignId: data.campaignId,
-        stackId: data.stackId,
+        'stacks._id': data.stackId,
+      },
+      {
+        $pull: { stacks: { _id: data.stackId } },
+        $set: { updatedAt: new Date() },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      const screenExists = await GMScreen.countDocuments({
+        _id: data.screenId,
+        campaignId: data.campaignId,
       });
-      throw e;
+      if (screenExists === 0) {
+        throw new Error('Screen not found');
+      }
+      // Stack wasn't present — true no-op
+      return { success: true };
     }
-  });
+
+    serverCaptureEvent(sessionUserId, 'gmscreen_stack_deleted', {
+      campaign_id: data.campaignId,
+      screen_id: data.screenId,
+      stack_id: data.stackId,
+    });
+
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'deleteStack',
+      screenId: data.screenId,
+      campaignId: data.campaignId,
+      stackId: data.stackId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // addStackItem — add a wiki ref to a stack
@@ -1268,75 +1378,71 @@ export const deleteStack = createServerFn({ method: 'POST' })
 
 export { addStackItemSchema };
 
-export const addStackItem = createServerFn({ method: 'POST' })
-  .inputValidator(addStackItemSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+export const addStackItem = async ({ data }: { data: z.infer<typeof addStackItemSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      const screen = await GMScreen.findOne({
-        _id: data.screenId,
-        campaignId: data.campaignId,
-      });
-      if (!screen) throw new Error('Screen not found');
+    const screen = await GMScreen.findOne({
+      _id: data.screenId,
+      campaignId: data.campaignId,
+    });
+    if (!screen) throw new Error('Screen not found');
 
-      if (!screen.stacks) {
-        screen.stacks = [];
-      }
-
-      const stack = screen.stacks.find((s: { _id: unknown }) => String(s._id) === data.stackId);
-      if (!stack) throw new Error('Stack not found');
-
-      // Ensure items is a real Mongoose subdocument array (legacy stacks may lack it)
-      if (!stack.items) {
-        stack.items = [];
-      }
-
-      // Duplicate check
-      const duplicate = stack.items.find(
-        (item: { collection?: string; documentId?: unknown }) =>
-          item.collection === data.collection && String(item.documentId) === data.documentId
-      );
-      if (duplicate) {
-        return { success: true, item: serializeStackItem(duplicate), existed: true };
-      }
-
-      if (stack.items.length >= GMSCREEN_LIMITS.MAX_STACK_ITEMS) {
-        throw new Error(
-          `A stack cannot contain more than ${GMSCREEN_LIMITS.MAX_STACK_ITEMS} items`
-        );
-      }
-
-      stack.items.push({
-        collection: data.collection,
-        documentId: data.documentId,
-        label: data.label,
-      });
-      screen.updatedAt = new Date();
-      await screen.save();
-
-      const created = stack.items[stack.items.length - 1];
-
-      serverCaptureEvent(sessionUserId, 'gmscreen_stack_item_added', {
-        campaign_id: data.campaignId,
-        screen_id: data.screenId,
-        stack_id: data.stackId,
-        item_id: String(created._id),
-      });
-
-      return { success: true, item: serializeStackItem(created), existed: false };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'addStackItem',
-        screenId: data.screenId,
-        campaignId: data.campaignId,
-        stackId: data.stackId,
-      });
-      throw e;
+    if (!screen.stacks) {
+      screen.stacks = [];
     }
-  });
+
+    const stack = screen.stacks.find((s: { _id: unknown }) => String(s._id) === data.stackId);
+    if (!stack) throw new Error('Stack not found');
+
+    // Ensure items is a real Mongoose subdocument array (legacy stacks may lack it)
+    if (!stack.items) {
+      stack.items = [];
+    }
+
+    // Duplicate check
+    const duplicate = stack.items.find(
+      (item: { collection?: string; documentId?: unknown }) =>
+        item.collection === data.collection && String(item.documentId) === data.documentId
+    );
+    if (duplicate) {
+      return { success: true, item: serializeStackItem(duplicate), existed: true };
+    }
+
+    if (stack.items.length >= GMSCREEN_LIMITS.MAX_STACK_ITEMS) {
+      throw new Error(`A stack cannot contain more than ${GMSCREEN_LIMITS.MAX_STACK_ITEMS} items`);
+    }
+
+    stack.items.push({
+      collection: data.collection,
+      documentId: data.documentId,
+      label: data.label,
+    });
+    screen.updatedAt = new Date();
+    await screen.save();
+
+    const created = stack.items[stack.items.length - 1];
+
+    serverCaptureEvent(sessionUserId, 'gmscreen_stack_item_added', {
+      campaign_id: data.campaignId,
+      screen_id: data.screenId,
+      stack_id: data.stackId,
+      item_id: String(created._id),
+    });
+
+    return { success: true, item: serializeStackItem(created), existed: false };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'addStackItem',
+      screenId: data.screenId,
+      campaignId: data.campaignId,
+      stackId: data.stackId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // removeStackItem — remove an item from a stack
@@ -1344,64 +1450,66 @@ export const addStackItem = createServerFn({ method: 'POST' })
 
 export { removeStackItemSchema };
 
-export const removeStackItem = createServerFn({ method: 'POST' })
-  .inputValidator(removeStackItemSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+export const removeStackItem = async ({
+  data,
+}: {
+  data: z.infer<typeof removeStackItemSchema>;
+}) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      const screen = await GMScreen.findOne({
-        _id: data.screenId,
-        campaignId: data.campaignId,
-      });
-      if (!screen) throw new Error('Screen not found');
+    const screen = await GMScreen.findOne({
+      _id: data.screenId,
+      campaignId: data.campaignId,
+    });
+    if (!screen) throw new Error('Screen not found');
 
-      if (!screen.stacks) {
-        screen.stacks = [];
-      }
-
-      const stack = screen.stacks.find((s: { _id: unknown }) => String(s._id) === data.stackId);
-      if (!stack) throw new Error('Stack not found');
-
-      // Ensure items is a real Mongoose subdocument array (legacy stacks may lack it)
-      if (!stack.items) {
-        stack.items = [];
-      }
-
-      const index = stack.items.findIndex(
-        (item: { _id: unknown }) => String(item._id) === data.itemId
-      );
-
-      if (index === -1) {
-        // Item not present — true no-op
-        return { success: true };
-      }
-
-      stack.items.splice(index, 1);
-      screen.updatedAt = new Date();
-      await screen.save();
-
-      serverCaptureEvent(sessionUserId, 'gmscreen_stack_item_removed', {
-        campaign_id: data.campaignId,
-        screen_id: data.screenId,
-        stack_id: data.stackId,
-        item_id: data.itemId,
-      });
-
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'removeStackItem',
-        screenId: data.screenId,
-        campaignId: data.campaignId,
-        stackId: data.stackId,
-        itemId: data.itemId,
-      });
-      throw e;
+    if (!screen.stacks) {
+      screen.stacks = [];
     }
-  });
+
+    const stack = screen.stacks.find((s: { _id: unknown }) => String(s._id) === data.stackId);
+    if (!stack) throw new Error('Stack not found');
+
+    // Ensure items is a real Mongoose subdocument array (legacy stacks may lack it)
+    if (!stack.items) {
+      stack.items = [];
+    }
+
+    const index = stack.items.findIndex(
+      (item: { _id: unknown }) => String(item._id) === data.itemId
+    );
+
+    if (index === -1) {
+      // Item not present — true no-op
+      return { success: true };
+    }
+
+    stack.items.splice(index, 1);
+    screen.updatedAt = new Date();
+    await screen.save();
+
+    serverCaptureEvent(sessionUserId, 'gmscreen_stack_item_removed', {
+      campaign_id: data.campaignId,
+      screen_id: data.screenId,
+      stack_id: data.stackId,
+      item_id: data.itemId,
+    });
+
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'removeStackItem',
+      screenId: data.screenId,
+      campaignId: data.campaignId,
+      stackId: data.stackId,
+      itemId: data.itemId,
+    });
+    throw e;
+  }
+};
 
 // removeDocumentRefsFromScreens moved to ./gmscreens-helpers.ts to avoid
 // pulling Mongoose models into the client bundle when notes.ts imports it.

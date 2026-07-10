@@ -1,7 +1,7 @@
 import React from 'react';
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
 import { useState, useRef } from 'react';
-import { getMe } from '~/server/functions/auth';
+import { getMe } from '~/server/functions/rpc';
 import { useCreateCampaign } from '~/hooks/useCampaigns';
 import { Topbar } from '~/components/Topbar';
 import { PixelButton } from '~/components/PixelButton';

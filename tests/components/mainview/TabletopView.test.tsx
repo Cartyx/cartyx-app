@@ -86,7 +86,15 @@ vi.mock('~/components/mainview/tabletop/TabletopCanvas', () => ({
 }));
 
 vi.mock('~/components/mainview/FloatingWindowManager', () => ({
-  FloatingWindowManager: () => <div data-testid="floating-window-manager" />,
+  FloatingWindowManager: ({ windows }: { windows: Array<{ id: string; title: string }> }) => (
+    <div data-testid="floating-window-manager">
+      {windows.map((w) => (
+        <div key={w.id} data-testid={`fwm-window-${w.id}`}>
+          {w.title}
+        </div>
+      ))}
+    </div>
+  ),
 }));
 
 // Lazy import after mocks are set up
@@ -160,5 +168,55 @@ describe('TabletopView', () => {
     );
     expect(screen.getByTestId('tabletop-tab-bar')).toBeInTheDocument();
     expect(screen.getByTestId('tabletop-canvas')).toBeInTheDocument();
+  });
+
+  it('opens the dice roller window when the dice tool is selected and reverts the tool', () => {
+    const onToolChange = vi.fn();
+    const { rerender } = render(
+      <TabletopView
+        campaignId="c1"
+        isGM={true}
+        currentUserId={null}
+        getToken={mockGetToken}
+        sessionId={null}
+        activeTool="ruler"
+        onToolChange={onToolChange}
+      />,
+      { wrapper: Wrapper }
+    );
+    expect(screen.queryByTestId('fwm-window-dice-roller')).not.toBeInTheDocument();
+
+    rerender(
+      <TabletopView
+        campaignId="c1"
+        isGM={true}
+        currentUserId={null}
+        getToken={mockGetToken}
+        sessionId={null}
+        activeTool="dice"
+        onToolChange={onToolChange}
+      />
+    );
+    expect(screen.getByTestId('fwm-window-dice-roller')).toHaveTextContent('Dice Roller');
+    expect(onToolChange).toHaveBeenCalledWith('ruler');
+  });
+
+  it('keeps the dice window a singleton across repeated dice-tool selections', () => {
+    const onToolChange = vi.fn();
+    const props = {
+      campaignId: 'c1',
+      isGM: true,
+      currentUserId: null,
+      getToken: mockGetToken,
+      sessionId: null,
+      onToolChange,
+    };
+    const { rerender } = render(<TabletopView {...props} activeTool="pointer" />, {
+      wrapper: Wrapper,
+    });
+    rerender(<TabletopView {...props} activeTool="dice" />);
+    rerender(<TabletopView {...props} activeTool="pointer" />);
+    rerender(<TabletopView {...props} activeTool="dice" />);
+    expect(screen.getAllByTestId('fwm-window-dice-roller')).toHaveLength(1);
   });
 });

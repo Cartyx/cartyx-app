@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
 import { createServerFn } from '@tanstack/react-start';
 import { Plus } from 'lucide-react';
-import { getMe } from '~/server/functions/auth';
+import { getMe } from '~/server/functions/rpc';
 import { useCampaign } from '~/hooks/useCampaigns';
 import { useActivePlayerContext } from '~/providers/ActivePlayerProvider';
 import { CampaignHeader } from '~/components/mainview/CampaignHeader';
@@ -15,6 +15,10 @@ import type { TabId } from '~/components/mainview/TabNavigation';
 import type { ToolType } from '~/components/mainview/ToolBar';
 import { CatchUpWidget } from '~/components/mainview/widgets/CatchUpWidget';
 import { CampaignTimelineWidget } from '~/components/mainview/widgets/CampaignTimelineWidget';
+import { useCalendar } from '~/hooks/useCalendar';
+import { useEpicEvents } from '~/hooks/useEvents';
+import { eventsToTimeline } from '~/services/eventsTimeline';
+import { calendarConfigFromData } from '~/types/calendar';
 import { KeyAlliesWidget } from '~/components/mainview/widgets/KeyAlliesWidget';
 import { PartyMembersWidget } from '~/components/mainview/widgets/PartyMembersWidget';
 import { SessionsListWidget } from '~/components/mainview/widgets/SessionsListWidget';
@@ -97,6 +101,12 @@ function PlayPageContent() {
 
   const needsNewPlayer = !isCampaignLoading && !isPlayerLoading && !activePlayer && !campaign?.isGM;
 
+  const { calendar } = useCalendar(campaignId);
+  const { events: epicEvents } = useEpicEvents(campaignId);
+  const timelineEvents = calendar
+    ? eventsToTimeline(calendarConfigFromData(calendar), epicEvents, calendar.currentDate)
+    : undefined;
+
   // Coerce non-GMs away from the GM-only tab
   const effectiveTab =
     activeTab === 'gmscreens' && !campaign?.isGM ? ('dashboard' as const) : activeTab;
@@ -158,7 +168,7 @@ function PlayPageContent() {
               <PartyMembersWidget campaignId={campaignId} />
               <KeyAlliesWidget campaignId={campaignId} />
               <SessionsListWidget campaignId={campaignId} className="col-span-full" />
-              <CampaignTimelineWidget className="xl:col-span-2" />
+              <CampaignTimelineWidget events={timelineEvents} className="xl:col-span-2" />
             </DashboardView>
           </div>
           <div

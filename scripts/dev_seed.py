@@ -37,6 +37,7 @@ from pymongo.errors import ConfigurationError
 # focused on insertion logic.
 from seed_player_data import PLAYER_EMAILS, PLAYER_IMAGES, random_pc
 from seed_monster_data import build_monster_docs
+from seed_calendar_data import HARPTOS, to_ordinal
 
 
 def import_srd_races(db, *, campaign_id, gm_id, now) -> int:
@@ -145,17 +146,18 @@ def ensure_player_users(db, now) -> list[dict]:
 
 
 def local_avatar_path(kind: str, name: str) -> str:
-    """Deterministic served path for a generated local avatar.
+    """Deterministic served URL for a generated seed avatar.
 
     The PNG itself is produced by `scripts/gen_seed_avatars.mjs` (run via
     `npm run dev:gen-avatars`) — Python has no SVG rasteriser, so the seed only
-    records the path and the Node generator renders the identicon there. The
-    hash MUST stay in sync with that script: sha1("{kind}:{name}")[:16].
-    Local files avoid DiceBear's CDN rate limit (which 429s the burst of ~350
-    avatar requests the wiki fires on load) and work offline.
+    records the URL and the Node generator renders (and, when the CDN is
+    configured, uploads) the identicon there. The hash MUST stay in sync with
+    that script: sha1("{kind}:{name}")[:16]. Generated files avoid DiceBear's
+    CDN rate limit (which 429s the burst of ~350 avatar requests the wiki
+    fires on load) and work offline.
     """
     digest = hashlib.sha1(f"{kind}:{name}".encode("utf-8")).hexdigest()[:16]
-    return f"/uploads/seed-avatars/{kind}/{digest}.png"
+    return public_url(f"/uploads/seed-avatars/{kind}/{digest}.png")
 
 
 def adventurer_avatar(first_name: str, last_name: str) -> str:
@@ -180,6 +182,28 @@ def require_mongo_uri() -> str:
     if re.search(r"prod", uri, re.IGNORECASE):
         sys.exit("MONGODB_URI looks like a production connection string. Aborting.")
     return uri
+
+
+# ---------------------------------------------------------------------------
+# CDN / R2 uploads
+# ---------------------------------------------------------------------------
+# The deployed dev environment (Vercel) cannot serve files written to a local
+# public/uploads/ — its filesystem is baked from git at build time and
+# public/uploads/ is gitignored. When the CDN is configured (CDN_URL + R2_*
+# env vars, same ones the app uses), seed images are uploaded to R2 and the
+# documents store full CDN URLs — exactly like a real user upload through the
+# app (see app/server/functions/uploads.ts). Without CDN config everything
+# falls back to local public/uploads/ writes for plain-localhost dev and CI.
+# The shared implementation lives in r2_util (also used by dev_clear.py and
+# repair_seed_images.py) so the guards and endpoint can't drift.
+
+from r2_util import (  # noqa: F401 — re-exported for repair/verify scripts
+    CDN_ENV_KEYS,
+    cdn_base,
+    list_r2_keys,
+    public_url,
+    upload_to_r2,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -208,21 +232,35 @@ def generate_campaign_svg(title: str, colors: dict[str, str]) -> str:
 
 
 def save_image(svg_content: str, filename: str) -> str:
+    """Store a generated campaign image where the app will serve it.
+
+    CDN configured → upload to R2 under uploads/campaigns/ and return the full
+    CDN URL, matching a real user upload. Otherwise → write to the local
+    public/uploads/ fallback and return the relative path."""
+    rel = f"/uploads/campaigns/{filename}"
+    if cdn_base():
+        upload_to_r2(rel, svg_content.encode("utf-8"), "image/svg+xml")
+        return public_url(rel)
     uploads_dir = REPO_ROOT / "public" / "uploads" / "campaigns"
     uploads_dir.mkdir(parents=True, exist_ok=True)
     (uploads_dir / filename).write_text(svg_content, encoding="utf-8")
-    return f"/uploads/campaigns/{filename}"
+    return rel
 
 
 def copy_player_portraits() -> None:
     """Publish the 12 committed player portraits so the URLs the player docs
-    reference (`/uploads/seed-players/playerN.jpg`, see PLAYER_IMAGES) actually
-    resolve. The source files live in `assets/` (not web-served); Vite only
-    serves `public/` at the site root, so each portrait is copied into
-    `public/uploads/seed-players/`. Idempotent — overwrites on every seed."""
+    reference (PLAYER_IMAGES via public_url) actually resolve. The source
+    files live in `assets/` (not web-served). CDN configured → upload each to
+    R2 under uploads/seed-players/; otherwise copy into
+    `public/uploads/seed-players/` for the local Vite server. Idempotent —
+    R2 keys already present are skipped (the portraits are committed assets
+    that never change); local copies are overwritten."""
     src_dir = REPO_ROOT / "assets"
+    use_cdn = bool(cdn_base())
     dst_dir = REPO_ROOT / "public" / "uploads" / "seed-players"
-    dst_dir.mkdir(parents=True, exist_ok=True)
+    if not use_cdn:
+        dst_dir.mkdir(parents=True, exist_ok=True)
+    existing = list_r2_keys("uploads/seed-players/") if use_cdn else set()
     copied = 0
     missing = []
     for i in range(1, 13):
@@ -230,9 +268,15 @@ def copy_player_portraits() -> None:
         if not src.exists():
             missing.append(src.name)
             continue
-        shutil.copyfile(src, dst_dir / f"player{i}.jpg")
+        if use_cdn:
+            if f"uploads/seed-players/player{i}.jpg" not in existing:
+                upload_to_r2(f"/uploads/seed-players/player{i}.jpg",
+                             src.read_bytes(), "image/jpeg")
+        else:
+            shutil.copyfile(src, dst_dir / f"player{i}.jpg")
         copied += 1
-    print(f"Player portraits: copied {copied}/12 → public/uploads/seed-players/")
+    dest = "R2 uploads/seed-players/" if use_cdn else "public/uploads/seed-players/"
+    print(f"Player portraits: published {copied}/12 → {dest}")
     if missing:
         print(f"  WARNING missing portrait sources: {', '.join(missing)}")
 
@@ -566,6 +610,277 @@ CAMPAIGNS = [
         ],
     },
 ]
+
+
+def build_lore_docs(*, campaign_id, gm_id, player_ids, player_user_ids,
+                    character_ids, location_ids, race_ids, now):
+    """Return at least 5 Lore docs for the rich campaign.
+
+    Arguments
+    ---------
+    player_ids      : list of Player document ObjectIds (not userId) — used for
+                      the "player" link targets so the Lore tab can filter by
+                      player doc id.
+    player_user_ids : list of User ObjectIds, parallel to player_ids — used as
+                      createdBy so the server's ownership check
+                      (String(doc.createdBy) === member.userId) correctly
+                      identifies the owning player.
+    character_ids : list of Character document ObjectIds (in insertion order)
+    location_ids  : dict mapping location name → ObjectId
+    race_ids      : dict mapping race title → ObjectId (subset; may be empty)
+    """
+    def image(slug, caption):
+        return {"url": f"/uploads/seed-lore/{slug}.png", "caption": caption, "crop": None}
+
+    def lore(title, content, *, public, author_id, links, images, tags,
+             gm_content="", day_offset=0):
+        ts = now - timedelta(days=day_offset)
+        return {
+            "title": title,
+            "content": content,
+            "gmContent": gm_content,
+            "isPublic": public,
+            "images": images,
+            "links": links,
+            "tags": tags,
+            "campaignId": campaign_id,
+            "createdBy": author_id,
+            "createdAt": ts,
+            "updatedAt": ts,
+        }
+
+    # Resolve ids — fall back gracefully when the collection is sparse.
+    elf_race_id   = race_ids.get("Elf") or (next(iter(race_ids.values())) if race_ids else ObjectId())
+    phandalin_id  = location_ids.get("Phandalin") or (next(iter(location_ids.values())) if location_ids else ObjectId())
+    # "Black Spider" NPC is Nezznar — use the first character id (Thorin) as a
+    # stand-in when no named-character lookup is available; see build_lore_docs
+    # call site where character_ids are indexed by insertion order.
+    npc_id        = character_ids[0] if character_ids else ObjectId()
+    # Second character (Elara Moonwhisper) for the dragon legend multi-link.
+    char2_id      = character_ids[1] if len(character_ids) > 1 else npc_id
+    # Player *document* ids for the two player-linked lore docs (link targets).
+    player0_id    = player_ids[0] if player_ids else ObjectId()
+    player1_id    = player_ids[1] if len(player_ids) > 1 else player0_id
+    # Player *user* ids — used as createdBy so the server ownership check
+    # (String(doc.createdBy) === member.userId) recognises the owning player.
+    player0_user_id = player_user_ids[0] if player_user_ids else ObjectId()
+    player1_user_id = player_user_ids[1] if len(player_user_ids) > 1 else player0_user_id
+
+    docs = [
+        # 1 — Race link (public, GM-authored)
+        lore(
+            "Origins of the Elves",
+            (
+                "Long before the rise of human kingdoms, the elves walked beneath "
+                "ancient stars. Born of the Feywild's raw magic, they carry the "
+                "memories of an age when gods still walked among mortals.\n\n"
+                "Their **Trance** meditation is not sleep but a waking reverie, "
+                "and their **Darkvision** a remnant of centuries spent in star-lit "
+                "forests far from any torch."
+            ),
+            public=True,
+            author_id=gm_id,
+            links=[{"kind": "race", "id": elf_race_id}],
+            images=[image("elf-origins", "Ancient elf ruins beneath a moonlit sky")],
+            tags=["lore", "race", "elf"],
+            day_offset=14,
+        ),
+        # 2 — Location link (public, GM-authored)
+        lore(
+            "A Short History of Phandalin",
+            (
+                "Phandalin was once a thriving human settlement that traded with "
+                "the dwarves of the Phandelver Pact. Orcs razed it to the ground "
+                "some five centuries ago, and only ruins remained until a generation "
+                "past when a wave of settlers began to rebuild.\n\n"
+                "Today it is a rough frontier town of a few hundred souls. The "
+                "Miner's Exchange controls much of the commerce, while Harbin Wester "
+                "serves as the largely ineffectual Townmaster."
+            ),
+            public=True,
+            author_id=gm_id,
+            links=[{"kind": "location", "id": phandalin_id}],
+            images=[image("phandalin-history", "Phandalin's main street at dusk")],
+            tags=["lore", "location", "history"],
+            day_offset=10,
+        ),
+        # 3 — Character link (private, GM-only gmContent)
+        lore(
+            "The Black Spider's Web",
+            (
+                "Rumours speak of a shadowy figure pulling strings across the "
+                "Sword Coast — a spymaster known only as the Black Spider. Caravans "
+                "have been ambushed, dwarven prospectors have gone missing, and at "
+                "the centre of each thread sits this unseen hand."
+            ),
+            public=False,
+            author_id=gm_id,
+            links=[{"kind": "character", "id": npc_id}],
+            images=[image("black-spider", "A spider-sigil wax seal on a torn letter")],
+            tags=["lore", "villain", "secret"],
+            gm_content=(
+                "**GM eyes only:** The Black Spider is Nezznar, a drow mage "
+                "who wants sole access to the Forge of Spells in Wave Echo Cave. "
+                "He has sent a doppelganger to impersonate one of the Rockseeker "
+                "brothers — reveal this when the party reaches area 12."
+            ),
+            day_offset=10,
+        ),
+        # 4 — Multi-link: location + character (public)
+        lore(
+            "Legend of the Sleeping Dragon",
+            (
+                "The peasants of the Triboar Trail tell of a dragon that once "
+                "laid waste to a city of mages, then curled beneath the mountains "
+                "to sleep for a thousand years. Some say the tremors that occasionally "
+                "shake Phandalin are its shallow breaths.\n\n"
+                "Scholars note that every fifty years or so, a silver-scaled form "
+                "is glimpsed above the Sword Mountains at dusk."
+            ),
+            public=True,
+            author_id=gm_id,
+            links=[
+                {"kind": "location", "id": phandalin_id},
+                {"kind": "character", "id": char2_id},
+            ],
+            images=[image("dragon-legend", "A silver dragon silhouetted against storm clouds")],
+            tags=["lore", "legend", "dragon"],
+            day_offset=7,
+        ),
+        # 5 — Player link (private — player + GM only)
+        lore(
+            "The Wanderer's Oath",
+            (
+                "Before joining the party, this adventurer swore an oath in a "
+                "roadside shrine to Tymora — Lady Luck. The exact words are known "
+                "only to them and to the goddess, but the party has glimpsed the "
+                "silver coin always turning between their fingers."
+            ),
+            public=False,
+            # createdBy must be the User _id (not the Player doc _id) so the
+            # server ownership check (String(doc.createdBy) === member.userId)
+            # lets the owning player read their own private lore.
+            author_id=player0_user_id,
+            links=[{"kind": "player", "id": player0_id}],
+            images=[],
+            tags=["lore", "player", "backstory"],
+            day_offset=5,
+        ),
+        # 6 — Second player link (public) — ensures both visibility states
+        #     appear on the Player Lore tab.
+        lore(
+            "Songs of the Road",
+            (
+                "This adventurer keeps a travelling journal of the places the "
+                "party has passed through — sketches of Phandalin's crooked rooftops, "
+                "rubbings of goblin cave-carvings, the pressed flower from Conyberry. "
+                "Anyone who asks may read it at camp."
+            ),
+            public=True,
+            # Same reasoning: createdBy is the User _id, not the Player doc _id.
+            author_id=player1_user_id,
+            links=[{"kind": "player", "id": player1_id}],
+            images=[],
+            tags=["lore", "player", "journal"],
+            day_offset=3,
+        ),
+    ]
+    return docs
+
+
+def build_calendar_doc(*, campaign_id, gm_id, now):
+    """One Calendar of Harptos document for the rich campaign.
+
+    Starts from the shared HARPTOS config (which mirrors app/utils/harptos.ts)
+    and stamps on the per-campaign ownership/timestamps. A shallow copy is fine
+    because we only add top-level keys; the nested month/season/etc. lists are
+    static reference data we never mutate.
+    """
+    doc = dict(HARPTOS)
+    doc.update({
+        "campaignId": campaign_id,
+        "createdBy": gm_id,
+        "createdAt": now,
+        "updatedAt": now,
+    })
+    return doc
+
+
+def build_event_docs(*, campaign_id, calendar_id, gm_id, now,
+                     character_ids, location_ids, race_ids, player_ids, session_ids):
+    """~10 sample events on the Harptos calendar, linked to seeded entities.
+
+    Arguments
+    ---------
+    character_ids : list of Character document ObjectIds (insertion order) —
+                    character_ids[0] is the first named NPC (Thorin Ironforge).
+    location_ids  : dict mapping location name → ObjectId (e.g. "Phandalin").
+    race_ids      : dict mapping race title → ObjectId (subset; may be empty).
+    player_ids    : list of Player document ObjectIds.
+    session_ids   : list of session ObjectIds (the first is linked from the
+                    Siege event). Pass [] when none are available — the link
+                    simply becomes None.
+
+    Every start/end date is valid under Harptos (see seed_calendar_data.py for
+    month lengths; Shieldmeet — monthIndex 10 — is only valid in leap years, and
+    1488 IS a leap year so day 1 resolves).
+    """
+    def ev(title, content, start, *, public, epic=False, end=None, links=None,
+           gm_content="", tags=None, session_id=None, day_offset=0):
+        ts = now - timedelta(days=day_offset)
+        return {
+            "title": title, "content": content, "gmContent": gm_content,
+            "isPublic": public, "isEpic": epic,
+            "start": start, "end": end,
+            "startOrdinal": to_ordinal(HARPTOS, start),
+            "endOrdinal": to_ordinal(HARPTOS, end or start),
+            "links": links or [], "sessionId": session_id, "images": [],
+            "tags": tags or [], "color": None,
+            "campaignId": campaign_id, "calendarId": calendar_id, "createdBy": gm_id,
+            "createdAt": ts, "updatedAt": ts,
+        }
+
+    # Resolve ids against the real seeded structures, falling back to a fresh
+    # ObjectId only when the collection is genuinely empty (keeps the builder
+    # usable in DB-free unit checks).
+    phandalin = location_ids.get("Phandalin") or (next(iter(location_ids.values())) if location_ids else ObjectId())
+    npc0 = character_ids[0] if character_ids else ObjectId()
+    player0 = player_ids[0] if player_ids else ObjectId()
+    elf = race_ids.get("Elf") or (next(iter(race_ids.values())) if race_ids else ObjectId())
+    session0 = session_ids[0] if session_ids else None
+
+    return [
+        ev("The Time of Troubles", "The gods walked Faerûn as mortals; Mystra fell at Mistmere.",
+           {"year": 1358, "monthIndex": 6, "day": 15}, public=True, epic=True, tags=["world", "history"]),
+        ev("The Spellplague", "Blue fire swept the Weave; magic itself convulsed across the Realms.",
+           {"year": 1385, "monthIndex": 8, "day": 1}, public=True, epic=True, tags=["world", "history"]),
+        ev("Shieldmeet Grand Council", "Rulers renewed pacts on the leap-day festival of Shieldmeet.",
+           {"year": 1488, "monthIndex": 10, "day": 1}, public=True, tags=["festival", "politics"]),
+        ev("Founding of Phandalin", "Settlers rebuilt the ruined town atop the old Phandelver pact lands.",
+           {"year": 1451, "monthIndex": 3, "day": 8}, public=True,
+           links=[{"kind": "location", "id": phandalin}], tags=["history"]),
+        ev("The Siege of Phandalin", "Redbrands stormed the town over two desperate days.",
+           {"year": 1491, "monthIndex": 4, "day": 11}, end={"year": 1491, "monthIndex": 4, "day": 12},
+           public=True, epic=True,
+           links=[{"kind": "location", "id": phandalin}, {"kind": "character", "id": npc0}],
+           tags=["campaign", "battle"], session_id=session0),
+        ev("Gundren's Disappearance", "Gundren Rockseeker vanished on the Triboar Trail.",
+           {"year": 1491, "monthIndex": 4, "day": 2}, public=False,
+           gm_content="Captured by Cragmaw goblins on the Black Spider's orders.",
+           links=[{"kind": "character", "id": npc0}], tags=["campaign", "secret"]),
+        ev("Wave Echo Cave Rediscovered", "The lost mine and its Forge of Spells came to light again.",
+           {"year": 1491, "monthIndex": 4, "day": 20}, public=True,
+           links=[{"kind": "location", "id": phandalin}], tags=["campaign"]),
+        ev("Greengrass in Phandalin", "The spring festival of Greengrass was kept with garlands and ale.",
+           {"year": 1491, "monthIndex": 5, "day": 1}, public=True,
+           links=[{"kind": "player", "id": player0}], tags=["festival"]),
+        ev("The Elven Retreat", "The elves withdrew to their hidden refuges as the age turned.",
+           {"year": 1344, "monthIndex": 12, "day": 20}, public=True,
+           links=[{"kind": "race", "id": elf}], tags=["history", "elf"]),
+        ev("Council Vote at Neverwinter", "A closed council set the season's trade compacts.",
+           {"year": 1491, "monthIndex": 6, "day": 10}, public=False,
+           gm_content="Sets up the next arc's politics.", tags=["politics", "secret"]),
+    ]
 
 
 def build_note_docs(*, campaign_id, session_ids, gm_id, party, now):
@@ -976,11 +1291,13 @@ def main() -> None:
         # Insert four players (one per player account), each with a unique
         # portrait + randomised name/race/class/backstory.
         party = []
+        # player_doc_ids: list of Player document _ids (used for lore links).
+        player_doc_ids: list = []
         for pu in player_users:
             pc = random_pc(rng)
-            picture = PLAYER_IMAGES[image_cursor % len(PLAYER_IMAGES)]
+            picture = public_url(PLAYER_IMAGES[image_cursor % len(PLAYER_IMAGES)])
             image_cursor += 1
-            db.players.insert_one({
+            p_result = db.players.insert_one({
                 "campaignId": campaign_id,
                 # `userId` is required by the unique index
                 # `{campaignId:1, userId:1}` — one player document per user
@@ -1012,6 +1329,7 @@ def main() -> None:
                 "createdAt": now,
                 "updatedAt": now,
             })
+            player_doc_ids.append(p_result.inserted_id)
             print(f"    player    {pc['firstName']} {pc['lastName']} "
                   f"({pc['race']} {pc['characterClass']}) — {pu['email']}")
             party.append({"name": f"{pc['firstName']} {pc['lastName']}",
@@ -1104,9 +1422,11 @@ def main() -> None:
         ])
         print(f"    location types  ({len(DEFAULT_LOCATION_TYPES)} defaults)")
 
-        # Insert any seed locations defined for this campaign
+        # Insert any seed locations defined for this campaign.
+        # location_ids: maps location name → inserted _id (for lore links).
+        location_ids: dict[str, object] = {}
         for loc in defn.get("locations", []):
-            db.location.insert_one({
+            loc_result = db.location.insert_one({
                 "campaignId": campaign_id,
                 "createdBy": gm_id,
                 "name": loc["name"],
@@ -1123,11 +1443,13 @@ def main() -> None:
                 "createdAt": now,
                 "updatedAt": now,
             })
+            location_ids[loc["name"]] = loc_result.inserted_id
             print(f"    location  {loc['name']} ({loc['locationType']})")
 
-        # Insert characters
+        # Insert characters; capture ids in insertion order for lore links.
+        character_ids: list = []
         for char in defn["characters"]:
-            db.characters.insert_one({
+            char_result = db.characters.insert_one({
                 "firstName": char["firstName"],
                 "lastName": char["lastName"],
                 "race": char["race"],
@@ -1147,17 +1469,25 @@ def main() -> None:
                 "createdAt": now,
                 "updatedAt": now,
             })
+            character_ids.append(char_result.inserted_id)
             print(f"    character  {char['firstName']} {char['lastName']} ({char['race']} {char['characterClass']})")
 
         # Bulk / stock test campaign — pile in SRD races, rules, hundreds
         # of monsters (base + variants), and hundreds of NPC characters so
         # every list page, search, filter, and drag-to-token surface is
         # exercisable at realistic scale from a fresh seed.
+        race_ids: dict[str, object] = {}
         if defn.get("bulk_test_campaign"):
             n_races = import_srd_races(db, campaign_id=campaign_id, gm_id=gm_id, now=now)
             n_rules = import_srd_rules(db, campaign_id=campaign_id, gm_id=gm_id, now=now)
             print(f"    SRD races  imported {n_races} from docs/srd/races")
             print(f"    SRD rules  imported {n_rules} from docs/srd/rules")
+            # Collect race ids for lore links (query back the titles we care about).
+            for race_doc in db.races.find(
+                {"campaignId": campaign_id, "title": {"$in": ["Elf", "Dwarf", "Human"]}},
+                {"_id": 1, "title": 1},
+            ):
+                race_ids[race_doc["title"]] = race_doc["_id"]
 
             # Bulk NPC characters — 200 generated names/classes/factions,
             # plus the two named characters already declared on the spec.
@@ -1201,6 +1531,7 @@ def main() -> None:
                 gm_id=gm_id,
                 now=now,
                 with_variants=with_variants,
+                map_picture=public_url,
             )
             if monster_docs:
                 db.monsters.insert_many(monster_docs)
@@ -1208,6 +1539,42 @@ def main() -> None:
                 f"    monsters   imported {len(monster_docs)} stat blocks "
                 f"({'base+variants' if with_variants else 'base only'})"
             )
+
+        # Lore docs — rich campaign only, inserted last so all entity ids
+        # (races, locations, characters, players) are available.
+        if defn.get("rich_session_history"):
+            lore_docs = build_lore_docs(
+                campaign_id=campaign_id,
+                gm_id=gm_id,
+                player_ids=player_doc_ids,
+                player_user_ids=[pu["_id"] for pu in player_users],
+                character_ids=character_ids,
+                location_ids=location_ids,
+                race_ids=race_ids,
+                now=now,
+            )
+            if lore_docs:
+                # Mongoose pluralizes model('Lore') to the `lores` collection.
+                db.lores.insert_many(lore_docs)
+            print(f"    lore       inserted {len(lore_docs)}")
+
+            # Calendar of Harptos + sample events — inserted after lore so all
+            # entity ids (characters, locations, races, players, sessions) are
+            # available to link from events.
+            cal_doc = build_calendar_doc(campaign_id=campaign_id, gm_id=gm_id, now=now)
+            cal_result = db.calendars.insert_one(cal_doc)
+            calendar_id = cal_result.inserted_id
+            print(f"    calendar   inserted 1")
+
+            event_docs = build_event_docs(
+                campaign_id=campaign_id, calendar_id=calendar_id, gm_id=gm_id, now=now,
+                character_ids=character_ids, location_ids=location_ids, race_ids=race_ids,
+                player_ids=player_doc_ids, session_ids=list(session_ids.values()),
+            )
+            if event_docs:
+                # Mongoose pluralizes model('Event') to the `events` collection.
+                db.events.insert_many(event_docs)
+            print(f"    events     inserted {len(event_docs)}")
 
         print()
 

@@ -1,0 +1,37 @@
+# Dev-site release: namespace `dev` on cluster z440, installed by the Flux
+# HelmRelease in cartyx-infrastructure.
+# APP_ENV is `staging`, not `development`: prod-like cookies/uploads/secret
+# enforcement, but labeled distinctly for analytics and DB policy. The
+# `development` value would enable laptop-only local-disk upload fallbacks.
+web:
+  env:
+    APP_ENV: staging
+    BASE_URL: https://dev.cartyx.io
+    GOOGLE_CLIENT_ID: 771084537830-mqaa7q6rpe4k87nalgqlu7bu2lt8qam2.apps.googleusercontent.com
+    # GitHub OAuth apps allow ONE callback host each — the dev site needs its
+    # own OAuth app (callback https://dev.cartyx.io/auth/callback/github).
+    GITHUB_CLIENT_ID: ''
+    R2_ACCOUNT_ID: '66cc5f108c96110512e86fc8346a7558'
+    R2_BUCKET: cartyx-dev
+    CDN_URL: https://cdn-dev.cartyx.io
+  resources:
+    limits:
+      memory: 384Mi
+
+realtime:
+  resources:
+    limits:
+      memory: 192Mi
+
+ingress:
+  webHost: dev.cartyx.io
+  wsHost: dev-ws.cartyx.io
+
+tls:
+  secretName: dev-cartyx-tls
+  certificate:
+    enabled: false
+
+secret:
+  create: false
+  existingSecret: cartyx

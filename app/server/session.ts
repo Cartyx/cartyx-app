@@ -1,6 +1,7 @@
 import { SignJWT, jwtVerify } from 'jose';
 import { getCookie, setCookie, deleteCookie } from '@tanstack/react-start/server';
 import { serverCaptureException } from './utils/posthog';
+import { resolveEnvironment } from './db/policy';
 
 export interface SessionUser {
   id: string;
@@ -17,7 +18,7 @@ const COOKIE_NAME = 'cartyx_session';
 function getSecret(): Uint8Array {
   const secret = process.env.SESSION_SECRET;
   if (!secret) throw new Error('SESSION_SECRET environment variable is not set');
-  if (process.env.NODE_ENV === 'production' && secret.length < 32) {
+  if (resolveEnvironment() !== 'development' && secret.length < 32) {
     throw new Error('SESSION_SECRET must be at least 32 characters in production');
   }
   return new TextEncoder().encode(secret);
@@ -60,7 +61,7 @@ export async function setSession(user: SessionUser, rememberMe = false): Promise
 
   setCookie(COOKIE_NAME, token, {
     httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
+    secure: resolveEnvironment() !== 'development',
     sameSite: 'lax',
     maxAge,
     path: '/',

@@ -390,6 +390,11 @@ interface CompleteJoinWizardInput {
       isPublic?: boolean;
     };
   }>;
+  lore?: Array<{
+    title: string;
+    content?: string;
+    isPublic?: boolean;
+  }>;
 }
 
 export const useCompleteJoinWizard = createMutationHook({

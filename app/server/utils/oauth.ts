@@ -354,7 +354,15 @@ interface UserDoc {
 
 export async function upsertUser(profile: OAuthProfile): Promise<SessionUser> {
   await connectDB();
-  if (!isDBConnected()) return toSessionUser(profile, 'unknown');
+  if (!isDBConnected()) {
+    // With no DB connection we can neither look up nor persist the account, so
+    // minting a session would log the user into an unpersisted, role-less
+    // "unknown" session. Fail loudly (consistent with the catch below) so the
+    // OAuth callback redirects to an error page instead of a broken login.
+    const e = new Error('upsertUser: database not connected');
+    serverCaptureException(e, profile.id, { action: 'upsertUser', provider: profile.provider });
+    throw e;
+  }
 
   try {
     const nameParts = (profile.name ?? '').split(' ');
@@ -364,29 +372,58 @@ export async function upsertUser(profile: OAuthProfile): Promise<SessionUser> {
       accessToken: profile.accessToken ? encryptToken(profile.accessToken) : null,
       refreshToken: profile.refreshToken ? encryptToken(profile.refreshToken) : null,
     };
-    const stored = (await User.findOneAndUpdate(
+    const $set = {
+      provider: profile.provider,
+      providerId: profile.id,
+      ...(profile.email && { email: profile.email }),
+      ...(profile.name && {
+        firstName: nameParts[0] ?? '',
+        lastName: nameParts.slice(1).join(' ') ?? '',
+      }),
+      ...(profile.avatar && { avatarUrl: profile.avatar }),
+      oauthTokens,
+      lastLoginAt: new Date(),
+    };
+
+    // 1. Returning user — match by the OAuth subject id.
+    let stored = (await User.findOneAndUpdate(
       { providerId: profile.id },
-      {
-        $set: {
-          provider: profile.provider,
-          providerId: profile.id,
-          ...(profile.email && { email: profile.email }),
-          ...(profile.name && {
-            firstName: nameParts[0] ?? '',
-            lastName: nameParts.slice(1).join(' ') ?? '',
-          }),
-          ...(profile.avatar && { avatarUrl: profile.avatar }),
-          oauthTokens,
-          lastLoginAt: new Date(),
-        },
-        $setOnInsert: { createdAt: new Date(), role: 'unknown' },
-      },
-      { upsert: true, returnDocument: 'after', new: true }
+      { $set },
+      { returnDocument: 'after', new: true }
     )) as UserDoc | null;
+
+    // 2. First login for a pre-provisioned account. The dev seed (and the
+    //    invite flow) create User docs keyed only by email, with no providerId,
+    //    to be "claimed" on first OAuth login. Link the OAuth identity onto that
+    //    existing doc — which preserves its campaign memberships. Only claim
+    //    docs with no providerId yet, so we never hijack an account already
+    //    bound to a different provider identity.
+    if (!stored && profile.email) {
+      stored = (await User.findOneAndUpdate(
+        { email: profile.email, providerId: null },
+        { $set },
+        { returnDocument: 'after', new: true }
+      )) as UserDoc | null;
+    }
+
+    // 3. Brand-new user — create the account.
+    if (!stored) {
+      stored = (await User.findOneAndUpdate(
+        { providerId: profile.id },
+        { $set, $setOnInsert: { createdAt: new Date(), role: 'unknown' } },
+        { upsert: true, returnDocument: 'after', new: true }
+      )) as UserDoc | null;
+    }
+
     return toSessionUser(profile, stored?.role ?? 'unknown', stored);
   } catch (e) {
+    // A write failure here (lost connection, duplicate-key from the unique email
+    // index, etc.) means we could NOT persist/claim the account. Swallowing it and
+    // returning a fallback session would log the user into a broken, unpersisted
+    // session and redirect them to /campaigns. Capture it, then rethrow so the
+    // OAuth callback's catch redirects to an error page instead.
     serverCaptureException(e, profile.id, { action: 'upsertUser', provider: profile.provider });
-    return toSessionUser(profile, 'unknown');
+    throw e;
   }
 }
 

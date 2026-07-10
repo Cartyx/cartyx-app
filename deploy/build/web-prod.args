@@ -1,0 +1,13 @@
+# Client-baked build args for the PROD web image (ghcr.io/biozal/cartyx-web:prod-<sha>).
+# KEY=VALUE lines; consumed as --build-arg by .github/workflows/deploy.yml.
+# These compile into the browser bundle — changing one requires an image
+# rebuild + redeploy (merge to main), not a helm change.
+VITE_PUBLIC_PARTYKIT_HOST=ws.cartyx.io
+VITE_PUBLIC_FF_CHAT=true
+VITE_PUBLIC_FF_DICE=true
+VITE_PUBLIC_FF_WIKI=true
+VITE_PUBLIC_FF_NOTES=true
+VITE_PUBLIC_FF_SETTINGS=true
+# PostHog browser key is publishable (it ships in the bundle); fill in.
+VITE_PUBLIC_POSTHOG_KEY=phc_21Jf49LszdKrxcXJEoFiYtQM2EVweybihRCqT941CRN
+VITE_PUBLIC_POSTHOG_HOST=https://app.posthog.com

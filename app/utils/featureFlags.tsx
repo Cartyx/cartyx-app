@@ -2,71 +2,62 @@ import {
   useFeatureFlagEnabled as usePostHogFeatureFlagEnabled,
   useFeatureFlagPayload as usePostHogFeatureFlagPayload,
   useFeatureFlagVariantKey,
-} from '@posthog/react'
-import type { JsonType } from 'posthog-js'
-import { type ReactNode, useState, useEffect } from 'react'
+} from '@posthog/react';
+import type { JsonType } from 'posthog-js';
+import type { ReactNode } from 'react';
 
 export interface FeatureFlagState<TPayload = JsonType> {
-  isEnabled: boolean
-  isLoading: boolean
-  payload: TPayload | null
-  variant: string | boolean | undefined
+  isEnabled: boolean;
+  isLoading: boolean;
+  payload: TPayload | null;
+  variant: string | boolean | undefined;
 }
 
 function normalizePayload<TPayload>(payload: JsonType | undefined): TPayload | null {
-  return (payload ?? null) as TPayload | null
+  return (payload ?? null) as TPayload | null;
 }
 
 export function useFeatureFlag(flag: string): FeatureFlagState {
-  const isEnabled = usePostHogFeatureFlagEnabled(flag)
-  const payload = usePostHogFeatureFlagPayload(flag)
-  const variant = useFeatureFlagVariantKey(flag)
+  const isEnabled = usePostHogFeatureFlagEnabled(flag);
+  const payload = usePostHogFeatureFlagPayload(flag);
+  const variant = useFeatureFlagVariantKey(flag);
 
   return {
     isEnabled: isEnabled ?? false,
     isLoading: isEnabled === undefined,
     payload: normalizePayload(payload),
     variant,
-  }
+  };
 }
 
 export function useFeatureFlagEnabled(flag: string): boolean {
-  return usePostHogFeatureFlagEnabled(flag) ?? false
+  return usePostHogFeatureFlagEnabled(flag) ?? false;
 }
 
-// Like useFeatureFlagEnabled but returns false when the flag name is empty
-// (i.e. the env var is unset). PostHog is never queried with an empty string —
-// a sentinel key is used instead so hook call count stays stable.
-export function useOptionalFeatureFlagEnabled(flag: string): boolean {
-  const enabled = usePostHogFeatureFlagEnabled(flag || '__ff_disabled__')
-  return Boolean(flag) && (enabled ?? false)
+// The optional flags are plain booleans baked into the client bundle from
+// VITE_PUBLIC_FF_* at build time — no PostHog round-trip. Kept as hooks so
+// call sites don't churn; `flagValue` is the env value itself.
+function parseBooleanFlag(flagValue: string): boolean {
+  return flagValue === 'true' || flagValue === '1';
 }
 
-const FLAG_LOADING_TIMEOUT_MS = 3000
+export function useOptionalFeatureFlagEnabled(flagValue: string): boolean {
+  return parseBooleanFlag(flagValue);
+}
 
-export function useOptionalFeatureFlag(flag: string): { isEnabled: boolean; isLoading: boolean } {
-  const enabled = usePostHogFeatureFlagEnabled(flag || '__ff_disabled__')
-  const [timedOut, setTimedOut] = useState(false)
-
-  useEffect(() => {
-    setTimedOut(false)
-    if (!flag || enabled !== undefined) return
-    const timer = setTimeout(() => setTimedOut(true), FLAG_LOADING_TIMEOUT_MS)
-    return () => clearTimeout(timer)
-  }, [flag, enabled])
-
-  return {
-    isEnabled: Boolean(flag) && (enabled ?? false),
-    isLoading: Boolean(flag) && enabled === undefined && !timedOut,
-  }
+export function useOptionalFeatureFlag(flagValue: string): {
+  isEnabled: boolean;
+  isLoading: boolean;
+} {
+  return { isEnabled: parseBooleanFlag(flagValue), isLoading: false };
 }
 
 export function useFeatureFlagPayload<TPayload = JsonType>(flag: string): TPayload | null {
-  return normalizePayload<TPayload>(usePostHogFeatureFlagPayload(flag))
+  return normalizePayload<TPayload>(usePostHogFeatureFlagPayload(flag));
 }
 
 export function useFeatureFlagVariant(flag: string): string | boolean | undefined {
-  return useFeatureFlagVariantKey(flag)
+  return useFeatureFlagVariantKey(flag);
 }
 
 export function FeatureFlagGate({
@@ -75,14 +66,14 @@ export function FeatureFlagGate({
   fallback = null,
   showFallbackWhileLoading = false,
 }: {
-  flag: string
-  children: ReactNode
-  fallback?: ReactNode
-  showFallbackWhileLoading?: boolean
+  flag: string;
+  children: ReactNode;
+  fallback?: ReactNode;
+  showFallbackWhileLoading?: boolean;
 }) {
-  const { isEnabled, isLoading } = useFeatureFlag(flag)
+  const { isEnabled, isLoading } = useFeatureFlag(flag);
 
-  if (isLoading && !showFallbackWhileLoading) return null
+  if (isLoading && !showFallbackWhileLoading) return null;
 
-  return isEnabled ? <>{children}</> : <>{fallback}</>
+  return isEnabled ? <>{children}</> : <>{fallback}</>;
 }

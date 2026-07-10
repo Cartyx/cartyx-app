@@ -1,0 +1,40 @@
+{{- if and .Values.ingress.enabled .Values.ingress.blockHealthEndpoints }}
+# Blocks /healthz and /readyz from the public internet: the IngressRoute
+# below outranks the host-only routers created from the Ingress (priority
+# 100 > rule-length defaults), and its ipAllowList matches no real source
+# address, so Traefik answers 403 before any backend is reached. Kubelet
+# probes talk to the pod IP directly and never traverse the ingress.
+# Traefik v2 note: the CRD field there is `ipWhiteList` (same shape).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: {{ include "cartyx.fullname" . }}-block-health
+  labels:
+    {{- include "cartyx.labels" . | nindent 4 }}
+spec:
+  ipAllowList:
+    sourceRange:
+      - 255.255.255.255/32
+---
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: {{ include "cartyx.fullname" . }}-block-health
+  labels:
+    {{- include "cartyx.labels" . | nindent 4 }}
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: (Host(`{{ .Values.ingress.webHost }}`) || Host(`{{ .Values.ingress.wsHost }}`)) && (Path(`/healthz`) || Path(`/readyz`))
+      priority: 100
+      middlewares:
+        - name: {{ include "cartyx.fullname" . }}-block-health
+      services:
+        # Never reached — the middleware 403s first — but the CRD requires one.
+        - name: {{ include "cartyx.fullname" . }}-web
+          port: {{ .Values.web.env.PORT | int }}
+  tls:
+    secretName: {{ .Values.tls.secretName }}
+{{- end }}

@@ -115,4 +115,14 @@ export const completeJoinWizardSchema = z.object({
     )
     .optional()
     .default([]),
+  lore: z
+    .array(
+      z.object({
+        title: z.string().trim().min(1),
+        content: z.string().default(''),
+        isPublic: z.boolean().default(false),
+      })
+    )
+    .optional()
+    .default([]),
 });

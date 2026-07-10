@@ -72,6 +72,17 @@ describe('FloatingWindowManager', () => {
     expect(screen.getByRole('button', { name: 'Restore Wiki' })).toBeInTheDocument();
   });
 
+  it('tray re-enables pointer events inside the pointer-events-none wrapper', () => {
+    // The manager wrapper is pointer-events-none so clicks pass through to
+    // content below (e.g. the active map). FloatingWindow opts back in with
+    // pointer-events-auto; the tray must do the same or its restore buttons
+    // are unclickable (regression: minimized windows could not be restored).
+    render(<ControlledManager />);
+
+    const tray = screen.getByRole('toolbar', { name: 'Minimized windows' });
+    expect(tray.className).toContain('pointer-events-auto');
+  });
+
   it('closing a window calls onWindowsChange without that window', async () => {
     const user = userEvent.setup();
     const onWindowsChange = vi.fn();

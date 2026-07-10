@@ -156,6 +156,119 @@ def test_dice_log_deterministic():
     assert [d["id"] for d in a] == [d["id"] for d in b], "dice ids must be deterministic"
 
 
+def test_lore_docs():
+    race_id        = ObjectId()
+    location_id    = ObjectId()
+    char_id0       = ObjectId()
+    char_id1       = ObjectId()
+    player_id0     = ObjectId()   # Player document _id
+    player_id1     = ObjectId()
+    player_user_id0 = ObjectId()  # User _id for the owning player
+    player_user_id1 = ObjectId()
+
+    docs = seed.build_lore_docs(
+        campaign_id=CAMPAIGN_ID,
+        gm_id=GM_ID,
+        player_ids=[player_id0, player_id1],
+        player_user_ids=[player_user_id0, player_user_id1],
+        character_ids=[char_id0, char_id1],
+        location_ids={"Phandalin": location_id},
+        race_ids={"Elf": race_id},
+        now=NOW,
+    )
+
+    # ── Volume ──────────────────────────────────────────────────────────────
+    assert len(docs) >= 5, f"expected >=5 lore docs, got {len(docs)}"
+
+    # ── Required fields present on every doc ────────────────────────────────
+    required = {
+        "title", "content", "gmContent", "isPublic", "images",
+        "links", "tags", "campaignId", "createdBy", "createdAt", "updatedAt",
+    }
+    for d in docs:
+        assert required.issubset(d), f"missing fields in {d.get('title')!r}: {required - d.keys()}"
+        assert d["campaignId"] == CAMPAIGN_ID
+        assert isinstance(d["isPublic"], bool)
+        assert isinstance(d["tags"], list)
+        assert isinstance(d["links"], list)
+        assert isinstance(d["images"], list)
+
+    # ── All four link kinds must appear at least once ────────────────────────
+    link_kinds = {lnk["kind"] for d in docs for lnk in d["links"]}
+    for kind in ("race", "location", "character", "player"):
+        assert kind in link_kinds, f"no link of kind={kind!r} found"
+
+    # ── Links must carry real (non-falsy) ids ────────────────────────────────
+    for d in docs:
+        for lnk in d["links"]:
+            assert lnk.get("id"), f"link missing id in doc {d.get('title')!r}"
+            assert lnk.get("kind") in ("race", "location", "character", "player"), \
+                f"unexpected link kind {lnk.get('kind')!r}"
+
+    # ── At least one private doc with non-empty gmContent ───────────────────
+    private_with_gm = [d for d in docs if not d["isPublic"] and d.get("gmContent")]
+    assert private_with_gm, "need at least one private doc with gmContent"
+
+    # ── At least one public and one private doc ──────────────────────────────
+    assert any(d["isPublic"] for d in docs), "need at least one public doc"
+    assert any(not d["isPublic"] for d in docs), "need at least one private doc"
+
+    # ── Images carry the expected slug-based URL pattern ────────────────────
+    img_urls = [img["url"] for d in docs for img in d["images"]]
+    assert any(u.startswith("/uploads/seed-lore/") for u in img_urls), \
+        "image urls should be under /uploads/seed-lore/"
+
+    # ── The race link uses the supplied race_id ──────────────────────────────
+    race_links = [lnk for d in docs for lnk in d["links"] if lnk["kind"] == "race"]
+    assert any(lnk["id"] == race_id for lnk in race_links), \
+        "race link must use the supplied race_id"
+
+    # ── The location link uses the supplied location_id ──────────────────────
+    loc_links = [lnk for d in docs for lnk in d["links"] if lnk["kind"] == "location"]
+    assert any(lnk["id"] == location_id for lnk in loc_links), \
+        "location link must use the supplied location_id"
+
+    # ── Player links use the supplied player doc ids ─────────────────────────
+    player_links = [lnk for d in docs for lnk in d["links"] if lnk["kind"] == "player"]
+    linked_player_ids = {lnk["id"] for lnk in player_links}
+    assert player_id0 in linked_player_ids or player_id1 in linked_player_ids, \
+        "player links must use the supplied player_ids"
+
+    # ── Player-linked private lore must use the User _id as createdBy ──────────
+    # The server checks String(doc.createdBy) === member.userId where
+    # member.userId is the authenticated User's DB _id — NOT the Player doc _id.
+    player_private = [
+        d for d in docs
+        if not d["isPublic"]
+        and any(lnk["kind"] == "player" for lnk in d["links"])
+    ]
+    assert player_private, "need at least one private player-linked lore doc"
+    player_user_ids_set = {player_user_id0, player_user_id1}
+    player_doc_ids_set  = {player_id0, player_id1}
+    for d in player_private:
+        assert d["createdBy"] in player_user_ids_set, (
+            f"Private player lore {d['title']!r} createdBy={d['createdBy']} "
+            f"must be a User _id {player_user_ids_set}, not a Player doc _id"
+        )
+        assert d["createdBy"] not in player_doc_ids_set, (
+            f"Private player lore {d['title']!r} createdBy must NOT be the "
+            f"Player document _id {player_doc_ids_set}"
+        )
+
+    # ── Graceful fallback when race_ids is empty ─────────────────────────────
+    docs_no_races = seed.build_lore_docs(
+        campaign_id=CAMPAIGN_ID,
+        gm_id=GM_ID,
+        player_ids=[player_id0, player_id1],
+        player_user_ids=[player_user_id0, player_user_id1],
+        character_ids=[char_id0, char_id1],
+        location_ids={"Phandalin": location_id},
+        race_ids={},  # empty — should still produce docs without crashing
+        now=NOW,
+    )
+    assert len(docs_no_races) >= 5, "build_lore_docs must work even when race_ids is empty"
+
+
 def test_chat_transcript_spine_per_session():
     start = NOW
     end = start + timedelta(hours=4)
@@ -200,6 +313,146 @@ def test_transcript_ids_are_session_scoped():
         assert ids1 == [d["id"] for d in run1_again], "ids reproducible for same session"
         assert set(ids1).isdisjoint(d["id"] for d in run2), \
             "ids must not collide across runs with different session ids"
+
+
+def test_calendar_doc():
+    doc = seed.build_calendar_doc(campaign_id=CAMPAIGN_ID, gm_id=GM_ID, now=NOW)
+    assert doc["name"] == "Calendar of Harptos"
+    assert doc["campaignId"] == CAMPAIGN_ID
+    assert doc["createdBy"] == GM_ID
+    assert doc["createdAt"] == NOW and doc["updatedAt"] == NOW
+    # Reference data carried through from the shared HARPTOS config.
+    assert isinstance(doc["months"], list) and len(doc["months"]) == 18
+    assert isinstance(doc["weekdays"], list) and doc["weekdays"]
+    assert doc["epoch"]["year"] == 1372
+    # Building twice must not mutate the shared HARPTOS dict (no campaignId leak).
+    from seed_calendar_data import HARPTOS
+    assert "campaignId" not in HARPTOS, "build_calendar_doc must not mutate HARPTOS"
+
+
+def test_event_docs():
+    location_id = ObjectId()
+    char_id0 = ObjectId()
+    char_id1 = ObjectId()
+    elf_race_id = ObjectId()
+    player_id0 = ObjectId()
+    session_id0 = ObjectId()
+    calendar_id = ObjectId()
+
+    docs = seed.build_event_docs(
+        campaign_id=CAMPAIGN_ID, calendar_id=calendar_id, gm_id=GM_ID, now=NOW,
+        character_ids=[char_id0, char_id1],
+        location_ids={"Phandalin": location_id},
+        race_ids={"Elf": elf_race_id},
+        player_ids=[player_id0],
+        session_ids=[session_id0],
+    )
+
+    # ── Volume ──────────────────────────────────────────────────────────────
+    assert len(docs) == 10, f"expected exactly 10 events, got {len(docs)}"
+
+    # ── Required fields on every doc ─────────────────────────────────────────
+    required = {
+        "title", "content", "gmContent", "isPublic", "isEpic", "start", "end",
+        "startOrdinal", "endOrdinal", "links", "sessionId", "images", "tags",
+        "color", "campaignId", "calendarId", "createdBy", "createdAt", "updatedAt",
+    }
+    for d in docs:
+        assert required.issubset(d), f"missing fields in {d.get('title')!r}: {required - d.keys()}"
+        assert d["campaignId"] == CAMPAIGN_ID
+        assert d["calendarId"] == calendar_id
+        assert d["createdBy"] == GM_ID
+        assert isinstance(d["isPublic"], bool)
+        assert isinstance(d["isEpic"], bool)
+        assert isinstance(d["tags"], list)
+        assert isinstance(d["links"], list)
+        assert isinstance(d["images"], list)
+        # Ordinals MUST be integers (the wire/index field is a Number).
+        assert isinstance(d["startOrdinal"], int), f"startOrdinal not int in {d['title']!r}"
+        assert isinstance(d["endOrdinal"], int), f"endOrdinal not int in {d['title']!r}"
+        # start is a {year, monthIndex, day} dict; end is that or None.
+        assert set(d["start"].keys()) == {"year", "monthIndex", "day"}
+        assert d["end"] is None or set(d["end"].keys()) == {"year", "monthIndex", "day"}
+        # endOrdinal defaults to startOrdinal when there's no end.
+        if d["end"] is None:
+            assert d["endOrdinal"] == d["startOrdinal"]
+        else:
+            assert d["endOrdinal"] >= d["startOrdinal"]
+
+    # ── Ordinal correctness — must equal the engine's to_ordinal ─────────────
+    from seed_calendar_data import HARPTOS, to_ordinal
+    for d in docs:
+        assert d["startOrdinal"] == to_ordinal(HARPTOS, d["start"])
+        assert d["endOrdinal"] == to_ordinal(HARPTOS, d["end"] or d["start"])
+
+    # ── Public/private + epic mix ────────────────────────────────────────────
+    assert any(d["isPublic"] for d in docs), "need a public event"
+    assert any(not d["isPublic"] for d in docs), "need a private event"
+    assert any(d["isEpic"] for d in docs), "need an epic event"
+    # Private events carry GM-only content.
+    assert any(not d["isPublic"] and d["gmContent"] for d in docs), \
+        "need a private event with gmContent"
+
+    # ── Links resolve to the supplied real ids ───────────────────────────────
+    link_kinds = {lnk["kind"] for d in docs for lnk in d["links"]}
+    for kind in ("location", "character", "race", "player"):
+        assert kind in link_kinds, f"no event link of kind={kind!r}"
+    all_link_ids = {lnk["id"] for d in docs for lnk in d["links"]}
+    assert location_id in all_link_ids, "location link must use supplied location_id"
+    assert char_id0 in all_link_ids, "character link must use supplied character id"
+    assert elf_race_id in all_link_ids, "race link must use supplied Elf race id"
+    assert player_id0 in all_link_ids, "player link must use supplied player id"
+    # The two-day Siege event links the first session.
+    assert any(d["sessionId"] == session_id0 for d in docs), \
+        "the multi-day Siege event must link the first session"
+
+    # ── A multi-day event exists (end != start) ──────────────────────────────
+    assert any(d["end"] is not None for d in docs), "need at least one multi-day event"
+
+    # ── Graceful fallback when collections are empty ─────────────────────────
+    docs_empty = seed.build_event_docs(
+        campaign_id=CAMPAIGN_ID, calendar_id=calendar_id, gm_id=GM_ID, now=NOW,
+        character_ids=[], location_ids={}, race_ids={}, player_ids=[], session_ids=[],
+    )
+    assert len(docs_empty) == 10, "build_event_docs must work with empty id collections"
+    # With no sessions, the session link falls back to None.
+    assert all(d["sessionId"] is None for d in docs_empty), \
+        "sessionId must be None when no session ids are supplied"
+    # Ordinals still integers in the fallback path.
+    for d in docs_empty:
+        assert isinstance(d["startOrdinal"], int) and isinstance(d["endOrdinal"], int)
+
+
+def test_public_url_cdn_toggle():
+    # Seed image URLs must flip between local paths (no CDN config — localhost
+    # dev and CI) and full CDN URLs (deployed dev, where local files 404).
+    import os
+    from unittest import mock
+
+    with mock.patch.dict(os.environ):  # restores the real env on exit
+        for k in seed.CDN_ENV_KEYS:
+            os.environ.pop(k, None)
+        assert seed.cdn_base() is None, "no CDN without full config"
+        assert seed.public_url("/uploads/campaigns/x.svg") == "/uploads/campaigns/x.svg"
+
+        os.environ.update({
+            "CDN_URL": "https://cdn-dev.example.io/",  # trailing slash on purpose
+            "R2_ACCOUNT_ID": "acct",
+            "R2_ACCESS_KEY_ID": "key",
+            "R2_SECRET_ACCESS_KEY": "secret",
+            "R2_BUCKET": "cartyx-dev",
+        })
+        assert seed.cdn_base() == "https://cdn-dev.example.io", "trailing slash stripped"
+        assert (seed.public_url("/uploads/campaigns/x.svg")
+                == "https://cdn-dev.example.io/uploads/campaigns/x.svg")
+        avatar = seed.local_avatar_path("character", "Test Person")
+        assert avatar.startswith("https://cdn-dev.example.io/uploads/seed-avatars/character/"), avatar
+
+        # Partial config (bucket missing) must fall back to local paths rather
+        # than emitting URLs nothing will ever upload to.
+        os.environ.pop("R2_BUCKET")
+        assert seed.cdn_base() is None, "partial R2 config must disable the CDN path"
+        assert seed.public_url("/uploads/campaigns/x.svg") == "/uploads/campaigns/x.svg"
 
 
 def run():

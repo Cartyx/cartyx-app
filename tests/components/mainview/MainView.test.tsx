@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -58,6 +58,18 @@ describe('MainView', () => {
   beforeEach(() => {
     // Default: mobile viewport (< lg), so isDesktop = false in all standard tests
     mockMatchMedia(0);
+    // This suite only exercises the MainView shell (toolbar/inspector chrome),
+    // not inspector tab content — keep all inspector tabs disabled so panels
+    // like WikiPanel (which needs router context) never mount here.
+    vi.stubEnv('VITE_PUBLIC_FF_CHAT', '');
+    vi.stubEnv('VITE_PUBLIC_FF_DICE', '');
+    vi.stubEnv('VITE_PUBLIC_FF_WIKI', '');
+    vi.stubEnv('VITE_PUBLIC_FF_NOTES', '');
+    vi.stubEnv('VITE_PUBLIC_FF_SETTINGS', '');
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it('renders children', () => {

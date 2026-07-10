@@ -1,11 +1,15 @@
 import { PostHog } from 'posthog-node';
+import { createExceptionThrottle } from '~/utils/exception-throttle';
+import { resolveEnvironment } from '../db/policy';
 
 let client: PostHog | null = null;
 
+// A failing server function hit by a high-frequency mutation can otherwise
+// emit one $exception per request; same semantics as the client-side hook.
+const exceptionThrottle = createExceptionThrottle();
+
 function getEnvironment(): string {
-  if (process.env.VERCEL_ENV) return process.env.VERCEL_ENV; // 'production', 'preview', 'development'
-  if (process.env.VERCEL) return 'vercel';
-  return process.env.NODE_ENV ?? 'unknown';
+  return resolveEnvironment();
 }
 
 function getClient(): PostHog | null {
@@ -34,6 +38,10 @@ export async function serverCaptureException(
   const id = distinctId ?? 'server';
   const err = error instanceof Error ? error : new Error(String(error));
 
+  const key = `${err.constructor.name}:${err.message}`.slice(0, 200);
+  const decision = exceptionThrottle.check(key, Date.now());
+  if (!decision.capture) return;
+
   try {
     await ph.captureImmediate({
       distinctId: id,
@@ -44,6 +52,8 @@ export async function serverCaptureException(
         $exception_stack_trace_raw: err.stack,
         environment: getEnvironment(),
         base_url: process.env.BASE_URL ?? 'unknown',
+        recurrence_count: decision.occurrences,
+        ...(decision.capped && { exception_throttle_capped: true }),
         ...properties,
       },
     });

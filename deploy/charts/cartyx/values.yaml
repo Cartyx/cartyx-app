@@ -1,0 +1,102 @@
+# Production-shaped defaults for the cartyx app chart (web + realtime).
+# Per-environment overrides: values-prod.yaml / values-dev.yaml.
+# Local kind overrides: values-local.yaml.
+#
+# Image tags are REQUIRED at install time (immutable git-sha tags, e.g.
+# prod-a1b2c3d) — committed files here never pin a tag and `latest` never
+# deploys. On the real cluster the Flux HelmRelease values (in the
+# cartyx-infrastructure repo, bumped by CI) carry the live tags. Secret
+# values are never committed: the cluster uses a kubectl-created Secret via
+# secret.existingSecret; the kind path injects from .env via --set-string.
+
+web:
+  image:
+    repository: ghcr.io/biozal/cartyx-web
+    tag: ''
+    pullPolicy: IfNotPresent
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    nodePort: null # honored only when type is NodePort
+  resources:
+    requests:
+      cpu: 100m
+      memory: 192Mi
+    limits:
+      memory: 512Mi # no CPU limit — avoids event-loop throttling
+  # Plain (non-secret) server-read env, live at deploy time. Empty values are
+  # omitted from the pod. VITE_PUBLIC_* client values are NOT here — they are
+  # baked into the image at build time from deploy/build/web-<env>.args, so a
+  # client flag/host change means an image rebuild, not a helm change.
+  env:
+    APP_ENV: production
+    PORT: '3000'
+    BASE_URL: ''
+    GOOGLE_CLIENT_ID: ''
+    GITHUB_CLIENT_ID: ''
+    R2_ACCOUNT_ID: ''
+    R2_BUCKET: ''
+    CDN_URL: ''
+    POSTHOG_HOST: 'https://app.posthog.com'
+
+realtime:
+  image:
+    repository: ghcr.io/biozal/cartyx-realtime
+    tag: ''
+    pullPolicy: IfNotPresent
+  # MUST stay 1: rooms and relay state live in per-pod in-memory maps with no
+  # cross-pod sharing or sticky session routing. Scaling this out silently
+  # splits clients into disjoint rooms. Raising it requires sticky routing or
+  # external room state (e.g. Redis) first. The deployment template enforces
+  # this with a `fail` guard.
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    nodePort: null
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  env:
+    PORT: '1999'
+
+ingress:
+  enabled: true
+  className: traefik
+  webHost: '' # e.g. app.cartyx.io — required when ingress.enabled
+  wsHost: '' # e.g. ws.cartyx.io — required when ingress.enabled
+  # 403 /healthz + /readyz at the ingress (Traefik Middleware + IngressRoute).
+  # Kubelet probes hit pods directly and are unaffected.
+  blockHealthEndpoints: true
+
+tls:
+  secretName: cartyx-tls
+  # On cluster z440 certificates are owned by the cartyx-infrastructure repo
+  # (per-env, deliberately not a wildcard) — values-prod/dev DISABLE this and
+  # point secretName at the infra-issued secrets. Enable it only on clusters
+  # where nothing else issues the cert.
+  certificate:
+    enabled: true # cert-manager Certificate covering [webHost, wsHost]
+    clusterIssuer: '' # required when enabled — find it: kubectl get clusterissuer
+
+secret:
+  create: true
+  # Name of a pre-created Secret holding the same keys; when set, the chart
+  # does not manage a Secret and the checksum-restart behavior is inert
+  # (immutable image tags force rollouts anyway). Cluster z440 sets `cartyx`
+  # (created out-of-band with kubectl — see README); the kind path leaves
+  # this empty and uses the chart-managed Secret.
+  existingSecret: ''
+  values:
+    sessionSecret: '' # required; >=32 chars when APP_ENV is production/staging
+    mongodbUri: '' # required
+    googleClientSecret: ''
+    githubClientSecret: ''
+    r2AccessKeyId: ''
+    r2SecretAccessKey: ''
+    posthogKey: ''
+
+nameOverride: ''
+fullnameOverride: ''

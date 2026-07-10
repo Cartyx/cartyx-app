@@ -14,6 +14,7 @@ import { useTabletopMapSync } from '~/hooks/useTabletopMapSync';
 import { ActiveMapStage } from './ActiveMapStage';
 import { TabletopTabBar } from './TabletopTabBar';
 import { TabletopCanvas } from './TabletopCanvas';
+import { DiceRollerPanel } from '~/components/mainview/DiceRollerPanel';
 import {
   FloatingWindowManager,
   type ManagedWindow,
@@ -24,6 +25,11 @@ import {
   CharacterWindowWrapper,
   EditCharacterModalWrapper,
 } from '~/components/mainview/gmscreens/CharacterWindowWrapper';
+import {
+  LoreWindowWrapper,
+  EditLoreModalWrapper,
+} from '~/components/mainview/gmscreens/LoreWindowWrapper';
+import { EventWindowWrapper } from '~/components/mainview/gmscreens/EventWindowWrapper';
 import { RaceWindowWrapper, EditRaceModalWrapper } from '~/components/wiki/races/RaceWindowWrapper';
 import {
   RuleWindowWrapper,
@@ -54,6 +60,8 @@ type DialogState =
   | { type: 'create-tab' }
   | { type: 'rename-tab'; screenId: string; currentName: string }
   | { type: 'delete-tab'; screenId: string; screenName: string };
+
+const DICE_ROLLER_WINDOW_ID = 'dice-roller';
 
 /** Map FloatingWindow states to backend WindowState values (used when server persistence is added). */
 function _toWindowState(state: FloatingWindowState): 'open' | 'minimized' {
@@ -112,8 +120,14 @@ export function TabletopView({
   const [editingPlayerId, setEditingPlayerId] = useState<string | null>(null);
   const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
   const [editingMonsterId, setEditingMonsterId] = useState<string | null>(null);
+  const [editingLoreId, setEditingLoreId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [localWindows, setLocalWindows] = useState<ManagedWindow[]>([]);
+  // The dice roller is a per-user ephemeral window: it lives outside
+  // localWindows because the server-sync effect rebuilds that array from
+  // activeScreen.windows and would drop it.
+  const [diceWindow, setDiceWindow] = useState<ManagedWindow | null>(null);
+  const prevToolRef = useRef<ToolType>('pointer');
   const localScreenIdRef = useRef<string | null>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
 
@@ -348,6 +362,16 @@ export function TabletopView({
               onEdit={() => setEditingMonsterId(w.documentId)}
             />
           );
+        } else if (w.collection === 'lore') {
+          windowContent = (
+            <LoreWindowWrapper
+              loreId={w.documentId}
+              campaignId={campaignId}
+              onEdit={() => setEditingLoreId(w.documentId)}
+            />
+          );
+        } else if (w.collection === 'events') {
+          windowContent = <EventWindowWrapper eventId={w.documentId} campaignId={campaignId} />;
         } else {
           windowContent = (
             <div className="p-4 overflow-auto h-full">
@@ -365,7 +389,8 @@ export function TabletopView({
         if (
           w.collection === 'rule' ||
           w.collection === 'character' ||
-          w.collection === 'location'
+          w.collection === 'location' ||
+          w.collection === 'lore'
         ) {
           if (doc?.isPublic === true) {
             titleIcon = (
@@ -447,16 +472,44 @@ export function TabletopView({
     });
   }, [activeScreen, activeScreenId, campaignId, isGM]);
 
+  // Selecting the dice tool acts as a button: open/focus the roller window,
+  // then hand the toolbar back to the previously active tool.
+  useEffect(() => {
+    if (activeTool === 'dice') {
+      setDiceWindow((w) => {
+        const zTop = Math.max(0, ...localWindows.map((lw) => lw.zIndex), w?.zIndex ?? 0) + 1;
+        if (w) return { ...w, state: 'normal', zIndex: zTop };
+        return {
+          id: DICE_ROLLER_WINDOW_ID,
+          title: 'Dice Roller',
+          content: <DiceRollerPanel />,
+          position: { x: 80, y: 80 },
+          size: { width: 340, height: 560 },
+          state: 'normal',
+          zIndex: zTop,
+        };
+      });
+      onToolChange?.(prevToolRef.current);
+    } else if (activeTool) {
+      prevToolRef.current = activeTool;
+    }
+  }, [activeTool, onToolChange, localWindows]);
+
   // --- Window change handler (local state + close mutation) ---
   const handleWindowsChange = useCallback(
     (nextWindows: ManagedWindow[]) => {
+      // The dice roller window is per-user state, never persisted server-side.
+      const dice = nextWindows.find((w) => w.id === DICE_ROLLER_WINDOW_ID) ?? null;
+      const rest = nextWindows.filter((w) => w.id !== DICE_ROLLER_WINDOW_ID);
+
       // Optimistically update local state immediately (handles minimize/restore/move/resize)
-      setLocalWindows(nextWindows);
+      setDiceWindow(dice);
+      setLocalWindows(rest);
 
       if (!activeScreenId || !activeScreen) return;
 
       // Handle closes — fire close mutation for removed windows
-      const nextIds = new Set(nextWindows.map((w) => w.id));
+      const nextIds = new Set(rest.map((w) => w.id));
       for (const w of activeScreen.windows) {
         if (!nextIds.has(w.id)) {
           mutations.closeWindow.mutate({ screenId: activeScreenId, windowId: w.id });
@@ -585,7 +638,10 @@ export function TabletopView({
           <TabletopCanvas screen={activeScreen} />
         )}
 
-        <FloatingWindowManager windows={localWindows} onWindowsChange={handleWindowsChange} />
+        <FloatingWindowManager
+          windows={diceWindow ? [...localWindows, diceWindow] : localWindows}
+          onWindowsChange={handleWindowsChange}
+        />
       </div>
 
       {/* Dialogs */}
@@ -661,6 +717,13 @@ export function TabletopView({
           campaignId={campaignId}
           monsterId={editingMonsterId}
           onClose={() => setEditingMonsterId(null)}
+        />
+      )}
+      {editingLoreId !== null && (
+        <EditLoreModalWrapper
+          campaignId={campaignId}
+          loreId={editingLoreId}
+          onClose={() => setEditingLoreId(null)}
         />
       )}
     </div>

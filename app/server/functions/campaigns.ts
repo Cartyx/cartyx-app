@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/react-start';
+import { z } from 'zod';
 import mongoose from 'mongoose';
 import { getSession } from '../session';
 import { connectDB, isDBConnected } from '../db/connection';
@@ -109,7 +109,7 @@ function serializeCampaign(
   };
 }
 
-export const listCampaigns = createServerFn({ method: 'GET' }).handler(async () => {
+export const listCampaigns = async () => {
   try {
     const user = await getSession();
     if (!user) return [];
@@ -192,244 +192,240 @@ export const listCampaigns = createServerFn({ method: 'GET' }).handler(async () 
     serverCaptureException(e, undefined, { action: 'listCampaigns' });
     throw e;
   }
-});
+};
 
-export const getCampaign = createServerFn({ method: 'GET' })
-  .inputValidator(getCampaignSchema)
-  .handler(async ({ data }) => {
-    try {
-      const user = await getSession();
-      if (!user) throw new Error('Not authenticated');
+export const getCampaign = async ({ data }: { data: z.infer<typeof getCampaignSchema> }) => {
+  try {
+    const user = await getSession();
+    if (!user) throw new Error('Not authenticated');
 
-      await connectDB();
-      if (!isDBConnected()) throw new Error('Database not available');
+    await connectDB();
+    if (!isDBConnected()) throw new Error('Database not available');
 
-      const dbUser = await User.findOne({ providerId: user.id });
-      const c = await Campaign.findById(data.id);
-      if (!c) return null;
+    const dbUser = await User.findOne({ providerId: user.id });
+    const c = await Campaign.findById(data.id);
+    if (!c) return null;
 
-      const userId = dbUser ? String(dbUser._id) : undefined;
+    const userId = dbUser ? String(dbUser._id) : undefined;
 
-      // Only members can see campaigns; treat gameMasterId as implicit member for legacy campaigns
-      const members = c.members ?? [];
-      const isMember = userId
-        ? members.some((m: { userId: unknown }) => String(m.userId) === userId) ||
-          (members.length === 0 && c.gameMasterId != null && String(c.gameMasterId) === userId)
-        : false;
-      if (!isMember) return null;
+    // Only members can see campaigns; treat gameMasterId as implicit member for legacy campaigns
+    const members = c.members ?? [];
+    const isMember = userId
+      ? members.some((m: { userId: unknown }) => String(m.userId) === userId) ||
+        (members.length === 0 && c.gameMasterId != null && String(c.gameMasterId) === userId)
+      : false;
+    if (!isMember) return null;
 
-      const isOwner = !!userId && c.gameMasterId != null && String(c.gameMasterId) === userId;
+    const isOwner = !!userId && c.gameMasterId != null && String(c.gameMasterId) === userId;
 
-      // Load players and sessions in parallel; GM also gets gmscreen docs.
-      // The active session's summary is fetched separately to avoid including
-      // potentially large catch-up markdown in every session row.
-      const queries: [
-        ReturnType<typeof Player.find>,
-        ReturnType<typeof Session.find>,
-        ReturnType<typeof GMScreen.find> | null,
-        ReturnType<typeof Session.findOne>,
-      ] = [
-        Player.find(
-          { campaignId: c._id },
-          '_id campaignId userId characterName characterClass avatar'
-        ).lean(),
-        Session.find({ campaignId: c._id }, '_id name number startDate endDate status')
-          .sort({ number: 1 })
-          .lean(),
-        isOwner ? GMScreen.find({ campaignId: c._id }, '_id name').lean() : null,
-        Session.findOne({ campaignId: c._id, status: 'active' }, '_id summary').lean(),
-      ];
+    // Load players and sessions in parallel; GM also gets gmscreen docs.
+    // The active session's summary is fetched separately to avoid including
+    // potentially large catch-up markdown in every session row.
+    const queries: [
+      ReturnType<typeof Player.find>,
+      ReturnType<typeof Session.find>,
+      ReturnType<typeof GMScreen.find> | null,
+      ReturnType<typeof Session.findOne>,
+    ] = [
+      Player.find(
+        { campaignId: c._id },
+        '_id campaignId userId characterName characterClass avatar'
+      ).lean(),
+      Session.find({ campaignId: c._id }, '_id name number startDate endDate status')
+        .sort({ number: 1 })
+        .lean(),
+      isOwner ? GMScreen.find({ campaignId: c._id }, '_id name').lean() : null,
+      Session.findOne({ campaignId: c._id, status: 'active' }, '_id summary').lean(),
+    ];
 
-      const [playerDocs, sessionDocs, gmScreenDocs, activeSessionDoc] = await Promise.all(queries);
+    const [playerDocs, sessionDocs, gmScreenDocs, activeSessionDoc] = await Promise.all(queries);
 
-      const partyMembers = (
-        playerDocs as Array<{
-          _id: unknown;
-          characterName: unknown;
-          characterClass: unknown;
-          avatar: unknown;
-          userId: unknown;
-        }>
-      ).map((p) => ({
-        id: String(p._id),
-        characterName: p.characterName as string,
-        characterClass: p.characterClass as string,
-        avatar: (p.avatar as string | undefined) ?? null,
-        userId: String(p.userId),
-      }));
+    const partyMembers = (
+      playerDocs as Array<{
+        _id: unknown;
+        characterName: unknown;
+        characterClass: unknown;
+        avatar: unknown;
+        userId: unknown;
+      }>
+    ).map((p) => ({
+      id: String(p._id),
+      characterName: p.characterName as string,
+      characterClass: p.characterClass as string,
+      avatar: (p.avatar as string | undefined) ?? null,
+      userId: String(p.userId),
+    }));
 
-      const activeDoc = activeSessionDoc as { _id: unknown; summary?: string } | null;
-      const activeId = activeDoc ? String(activeDoc._id) : null;
-      const activeCatchUp = activeDoc?.summary ?? null;
+    const activeDoc = activeSessionDoc as { _id: unknown; summary?: string } | null;
+    const activeId = activeDoc ? String(activeDoc._id) : null;
+    const activeCatchUp = activeDoc?.summary ?? null;
 
-      const sessions = (
-        sessionDocs as Array<{
-          _id: unknown;
-          name: unknown;
-          number: unknown;
-          startDate: unknown;
-          endDate: unknown;
-          status: unknown;
-        }>
-      ).map((s) => ({
-        id: String(s._id),
-        name: s.name as string,
-        number: s.number as number,
-        startDate: (s.startDate as Date).toISOString(),
-        endDate: s.endDate ? (s.endDate as Date).toISOString() : null,
-        status: ((s.status as string) ?? 'not_started') as 'not_started' | 'active' | 'completed',
-        catchUp: String(s._id) === activeId ? activeCatchUp : null,
-      }));
+    const sessions = (
+      sessionDocs as Array<{
+        _id: unknown;
+        name: unknown;
+        number: unknown;
+        startDate: unknown;
+        endDate: unknown;
+        status: unknown;
+      }>
+    ).map((s) => ({
+      id: String(s._id),
+      name: s.name as string,
+      number: s.number as number,
+      startDate: (s.startDate as Date).toISOString(),
+      endDate: s.endDate ? (s.endDate as Date).toISOString() : null,
+      status: ((s.status as string) ?? 'not_started') as 'not_started' | 'active' | 'completed',
+      catchUp: String(s._id) === activeId ? activeCatchUp : null,
+    }));
 
-      const gmScreens = gmScreenDocs
-        ? (gmScreenDocs as Array<{ _id: unknown; name: unknown }>).map((g) => ({
-            id: String(g._id),
-            name: g.name as string,
-          }))
-        : undefined;
+    const gmScreens = gmScreenDocs
+      ? (gmScreenDocs as Array<{ _id: unknown; name: unknown }>).map((g) => ({
+          id: String(g._id),
+          name: g.name as string,
+        }))
+      : undefined;
 
-      const serialized = serializeCampaign(
-        c as Parameters<typeof serializeCampaign>[0],
-        userId,
-        userId,
-        partyMembers,
-        sessions,
-        gmScreens
-      );
+    const serialized = serializeCampaign(
+      c as Parameters<typeof serializeCampaign>[0],
+      userId,
+      userId,
+      partyMembers,
+      sessions,
+      gmScreens
+    );
 
-      // Redact invite code for non-owners
-      if (!isOwner) {
-        return { ...serialized, inviteCode: '' };
-      }
-
-      return serialized;
-    } catch (e) {
-      serverCaptureException(e, undefined, { action: 'getCampaign', campaignId: data.id });
-      throw e;
+    // Redact invite code for non-owners
+    if (!isOwner) {
+      return { ...serialized, inviteCode: '' };
     }
-  });
+
+    return serialized;
+  } catch (e) {
+    serverCaptureException(e, undefined, { action: 'getCampaign', campaignId: data.id });
+    throw e;
+  }
+};
 
 export { campaignInputSchema };
 
-export const createCampaign = createServerFn({ method: 'POST' })
-  .inputValidator(campaignInputSchema)
-  .handler(async ({ data }) => {
-    const user = await getSession();
-    try {
-      if (!user) throw new Error('Not authenticated');
-      if (user.role !== 'gm') throw new Error('Only GMs can create campaigns');
+export const createCampaign = async ({ data }: { data: z.infer<typeof campaignInputSchema> }) => {
+  const user = await getSession();
+  try {
+    if (!user) throw new Error('Not authenticated');
+    if (user.role !== 'gm') throw new Error('Only GMs can create campaigns');
 
-      await connectDB();
-      if (!isDBConnected()) throw new Error('Database not available');
+    await connectDB();
+    if (!isDBConnected()) throw new Error('Database not available');
 
-      const {
-        name,
-        description,
-        schedFreq,
-        schedDay,
-        schedTime,
-        schedTz,
-        links,
-        maxPlayers,
-        imageData,
-        imageMime,
-        imageName,
-        imagePath: imagePathInput,
-      } = data;
+    const {
+      name,
+      description,
+      schedFreq,
+      schedDay,
+      schedTime,
+      schedTz,
+      links,
+      maxPlayers,
+      imageData,
+      imageMime,
+      imageName,
+      imagePath: imagePathInput,
+    } = data;
 
-      if (!name.trim()) throw new Error('Campaign name is required');
+    if (!name.trim()) throw new Error('Campaign name is required');
 
-      const dbUser = await User.findOne({ providerId: user.id });
-      if (!dbUser) throw new Error('User not found');
+    const dbUser = await User.findOne({ providerId: user.id });
+    if (!dbUser) throw new Error('User not found');
 
-      let imagePath: string | null = null;
-      if (imagePathInput) {
-        // Direct upload path: validate the URL origin matches our CDN
-        const cdnUrl = process.env.CDN_URL;
-        if (!cdnUrl) throw new Error('Invalid image path');
-        try {
-          const cdnOrigin = new URL(cdnUrl);
-          const imageUrl = new URL(imagePathInput);
-          if (imageUrl.origin !== cdnOrigin.origin) throw new Error('Invalid image path');
-          if (!imageUrl.pathname.startsWith('/uploads/')) throw new Error('Invalid image path');
-        } catch {
-          throw new Error('Invalid image path');
-        }
-        imagePath = imagePathInput;
-      } else if (imageData && imageMime && imageName) {
-        // Local dev fallback: base64 → save via server
-        if (imageData.length > MAX_IMAGE_BASE64_LENGTH) {
-          throw new Error('Image must be under 3MB after compression');
-        }
-        const buffer = Buffer.from(imageData, 'base64');
-        const file = new File([buffer], imageName, { type: imageMime });
-        imagePath = await saveUploadedFile(file, 'uploads/campaigns');
-      }
-
-      interface CampaignResult {
-        _id: mongoose.Types.ObjectId;
-        name: string;
-        inviteCode: string;
-      }
-      const mongoSession = await mongoose.startSession();
-      let result: CampaignResult;
+    let imagePath: string | null = null;
+    if (imagePathInput) {
+      // Direct upload path: validate the URL origin matches our CDN
+      const cdnUrl = process.env.CDN_URL;
+      if (!cdnUrl) throw new Error('Invalid image path');
       try {
-        result = (await mongoSession.withTransaction(async () => {
-          let campaign: CampaignResult | null = null;
-          let attempts = 0;
-          while (attempts < 10 && !campaign) {
-            const inviteCode = generateInviteCode();
-            const inUse = await Campaign.exists({ inviteCode }).session(mongoSession);
-            attempts++;
-            if (inUse) continue;
-            try {
-              const created = (await Campaign.create(
-                [
-                  {
-                    gameMasterId: dbUser._id,
-                    name: name.trim(),
-                    description: description.trim(),
-                    imagePath,
-                    schedule: {
-                      frequency: schedFreq ?? null,
-                      dayOfWeek: schedDay ?? null,
-                      time: schedTime ?? null,
-                      timezone: schedTz ?? null,
-                    },
-                    links: links ?? [],
-                    maxPlayers: parseMaxPlayers(maxPlayers),
-                    inviteCode,
-                    members: [{ userId: dbUser._id, role: 'gm', joinedAt: new Date() }],
-                  },
-                ],
-                { session: mongoSession }
-              )) as unknown as CampaignResult[];
-              campaign = created[0] as CampaignResult;
-            } catch (e: unknown) {
-              if ((e as { code?: number })?.code === 11000) {
-                campaign = null;
-                continue;
-              }
-              throw e;
-            }
-          }
+        const cdnOrigin = new URL(cdnUrl);
+        const imageUrl = new URL(imagePathInput);
+        if (imageUrl.origin !== cdnOrigin.origin) throw new Error('Invalid image path');
+        if (!imageUrl.pathname.startsWith('/uploads/')) throw new Error('Invalid image path');
+      } catch {
+        throw new Error('Invalid image path');
+      }
+      imagePath = imagePathInput;
+    } else if (imageData && imageMime && imageName) {
+      // Local dev fallback: base64 → save via server
+      if (imageData.length > MAX_IMAGE_BASE64_LENGTH) {
+        throw new Error('Image must be under 3MB after compression');
+      }
+      const buffer = Buffer.from(imageData, 'base64');
+      const file = new File([buffer], imageName, { type: imageMime });
+      imagePath = await saveUploadedFile(file, 'uploads/campaigns');
+    }
 
-          if (!campaign) throw new Error('Could not generate unique invite code');
-
-          // Create default Session 0 and GM Screen for new campaign
-          const now = new Date();
-          await Promise.all([
-            Session.create(
+    interface CampaignResult {
+      _id: mongoose.Types.ObjectId;
+      name: string;
+      inviteCode: string;
+    }
+    const mongoSession = await mongoose.startSession();
+    let result: CampaignResult;
+    try {
+      result = (await mongoSession.withTransaction(async () => {
+        let campaign: CampaignResult | null = null;
+        let attempts = 0;
+        while (attempts < 10 && !campaign) {
+          const inviteCode = generateInviteCode();
+          const inUse = await Campaign.exists({ inviteCode }).session(mongoSession);
+          attempts++;
+          if (inUse) continue;
+          try {
+            const created = (await Campaign.create(
               [
                 {
-                  campaignId: campaign._id,
-                  name: 'Session 0',
-                  gm: dbUser._id,
-                  number: 0,
-                  startDate: now,
-                  endDate: null,
-                  status: 'active',
-                  summary: `## Welcome to Your Campaign!
+                  gameMasterId: dbUser._id,
+                  name: name.trim(),
+                  description: description.trim(),
+                  imagePath,
+                  schedule: {
+                    frequency: schedFreq ?? null,
+                    dayOfWeek: schedDay ?? null,
+                    time: schedTime ?? null,
+                    timezone: schedTz ?? null,
+                  },
+                  links: links ?? [],
+                  maxPlayers: parseMaxPlayers(maxPlayers),
+                  inviteCode,
+                  members: [{ userId: dbUser._id, role: 'gm', joinedAt: new Date() }],
+                },
+              ],
+              { session: mongoSession }
+            )) as unknown as CampaignResult[];
+            campaign = created[0] as CampaignResult;
+          } catch (e: unknown) {
+            if ((e as { code?: number })?.code === 11000) {
+              campaign = null;
+              continue;
+            }
+            throw e;
+          }
+        }
+
+        if (!campaign) throw new Error('Could not generate unique invite code');
+
+        // Create default Session 0 and GM Screen for new campaign
+        const now = new Date();
+        await Promise.all([
+          Session.create(
+            [
+              {
+                campaignId: campaign._id,
+                name: 'Session 0',
+                gm: dbUser._id,
+                number: 0,
+                startDate: now,
+                endDate: null,
+                status: 'active',
+                summary: `## Welcome to Your Campaign!
 
 This is the **Catch Up** section. Your players will see this on their Dashboard to stay up to date on the story.
 
@@ -444,306 +440,308 @@ This is the **Catch Up** section. Your players will see this on their Dashboard 
 - **Session notes:** Use the session editor to keep notes during and after each session
 
 *Replace this text with your Session 0 recap once you're ready!*`,
-                },
-              ],
-              { session: mongoSession }
-            ),
-            GMScreen.create(
-              [
-                {
-                  campaignId: campaign._id,
-                  name: 'General',
-                  tabOrder: 0,
-                  createdBy: dbUser._id,
-                },
-              ],
-              { session: mongoSession }
-            ),
-          ]);
-
-          // Sync User.campaigns array
-          await User.updateOne(
-            { _id: dbUser._id },
-            {
-              $push: {
-                campaigns: { campaignId: campaign._id, joinedAt: new Date(), status: 'active' },
               },
-            },
+            ],
             { session: mongoSession }
-          );
+          ),
+          GMScreen.create(
+            [
+              {
+                campaignId: campaign._id,
+                name: 'General',
+                tabOrder: 0,
+                createdBy: dbUser._id,
+              },
+            ],
+            { session: mongoSession }
+          ),
+        ]);
 
-          return campaign;
-        })) as CampaignResult;
-      } finally {
-        await mongoSession.endSession();
-      }
+        // Sync User.campaigns array
+        await User.updateOne(
+          { _id: dbUser._id },
+          {
+            $push: {
+              campaigns: { campaignId: campaign._id, joinedAt: new Date(), status: 'active' },
+            },
+          },
+          { session: mongoSession }
+        );
 
-      serverCaptureEvent(user.id, 'campaign_created', {
-        campaign_id: String(result._id),
-        campaign_name: result.name,
-        has_image: imagePath !== null,
-        has_schedule: !!(schedFreq || schedDay || schedTime || schedTz),
-      });
-
-      return {
-        success: true,
-        campaignId: String(result._id),
-        inviteCode: result.inviteCode,
-      };
-    } catch (e) {
-      serverCaptureException(e, user?.id, { action: 'createCampaign' });
-      throw e;
+        return campaign;
+      })) as CampaignResult;
+    } finally {
+      await mongoSession.endSession();
     }
-  });
 
-export const updateCampaign = createServerFn({ method: 'POST' })
-  .inputValidator(updateCampaignInputSchema)
-  .handler(async ({ data }) => {
-    const user = await getSession();
-    try {
-      if (!user) throw new Error('Not authenticated');
+    serverCaptureEvent(user.id, 'campaign_created', {
+      campaign_id: String(result._id),
+      campaign_name: result.name,
+      has_image: imagePath !== null,
+      has_schedule: !!(schedFreq || schedDay || schedTime || schedTz),
+    });
 
-      await connectDB();
-      if (!isDBConnected()) throw new Error('Database not available');
+    return {
+      success: true,
+      campaignId: String(result._id),
+      inviteCode: result.inviteCode,
+    };
+  } catch (e) {
+    serverCaptureException(e, user?.id, { action: 'createCampaign' });
+    throw e;
+  }
+};
 
-      const dbUser = await User.findOne({ providerId: user.id });
-      if (!dbUser) throw new Error('User not found');
+export const updateCampaign = async ({
+  data,
+}: {
+  data: z.infer<typeof updateCampaignInputSchema>;
+}) => {
+  const user = await getSession();
+  try {
+    if (!user) throw new Error('Not authenticated');
 
-      const campaign = await Campaign.findById(data.id);
-      if (!campaign) throw new Error('Campaign not found');
-      if (String(campaign.gameMasterId) !== String(dbUser._id)) throw new Error('Forbidden');
+    await connectDB();
+    if (!isDBConnected()) throw new Error('Database not available');
 
-      const {
-        name,
-        description,
-        schedFreq,
-        schedDay,
-        schedTime,
-        schedTz,
-        links,
-        maxPlayers,
-        imageData,
-        imageMime,
-        imageName,
-        imagePath: imagePathInput,
-      } = data;
+    const dbUser = await User.findOne({ providerId: user.id });
+    if (!dbUser) throw new Error('User not found');
 
-      if (!name.trim()) throw new Error('Campaign name is required');
+    const campaign = await Campaign.findById(data.id);
+    if (!campaign) throw new Error('Campaign not found');
+    if (String(campaign.gameMasterId) !== String(dbUser._id)) throw new Error('Forbidden');
 
-      campaign.name = name.trim();
-      campaign.description = description.trim();
-      campaign.schedule = {
-        frequency: schedFreq ?? null,
-        dayOfWeek: schedDay ?? null,
-        time: schedTime ?? null,
-        timezone: schedTz ?? null,
-      };
-      campaign.links = links ?? [];
-      campaign.maxPlayers = parseMaxPlayers(maxPlayers);
-      campaign.updatedAt = new Date();
+    const {
+      name,
+      description,
+      schedFreq,
+      schedDay,
+      schedTime,
+      schedTz,
+      links,
+      maxPlayers,
+      imageData,
+      imageMime,
+      imageName,
+      imagePath: imagePathInput,
+    } = data;
 
-      if (imagePathInput) {
-        // Direct upload path: validate the URL origin matches our CDN
-        const cdnUrl = process.env.CDN_URL;
-        if (!cdnUrl) throw new Error('Invalid image path');
-        try {
-          const cdnOrigin = new URL(cdnUrl);
-          const imageUrl = new URL(imagePathInput);
-          if (imageUrl.origin !== cdnOrigin.origin) throw new Error('Invalid image path');
-          if (!imageUrl.pathname.startsWith('/uploads/')) throw new Error('Invalid image path');
-        } catch {
-          throw new Error('Invalid image path');
-        }
-        campaign.imagePath = imagePathInput;
-      } else if (imageData && imageMime && imageName) {
-        // Local dev fallback: base64 → save via server
-        if (imageData.length > MAX_IMAGE_BASE64_LENGTH) {
-          throw new Error('Image must be under 3MB after compression');
-        }
-        const buffer = Buffer.from(imageData, 'base64');
-        const file = new File([buffer], imageName, { type: imageMime });
-        campaign.imagePath = await saveUploadedFile(file, 'uploads/campaigns');
+    if (!name.trim()) throw new Error('Campaign name is required');
+
+    campaign.name = name.trim();
+    campaign.description = description.trim();
+    campaign.schedule = {
+      frequency: schedFreq ?? null,
+      dayOfWeek: schedDay ?? null,
+      time: schedTime ?? null,
+      timezone: schedTz ?? null,
+    };
+    campaign.links = links ?? [];
+    campaign.maxPlayers = parseMaxPlayers(maxPlayers);
+    campaign.updatedAt = new Date();
+
+    if (imagePathInput) {
+      // Direct upload path: validate the URL origin matches our CDN
+      const cdnUrl = process.env.CDN_URL;
+      if (!cdnUrl) throw new Error('Invalid image path');
+      try {
+        const cdnOrigin = new URL(cdnUrl);
+        const imageUrl = new URL(imagePathInput);
+        if (imageUrl.origin !== cdnOrigin.origin) throw new Error('Invalid image path');
+        if (!imageUrl.pathname.startsWith('/uploads/')) throw new Error('Invalid image path');
+      } catch {
+        throw new Error('Invalid image path');
       }
-
-      await campaign.save();
-      serverCaptureEvent(user.id, 'campaign_updated', { campaign_id: data.id });
-      return { success: true, campaignId: String(campaign._id) };
-    } catch (e) {
-      serverCaptureException(e, user?.id, { action: 'updateCampaign', campaignId: data.id });
-      throw e;
+      campaign.imagePath = imagePathInput;
+    } else if (imageData && imageMime && imageName) {
+      // Local dev fallback: base64 → save via server
+      if (imageData.length > MAX_IMAGE_BASE64_LENGTH) {
+        throw new Error('Image must be under 3MB after compression');
+      }
+      const buffer = Buffer.from(imageData, 'base64');
+      const file = new File([buffer], imageName, { type: imageMime });
+      campaign.imagePath = await saveUploadedFile(file, 'uploads/campaigns');
     }
-  });
+
+    await campaign.save();
+    serverCaptureEvent(user.id, 'campaign_updated', { campaign_id: data.id });
+    return { success: true, campaignId: String(campaign._id) };
+  } catch (e) {
+    serverCaptureException(e, user?.id, { action: 'updateCampaign', campaignId: data.id });
+    throw e;
+  }
+};
 
 /** @deprecated Use completeJoinWizard in players.ts instead. Kept for backwards compatibility. */
-export const joinCampaign = createServerFn({ method: 'POST' })
-  .inputValidator(joinCampaignSchema)
-  .handler(async ({ data }) => {
-    const user = await getSession();
-    try {
-      if (!user) throw new Error('Not authenticated');
+export const joinCampaign = async ({ data }: { data: z.infer<typeof joinCampaignSchema> }) => {
+  const user = await getSession();
+  try {
+    if (!user) throw new Error('Not authenticated');
 
-      await connectDB();
-      if (!isDBConnected()) throw new Error('Database not available');
+    await connectDB();
+    if (!isDBConnected()) throw new Error('Database not available');
 
-      const dbUser = await User.findOne({ providerId: user.id });
-      if (!dbUser) throw new Error('User not found');
+    const dbUser = await User.findOne({ providerId: user.id });
+    if (!dbUser) throw new Error('User not found');
 
-      const normalizedInviteCode = data.inviteCode.trim().toUpperCase();
-      const campaign = await Campaign.findOne({ inviteCode: normalizedInviteCode });
-      if (!campaign) throw new Error('Invalid invite code');
-      if (campaign.status !== 'active') throw new Error('Campaign is not active');
+    const normalizedInviteCode = data.inviteCode.trim().toUpperCase();
+    const campaign = await Campaign.findOne({ inviteCode: normalizedInviteCode });
+    if (!campaign) throw new Error('Invalid invite code');
+    if (campaign.status !== 'active') throw new Error('Campaign is not active');
 
-      // Treat GM as implicit member (consistent with getCampaign)
-      const alreadyMember =
-        (campaign.members ?? []).some(
-          (m: { userId: unknown }) => String(m.userId) === String(dbUser._id)
-        ) || String(campaign.gameMasterId) === String(dbUser._id);
-      if (alreadyMember) throw new Error('Already a member of this campaign');
+    // Treat GM as implicit member (consistent with getCampaign)
+    const alreadyMember =
+      (campaign.members ?? []).some(
+        (m: { userId: unknown }) => String(m.userId) === String(dbUser._id)
+      ) || String(campaign.gameMasterId) === String(dbUser._id);
+    if (alreadyMember) throw new Error('Already a member of this campaign');
 
-      const now = new Date();
+    const now = new Date();
 
-      const updatedCampaign = await Campaign.findOneAndUpdate(
-        {
-          _id: campaign._id,
-          status: 'active',
-          'members.userId': { $ne: dbUser._id },
-          $expr: {
-            $lt: [
-              {
-                $size: {
-                  $filter: {
-                    input: { $ifNull: ['$members', []] },
-                    as: 'm',
-                    cond: { $eq: ['$$m.role', 'player'] },
-                  },
+    const updatedCampaign = await Campaign.findOneAndUpdate(
+      {
+        _id: campaign._id,
+        status: 'active',
+        'members.userId': { $ne: dbUser._id },
+        $expr: {
+          $lt: [
+            {
+              $size: {
+                $filter: {
+                  input: { $ifNull: ['$members', []] },
+                  as: 'm',
+                  cond: { $eq: ['$$m.role', 'player'] },
                 },
               },
-              { $ifNull: ['$maxPlayers', 4] },
-            ],
-          },
+            },
+            { $ifNull: ['$maxPlayers', 4] },
+          ],
         },
-        {
-          $addToSet: { members: { userId: dbUser._id, role: 'player', joinedAt: now } },
-        },
-        {
-          new: true,
-        }
-      );
-
-      if (!updatedCampaign) {
-        throw new Error('Campaign is full');
+      },
+      {
+        $addToSet: { members: { userId: dbUser._id, role: 'player', joinedAt: now } },
+      },
+      {
+        new: true,
       }
+    );
 
-      await User.updateOne(
-        { _id: dbUser._id },
-        {
-          $addToSet: {
-            campaigns: { campaignId: updatedCampaign._id, status: 'active', joinedAt: now },
-          },
-        }
-      );
+    if (!updatedCampaign) {
+      throw new Error('Campaign is full');
+    }
 
-      // Create placeholder Player document (can be edited later)
-      const displayName = [
-        dbUser.firstName as string | undefined,
-        dbUser.lastName as string | undefined,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .trim();
-      await Player.updateOne(
-        {
+    await User.updateOne(
+      { _id: dbUser._id },
+      {
+        $addToSet: {
+          campaigns: { campaignId: updatedCampaign._id, status: 'active', joinedAt: now },
+        },
+      }
+    );
+
+    // Create placeholder Player document (can be edited later)
+    const displayName = [
+      dbUser.firstName as string | undefined,
+      dbUser.lastName as string | undefined,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    await Player.updateOne(
+      {
+        campaignId: updatedCampaign._id,
+        userId: dbUser._id,
+      },
+      {
+        $setOnInsert: {
           campaignId: updatedCampaign._id,
           userId: dbUser._id,
+          characterName: displayName || 'Adventurer',
+          characterClass: 'Adventurer',
+          joinedAt: now,
         },
-        {
-          $setOnInsert: {
-            campaignId: updatedCampaign._id,
-            userId: dbUser._id,
-            characterName: displayName || 'Adventurer',
-            characterClass: 'Adventurer',
-            joinedAt: now,
-          },
-        },
-        { upsert: true }
-      );
+      },
+      { upsert: true }
+    );
 
-      serverCaptureEvent(user.id, 'campaign_joined', { campaign_id: String(updatedCampaign._id) });
+    serverCaptureEvent(user.id, 'campaign_joined', { campaign_id: String(updatedCampaign._id) });
 
-      return { success: true, campaignId: String(updatedCampaign._id) };
-    } catch (e) {
-      serverCaptureException(e, user?.id, { action: 'joinCampaign' });
-      throw e;
-    }
-  });
+    return { success: true, campaignId: String(updatedCampaign._id) };
+  } catch (e) {
+    serverCaptureException(e, user?.id, { action: 'joinCampaign' });
+    throw e;
+  }
+};
 
-export const activateSession = createServerFn({ method: 'POST' })
-  .inputValidator(activateSessionSchema)
-  .handler(async ({ data }) => {
-    const user = await getSession();
+export const activateSession = async ({
+  data,
+}: {
+  data: z.infer<typeof activateSessionSchema>;
+}) => {
+  const user = await getSession();
+  try {
+    if (!user) throw new Error('Not authenticated');
+
+    await connectDB();
+    if (!isDBConnected()) throw new Error('Database not available');
+
+    const dbUser = await User.findOne({ providerId: user.id });
+    if (!dbUser) throw new Error('User not found');
+
+    const campaign = await Campaign.findById(data.campaignId);
+    if (!campaign) throw new Error('Campaign not found');
+    if (String(campaign.gameMasterId) !== String(dbUser._id)) throw new Error('Forbidden');
+
+    const mongoSession = await mongoose.startSession();
     try {
-      if (!user) throw new Error('Not authenticated');
+      await mongoSession.withTransaction(async () => {
+        const currentActive = await Session.findOne({
+          campaignId: data.campaignId,
+          status: 'active',
+        }).session(mongoSession);
 
-      await connectDB();
-      if (!isDBConnected()) throw new Error('Database not available');
+        // If the target is already the active session, no-op
+        if (currentActive && String(currentActive._id) === data.sessionId) {
+          return;
+        }
 
-      const dbUser = await User.findOne({ providerId: user.id });
-      if (!dbUser) throw new Error('User not found');
+        // Verify target session exists and belongs to this campaign
+        const targetSession = await Session.findOne({
+          _id: data.sessionId,
+          campaignId: data.campaignId,
+        }).session(mongoSession);
+        if (!targetSession) throw new Error('Session not found');
 
-      const campaign = await Campaign.findById(data.campaignId);
-      if (!campaign) throw new Error('Campaign not found');
-      if (String(campaign.gameMasterId) !== String(dbUser._id)) throw new Error('Forbidden');
+        const now = new Date();
 
-      const mongoSession = await mongoose.startSession();
-      try {
-        await mongoSession.withTransaction(async () => {
-          const currentActive = await Session.findOne({
-            campaignId: data.campaignId,
-            status: 'active',
-          }).session(mongoSession);
-
-          // If the target is already the active session, no-op
-          if (currentActive && String(currentActive._id) === data.sessionId) {
-            return;
-          }
-
-          // Verify target session exists and belongs to this campaign
-          const targetSession = await Session.findOne({
-            _id: data.sessionId,
-            campaignId: data.campaignId,
-          }).session(mongoSession);
-          if (!targetSession) throw new Error('Session not found');
-
-          const now = new Date();
-
-          // Deactivate the currently active session
-          if (currentActive) {
-            const endDate = data.endDate ? new Date(data.endDate) : now;
-            await Session.updateOne(
-              { _id: currentActive._id },
-              { $set: { status: 'completed', endDate, updatedAt: now } },
-              { session: mongoSession }
-            );
-          }
-
-          // Activate the target session
+        // Deactivate the currently active session
+        if (currentActive) {
+          const endDate = data.endDate ? new Date(data.endDate) : now;
           await Session.updateOne(
-            { _id: data.sessionId, campaignId: data.campaignId },
-            { $set: { status: 'active', updatedAt: now } },
+            { _id: currentActive._id },
+            { $set: { status: 'completed', endDate, updatedAt: now } },
             { session: mongoSession }
           );
-        });
-      } finally {
-        await mongoSession.endSession();
-      }
+        }
 
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, user?.id, {
-        action: 'activateSession',
-        campaignId: data.campaignId,
-        sessionId: data.sessionId,
+        // Activate the target session
+        await Session.updateOne(
+          { _id: data.sessionId, campaignId: data.campaignId },
+          { $set: { status: 'active', updatedAt: now } },
+          { session: mongoSession }
+        );
       });
-      throw e;
+    } finally {
+      await mongoSession.endSession();
     }
-  });
+
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, user?.id, {
+      action: 'activateSession',
+      campaignId: data.campaignId,
+      sessionId: data.sessionId,
+    });
+    throw e;
+  }
+};

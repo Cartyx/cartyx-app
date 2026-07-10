@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/react-start';
+import { z } from 'zod';
 import mongoose from 'mongoose';
 import { getSession } from '../session';
 import { connectDB, isDBConnected } from '../db/connection';
@@ -215,23 +215,331 @@ async function requireCampaignGM(
 
 export { listTabletopScreensSchema };
 
-export const listTabletopScreens = createServerFn({ method: 'GET' })
-  .inputValidator(listTabletopScreensSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
+export const listTabletopScreens = async ({
+  data,
+}: {
+  data: z.infer<typeof listTabletopScreensSchema>;
+}) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+
+    const docs = await TabletopScreen.find(
+      { campaignId: data.campaignId },
+      '_id campaignId name tabOrder mode gridStyle gridSize gridVisible gridScale createdBy createdAt updatedAt'
+    )
+      .sort({ tabOrder: 1 })
+      .lean();
+
+    return (
+      docs as Array<{
+        _id: unknown;
+        campaignId: unknown;
+        name?: string;
+        tabOrder?: number;
+        mode?: string;
+        gridStyle?: string;
+        gridSize?: number;
+        gridVisible?: boolean;
+        gridScale?: number;
+        createdBy: unknown;
+        createdAt?: Date;
+        updatedAt?: Date;
+      }>
+    ).map(serializeTabletopScreen);
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'listTabletopScreens',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// createTabletopScreen
+// ---------------------------------------------------------------------------
+
+export { createTabletopScreenSchema };
+
+const MAX_TAB_ORDER_RETRIES = 3;
+
+export const createTabletopScreen = async ({
+  data,
+}: {
+  data: z.infer<typeof createTabletopScreenSchema>;
+}) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
+
+    let doc: {
+      _id: unknown;
+      campaignId: unknown;
+      name?: string;
+      tabOrder?: number;
+      mode?: string;
+      gridStyle?: string;
+      gridSize?: number;
+      gridVisible?: boolean;
+      gridScale?: number;
+      createdBy: unknown;
+      createdAt?: Date;
+      updatedAt?: Date;
+    };
+
+    for (let attempt = 0; attempt < MAX_TAB_ORDER_RETRIES; attempt++) {
+      const mongoSession = await mongoose.startSession();
+      try {
+        doc = (await mongoSession.withTransaction(async () => {
+          const last = (await TabletopScreen.findOne({ campaignId: data.campaignId })
+            .sort({ tabOrder: -1 })
+            .select('tabOrder')
+            .session(mongoSession)
+            .lean()) as { tabOrder?: number } | null;
+
+          const nextOrder = (last?.tabOrder ?? -1) + 1;
+
+          const now = new Date();
+          const createdDocs = (await TabletopScreen.create(
+            [
+              {
+                campaignId: data.campaignId,
+                name: data.name.trim(),
+                tabOrder: nextOrder,
+                createdBy: gm.userId,
+                createdAt: now,
+                updatedAt: now,
+              },
+            ],
+            { session: mongoSession }
+          )) as unknown as unknown[];
+          const created = createdDocs[0];
+
+          return created;
+        })) as typeof doc;
+      } catch (e) {
+        if (isDuplicateKeyError(e, 'tabOrder')) {
+          continue;
+        }
+        throw e;
+      } finally {
+        await mongoSession.endSession();
+      }
+
+      serverCaptureEvent(sessionUserId, 'tabletop_screen_created', {
+        campaign_id: data.campaignId,
+        screen_id: String(doc._id),
+      });
+
+      return { success: true, screen: serializeTabletopScreen(doc) };
+    }
+
+    const exhaustionError = new Error('Failed to allocate tabOrder after retries');
+    serverCaptureException(exhaustionError, sessionUserId, {
+      action: 'createTabletopScreen',
+      campaignId: data.campaignId,
+      retries: MAX_TAB_ORDER_RETRIES,
+    });
+    throw new AlreadyReportedError(
+      'Could not create the screen due to a conflict. Please try again.'
+    );
+  } catch (e) {
+    if (isDuplicateKeyError(e, 'name')) {
+      throw new Error('A screen with that name already exists in this campaign');
+    }
+    if (!(e instanceof AlreadyReportedError)) {
+      serverCaptureException(e, sessionUserId, {
+        action: 'createTabletopScreen',
+        campaignId: data.campaignId,
+      });
+    }
+    throw e;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// getTabletopScreen — fetch a single screen with hydrated windows
+// ---------------------------------------------------------------------------
+
+export { getTabletopScreenSchema };
+
+export const getTabletopScreen = async ({
+  data,
+}: {
+  data: z.infer<typeof getTabletopScreenSchema>;
+}): Promise<TabletopScreenDetailData> => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+
+    const doc = (await TabletopScreen.findOne({
+      _id: data.id,
+      campaignId: data.campaignId,
+    }).lean()) as {
+      _id: unknown;
+      campaignId: unknown;
+      name?: string;
+      tabOrder?: number;
+      mode?: string;
+      gridStyle?: string;
+      gridSize?: number;
+      gridVisible?: boolean;
+      gridScale?: number;
+      createdBy: unknown;
+      createdAt?: Date;
+      updatedAt?: Date;
+      windows?: Array<{
+        _id: unknown;
+        collection?: string;
+        documentId: unknown;
+        state?: string;
+        x?: number | null;
+        y?: number | null;
+        width?: number | null;
+        height?: number | null;
+        zIndex?: number;
+      }>;
+    } | null;
+
+    if (!doc) throw new Error('Screen not found');
+
+    // Monsters are GM-only — players never see monster windows on a shared tab.
+    const rawWindows = (doc.windows ?? []).filter(
+      (w) => member.role === 'gm' || w.collection !== 'monster'
+    );
+    const windows = rawWindows.map(serializeWindow);
+
+    // Collect all refs from windows
+    const refs: Array<{ collection: string; documentId: string }> = [];
+    for (const w of windows) {
+      refs.push({ collection: w.collection, documentId: w.documentId });
+    }
+
+    const hydrated = await hydrateRefs(refs, data.campaignId, {
+      isGM: member.role === 'gm',
+    });
+
+    return {
+      ...serializeTabletopScreen(doc),
+      windows,
+      hydrated,
+    };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'getTabletopScreen',
+      screenId: data.id,
+    });
+    throw e;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// renameTabletopScreen
+// ---------------------------------------------------------------------------
+
+export { renameTabletopScreenSchema };
+
+export const renameTabletopScreen = async ({
+  data,
+}: {
+  data: z.infer<typeof renameTabletopScreenSchema>;
+}) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
+
+    const screen = await TabletopScreen.findById(data.id);
+    if (!screen) throw new Error('Screen not found');
+    if (String(screen.campaignId) !== data.campaignId) throw new Error('Forbidden');
+
+    screen.name = data.name.trim();
+    screen.updatedAt = new Date();
+    await screen.save();
+
+    serverCaptureEvent(sessionUserId, 'tabletop_screen_renamed', {
+      campaign_id: data.campaignId,
+      screen_id: data.id,
+    });
+
+    return { success: true, screen: serializeTabletopScreen(screen) };
+  } catch (e) {
+    if ((e as { code?: number })?.code === 11000) {
+      throw new Error('A screen with that name already exists in this campaign');
+    }
+    serverCaptureException(e, sessionUserId, {
+      action: 'renameTabletopScreen',
+      screenId: data.id,
+    });
+    throw e;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// deleteTabletopScreen
+// ---------------------------------------------------------------------------
+
+export { deleteTabletopScreenSchema };
+
+export const deleteTabletopScreen = async ({
+  data,
+}: {
+  data: z.infer<typeof deleteTabletopScreenSchema>;
+}) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
+
+    // Use a transaction so the count-check + delete is atomic
+    const mongoSession = await mongoose.startSession();
+    let deletedTabOrder: number;
     try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
+      deletedTabOrder = await mongoSession.withTransaction(async () => {
+        const screen = await TabletopScreen.findOne({
+          _id: data.id,
+          campaignId: data.campaignId,
+        }).session(mongoSession);
+        if (!screen) throw new Error('Screen not found');
 
-      const docs = await TabletopScreen.find(
-        { campaignId: data.campaignId },
-        '_id campaignId name tabOrder mode gridStyle gridSize gridVisible gridScale createdBy createdAt updatedAt'
-      )
-        .sort({ tabOrder: 1 })
-        .lean();
+        const count = await TabletopScreen.countDocuments({
+          campaignId: data.campaignId,
+        }).session(mongoSession);
+        if (count <= 1) throw new Error('Cannot delete the last screen');
 
-      return (
-        docs as Array<{
+        const tabOrder = typeof screen.tabOrder === 'number' ? screen.tabOrder : 0;
+        await TabletopScreen.deleteOne({ _id: data.id, campaignId: data.campaignId }).session(
+          mongoSession
+        );
+
+        return tabOrder;
+      });
+    } finally {
+      await mongoSession.endSession();
+    }
+
+    // Return the remaining screens so the client can resolve the next active screen
+    const remaining = await TabletopScreen.find(
+      { campaignId: data.campaignId },
+      '_id campaignId name tabOrder mode gridStyle gridSize gridVisible gridScale createdBy createdAt updatedAt'
+    )
+      .sort({ tabOrder: 1 })
+      .lean();
+
+    serverCaptureEvent(sessionUserId, 'tabletop_screen_deleted', {
+      campaign_id: data.campaignId,
+      screen_id: data.id,
+    });
+
+    return {
+      success: true,
+      deletedTabOrder,
+      remaining: (
+        remaining as Array<{
           _id: unknown;
           campaignId: unknown;
           name?: string;
@@ -245,147 +553,203 @@ export const listTabletopScreens = createServerFn({ method: 'GET' })
           createdAt?: Date;
           updatedAt?: Date;
         }>
-      ).map(serializeTabletopScreen);
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'listTabletopScreens',
-        campaignId: data.campaignId,
-      });
-      throw e;
+      ).map(serializeTabletopScreen),
+    };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'deleteTabletopScreen',
+      screenId: data.id,
+    });
+    throw e;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// updateTabletopScreenSettings — partial update of grid/mode settings
+// ---------------------------------------------------------------------------
+
+export { updateTabletopScreenSettingsSchema };
+
+export const updateTabletopScreenSettings = async ({
+  data,
+}: {
+  data: z.infer<typeof updateTabletopScreenSettingsSchema>;
+}) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
+
+    // Build $set for only the fields that were provided
+    const setFields: Record<string, unknown> = { updatedAt: new Date() };
+    if (data.gridStyle !== undefined) setFields.gridStyle = data.gridStyle;
+    if (data.gridSize !== undefined) setFields.gridSize = data.gridSize;
+    if (data.gridVisible !== undefined) setFields.gridVisible = data.gridVisible;
+    if (data.gridScale !== undefined) setFields.gridScale = data.gridScale;
+    if (data.mode !== undefined) setFields.mode = data.mode;
+
+    const result = await TabletopScreen.updateOne(
+      { _id: data.id, campaignId: data.campaignId },
+      { $set: setFields }
+    );
+
+    if (result.matchedCount === 0) {
+      throw new Error('Screen not found');
     }
-  });
+
+    serverCaptureEvent(sessionUserId, 'tabletop_screen_settings_updated', {
+      campaign_id: data.campaignId,
+      screen_id: data.id,
+    });
+
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'updateTabletopScreenSettings',
+      screenId: data.id,
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
-// createTabletopScreen
+// openTabletopWindow — open a wiki ref as a window (or focus existing dup)
 // ---------------------------------------------------------------------------
 
-export { createTabletopScreenSchema };
+/**
+ * **Duplicate rule:** If a window with the same `collection + documentId` already
+ * exists on this screen, the existing window is focused (state -> 'open', zIndex
+ * bumped to max + 1) and returned with `existed: true`.  No second window is
+ * created for the same ref — enforced atomically via a conditional
+ * `updateOne` filter (`$nor: [{ windows: { $elemMatch: {...} } }]`) so that
+ * two concurrent calls for the same ref cannot both create a window.
+ */
 
-const MAX_TAB_ORDER_RETRIES = 3;
+export { openTabletopWindowSchema };
 
-export const createTabletopScreen = createServerFn({ method: 'POST' })
-  .inputValidator(createTabletopScreenSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+/**
+ * Focuses an already-open (or just-raced-open) window sub-doc: bumps its
+ * zIndex above the current max and sets state back to 'open', then persists
+ * via `.save()`. Shared by the "already existed on read" path and the
+ * "lost the atomic create race" fallback path in `openTabletopWindow`.
+ */
+async function focusWindowAndSave(
+  screen: { updatedAt: Date; save: () => Promise<unknown> },
+  windows: Array<{ zIndex?: number }>,
+  existing: { _id: unknown; state?: string; zIndex?: number }
+) {
+  const maxZ = windows.reduce(
+    (max: number, w: { zIndex?: number }) => Math.max(max, w.zIndex ?? 0),
+    0
+  );
+  existing.state = 'open';
+  existing.zIndex = maxZ + 1;
+  screen.updatedAt = new Date();
+  await screen.save();
+  return existing;
+}
 
-      let doc: {
-        _id: unknown;
-        campaignId: unknown;
-        name?: string;
-        tabOrder?: number;
-        mode?: string;
-        gridStyle?: string;
-        gridSize?: number;
-        gridVisible?: boolean;
-        gridScale?: number;
-        createdBy: unknown;
-        createdAt?: Date;
-        updatedAt?: Date;
-      };
+export const openTabletopWindow = async ({
+  data,
+}: {
+  data: z.infer<typeof openTabletopWindowSchema>;
+}) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      for (let attempt = 0; attempt < MAX_TAB_ORDER_RETRIES; attempt++) {
-        const mongoSession = await mongoose.startSession();
-        try {
-          doc = (await mongoSession.withTransaction(async () => {
-            const last = (await TabletopScreen.findOne({ campaignId: data.campaignId })
-              .sort({ tabOrder: -1 })
-              .select('tabOrder')
-              .session(mongoSession)
-              .lean()) as { tabOrder?: number } | null;
+    const screen = await TabletopScreen.findOne({
+      _id: data.screenId,
+      campaignId: data.campaignId,
+    });
+    if (!screen) throw new Error('Screen not found');
 
-            const nextOrder = (last?.tabOrder ?? -1) + 1;
-
-            const now = new Date();
-            const createdDocs = (await TabletopScreen.create(
-              [
-                {
-                  campaignId: data.campaignId,
-                  name: data.name.trim(),
-                  tabOrder: nextOrder,
-                  createdBy: gm.userId,
-                  createdAt: now,
-                  updatedAt: now,
-                },
-              ],
-              { session: mongoSession }
-            )) as unknown as unknown[];
-            const created = createdDocs[0];
-
-            return created;
-          })) as typeof doc;
-        } catch (e) {
-          if (isDuplicateKeyError(e, 'tabOrder')) {
-            continue;
-          }
-          throw e;
-        } finally {
-          await mongoSession.endSession();
-        }
-
-        serverCaptureEvent(sessionUserId, 'tabletop_screen_created', {
-          campaign_id: data.campaignId,
-          screen_id: String(doc._id),
-        });
-
-        return { success: true, screen: serializeTabletopScreen(doc) };
-      }
-
-      const exhaustionError = new Error('Failed to allocate tabOrder after retries');
-      serverCaptureException(exhaustionError, sessionUserId, {
-        action: 'createTabletopScreen',
-        campaignId: data.campaignId,
-        retries: MAX_TAB_ORDER_RETRIES,
-      });
-      throw new AlreadyReportedError(
-        'Could not create the screen due to a conflict. Please try again.'
-      );
-    } catch (e) {
-      if (isDuplicateKeyError(e, 'name')) {
-        throw new Error('A screen with that name already exists in this campaign');
-      }
-      if (!(e instanceof AlreadyReportedError)) {
-        serverCaptureException(e, sessionUserId, {
-          action: 'createTabletopScreen',
-          campaignId: data.campaignId,
-        });
-      }
-      throw e;
+    if (!screen.windows) {
+      screen.windows = [];
     }
-  });
+    const windows = screen.windows;
 
-// ---------------------------------------------------------------------------
-// getTabletopScreen — fetch a single screen with hydrated windows
-// ---------------------------------------------------------------------------
+    // Check for existing window with same ref
+    const existing = windows.find(
+      (w: { collection?: string; documentId?: unknown }) =>
+        w.collection === data.collection && String(w.documentId) === data.documentId
+    );
 
-export { getTabletopScreenSchema };
+    if (existing) {
+      await focusWindowAndSave(screen, windows, existing);
 
-export const getTabletopScreen = createServerFn({ method: 'GET' })
-  .inputValidator(getTabletopScreenSchema)
-  .handler(async ({ data }): Promise<TabletopScreenDetailData> => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
+      serverCaptureEvent(sessionUserId, 'tabletop_window_focused', {
+        campaign_id: data.campaignId,
+        screen_id: data.screenId,
+        window_id: String(existing._id),
+      });
 
-      const doc = (await TabletopScreen.findOne({
-        _id: data.id,
+      return { success: true, window: serializeWindow(existing), existed: true };
+    }
+
+    // Enforce cap — fast-path only. Like the `existing` check above, this
+    // reads a possibly-stale snapshot; the authoritative cap enforcement is
+    // the $expr size condition in the atomic filter below.
+    if (windows.length >= TABLETOP_LIMITS.MAX_WINDOWS) {
+      throw new Error(`A screen cannot have more than ${TABLETOP_LIMITS.MAX_WINDOWS} windows`);
+    }
+
+    // Create new window
+    const maxZ = windows.reduce(
+      (max: number, w: { zIndex?: number }) => Math.max(max, w.zIndex ?? 0),
+      0
+    );
+    const newWindow = {
+      collection: data.collection,
+      documentId: data.documentId,
+      state: 'open' as const,
+      x: data.x ?? null,
+      y: data.y ?? null,
+      width: null,
+      height: null,
+      zIndex: maxZ + 1,
+    };
+
+    // Atomic conditional push — this is the fix for the create/create race:
+    // two concurrent calls can both pass the `existing` and cap checks above
+    // (both read the array before either write lands), but this filter is
+    // re-evaluated by Mongo against the *current* document at write time.
+    // The $nor clause rejects the push when a window for this ref already
+    // exists (dedupe); the $expr size clause rejects it when the array is
+    // already at the cap — needed because schema validators don't run on
+    // updateOne pushes, so without it two concurrent opens of *different*
+    // refs at length cap-1 would land cap+1 windows.
+    const pushResult = await TabletopScreen.updateOne(
+      {
+        _id: data.screenId,
         campaignId: data.campaignId,
-      }).lean()) as {
-        _id: unknown;
-        campaignId: unknown;
-        name?: string;
-        tabOrder?: number;
-        mode?: string;
-        gridStyle?: string;
-        gridSize?: number;
-        gridVisible?: boolean;
-        gridScale?: number;
-        createdBy: unknown;
-        createdAt?: Date;
-        updatedAt?: Date;
+        $nor: [
+          {
+            windows: {
+              $elemMatch: { collection: data.collection, documentId: data.documentId },
+            },
+          },
+        ],
+        // $ifNull guards legacy documents that predate the windows field —
+        // $size on a missing field errors inside $expr instead of not matching.
+        $expr: {
+          $lt: [{ $size: { $ifNull: ['$windows', []] } }, TABLETOP_LIMITS.MAX_WINDOWS],
+        },
+      },
+      {
+        $push: { windows: newWindow },
+        $set: { updatedAt: new Date() },
+      }
+    );
+
+    if (pushResult.modifiedCount > 0) {
+      // Re-fetch just the pushed sub-doc so we can return its Mongoose-assigned _id.
+      const refetched = (await TabletopScreen.findOne(
+        { _id: data.screenId, campaignId: data.campaignId },
+        { windows: { $elemMatch: { collection: data.collection, documentId: data.documentId } } }
+      ).lean()) as {
         windows?: Array<{
           _id: unknown;
           collection?: string;
@@ -398,291 +762,8 @@ export const getTabletopScreen = createServerFn({ method: 'GET' })
           zIndex?: number;
         }>;
       } | null;
-
-      if (!doc) throw new Error('Screen not found');
-
-      // Monsters are GM-only — players never see monster windows on a shared tab.
-      const rawWindows = (doc.windows ?? []).filter(
-        (w) => member.role === 'gm' || w.collection !== 'monster'
-      );
-      const windows = rawWindows.map(serializeWindow);
-
-      // Collect all refs from windows
-      const refs: Array<{ collection: string; documentId: string }> = [];
-      for (const w of windows) {
-        refs.push({ collection: w.collection, documentId: w.documentId });
-      }
-
-      const hydrated = await hydrateRefs(refs, data.campaignId);
-
-      return {
-        ...serializeTabletopScreen(doc),
-        windows,
-        hydrated,
-      };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'getTabletopScreen',
-        screenId: data.id,
-      });
-      throw e;
-    }
-  });
-
-// ---------------------------------------------------------------------------
-// renameTabletopScreen
-// ---------------------------------------------------------------------------
-
-export { renameTabletopScreenSchema };
-
-export const renameTabletopScreen = createServerFn({ method: 'POST' })
-  .inputValidator(renameTabletopScreenSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
-
-      const screen = await TabletopScreen.findById(data.id);
-      if (!screen) throw new Error('Screen not found');
-      if (String(screen.campaignId) !== data.campaignId) throw new Error('Forbidden');
-
-      screen.name = data.name.trim();
-      screen.updatedAt = new Date();
-      await screen.save();
-
-      serverCaptureEvent(sessionUserId, 'tabletop_screen_renamed', {
-        campaign_id: data.campaignId,
-        screen_id: data.id,
-      });
-
-      return { success: true, screen: serializeTabletopScreen(screen) };
-    } catch (e) {
-      if ((e as { code?: number })?.code === 11000) {
-        throw new Error('A screen with that name already exists in this campaign');
-      }
-      serverCaptureException(e, sessionUserId, {
-        action: 'renameTabletopScreen',
-        screenId: data.id,
-      });
-      throw e;
-    }
-  });
-
-// ---------------------------------------------------------------------------
-// deleteTabletopScreen
-// ---------------------------------------------------------------------------
-
-export { deleteTabletopScreenSchema };
-
-export const deleteTabletopScreen = createServerFn({ method: 'POST' })
-  .inputValidator(deleteTabletopScreenSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
-
-      // Use a transaction so the count-check + delete is atomic
-      const mongoSession = await mongoose.startSession();
-      let deletedTabOrder: number;
-      try {
-        deletedTabOrder = await mongoSession.withTransaction(async () => {
-          const screen = await TabletopScreen.findOne({
-            _id: data.id,
-            campaignId: data.campaignId,
-          }).session(mongoSession);
-          if (!screen) throw new Error('Screen not found');
-
-          const count = await TabletopScreen.countDocuments({
-            campaignId: data.campaignId,
-          }).session(mongoSession);
-          if (count <= 1) throw new Error('Cannot delete the last screen');
-
-          const tabOrder = typeof screen.tabOrder === 'number' ? screen.tabOrder : 0;
-          await TabletopScreen.deleteOne({ _id: data.id, campaignId: data.campaignId }).session(
-            mongoSession
-          );
-
-          return tabOrder;
-        });
-      } finally {
-        await mongoSession.endSession();
-      }
-
-      // Return the remaining screens so the client can resolve the next active screen
-      const remaining = await TabletopScreen.find(
-        { campaignId: data.campaignId },
-        '_id campaignId name tabOrder mode gridStyle gridSize gridVisible gridScale createdBy createdAt updatedAt'
-      )
-        .sort({ tabOrder: 1 })
-        .lean();
-
-      serverCaptureEvent(sessionUserId, 'tabletop_screen_deleted', {
-        campaign_id: data.campaignId,
-        screen_id: data.id,
-      });
-
-      return {
-        success: true,
-        deletedTabOrder,
-        remaining: (
-          remaining as Array<{
-            _id: unknown;
-            campaignId: unknown;
-            name?: string;
-            tabOrder?: number;
-            mode?: string;
-            gridStyle?: string;
-            gridSize?: number;
-            gridVisible?: boolean;
-            gridScale?: number;
-            createdBy: unknown;
-            createdAt?: Date;
-            updatedAt?: Date;
-          }>
-        ).map(serializeTabletopScreen),
-      };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'deleteTabletopScreen',
-        screenId: data.id,
-      });
-      throw e;
-    }
-  });
-
-// ---------------------------------------------------------------------------
-// updateTabletopScreenSettings — partial update of grid/mode settings
-// ---------------------------------------------------------------------------
-
-export { updateTabletopScreenSettingsSchema };
-
-export const updateTabletopScreenSettings = createServerFn({ method: 'POST' })
-  .inputValidator(updateTabletopScreenSettingsSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
-
-      // Build $set for only the fields that were provided
-      const setFields: Record<string, unknown> = { updatedAt: new Date() };
-      if (data.gridStyle !== undefined) setFields.gridStyle = data.gridStyle;
-      if (data.gridSize !== undefined) setFields.gridSize = data.gridSize;
-      if (data.gridVisible !== undefined) setFields.gridVisible = data.gridVisible;
-      if (data.gridScale !== undefined) setFields.gridScale = data.gridScale;
-      if (data.mode !== undefined) setFields.mode = data.mode;
-
-      const result = await TabletopScreen.updateOne(
-        { _id: data.id, campaignId: data.campaignId },
-        { $set: setFields }
-      );
-
-      if (result.matchedCount === 0) {
-        throw new Error('Screen not found');
-      }
-
-      serverCaptureEvent(sessionUserId, 'tabletop_screen_settings_updated', {
-        campaign_id: data.campaignId,
-        screen_id: data.id,
-      });
-
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'updateTabletopScreenSettings',
-        screenId: data.id,
-        campaignId: data.campaignId,
-      });
-      throw e;
-    }
-  });
-
-// ---------------------------------------------------------------------------
-// openTabletopWindow — open a wiki ref as a window (or focus existing dup)
-// ---------------------------------------------------------------------------
-
-/**
- * **Duplicate rule:** If a window with the same `collection + documentId` already
- * exists on this screen, the existing window is focused (state -> 'open', zIndex
- * bumped to max + 1) and returned with `existed: true`.  No second window is
- * created for the same ref.
- */
-
-export { openTabletopWindowSchema };
-
-export const openTabletopWindow = createServerFn({ method: 'POST' })
-  .inputValidator(openTabletopWindowSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
-
-      const screen = await TabletopScreen.findOne({
-        _id: data.screenId,
-        campaignId: data.campaignId,
-      });
-      if (!screen) throw new Error('Screen not found');
-
-      if (!screen.windows) {
-        screen.windows = [];
-      }
-      const windows = screen.windows;
-
-      // Check for existing window with same ref
-      const existing = windows.find(
-        (w: { collection?: string; documentId?: unknown }) =>
-          w.collection === data.collection && String(w.documentId) === data.documentId
-      );
-
-      if (existing) {
-        // Focus existing: set state to open, bump zIndex
-        const maxZ = windows.reduce(
-          (max: number, w: { zIndex?: number }) => Math.max(max, w.zIndex ?? 0),
-          0
-        );
-        existing.state = 'open';
-        existing.zIndex = maxZ + 1;
-        screen.updatedAt = new Date();
-        await screen.save();
-
-        serverCaptureEvent(sessionUserId, 'tabletop_window_focused', {
-          campaign_id: data.campaignId,
-          screen_id: data.screenId,
-          window_id: String(existing._id),
-        });
-
-        return { success: true, window: serializeWindow(existing), existed: true };
-      }
-
-      // Enforce cap
-      if (windows.length >= TABLETOP_LIMITS.MAX_WINDOWS) {
-        throw new Error(`A screen cannot have more than ${TABLETOP_LIMITS.MAX_WINDOWS} windows`);
-      }
-
-      // Create new window
-      const maxZ = windows.reduce(
-        (max: number, w: { zIndex?: number }) => Math.max(max, w.zIndex ?? 0),
-        0
-      );
-      const newWindow = {
-        collection: data.collection,
-        documentId: data.documentId,
-        state: 'open' as const,
-        x: data.x ?? null,
-        y: data.y ?? null,
-        width: null,
-        height: null,
-        zIndex: maxZ + 1,
-      };
-      windows.push(newWindow);
-      screen.updatedAt = new Date();
-      await screen.save();
-
-      // The pushed sub-doc now has an _id assigned by Mongoose
-      const created = windows[windows.length - 1];
+      const created = refetched?.windows?.[0];
+      if (!created) throw new Error('Window not found after creation');
 
       serverCaptureEvent(sessionUserId, 'tabletop_window_opened', {
         campaign_id: data.campaignId,
@@ -691,15 +772,48 @@ export const openTabletopWindow = createServerFn({ method: 'POST' })
       });
 
       return { success: true, window: serializeWindow(created), existed: false };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'openTabletopWindow',
-        screenId: data.screenId,
-        campaignId: data.campaignId,
-      });
-      throw e;
     }
-  });
+
+    // The filter didn't match: either another concurrent call created a
+    // window for this ref first (dedupe loss), or a concurrent open of a
+    // *different* ref filled the last cap slot ($expr loss), or the screen
+    // was deleted. Re-fetch canonical state to tell these apart: ref present
+    // → focus the winner; ref absent at cap → cap error; otherwise not found.
+    const refreshed = await TabletopScreen.findOne({
+      _id: data.screenId,
+      campaignId: data.campaignId,
+    });
+    if (!refreshed) throw new Error('Screen not found');
+    if (!refreshed.windows) refreshed.windows = [];
+    const race = refreshed.windows.find(
+      (w: { collection?: string; documentId?: unknown }) =>
+        w.collection === data.collection && String(w.documentId) === data.documentId
+    );
+    if (!race) {
+      if (refreshed.windows.length >= TABLETOP_LIMITS.MAX_WINDOWS) {
+        throw new Error(`A screen cannot have more than ${TABLETOP_LIMITS.MAX_WINDOWS} windows`);
+      }
+      throw new Error('Screen not found');
+    }
+
+    await focusWindowAndSave(refreshed, refreshed.windows, race);
+
+    serverCaptureEvent(sessionUserId, 'tabletop_window_focused', {
+      campaign_id: data.campaignId,
+      screen_id: data.screenId,
+      window_id: String(race._id),
+    });
+
+    return { success: true, window: serializeWindow(race), existed: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'openTabletopWindow',
+      screenId: data.screenId,
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // closeTabletopWindow — remove a window from a screen
@@ -707,56 +821,58 @@ export const openTabletopWindow = createServerFn({ method: 'POST' })
 
 export { closeTabletopWindowSchema };
 
-export const closeTabletopWindow = createServerFn({ method: 'POST' })
-  .inputValidator(closeTabletopWindowSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const gm = await requireCampaignGM(data.campaignId);
-      sessionUserId = gm.sessionUserId;
+export const closeTabletopWindow = async ({
+  data,
+}: {
+  data: z.infer<typeof closeTabletopWindowSchema>;
+}) => {
+  let sessionUserId: string | undefined;
+  try {
+    const gm = await requireCampaignGM(data.campaignId);
+    sessionUserId = gm.sessionUserId;
 
-      const result = await TabletopScreen.updateOne(
-        {
-          _id: data.screenId,
-          campaignId: data.campaignId,
-          'windows._id': data.windowId,
-        },
-        {
-          $pull: { windows: { _id: data.windowId } },
-          $set: { updatedAt: new Date() },
-        }
-      );
-
-      if (result.matchedCount === 0) {
-        // Distinguish screen-not-found from window-not-found
-        const screenExists = await TabletopScreen.countDocuments({
-          _id: data.screenId,
-          campaignId: data.campaignId,
-        });
-        if (screenExists === 0) {
-          throw new Error('Screen not found');
-        }
-        // Window wasn't present — true no-op
-        return { success: true };
-      }
-
-      serverCaptureEvent(sessionUserId, 'tabletop_window_closed', {
-        campaign_id: data.campaignId,
-        screen_id: data.screenId,
-        window_id: data.windowId,
-      });
-
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'closeTabletopWindow',
+    const result = await TabletopScreen.updateOne(
+      {
+        _id: data.screenId,
         campaignId: data.campaignId,
-        screenId: data.screenId,
-        windowId: data.windowId,
+        'windows._id': data.windowId,
+      },
+      {
+        $pull: { windows: { _id: data.windowId } },
+        $set: { updatedAt: new Date() },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      // Distinguish screen-not-found from window-not-found
+      const screenExists = await TabletopScreen.countDocuments({
+        _id: data.screenId,
+        campaignId: data.campaignId,
       });
-      throw e;
+      if (screenExists === 0) {
+        throw new Error('Screen not found');
+      }
+      // Window wasn't present — true no-op
+      return { success: true };
     }
-  });
+
+    serverCaptureEvent(sessionUserId, 'tabletop_window_closed', {
+      campaign_id: data.campaignId,
+      screen_id: data.screenId,
+      window_id: data.windowId,
+    });
+
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'closeTabletopWindow',
+      campaignId: data.campaignId,
+      screenId: data.screenId,
+      windowId: data.windowId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // getPlayerState — fetch the caller's player state for a campaign
@@ -764,49 +880,47 @@ export const closeTabletopWindow = createServerFn({ method: 'POST' })
 
 export { getPlayerStateSchema };
 
-export const getPlayerState = createServerFn({ method: 'GET' })
-  .inputValidator(getPlayerStateSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
+export const getPlayerState = async ({ data }: { data: z.infer<typeof getPlayerStateSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
 
-      const doc = (await TabletopPlayerState.findOne({
-        campaignId: data.campaignId,
-        userId: member.userId,
-      }).lean()) as {
-        _id: unknown;
-        campaignId: unknown;
-        userId: unknown;
-        activeScreenId?: unknown;
-        viewports?: Array<{
-          screenId: unknown;
-          zoom?: number;
-          panX?: number;
-          panY?: number;
-        }>;
-        windowOverrides?: Array<{
-          windowId?: string;
-          x?: number;
-          y?: number;
-          width?: number;
-          height?: number;
-          state?: string;
-        }>;
-      } | null;
+    const doc = (await TabletopPlayerState.findOne({
+      campaignId: data.campaignId,
+      userId: member.userId,
+    }).lean()) as {
+      _id: unknown;
+      campaignId: unknown;
+      userId: unknown;
+      activeScreenId?: unknown;
+      viewports?: Array<{
+        screenId: unknown;
+        zoom?: number;
+        panX?: number;
+        panY?: number;
+      }>;
+      windowOverrides?: Array<{
+        windowId?: string;
+        x?: number;
+        y?: number;
+        width?: number;
+        height?: number;
+        state?: string;
+      }>;
+    } | null;
 
-      if (!doc) return null;
+    if (!doc) return null;
 
-      return serializePlayerState(doc);
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'getPlayerState',
-        campaignId: data.campaignId,
-      });
-      throw e;
-    }
-  });
+    return serializePlayerState(doc);
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'getPlayerState',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // updatePlayerState — upsert the caller's player state
@@ -814,130 +928,63 @@ export const getPlayerState = createServerFn({ method: 'GET' })
 
 export { updatePlayerStateSchema };
 
-export const updatePlayerState = createServerFn({ method: 'POST' })
-  .inputValidator(updatePlayerStateSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
+export const updatePlayerState = async ({
+  data,
+}: {
+  data: z.infer<typeof updatePlayerStateSchema>;
+}) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
 
-      const setFields: Record<string, unknown> = {};
-      if (data.activeScreenId !== undefined) {
-        setFields.activeScreenId = data.activeScreenId;
-      }
+    const setFields: Record<string, unknown> = {};
+    if (data.activeScreenId !== undefined) {
+      setFields.activeScreenId = data.activeScreenId;
+    }
 
-      // Viewport upsert: replace the matching screenId entry or push new
-      if (data.viewport) {
-        const existing = await TabletopPlayerState.findOne({
-          campaignId: data.campaignId,
-          userId: member.userId,
-          'viewports.screenId': data.viewport.screenId,
-        });
+    // Viewport upsert: replace the matching screenId entry or push new
+    if (data.viewport) {
+      const existing = await TabletopPlayerState.findOne({
+        campaignId: data.campaignId,
+        userId: member.userId,
+        'viewports.screenId': data.viewport.screenId,
+      });
 
-        if (existing) {
-          // Update existing viewport entry
-          await TabletopPlayerState.updateOne(
-            {
-              campaignId: data.campaignId,
-              userId: member.userId,
-              'viewports.screenId': data.viewport.screenId,
+      if (existing) {
+        // Update existing viewport entry
+        await TabletopPlayerState.updateOne(
+          {
+            campaignId: data.campaignId,
+            userId: member.userId,
+            'viewports.screenId': data.viewport.screenId,
+          },
+          {
+            $set: {
+              'viewports.$.zoom': data.viewport.zoom,
+              'viewports.$.panX': data.viewport.panX,
+              'viewports.$.panY': data.viewport.panY,
+              ...setFields,
             },
-            {
-              $set: {
-                'viewports.$.zoom': data.viewport.zoom,
-                'viewports.$.panX': data.viewport.panX,
-                'viewports.$.panY': data.viewport.panY,
-                ...setFields,
-              },
-            },
-            { upsert: true }
-          );
-        } else {
-          // Push new viewport entry (or create the whole doc)
-          await TabletopPlayerState.updateOne(
-            {
-              campaignId: data.campaignId,
-              userId: member.userId,
-            },
-            {
-              $push: {
-                viewports: {
-                  screenId: data.viewport.screenId,
-                  zoom: data.viewport.zoom,
-                  panX: data.viewport.panX,
-                  panY: data.viewport.panY,
-                },
-              },
-              $set: setFields,
-              $setOnInsert: {
-                campaignId: data.campaignId,
-                userId: member.userId,
-              },
-            },
-            { upsert: true }
-          );
-        }
-      } else if (data.windowOverride) {
-        // Window override upsert: replace existing or push new
-        const existing = await TabletopPlayerState.findOne({
-          campaignId: data.campaignId,
-          userId: member.userId,
-          'windowOverrides.windowId': data.windowOverride.windowId,
-        });
-
-        if (existing) {
-          await TabletopPlayerState.updateOne(
-            {
-              campaignId: data.campaignId,
-              userId: member.userId,
-              'windowOverrides.windowId': data.windowOverride.windowId,
-            },
-            {
-              $set: {
-                'windowOverrides.$.x': data.windowOverride.x,
-                'windowOverrides.$.y': data.windowOverride.y,
-                'windowOverrides.$.width': data.windowOverride.width,
-                'windowOverrides.$.height': data.windowOverride.height,
-                'windowOverrides.$.state': data.windowOverride.state,
-                ...setFields,
-              },
-            }
-          );
-        } else {
-          await TabletopPlayerState.updateOne(
-            {
-              campaignId: data.campaignId,
-              userId: member.userId,
-            },
-            {
-              $push: {
-                windowOverrides: {
-                  windowId: data.windowOverride.windowId,
-                  x: data.windowOverride.x,
-                  y: data.windowOverride.y,
-                  width: data.windowOverride.width,
-                  height: data.windowOverride.height,
-                  state: data.windowOverride.state,
-                },
-              },
-              $set: setFields,
-              $setOnInsert: {
-                campaignId: data.campaignId,
-                userId: member.userId,
-              },
-            },
-            { upsert: true }
-          );
-        }
-      } else if (Object.keys(setFields).length > 0) {
-        // Only activeScreenId update
+          },
+          { upsert: true }
+        );
+      } else {
+        // Push new viewport entry (or create the whole doc)
         await TabletopPlayerState.updateOne(
           {
             campaignId: data.campaignId,
             userId: member.userId,
           },
           {
+            $push: {
+              viewports: {
+                screenId: data.viewport.screenId,
+                zoom: data.viewport.zoom,
+                panX: data.viewport.panX,
+                panY: data.viewport.panY,
+              },
+            },
             $set: setFields,
             $setOnInsert: {
               campaignId: data.campaignId,
@@ -947,38 +994,107 @@ export const updatePlayerState = createServerFn({ method: 'POST' })
           { upsert: true }
         );
       }
-
-      // Fetch and return the updated state
-      const doc = (await TabletopPlayerState.findOne({
+    } else if (data.windowOverride) {
+      // Window override upsert: replace existing or push new
+      const existing = await TabletopPlayerState.findOne({
         campaignId: data.campaignId,
         userId: member.userId,
-      }).lean()) as {
-        _id: unknown;
-        campaignId: unknown;
-        userId: unknown;
-        activeScreenId?: unknown;
-        viewports?: Array<{
-          screenId: unknown;
-          zoom?: number;
-          panX?: number;
-          panY?: number;
-        }>;
-        windowOverrides?: Array<{
-          windowId?: string;
-          x?: number;
-          y?: number;
-          width?: number;
-          height?: number;
-          state?: string;
-        }>;
-      } | null;
-
-      return { success: true, state: doc ? serializePlayerState(doc) : null };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'updatePlayerState',
-        campaignId: data.campaignId,
+        'windowOverrides.windowId': data.windowOverride.windowId,
       });
-      throw e;
+
+      if (existing) {
+        await TabletopPlayerState.updateOne(
+          {
+            campaignId: data.campaignId,
+            userId: member.userId,
+            'windowOverrides.windowId': data.windowOverride.windowId,
+          },
+          {
+            $set: {
+              'windowOverrides.$.x': data.windowOverride.x,
+              'windowOverrides.$.y': data.windowOverride.y,
+              'windowOverrides.$.width': data.windowOverride.width,
+              'windowOverrides.$.height': data.windowOverride.height,
+              'windowOverrides.$.state': data.windowOverride.state,
+              ...setFields,
+            },
+          }
+        );
+      } else {
+        await TabletopPlayerState.updateOne(
+          {
+            campaignId: data.campaignId,
+            userId: member.userId,
+          },
+          {
+            $push: {
+              windowOverrides: {
+                windowId: data.windowOverride.windowId,
+                x: data.windowOverride.x,
+                y: data.windowOverride.y,
+                width: data.windowOverride.width,
+                height: data.windowOverride.height,
+                state: data.windowOverride.state,
+              },
+            },
+            $set: setFields,
+            $setOnInsert: {
+              campaignId: data.campaignId,
+              userId: member.userId,
+            },
+          },
+          { upsert: true }
+        );
+      }
+    } else if (Object.keys(setFields).length > 0) {
+      // Only activeScreenId update
+      await TabletopPlayerState.updateOne(
+        {
+          campaignId: data.campaignId,
+          userId: member.userId,
+        },
+        {
+          $set: setFields,
+          $setOnInsert: {
+            campaignId: data.campaignId,
+            userId: member.userId,
+          },
+        },
+        { upsert: true }
+      );
     }
-  });
+
+    // Fetch and return the updated state
+    const doc = (await TabletopPlayerState.findOne({
+      campaignId: data.campaignId,
+      userId: member.userId,
+    }).lean()) as {
+      _id: unknown;
+      campaignId: unknown;
+      userId: unknown;
+      activeScreenId?: unknown;
+      viewports?: Array<{
+        screenId: unknown;
+        zoom?: number;
+        panX?: number;
+        panY?: number;
+      }>;
+      windowOverrides?: Array<{
+        windowId?: string;
+        x?: number;
+        y?: number;
+        width?: number;
+        height?: number;
+        state?: string;
+      }>;
+    } | null;
+
+    return { success: true, state: doc ? serializePlayerState(doc) : null };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'updatePlayerState',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};

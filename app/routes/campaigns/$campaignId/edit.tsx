@@ -1,8 +1,7 @@
 import React from 'react';
 import { createFileRoute, redirect, useNavigate, Link } from '@tanstack/react-router';
 import { useState, useRef } from 'react';
-import { getMe } from '~/server/functions/auth';
-import { getCampaign } from '~/server/functions/campaigns';
+import { getMe, getCampaign } from '~/server/functions/rpc';
 import { getQueryClient } from '~/providers/QueryProvider';
 import { queryKeys } from '~/utils/queryKeys';
 import { useUpdateCampaign } from '~/hooks/useCampaigns';

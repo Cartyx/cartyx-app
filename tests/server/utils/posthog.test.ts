@@ -21,6 +21,7 @@ describe('server posthog utilities', () => {
 
   afterEach(() => {
     delete process.env.POSTHOG_KEY;
+    delete process.env.APP_ENV;
   });
 
   describe('serverCaptureException', () => {
@@ -66,6 +67,42 @@ describe('server posthog utilities', () => {
     });
   });
 
+  describe('serverCaptureException throttling', () => {
+    it('drops rapid repeats of the same error', async () => {
+      process.env.POSTHOG_KEY = 'test-key';
+      const { serverCaptureException } = await import('~/server/utils/posthog');
+      for (let i = 0; i < 50; i++) {
+        await serverCaptureException(new Error('storming error'));
+      }
+      expect(mockCapture).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports a recurrence count on forwarded captures', async () => {
+      process.env.POSTHOG_KEY = 'test-key';
+      vi.useFakeTimers();
+      vi.setSystemTime(0);
+      try {
+        const { serverCaptureException } = await import('~/server/utils/posthog');
+        await serverCaptureException(new Error('recurring error'));
+        await serverCaptureException(new Error('recurring error'));
+        vi.advanceTimersByTime(6_000);
+        await serverCaptureException(new Error('recurring error'));
+        expect(mockCapture).toHaveBeenCalledTimes(2);
+        expect(mockCapture.mock.calls.at(-1)![0].properties.recurrence_count).toBe(3);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('throttles distinct errors independently', async () => {
+      process.env.POSTHOG_KEY = 'test-key';
+      const { serverCaptureException } = await import('~/server/utils/posthog');
+      await serverCaptureException(new Error('error one'));
+      await serverCaptureException(new TypeError('error two'));
+      expect(mockCapture).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('serverCaptureEvent', () => {
     it('captures a custom event', async () => {
       process.env.POSTHOG_KEY = 'test-key';
@@ -77,6 +114,21 @@ describe('server posthog utilities', () => {
         event: 'campaign_created',
         properties: expect.objectContaining({ name: 'Test', environment: expect.any(String) }),
       });
+    });
+  });
+
+  describe('environment labeling', () => {
+    it('labels events with the APP_ENV-derived environment', async () => {
+      process.env.POSTHOG_KEY = 'test-key';
+      process.env.APP_ENV = 'staging';
+      const { serverCaptureEvent } = await import('~/server/utils/posthog');
+      await serverCaptureEvent('user_123', 'dice_rolled');
+
+      expect(mockCapture).toHaveBeenCalledWith(
+        expect.objectContaining({
+          properties: expect.objectContaining({ environment: 'staging' }),
+        })
+      );
     });
   });
 

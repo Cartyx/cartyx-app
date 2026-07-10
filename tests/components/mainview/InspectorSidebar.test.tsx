@@ -1,8 +1,11 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { InspectorSidebar } from '~/components/mainview/InspectorSidebar';
+import { useDiceRolls } from '~/hooks/useDiceRolls';
+import { usePartySession } from '~/hooks/usePartySession';
+import { requestDiceBroadcast, onDiceDelivery } from '~/utils/diceRollerBridge';
 
 // Env var names used per-environment (set in Vercel)
 const { DEV_FLAGS, enabledFlags } = vi.hoisted(() => {
@@ -355,5 +358,74 @@ describe('InspectorSidebar', () => {
       render(<InspectorSidebar onMobileClose={() => {}} />);
       expect(screen.getByTestId('mobile-inspector-close')).toHaveAttribute('type', 'button');
     });
+  });
+});
+
+describe('dice roller broadcast relay', () => {
+  const activeSessions = [{ id: 'sess-1', name: 'One', number: 1, status: 'active' as const }];
+  const parsedRoll = {
+    character: '',
+    title: '1d20',
+    rollType: 'custom',
+    attackRolls: [
+      { roll: 11, type: 'hit' as const, total: 11, formula: '1d20', discarded: false, dice: [11] },
+    ],
+    damageRolls: [],
+    totalDamages: {},
+    rollInfo: [] as Array<[string, string]>,
+    description: '',
+    channel: 'general' as const,
+  };
+
+  it('relays public rolls to sendDiceRoll with the user name and reports delivery', () => {
+    const sendDiceRoll = vi.fn();
+    vi.mocked(useDiceRolls).mockReturnValue({
+      rolls: [],
+      sendDiceRoll,
+      handlePartyMessage: vi.fn(),
+      saveError: null,
+      setSaveError: vi.fn(),
+    });
+    const fakeSocket = { send: vi.fn(), readyState: WebSocket.OPEN };
+    vi.mocked(usePartySession).mockReturnValue(fakeSocket as never);
+
+    const deliveries: Array<{ requestId: string; delivered: boolean }> = [];
+    const unsubscribe = onDiceDelivery((d) => deliveries.push(d));
+
+    render(<InspectorSidebar campaignId="c1" sessions={activeSessions} />);
+    act(() => {
+      requestDiceBroadcast({ requestId: 'req-1', roll: parsedRoll });
+    });
+
+    expect(sendDiceRoll).toHaveBeenCalledExactlyOnceWith(
+      { ...parsedRoll, character: 'Test' },
+      fakeSocket
+    );
+    expect(deliveries).toEqual([{ requestId: 'req-1', delivered: true }]);
+    unsubscribe();
+  });
+
+  it('reports delivered=false without sending when the socket is not open', () => {
+    const sendDiceRoll = vi.fn();
+    vi.mocked(useDiceRolls).mockReturnValue({
+      rolls: [],
+      sendDiceRoll,
+      handlePartyMessage: vi.fn(),
+      saveError: null,
+      setSaveError: vi.fn(),
+    });
+    vi.mocked(usePartySession).mockReturnValue(null as never);
+
+    const deliveries: Array<{ requestId: string; delivered: boolean }> = [];
+    const unsubscribe = onDiceDelivery((d) => deliveries.push(d));
+
+    render(<InspectorSidebar campaignId="c1" sessions={activeSessions} />);
+    act(() => {
+      requestDiceBroadcast({ requestId: 'req-2', roll: parsedRoll });
+    });
+
+    expect(sendDiceRoll).not.toHaveBeenCalled();
+    expect(deliveries).toEqual([{ requestId: 'req-2', delivered: false }]);
+    unsubscribe();
   });
 });

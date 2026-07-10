@@ -6,7 +6,7 @@ import { StatusBanner } from '~/components/StatusBanner';
 import { useCompleteJoinWizard } from '~/hooks/usePlayers';
 import { clearStorage } from './JoinWizard';
 import type { WizardState } from './JoinWizard';
-import { Swords, CheckCircle2 } from 'lucide-react';
+import { Swords, CheckCircle2, BookOpen } from 'lucide-react';
 
 interface StepReviewProps {
   wizardState: WizardState;
@@ -18,7 +18,7 @@ export function StepReview({ wizardState, onBack }: StepReviewProps) {
   const { complete, isLoading, error } = useCompleteJoinWizard();
   const [submitError, setSubmitError] = useState<string | null>(null);
 
-  const { player, characters, campaignId, campaignName } = wizardState;
+  const { player, characters, lore, campaignId, campaignName } = wizardState;
 
   async function handleJoin() {
     setSubmitError(null);
@@ -76,6 +76,11 @@ export function StepReview({ wizardState, onBack }: StepReviewProps) {
           descriptor: c.relationship.descriptor.trim(),
           isPublic: c.relationship.isPublic,
         },
+      })),
+      lore: (wizardState.lore ?? []).map((l) => ({
+        title: l.title.trim(),
+        content: l.content,
+        isPublic: l.isPublic,
       })),
     });
 
@@ -212,6 +217,29 @@ export function StepReview({ wizardState, onBack }: StepReviewProps) {
               </span>
             </div>
           )}
+        </div>
+
+        {/* Lore entries */}
+        <div>
+          <SectionHeader color="muted" tracking="tracking-widest" className="mb-2">
+            LORE ENTRIES ({(lore ?? []).length})
+          </SectionHeader>
+          <div className="bg-white/[0.03] border border-white/[0.07] rounded-xl px-4 py-3 flex items-center gap-2">
+            {(lore ?? []).length > 0 ? (
+              <>
+                <BookOpen className="h-4 w-4 text-indigo-400 shrink-0" />
+                <span className="text-xs text-slate-400">
+                  {(lore ?? []).length} {(lore ?? []).length === 1 ? 'entry' : 'entries'} —{' '}
+                  {(lore ?? []).filter((l) => l.isPublic).length} public,{' '}
+                  {(lore ?? []).filter((l) => !l.isPublic).length} private
+                </span>
+              </>
+            ) : (
+              <span className="text-xs text-slate-600 italic">
+                No lore entries — can be added later
+              </span>
+            )}
+          </div>
         </div>
       </div>
 

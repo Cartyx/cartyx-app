@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/react-start';
+import { z } from 'zod';
 import { getSession } from '../session';
 import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
@@ -102,49 +102,47 @@ async function requireCampaignMember(
 
 export { createNoteSchema };
 
-export const createNote = createServerFn({ method: 'POST' })
-  .inputValidator(createNoteSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      const userId = member.userId;
+export const createNote = async ({ data }: { data: z.infer<typeof createNoteSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    const userId = member.userId;
 
-      const now = new Date();
-      const finalTags = normalizeTags(data.tags ?? []);
-      const noteData: Record<string, unknown> = {
-        campaignId: data.campaignId,
-        createdBy: userId,
-        title: data.title.trim(),
-        note: data.note.trim(),
-        tags: finalTags,
-        isPublic: data.isPublic ?? false,
-        createdAt: now,
-        updatedAt: now,
-      };
-      if (data.sessionId && data.sessionId !== '__none__') {
-        noteData.sessionId = data.sessionId;
-      }
-      const doc = await Note.create(noteData);
-
-      // Register any new tags in the campaign tag registry
-      await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
-
-      serverCaptureEvent(sessionUserId, 'note_created', {
-        campaign_id: data.campaignId,
-        note_id: String(doc._id),
-      });
-
-      return { success: true, note: serializeNote(doc) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'createNote',
-        campaignId: data.campaignId,
-      });
-      throw e;
+    const now = new Date();
+    const finalTags = normalizeTags(data.tags ?? []);
+    const noteData: Record<string, unknown> = {
+      campaignId: data.campaignId,
+      createdBy: userId,
+      title: data.title.trim(),
+      note: data.note.trim(),
+      tags: finalTags,
+      isPublic: data.isPublic ?? false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    if (data.sessionId && data.sessionId !== '__none__') {
+      noteData.sessionId = data.sessionId;
     }
-  });
+    const doc = await Note.create(noteData);
+
+    // Register any new tags in the campaign tag registry
+    await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
+
+    serverCaptureEvent(sessionUserId, 'note_created', {
+      campaign_id: data.campaignId,
+      note_id: String(doc._id),
+    });
+
+    return { success: true, note: serializeNote(doc) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'createNote',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // updateNote
@@ -152,48 +150,46 @@ export const createNote = createServerFn({ method: 'POST' })
 
 export { updateNoteSchema };
 
-export const updateNote = createServerFn({ method: 'POST' })
-  .inputValidator(updateNoteSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      const userId = member.userId;
+export const updateNote = async ({ data }: { data: z.infer<typeof updateNoteSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    const userId = member.userId;
 
-      const existing = await Note.findById(data.id);
-      if (!existing) throw new Error('Note not found');
-      if (String(existing.campaignId) !== data.campaignId) throw new Error('Forbidden');
-      if (String(existing.createdBy) !== userId) throw new Error('Forbidden');
-      if (existing.isReadOnly) throw new Error('Note is read-only');
+    const existing = await Note.findById(data.id);
+    if (!existing) throw new Error('Note not found');
+    if (String(existing.campaignId) !== data.campaignId) throw new Error('Forbidden');
+    if (String(existing.createdBy) !== userId) throw new Error('Forbidden');
+    if (existing.isReadOnly) throw new Error('Note is read-only');
 
-      const finalTags = normalizeTags(data.tags ?? []);
-      existing.sessionId =
-        data.sessionId && data.sessionId !== '__none__' ? data.sessionId : undefined;
-      existing.title = data.title.trim();
-      existing.note = data.note.trim();
-      existing.tags = finalTags;
-      if (data.isPublic !== undefined) {
-        existing.isPublic = data.isPublic;
-      }
-      existing.updatedAt = new Date();
-      await existing.save();
-
-      // Register any new tags in the campaign tag registry
-      await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
-
-      serverCaptureEvent(sessionUserId, 'note_updated', {
-        campaign_id: data.campaignId,
-        note_id: data.id,
-        updated_by: userId,
-      });
-
-      return { success: true, note: serializeNote(existing) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'updateNote', noteId: data.id });
-      throw e;
+    const finalTags = normalizeTags(data.tags ?? []);
+    existing.sessionId =
+      data.sessionId && data.sessionId !== '__none__' ? data.sessionId : undefined;
+    existing.title = data.title.trim();
+    existing.note = data.note.trim();
+    existing.tags = finalTags;
+    if (data.isPublic !== undefined) {
+      existing.isPublic = data.isPublic;
     }
-  });
+    existing.updatedAt = new Date();
+    await existing.save();
+
+    // Register any new tags in the campaign tag registry
+    await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
+
+    serverCaptureEvent(sessionUserId, 'note_updated', {
+      campaign_id: data.campaignId,
+      note_id: data.id,
+      updated_by: userId,
+    });
+
+    return { success: true, note: serializeNote(existing) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'updateNote', noteId: data.id });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // deleteNote
@@ -201,48 +197,46 @@ export const updateNote = createServerFn({ method: 'POST' })
 
 export { deleteNoteSchema };
 
-export const deleteNote = createServerFn({ method: 'POST' })
-  .inputValidator(deleteNoteSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
+export const deleteNote = async ({ data }: { data: z.infer<typeof deleteNoteSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    const userId = member.userId;
+
+    const existing = await Note.findById(data.id);
+    if (!existing) throw new Error('Note not found');
+    if (String(existing.campaignId) !== data.campaignId) throw new Error('Forbidden');
+    if (String(existing.createdBy) !== userId) throw new Error('Forbidden');
+    if (existing.isReadOnly) throw new Error('Note is read-only');
+
+    await existing.deleteOne();
+
+    // Clean up GM Screen references to this note.
+    // Best-effort: the note is already deleted, so cleanup failure must not
+    // surface as a user-facing error — report it and move on.
     try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      const userId = member.userId;
-
-      const existing = await Note.findById(data.id);
-      if (!existing) throw new Error('Note not found');
-      if (String(existing.campaignId) !== data.campaignId) throw new Error('Forbidden');
-      if (String(existing.createdBy) !== userId) throw new Error('Forbidden');
-      if (existing.isReadOnly) throw new Error('Note is read-only');
-
-      await existing.deleteOne();
-
-      // Clean up GM Screen references to this note.
-      // Best-effort: the note is already deleted, so cleanup failure must not
-      // surface as a user-facing error — report it and move on.
-      try {
-        await removeDocumentRefsFromScreens(data.campaignId, 'note', data.id);
-      } catch (cleanupError) {
-        serverCaptureException(cleanupError, sessionUserId, {
-          action: 'deleteNote.cleanup',
-          campaignId: data.campaignId,
-          noteId: data.id,
-        });
-      }
-
-      serverCaptureEvent(sessionUserId, 'note_deleted', {
-        campaign_id: data.campaignId,
-        note_id: data.id,
-        deleted_by: userId,
+      await removeDocumentRefsFromScreens(data.campaignId, 'note', data.id);
+    } catch (cleanupError) {
+      serverCaptureException(cleanupError, sessionUserId, {
+        action: 'deleteNote.cleanup',
+        campaignId: data.campaignId,
+        noteId: data.id,
       });
-
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'deleteNote', noteId: data.id });
-      throw e;
     }
-  });
+
+    serverCaptureEvent(sessionUserId, 'note_deleted', {
+      campaign_id: data.campaignId,
+      note_id: data.id,
+      deleted_by: userId,
+    });
+
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'deleteNote', noteId: data.id });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // listNotes
@@ -250,68 +244,66 @@ export const deleteNote = createServerFn({ method: 'POST' })
 
 export { listNotesSchema };
 
-export const listNotes = createServerFn({ method: 'GET' })
-  .inputValidator(listNotesSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      const userId = member.userId;
+export const listNotes = async ({ data }: { data: z.infer<typeof listNotesSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    const userId = member.userId;
 
-      // Build query filter
-      const filter: Record<string, unknown> = { campaignId: data.campaignId };
+    // Build query filter
+    const filter: Record<string, unknown> = { campaignId: data.campaignId };
 
-      if (data.sessionId === '__none__') {
-        filter.sessionId = { $exists: false };
-      } else if (data.sessionId) {
-        filter.sessionId = data.sessionId;
-      }
-
-      if (data.visibility === 'public') {
-        filter.isPublic = true;
-      } else if (data.visibility === 'private') {
-        filter.isPublic = false;
-        filter.createdBy = userId;
-      } else {
-        // visibility='all' (default): only notes the user is allowed to see
-        filter.$or = [{ isPublic: true }, { createdBy: userId }];
-      }
-
-      if (data.search && data.search.trim()) {
-        filter.$text = { $search: data.search.trim() };
-      }
-
-      if (data.tags && data.tags.length > 0) {
-        const normalizedTags = [...new Set(normalizeTags(data.tags))];
-        if (normalizedTags.length > 0) {
-          filter.tags = { $all: normalizedTags };
-        }
-      }
-
-      const docs = await Note.find(filter).select('-note').sort({ updatedAt: -1 }).lean();
-
-      return (
-        docs as Array<{
-          _id: unknown;
-          campaignId: unknown;
-          sessionId: unknown;
-          createdBy: unknown;
-          title?: string;
-          tags?: string[];
-          isPublic?: boolean;
-          createdAt?: Date;
-          updatedAt?: Date;
-        }>
-      ).map(serializeNoteListItem);
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'listNotes',
-        campaignId: data.campaignId,
-      });
-      throw e;
+    if (data.sessionId === '__none__') {
+      filter.sessionId = { $exists: false };
+    } else if (data.sessionId) {
+      filter.sessionId = data.sessionId;
     }
-  });
+
+    if (data.visibility === 'public') {
+      filter.isPublic = true;
+    } else if (data.visibility === 'private') {
+      filter.isPublic = false;
+      filter.createdBy = userId;
+    } else {
+      // visibility='all' (default): only notes the user is allowed to see
+      filter.$or = [{ isPublic: true }, { createdBy: userId }];
+    }
+
+    if (data.search && data.search.trim()) {
+      filter.$text = { $search: data.search.trim() };
+    }
+
+    if (data.tags && data.tags.length > 0) {
+      const normalizedTags = [...new Set(normalizeTags(data.tags))];
+      if (normalizedTags.length > 0) {
+        filter.tags = { $all: normalizedTags };
+      }
+    }
+
+    const docs = await Note.find(filter).select('-note').sort({ updatedAt: -1 }).lean();
+
+    return (
+      docs as Array<{
+        _id: unknown;
+        campaignId: unknown;
+        sessionId: unknown;
+        createdBy: unknown;
+        title?: string;
+        tags?: string[];
+        isPublic?: boolean;
+        createdAt?: Date;
+        updatedAt?: Date;
+      }>
+    ).map(serializeNoteListItem);
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'listNotes',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // getNote
@@ -319,27 +311,25 @@ export const listNotes = createServerFn({ method: 'GET' })
 
 export { getNoteSchema };
 
-export const getNote = createServerFn({ method: 'GET' })
-  .inputValidator(getNoteSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      const userId = member.userId;
+export const getNote = async ({ data }: { data: z.infer<typeof getNoteSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    const userId = member.userId;
 
-      const doc = await Note.findById(data.id);
-      if (!doc) return null;
-      if (String(doc.campaignId) !== data.campaignId) return null;
+    const doc = await Note.findById(data.id);
+    if (!doc) return null;
+    if (String(doc.campaignId) !== data.campaignId) return null;
 
-      // Private notes are only visible to the creator
-      if (!doc.isPublic && String(doc.createdBy) !== userId) {
-        return null;
-      }
-
-      return serializeNote(doc);
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, { action: 'getNote', noteId: data.id });
-      throw e;
+    // Private notes are only visible to the creator
+    if (!doc.isPublic && String(doc.createdBy) !== userId) {
+      return null;
     }
-  });
+
+    return serializeNote(doc);
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, { action: 'getNote', noteId: data.id });
+    throw e;
+  }
+};

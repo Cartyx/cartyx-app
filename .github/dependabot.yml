@@ -61,6 +61,16 @@ updates:
       - dependency-name: '@typescript-eslint/parser'
         versions: ['>=9.0.0']
 
+      # --- TanStack Router/Start lockstep ---
+      # @tanstack/react-start pins an EXACT @tanstack/react-router version
+      # (e.g. react-start 1.168.25 → react-router 1.170.15; they version on
+      # different release trains). A standalone react-router bump leaves two
+      # copies of @tanstack/router-core in the tree and breaks the SSR build
+      # with missing-export errors. Never bump react-router on its own —
+      # move it manually alongside each react-start update, matching the
+      # exact version react-start declares in its dependencies.
+      - dependency-name: '@tanstack/react-router'
+
       # --- zod 5 boundary ---
       # zod 5 will be the next breaking release after 4. The 3→4 migration
       # (PR #439) renamed errorMap → error and required explicit key schemas

@@ -10,6 +10,7 @@ import {
   Layers,
   ChevronLeft,
 } from 'lucide-react';
+import { useOptionalFeatureFlag } from '~/utils/featureFlags';
 
 export type ToolType =
   | 'pointer'
@@ -52,7 +53,11 @@ export function ToolBar({
   onToggleCollapse,
   isGM = false,
 }: ToolBarProps) {
-  const visibleTools = tools.filter((t) => !t.gmOnly || isGM);
+  // The interactive dice roller ships behind the same boolean flag as the Dice feed tab.
+  const diceFlag = useOptionalFeatureFlag(import.meta.env.VITE_PUBLIC_FF_DICE ?? '');
+  const visibleTools = tools.filter(
+    (t) => (!t.gmOnly || isGM) && (t.id !== 'dice' || diceFlag.isEnabled)
+  );
   return (
     <div className="flex flex-col items-center h-full py-2 bg-[#080A12]">
       {!collapsed && (

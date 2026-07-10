@@ -11,6 +11,7 @@ interface WikiFilterBarProps {
   onVisibilityChange: (value: 'all' | 'public' | 'private') => void;
   sessions?: CampaignData['sessions'];
   onCreateClick?: () => void;
+  createButtonTestId?: string;
   campaignId: string;
   filterTags: string[];
   onFilterTagsChange: (tags: string[]) => void;
@@ -28,6 +29,7 @@ export function WikiFilterBar({
   onVisibilityChange,
   sessions = [],
   onCreateClick,
+  createButtonTestId,
   campaignId,
   filterTags,
   onFilterTagsChange,
@@ -55,6 +57,7 @@ export function WikiFilterBar({
             onClick={onCreateClick}
             className="flex items-center justify-center h-8 w-8 rounded bg-blue-600 hover:bg-blue-500 text-white transition-colors"
             aria-label="Create new item"
+            data-testid={createButtonTestId}
           >
             <Plus className="h-4 w-4" />
           </button>

@@ -1,4 +1,4 @@
-import { createServerFn } from '@tanstack/react-start';
+import { z } from 'zod';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { Map as MapModel } from '../db/models/Map';
 import { MapToken } from '../db/models/MapToken';
@@ -206,298 +206,290 @@ function randomPosition(width: number, height: number): { x: number; y: number }
 // listMapTokens (members)
 // ---------------------------------------------------------------------------
 
-export const listMapTokens = createServerFn({ method: 'GET' })
-  .inputValidator(listMapTokensSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
+export const listMapTokens = async ({ data }: { data: z.infer<typeof listMapTokensSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
 
-      // Campaign membership alone does not prove the requested map belongs to
-      // this campaign. Scope the map by campaignId (like the mutating siblings)
-      // so a member of one campaign can't read tokens of another's maps.
-      const map = await MapModel.findOne({ _id: data.mapId, campaignId: data.campaignId }).lean();
-      if (!map) throw new Error('Map not found');
+    // Campaign membership alone does not prove the requested map belongs to
+    // this campaign. Scope the map by campaignId (like the mutating siblings)
+    // so a member of one campaign can't read tokens of another's maps.
+    const map = await MapModel.findOne({ _id: data.mapId, campaignId: data.campaignId }).lean();
+    if (!map) throw new Error('Map not found');
 
-      const filter: Record<string, unknown> = { mapId: data.mapId };
-      if (!member.isGM) filter.hiddenFromPlayers = { $ne: true };
-      // Bound the result set; batch placement can add many tokens per map.
-      const docs = await MapToken.find(filter).sort({ zIndex: 1, createdAt: 1 }).limit(2000).lean();
-      return { tokens: docs.map((d) => serializeToken(d as TokenDoc)) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'listMapTokens',
-        campaignId: data.campaignId,
-        mapId: data.mapId,
-      });
-      throw e;
-    }
-  });
+    const filter: Record<string, unknown> = { mapId: data.mapId };
+    if (!member.isGM) filter.hiddenFromPlayers = { $ne: true };
+    // Bound the result set; batch placement can add many tokens per map.
+    const docs = await MapToken.find(filter).sort({ zIndex: 1, createdAt: 1 }).limit(2000).lean();
+    return { tokens: docs.map((d) => serializeToken(d as TokenDoc)) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'listMapTokens',
+      campaignId: data.campaignId,
+      mapId: data.mapId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // createMapToken (GM only)
 // ---------------------------------------------------------------------------
 
-export const createMapToken = createServerFn({ method: 'POST' })
-  .inputValidator(createMapTokenSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
+export const createMapToken = async ({ data }: { data: z.infer<typeof createMapTokenSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    if (!member.isGM) throw new Error('Forbidden');
+
+    const map = await MapModel.findOne({ _id: data.mapId, campaignId: data.campaignId }).lean();
+    if (!map) throw new Error('Map not found');
+    const mDoc = map as { imageWidth?: number; imageHeight?: number };
+
+    // Clamp drop coordinates into the image.
+    const w = mDoc.imageWidth ?? 0;
+    const h = mDoc.imageHeight ?? 0;
+    const x = Math.max(0, Math.min(w, data.x));
+    const y = Math.max(0, Math.min(h, data.y));
+
+    const hydrated = await hydrateFromSource(
+      data.sourceCollection,
+      data.sourceDocumentId,
+      data.campaignId
+    );
+
+    // Monsters can appear many times per map, so each instance gets its own
+    // number + letter suffix ("Goblin A"). Players/characters stay unique
+    // (null instanceNumber) and keep their plain label.
+    let instanceNumber: number | null = null;
+    let label = hydrated.label;
+    if (data.sourceCollection === 'monster') {
+      instanceNumber = (await nextInstanceNumbers(data.mapId, data.sourceDocumentId, 1))[0];
+      label = `${hydrated.label} ${instanceLabel(instanceNumber)}`;
+    }
+
     try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      if (!member.isGM) throw new Error('Forbidden');
-
-      const map = await MapModel.findOne({ _id: data.mapId, campaignId: data.campaignId }).lean();
-      if (!map) throw new Error('Map not found');
-      const mDoc = map as { imageWidth?: number; imageHeight?: number };
-
-      // Clamp drop coordinates into the image.
-      const w = mDoc.imageWidth ?? 0;
-      const h = mDoc.imageHeight ?? 0;
-      const x = Math.max(0, Math.min(w, data.x));
-      const y = Math.max(0, Math.min(h, data.y));
-
-      const hydrated = await hydrateFromSource(
-        data.sourceCollection,
-        data.sourceDocumentId,
-        data.campaignId
-      );
-
-      // Monsters can appear many times per map, so each instance gets its own
-      // number + letter suffix ("Goblin A"). Players/characters stay unique
-      // (null instanceNumber) and keep their plain label.
-      let instanceNumber: number | null = null;
-      let label = hydrated.label;
-      if (data.sourceCollection === 'monster') {
-        instanceNumber = (await nextInstanceNumbers(data.mapId, data.sourceDocumentId, 1))[0];
-        label = `${hydrated.label} ${instanceLabel(instanceNumber)}`;
-      }
-
-      try {
-        const doc = await MapToken.create({
+      const doc = await MapToken.create({
+        mapId: data.mapId,
+        campaignId: data.campaignId,
+        sourceCollection: data.sourceCollection,
+        sourceDocumentId: data.sourceDocumentId,
+        ownerUserId: hydrated.ownerUserId,
+        x,
+        y,
+        // Honour an explicit footprint from the caller, else the
+        // size derived from the source entity (monsters scale up).
+        sizeSquares: data.sizeSquares ?? hydrated.sizeSquares,
+        instanceNumber,
+        color: hydrated.color,
+        label,
+        imageUrl: hydrated.imageUrl,
+        hiddenFromPlayers: hydrated.hiddenFromPlayers,
+        createdBy: member.userId,
+      });
+      serverCaptureEvent(sessionUserId, 'map_token_placed', {
+        campaign_id: data.campaignId,
+        map_id: data.mapId,
+        source_collection: data.sourceCollection,
+      });
+      return { token: serializeToken(doc.toObject() as TokenDoc), existed: false };
+    } catch (createErr) {
+      // Unique key conflict → return existing token (refocus, not duplicate).
+      if ((createErr as { code?: number }).code === 11000) {
+        const existing = await MapToken.findOne({
           mapId: data.mapId,
-          campaignId: data.campaignId,
           sourceCollection: data.sourceCollection,
           sourceDocumentId: data.sourceDocumentId,
-          ownerUserId: hydrated.ownerUserId,
-          x,
-          y,
-          // Honour an explicit footprint from the caller, else the
-          // size derived from the source entity (monsters scale up).
-          sizeSquares: data.sizeSquares ?? hydrated.sizeSquares,
-          instanceNumber,
-          color: hydrated.color,
-          label,
-          imageUrl: hydrated.imageUrl,
-          hiddenFromPlayers: hydrated.hiddenFromPlayers,
-          createdBy: member.userId,
-        });
-        serverCaptureEvent(sessionUserId, 'map_token_placed', {
-          campaign_id: data.campaignId,
-          map_id: data.mapId,
-          source_collection: data.sourceCollection,
-        });
-        return { token: serializeToken(doc.toObject() as TokenDoc), existed: false };
-      } catch (createErr) {
-        // Unique key conflict → return existing token (refocus, not duplicate).
-        if ((createErr as { code?: number }).code === 11000) {
-          const existing = await MapToken.findOne({
-            mapId: data.mapId,
-            sourceCollection: data.sourceCollection,
-            sourceDocumentId: data.sourceDocumentId,
-          }).lean();
-          if (existing) {
-            return { token: serializeToken(existing as TokenDoc), existed: true };
-          }
+        }).lean();
+        if (existing) {
+          return { token: serializeToken(existing as TokenDoc), existed: true };
         }
-        throw createErr;
       }
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'createMapToken',
-        campaignId: data.campaignId,
-        mapId: data.mapId,
-      });
-      throw e;
+      throw createErr;
     }
-  });
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'createMapToken',
+      campaignId: data.campaignId,
+      mapId: data.mapId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // createMapTokensBatch (GM only) — place N monster instances at random spots.
 // ---------------------------------------------------------------------------
 
-export const createMapTokensBatch = createServerFn({ method: 'POST' })
-  .inputValidator(createMapTokensBatchSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      if (!member.isGM) throw new Error('Forbidden');
+export const createMapTokensBatch = async ({
+  data,
+}: {
+  data: z.infer<typeof createMapTokensBatchSchema>;
+}) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    if (!member.isGM) throw new Error('Forbidden');
 
-      const map = await MapModel.findOne({ _id: data.mapId, campaignId: data.campaignId }).lean();
-      if (!map) throw new Error('Map not found');
-      const mDoc = map as { imageWidth?: number; imageHeight?: number };
-      const w = mDoc.imageWidth ?? 0;
-      const h = mDoc.imageHeight ?? 0;
+    const map = await MapModel.findOne({ _id: data.mapId, campaignId: data.campaignId }).lean();
+    if (!map) throw new Error('Map not found');
+    const mDoc = map as { imageWidth?: number; imageHeight?: number };
+    const w = mDoc.imageWidth ?? 0;
+    const h = mDoc.imageHeight ?? 0;
 
-      const hydrated = await hydrateFromSource(
-        data.sourceCollection,
-        data.sourceDocumentId,
-        data.campaignId
-      );
+    const hydrated = await hydrateFromSource(
+      data.sourceCollection,
+      data.sourceDocumentId,
+      data.campaignId
+    );
 
-      const numbers = await nextInstanceNumbers(data.mapId, data.sourceDocumentId, data.count);
-      const docs = numbers.map((n) => {
-        const pos = randomPosition(w, h);
-        return {
-          mapId: data.mapId,
-          campaignId: data.campaignId,
-          sourceCollection: data.sourceCollection,
-          sourceDocumentId: data.sourceDocumentId,
-          ownerUserId: hydrated.ownerUserId,
-          x: pos.x,
-          y: pos.y,
-          sizeSquares: hydrated.sizeSquares,
-          instanceNumber: n,
-          color: hydrated.color,
-          label: `${hydrated.label} ${instanceLabel(n)}`,
-          imageUrl: hydrated.imageUrl,
-          hiddenFromPlayers: hydrated.hiddenFromPlayers,
-          createdBy: member.userId,
-        };
-      });
-
-      const created = await MapToken.insertMany(docs);
-      serverCaptureEvent(sessionUserId, 'map_tokens_batch_placed', {
-        campaign_id: data.campaignId,
-        map_id: data.mapId,
-        count: data.count,
-      });
+    const numbers = await nextInstanceNumbers(data.mapId, data.sourceDocumentId, data.count);
+    const docs = numbers.map((n) => {
+      const pos = randomPosition(w, h);
       return {
-        tokens: created.map((d) => serializeToken((d.toObject?.() ?? d) as TokenDoc)),
-      };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'createMapTokensBatch',
-        campaignId: data.campaignId,
         mapId: data.mapId,
-      });
-      throw e;
-    }
-  });
+        campaignId: data.campaignId,
+        sourceCollection: data.sourceCollection,
+        sourceDocumentId: data.sourceDocumentId,
+        ownerUserId: hydrated.ownerUserId,
+        x: pos.x,
+        y: pos.y,
+        sizeSquares: hydrated.sizeSquares,
+        instanceNumber: n,
+        color: hydrated.color,
+        label: `${hydrated.label} ${instanceLabel(n)}`,
+        imageUrl: hydrated.imageUrl,
+        hiddenFromPlayers: hydrated.hiddenFromPlayers,
+        createdBy: member.userId,
+      };
+    });
+
+    const created = await MapToken.insertMany(docs);
+    serverCaptureEvent(sessionUserId, 'map_tokens_batch_placed', {
+      campaign_id: data.campaignId,
+      map_id: data.mapId,
+      count: data.count,
+    });
+    return {
+      tokens: created.map((d) => serializeToken((d.toObject?.() ?? d) as TokenDoc)),
+    };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'createMapTokensBatch',
+      campaignId: data.campaignId,
+      mapId: data.mapId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // moveMapToken (GM or owner)
 // ---------------------------------------------------------------------------
 
-export const moveMapToken = createServerFn({ method: 'POST' })
-  .inputValidator(moveMapTokenSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
+export const moveMapToken = async ({ data }: { data: z.infer<typeof moveMapTokenSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
 
-      const token = await MapToken.findOne({
-        _id: data.tokenId,
-        mapId: data.mapId,
-        campaignId: data.campaignId,
-      });
-      if (!token) throw new Error('Token not found');
+    const token = await MapToken.findOne({
+      _id: data.tokenId,
+      mapId: data.mapId,
+      campaignId: data.campaignId,
+    });
+    if (!token) throw new Error('Token not found');
 
-      const canMove =
-        member.isGM || (token.ownerUserId != null && String(token.ownerUserId) === member.userId);
-      if (!canMove) throw new Error('Forbidden');
+    const canMove =
+      member.isGM || (token.ownerUserId != null && String(token.ownerUserId) === member.userId);
+    if (!canMove) throw new Error('Forbidden');
 
-      const map = await MapModel.findOne(
-        { _id: data.mapId, campaignId: data.campaignId },
-        'imageWidth imageHeight'
-      ).lean();
-      const mDoc = (map ?? {}) as { imageWidth?: number; imageHeight?: number };
-      const w = mDoc.imageWidth ?? Number.POSITIVE_INFINITY;
-      const h = mDoc.imageHeight ?? Number.POSITIVE_INFINITY;
-      token.x = Math.max(0, Math.min(w, data.x));
-      token.y = Math.max(0, Math.min(h, data.y));
-      token.updatedAt = new Date();
-      await token.save();
+    const map = await MapModel.findOne(
+      { _id: data.mapId, campaignId: data.campaignId },
+      'imageWidth imageHeight'
+    ).lean();
+    const mDoc = (map ?? {}) as { imageWidth?: number; imageHeight?: number };
+    const w = mDoc.imageWidth ?? Number.POSITIVE_INFINITY;
+    const h = mDoc.imageHeight ?? Number.POSITIVE_INFINITY;
+    token.x = Math.max(0, Math.min(w, data.x));
+    token.y = Math.max(0, Math.min(h, data.y));
+    token.updatedAt = new Date();
+    await token.save();
 
-      return { token: serializeToken(token.toObject() as TokenDoc) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'moveMapToken',
-        campaignId: data.campaignId,
-        tokenId: data.tokenId,
-      });
-      throw e;
-    }
-  });
+    return { token: serializeToken(token.toObject() as TokenDoc) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'moveMapToken',
+      campaignId: data.campaignId,
+      tokenId: data.tokenId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // updateMapToken (GM only)
 // ---------------------------------------------------------------------------
 
-export const updateMapToken = createServerFn({ method: 'POST' })
-  .inputValidator(updateMapTokenSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      if (!member.isGM) throw new Error('Forbidden');
+export const updateMapToken = async ({ data }: { data: z.infer<typeof updateMapTokenSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    if (!member.isGM) throw new Error('Forbidden');
 
-      const update: Record<string, unknown> = { updatedAt: new Date() };
-      if (data.labelVisible !== undefined) update.labelVisible = data.labelVisible;
-      if (data.hiddenFromPlayers !== undefined) update.hiddenFromPlayers = data.hiddenFromPlayers;
-      if (data.sizeSquares !== undefined) update.sizeSquares = data.sizeSquares;
-      if (data.color !== undefined) update.color = data.color;
-      if (data.label !== undefined) update.label = data.label;
+    const update: Record<string, unknown> = { updatedAt: new Date() };
+    if (data.labelVisible !== undefined) update.labelVisible = data.labelVisible;
+    if (data.hiddenFromPlayers !== undefined) update.hiddenFromPlayers = data.hiddenFromPlayers;
+    if (data.sizeSquares !== undefined) update.sizeSquares = data.sizeSquares;
+    if (data.color !== undefined) update.color = data.color;
+    if (data.label !== undefined) update.label = data.label;
 
-      const doc = await MapToken.findOneAndUpdate(
-        { _id: data.tokenId, mapId: data.mapId, campaignId: data.campaignId },
-        { $set: update },
-        { new: true }
-      ).lean();
-      if (!doc) throw new Error('Token not found');
+    const doc = await MapToken.findOneAndUpdate(
+      { _id: data.tokenId, mapId: data.mapId, campaignId: data.campaignId },
+      { $set: update },
+      { new: true }
+    ).lean();
+    if (!doc) throw new Error('Token not found');
 
-      return { token: serializeToken(doc as TokenDoc) };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'updateMapToken',
-        campaignId: data.campaignId,
-        tokenId: data.tokenId,
-      });
-      throw e;
-    }
-  });
+    return { token: serializeToken(doc as TokenDoc) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'updateMapToken',
+      campaignId: data.campaignId,
+      tokenId: data.tokenId,
+    });
+    throw e;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // deleteMapToken (GM only)
 // ---------------------------------------------------------------------------
 
-export const deleteMapToken = createServerFn({ method: 'POST' })
-  .inputValidator(deleteMapTokenSchema)
-  .handler(async ({ data }) => {
-    let sessionUserId: string | undefined;
-    try {
-      const member = await requireCampaignMember(data.campaignId);
-      sessionUserId = member.sessionUserId;
-      if (!member.isGM) throw new Error('Forbidden');
+export const deleteMapToken = async ({ data }: { data: z.infer<typeof deleteMapTokenSchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+    if (!member.isGM) throw new Error('Forbidden');
 
-      const result = await MapToken.deleteOne({
-        _id: data.tokenId,
-        mapId: data.mapId,
-        campaignId: data.campaignId,
-      });
-      if (result.deletedCount === 0) throw new Error('Token not found');
-      return { success: true };
-    } catch (e) {
-      serverCaptureException(e, sessionUserId, {
-        action: 'deleteMapToken',
-        campaignId: data.campaignId,
-        tokenId: data.tokenId,
-      });
-      throw e;
-    }
-  });
+    const result = await MapToken.deleteOne({
+      _id: data.tokenId,
+      mapId: data.mapId,
+      campaignId: data.campaignId,
+    });
+    if (result.deletedCount === 0) throw new Error('Token not found');
+    return { success: true };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'deleteMapToken',
+      campaignId: data.campaignId,
+      tokenId: data.tokenId,
+    });
+    throw e;
+  }
+};

@@ -1,0 +1,75 @@
+{{- if gt (int .Values.realtime.replicaCount) 1 }}
+{{- fail "realtime.replicaCount > 1 is not supported: rooms are per-pod in-memory state with no sticky routing" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cartyx.fullname" . }}-realtime
+  labels:
+    {{- include "cartyx.labels" . | nindent 4 }}
+    app.kubernetes.io/component: realtime
+spec:
+  replicas: {{ .Values.realtime.replicaCount }}
+  # Recreate, not RollingUpdate: room state is in-memory in a single pod; a
+  # rolling update would briefly run two pods and split connected players
+  # into disjoint rooms.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "cartyx.realtime.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "cartyx.realtime.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: realtime
+          image: "{{ .Values.realtime.image.repository }}:{{ required "realtime.image.tag is required — set an immutable git-sha tag at install time" .Values.realtime.image.tag }}"
+          imagePullPolicy: {{ .Values.realtime.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: ws
+              containerPort: {{ .Values.realtime.env.PORT | int }}
+          env:
+            - name: PORT
+              value: {{ .Values.realtime.env.PORT | quote }}
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cartyx.secretName" . }}
+                  key: sessionSecret
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cartyx.secretName" . }}
+                  key: mongodbUri
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: ws
+            initialDelaySeconds: 5
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: ws
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.realtime.resources | nindent 12 }}
