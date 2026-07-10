@@ -7,11 +7,13 @@ web:
   env:
     APP_ENV: staging
     BASE_URL: https://dev.cartyx.io
-    GOOGLE_CLIENT_ID: ''
+    GOOGLE_CLIENT_ID: 771084537830-mqaa7q6rpe4k87nalgqlu7bu2lt8qam2.apps.googleusercontent.com
+    # GitHub OAuth apps allow ONE callback host each — the dev site needs its
+    # own OAuth app (callback https://dev.cartyx.io/auth/callback/github).
     GITHUB_CLIENT_ID: ''
-    R2_ACCOUNT_ID: ''
-    R2_BUCKET: ''
-    CDN_URL: ''
+    R2_ACCOUNT_ID: '66cc5f108c96110512e86fc8346a7558'
+    R2_BUCKET: cartyx-dev
+    CDN_URL: https://cdn-dev.cartyx.io
   resources:
     limits:
       memory: 384Mi
