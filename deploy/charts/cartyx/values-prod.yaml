@@ -1,0 +1,31 @@
+# Production release: namespace `prod` on cluster z440, installed by the Flux
+# HelmRelease in cartyx-infrastructure (which also carries the image tags —
+# CI bumps them there). Client-baked VITE_PUBLIC_* live in
+# deploy/build/web-prod.args.
+web:
+  env:
+    APP_ENV: production
+    BASE_URL: https://app.cartyx.io
+    # OAuth client IDs are public identifiers (they appear in every auth
+    # redirect URL) — fill in and commit; the SECRETS live in the
+    # kubectl-created `cartyx` Secret (see README).
+    GOOGLE_CLIENT_ID: ''
+    GITHUB_CLIENT_ID: ''
+    R2_ACCOUNT_ID: ''
+    R2_BUCKET: ''
+    CDN_URL: ''
+
+ingress:
+  webHost: app.cartyx.io
+  wsHost: ws.cartyx.io
+
+# Certificates are owned by the cartyx-infrastructure repo (per-env, no
+# wildcard — its README forbids consolidating). Reference, don't issue.
+tls:
+  secretName: prod-cartyx-tls
+  certificate:
+    enabled: false
+
+secret:
+  create: false
+  existingSecret: cartyx # created out-of-band: see chart README, step 1

@@ -129,6 +129,24 @@ filtered_args=$(args_without ingress.webHost)
 # shellcheck disable=SC2086
 assert_fails "missing webHost is a render error" "webHost" $filtered_args
 
+# --- Task 6: environment values files ---
+prod_args=$(args_without ingress.)
+render_env() { # render_env <values file> — env values files against BASE_ARGS minus hosts
+  # shellcheck disable=SC2086
+  helm template cartyx "$CHART_DIR" $prod_args -f "$CHART_DIR/$1" 2>&1
+}
+if render_env values-prod.yaml | grep -q "host: app.cartyx.io"; then ok; else bad "values-prod resolves prod hosts"; fi
+if render_env values-dev.yaml | grep -q "host: dev-ws.cartyx.io"; then ok; else bad "values-dev resolves dev ws host"; fi
+if render_env values-dev.yaml | grep -q 'value: "staging"'; then ok; else bad "values-dev sets APP_ENV=staging"; fi
+if render_env values-dev.yaml | grep -q "memory: 384Mi"; then ok; else bad "values-dev web memory limit"; fi
+# Certs are infra-owned on z440: no Certificate object, infra secret names.
+if render_env values-prod.yaml | grep -q "kind: Certificate"; then bad "values-prod must not issue certs"; else ok; fi
+if render_env values-prod.yaml | grep -q "secretName: prod-cartyx-tls"; then ok; else bad "values-prod uses infra tls secret"; fi
+if render_env values-dev.yaml | grep -q "secretName: dev-cartyx-tls"; then ok; else bad "values-dev uses infra tls secret"; fi
+# App Secret is out-of-band on z440: no managed Secret, refs point at 'cartyx'.
+if render_env values-prod.yaml | grep -q "kind: Secret"; then bad "values-prod must not manage the Secret"; else ok; fi
+if render_env values-prod.yaml | grep -qE "name: cartyx$"; then ok; else bad "values-prod refs existingSecret cartyx"; fi
+
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
