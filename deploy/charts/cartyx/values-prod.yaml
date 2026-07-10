@@ -12,11 +12,10 @@ web:
     GOOGLE_CLIENT_ID: 771084537830-mqaa7q6rpe4k87nalgqlu7bu2lt8qam2.apps.googleusercontent.com
     # GitHub OAuth apps allow ONE callback host each — prod needs its own
     # OAuth app (callback https://app.cartyx.io/auth/callback/github).
-    GITHUB_CLIENT_ID: ''
+    GITHUB_CLIENT_ID: Ov2limoxRabMkVtRi3x
     R2_ACCOUNT_ID: '66cc5f108c96110512e86fc8346a7558'
-    # Production bucket/CDN — fill in (the .env values are the DEV pair).
-    R2_BUCKET: ''
-    CDN_URL: ''
+    R2_BUCKET: cartyx-production
+    CDN_URL: https://cdn.cartyx.io
 
 ingress:
   webHost: app.cartyx.io
