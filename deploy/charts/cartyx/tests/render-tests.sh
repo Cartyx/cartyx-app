@@ -63,7 +63,10 @@ args_without() {
 
 # ---- assertions (grow task by task) ----
 
-if helm lint "$CHART_DIR" "${BASE_ARGS[@]}" >/dev/null 2>&1; then ok; else bad "helm lint"; fi
+if lint_out=$(helm lint "$CHART_DIR" "${BASE_ARGS[@]}" 2>&1); then ok; else
+  bad "helm lint"
+  echo "$lint_out"
+fi
 assert_contains "chart renders at least one object" "^kind:"
 
 # --- Task 2: helpers + secret ---
