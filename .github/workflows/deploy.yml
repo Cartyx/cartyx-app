@@ -1,0 +1,100 @@
+name: Deploy
+
+on:
+  push:
+    branches: [dev, main]
+  workflow_dispatch: # manual re-deploys (rebuilds images for the current sha)
+
+# One deploy at a time per branch; queued pushes wait.
+concurrency:
+  group: deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & deploy (${{ github.ref_name == 'main' && 'prod' || 'dev' }})
+    runs-on: ubuntu-latest
+    # Guard manual dispatches from feature branches.
+    if: contains(fromJSON('["dev", "main"]'), github.ref_name)
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DEPLOY_ENV: ${{ github.ref_name == 'main' && 'prod' || 'dev' }}
+      WEB_HOST: ${{ github.ref_name == 'main' && 'app.cartyx.io' || 'dev.cartyx.io' }}
+      REGISTRY: ghcr.io/${{ github.repository_owner }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Log in to ghcr.io
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Compute image tags
+        id: tags
+        run: |
+          SHA=${GITHUB_SHA::7}
+          {
+            echo "sha=$SHA"
+            echo "webtag=$DEPLOY_ENV-$SHA"
+            echo "realtime=$REGISTRY/cartyx-realtime:$SHA"
+            echo "web=$REGISTRY/cartyx-web:$DEPLOY_ENV-$SHA"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push realtime image
+        run: |
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            -t "${{ steps.tags.outputs.realtime }}" realtime
+          docker push "${{ steps.tags.outputs.realtime }}"
+
+      - name: Build and push web image
+        # VITE_PUBLIC_* are baked into the client bundle HERE. Changing a
+        # feature flag or the ws host = edit deploy/build/web-$DEPLOY_ENV.args
+        # and merge — a values-only change cannot do it.
+        run: |
+          args=()
+          while IFS= read -r line; do
+            case "$line" in ''|'#'*) continue ;; esac
+            args+=(--build-arg "$line")
+          done < "deploy/build/web-$DEPLOY_ENV.args"
+          docker build -f Dockerfile.web "${args[@]}" \
+            --label "org.opencontainers.image.source=https://github.com/${{ github.repository }}" \
+            -t "${{ steps.tags.outputs.web }}" .
+          docker push "${{ steps.tags.outputs.web }}"
+
+      - name: Bump image tags in cartyx-infrastructure
+        # GitOps handoff (the flow the infra README documents): commit the new
+        # tags to the HelmRelease; Flux reconciles within a minute. CI never
+        # holds cluster credentials. The sed anchors are the ci:*-tag marker
+        # comments in apps/<env>/helmrelease.yaml.
+        env:
+          INFRA_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
+        run: |
+          git clone --depth 1 "https://x-access-token:${INFRA_TOKEN}@github.com/biozal/cartyx-infrastructure.git" /tmp/infra
+          cd /tmp/infra
+          F="apps/$DEPLOY_ENV/helmrelease.yaml"
+          sed -i -E "s|(tag: ).*( # ci:web-tag)|\1${{ steps.tags.outputs.webtag }}\2|" "$F"
+          sed -i -E "s|(tag: ).*( # ci:realtime-tag)|\1'${{ steps.tags.outputs.sha }}'\2|" "$F"
+          git diff --exit-code --quiet && { echo "tags unchanged — nothing to deploy"; exit 0; }
+          git config user.name "cartyx-ci"
+          git config user.email "ci@cartyx.io"
+          git commit -am "deploy(${DEPLOY_ENV}): web ${{ steps.tags.outputs.webtag }}, realtime ${{ steps.tags.outputs.sha }} (cartyx-app@${GITHUB_SHA::7})"
+          git push
+
+      - name: Verify public site
+        # Bounded poll: without cluster credentials CI can't confirm the new
+        # tag rolled out (use `flux get helmreleases -A` on the box for that)
+        # — this catches total breakage: site down, TLS broken, tunnel dead.
+        # Generous window: Flux GitRepository interval + helm upgrade + probes.
+        run: |
+          echo "Waiting for https://$WEB_HOST/ to answer 200 (up to 5 minutes)..."
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null "https://$WEB_HOST/"; then
+              echo "https://$WEB_HOST/ -> 200"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Site did not answer 200 within the window" >&2
+          exit 1
