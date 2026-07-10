@@ -25,16 +25,18 @@ bad() { FAIL=$((FAIL + 1)); echo "FAIL: $1"; }
 
 # assert_contains <name> <egrep pattern> [extra render args...]
 assert_contains() {
-  local name=$1 pattern=$2
+  local name=$1 pattern=$2 out
   shift 2
-  render "$@" | grep -qE "$pattern" && ok || bad "$name"
+  out=$(render "$@")
+  echo "$out" | grep -qE "$pattern" && ok || bad "$name"
 }
 
 # assert_not_contains <name> <egrep pattern> [extra render args...]
 assert_not_contains() {
-  local name=$1 pattern=$2
+  local name=$1 pattern=$2 out
   shift 2
-  render "$@" | grep -qE "$pattern" && bad "$name" || ok
+  out=$(render "$@")
+  echo "$out" | grep -qE "$pattern" && bad "$name" || ok
 }
 
 # assert_fails <name> <error pattern> <full helm-template args...>
