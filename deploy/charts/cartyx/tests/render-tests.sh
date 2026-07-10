@@ -135,17 +135,25 @@ render_env() { # render_env <values file> — env values files against BASE_ARGS
   # shellcheck disable=SC2086
   helm template cartyx "$CHART_DIR" $prod_args -f "$CHART_DIR/$1" 2>&1
 }
-if render_env values-prod.yaml | grep -q "host: app.cartyx.io"; then ok; else bad "values-prod resolves prod hosts"; fi
-if render_env values-dev.yaml | grep -q "host: dev-ws.cartyx.io"; then ok; else bad "values-dev resolves dev ws host"; fi
-if render_env values-dev.yaml | grep -q 'value: "staging"'; then ok; else bad "values-dev sets APP_ENV=staging"; fi
-if render_env values-dev.yaml | grep -q "memory: 384Mi"; then ok; else bad "values-dev web memory limit"; fi
+prod_out=$(render_env values-prod.yaml)
+dev_out=$(render_env values-dev.yaml)
+echo "$prod_out" | grep -q "host: app.cartyx.io" && ok || bad "values-prod resolves prod hosts"
+echo "$dev_out" | grep -q "host: dev-ws.cartyx.io" && ok || bad "values-dev resolves dev ws host"
+echo "$dev_out" | grep -q 'value: "staging"' && ok || bad "values-dev sets APP_ENV=staging"
+echo "$dev_out" | grep -q "memory: 384Mi" && ok || bad "values-dev web memory limit"
 # Certs are infra-owned on z440: no Certificate object, infra secret names.
-if render_env values-prod.yaml | grep -q "kind: Certificate"; then bad "values-prod must not issue certs"; else ok; fi
-if render_env values-prod.yaml | grep -q "secretName: prod-cartyx-tls"; then ok; else bad "values-prod uses infra tls secret"; fi
-if render_env values-dev.yaml | grep -q "secretName: dev-cartyx-tls"; then ok; else bad "values-dev uses infra tls secret"; fi
+echo "$prod_out" | grep -q "kind: Certificate" && bad "values-prod must not issue certs" || ok
+echo "$prod_out" | grep -q "secretName: prod-cartyx-tls" && ok || bad "values-prod uses infra tls secret"
+echo "$dev_out" | grep -q "secretName: dev-cartyx-tls" && ok || bad "values-dev uses infra tls secret"
 # App Secret is out-of-band on z440: no managed Secret, refs point at 'cartyx'.
-if render_env values-prod.yaml | grep -q "kind: Secret"; then bad "values-prod must not manage the Secret"; else ok; fi
-if render_env values-prod.yaml | grep -qE "name: cartyx$"; then ok; else bad "values-prod refs existingSecret cartyx"; fi
+echo "$prod_out" | grep -q "kind: Secret" && bad "values-prod must not manage the Secret" || ok
+# Discriminating existingSecret check: render under a release name whose
+# fullname is NOT 'cartyx' (esrel -> esrel-cartyx), scope the grep to
+# secretKeyRef blocks — only the existingSecret wiring can produce
+# 'name: cartyx' there; labels and a fullname-derived managed Secret cannot.
+# shellcheck disable=SC2086
+esrel_out=$(helm template esrel "$CHART_DIR" $prod_args -f "$CHART_DIR/values-prod.yaml" 2>&1)
+echo "$esrel_out" | grep -A2 "secretKeyRef:" | grep -qE "name: cartyx$" && ok || bad "values-prod refs existingSecret cartyx"
 
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"
