@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** One Helm chart (`deploy/charts/cartyx`) deploying web + realtime as two releases (`cartyx-prod` / `cartyx-dev` namespaces), auto-deployed by GitHub Actions on merge to `main` / `dev` via ghcr.io + Tailscale.
+**Goal:** One Helm chart (`deploy/charts/cartyx`) deploying web + realtime as one Flux `HelmRelease` per environment (`prod` / `dev` namespaces on cluster `z440`), auto-deployed on merge to `main` / `dev`: CI pushes images to ghcr.io and bumps tags in the **cartyx-infrastructure** repo; Flux reconciles. CI never holds cluster credentials.
 
-**Architecture:** Flat single chart with per-service templates and component-keyed values (`web:`, `realtime:`). A render-test script (`helm template` + grep assertions) is the chart's test suite, wired into CI. A new `deploy.yml` workflow builds/pushes images and runs `helm upgrade` against the k3s API over the tailnet, with secrets from GitHub Environments. The local kind path upgrades from realtime-only to the full chart; the Phase 1 `cartyx-realtime` chart is deleted.
+**Architecture:** Flat single chart with per-service templates and component-keyed values (`web:`, `realtime:`). A render-test script (`helm template` + grep assertions) is the chart's test suite, wired into CI. `deploy.yml` builds/pushes images then commits new image tags to the infra repo's HelmRelease files (fine-grained PAT). The infra repo (github.com/biozal/cartyx-infrastructure) gets a companion PR: `GitRepository` sources + `HelmRelease` per env replacing its whoami placeholders. Secrets live in a `kubectl`-created Secret named `cartyx` per namespace (`existingSecret`); certs stay infra-owned. The local kind path upgrades from realtime-only to the full chart; the Phase 1 `cartyx-realtime` chart is deleted.
 
-**Tech Stack:** Helm 3, k3s (Traefik v3 ingress, cert-manager), GitHub Actions, Docker, kind, bash.
+**Tech Stack:** Helm 3, k3s (Traefik v3 ingress, cert-manager, Flux, cloudflared), GitHub Actions, Docker, kind, bash.
 
-**Spec:** `docs/specs/2026-07-09-app-helm-chart-design.md` (approved, committed as f766e85).
+**Spec:** `docs/specs/2026-07-09-app-helm-chart-design.md` (approved; rev 2 = Flux pivot after infra-repo review).
 
 ## Global Constraints
 
@@ -19,7 +19,8 @@
 - Do not regress Phase 1 chart behaviors: realtime `replicaCount > 1` fail guard, `checksum/secret` pod annotation, `--set-string` comma/backslash escaping for secrets.
 - No CPU limits on any container (event-loop throttling). Memory limits: web 512Mi prod / 384Mi dev; realtime 256Mi prod / 192Mi dev.
 - No new npm dependencies anywhere in this plan (supply-chain rule is moot but stated).
-- Resource naming: release `cartyx` → Deployments/Services `cartyx-web` and `cartyx-realtime`; Secret/Ingress/Certificate `cartyx`; Middleware/IngressRoute `cartyx-block-health`.
+- Resource naming: release `cartyx` → Deployments/Services `cartyx-web` and `cartyx-realtime`; Secret/Ingress/Certificate `cartyx`; Middleware/IngressRoute `cartyx-block-health`. Cluster namespaces are `dev` and `prod` (they already exist in the infra repo — never create `cartyx-dev`/`cartyx-prod`).
+- The cluster (`z440`) is Flux-managed via github.com/biozal/cartyx-infrastructure: certs are per-env and infra-owned (`prod-cartyx-tls` / `dev-cartyx-tls`, do NOT issue from this chart there), the app Secret is created out-of-band (`existingSecret: cartyx`), and deploys happen by committing tag bumps to that repo — never `helm`/`kubectl` from CI.
 - Secret keys (exact, camelCase): `sessionSecret`, `mongodbUri`, `googleClientSecret`, `githubClientSecret`, `r2AccessKeyId`, `r2SecretAccessKey`, `posthogKey`.
 - Image refs: `ghcr.io/biozal/cartyx-web` (tags `prod-<sha7>` / `dev-<sha7>` / `local`), `ghcr.io/biozal/cartyx-realtime` (tags `<sha7>` / `local`).
 - Verify helm is installed before Task 1: `helm version --short` (if missing: `brew install helm`).
@@ -150,9 +151,11 @@ tests/
 # Local kind overrides: values-local.yaml.
 #
 # Image tags are REQUIRED at install time (immutable git-sha tags, e.g.
-# prod-a1b2c3d) — committed files never pin a tag and `latest` never deploys.
-# Secret values are injected at deploy time (GitHub Environment secrets via
-# helm --set-string) and are never committed.
+# prod-a1b2c3d) — committed files here never pin a tag and `latest` never
+# deploys. On the real cluster the Flux HelmRelease values (in the
+# cartyx-infrastructure repo, bumped by CI) carry the live tags. Secret
+# values are never committed: the cluster uses a kubectl-created Secret via
+# secret.existingSecret; the kind path injects from .env via --set-string.
 
 web:
   image:
@@ -218,6 +221,10 @@ ingress:
 
 tls:
   secretName: cartyx-tls
+  # On cluster z440 certificates are owned by the cartyx-infrastructure repo
+  # (per-env, deliberately not a wildcard) — values-prod/dev DISABLE this and
+  # point secretName at the infra-issued secrets. Enable it only on clusters
+  # where nothing else issues the cert.
   certificate:
     enabled: true # cert-manager Certificate covering [webHost, wsHost]
     clusterIssuer: '' # required when enabled — find it: kubectl get clusterissuer
@@ -226,7 +233,9 @@ secret:
   create: true
   # Name of a pre-created Secret holding the same keys; when set, the chart
   # does not manage a Secret and the checksum-restart behavior is inert
-  # (immutable image tags force rollouts anyway).
+  # (immutable image tags force rollouts anyway). Cluster z440 sets `cartyx`
+  # (created out-of-band with kubectl — see README); the kind path leaves
+  # this empty and uses the chart-managed Secret.
   existingSecret: ''
   values:
     sessionSecret: '' # required; >=32 chars when APP_ENV is production/staging
@@ -759,6 +768,7 @@ Append:
 assert_contains "ingress has web host rule" "host: web.test"
 assert_contains "ingress has ws host rule" "host: ws.test"
 assert_contains "ingress tls secret" "secretName: cartyx-tls"
+assert_contains "ingress uses websecure entrypoint" "router.entrypoints: websecure"
 assert_contains "health block middleware rendered" "kind: Middleware"
 assert_contains "health block route matches both paths" "/readyz"
 assert_not_contains "health block toggles off" "kind: Middleware" \
@@ -793,6 +803,11 @@ metadata:
   name: {{ include "cartyx.fullname" . }}
   labels:
     {{- include "cartyx.labels" . | nindent 4 }}
+  annotations:
+    # Match the cartyx-infrastructure convention: TLS-only via the websecure
+    # entrypoint (cloudflared forwards to Traefik over https with SNI).
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: 'true'
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   tls:
@@ -893,7 +908,7 @@ spec:
 - [ ] **Step 4: Run the tests**
 
 Run: `bash deploy/charts/cartyx/tests/render-tests.sh`
-Expected: all pass (`37 passed, 0 failed`), exit 0.
+Expected: all pass (`38 passed, 0 failed`), exit 0.
 
 - [ ] **Step 5: Commit**
 
@@ -926,40 +941,44 @@ Append:
 ```bash
 # --- Task 6: environment values files ---
 prod_args=$(args_without ingress.)
-# shellcheck disable=SC2086
-if helm template cartyx "$CHART_DIR" $prod_args -f "$CHART_DIR/values-prod.yaml" 2>&1 |
-  grep -q "host: app.cartyx.io"; then ok; else bad "values-prod resolves prod hosts"; fi
-# shellcheck disable=SC2086
-if helm template cartyx "$CHART_DIR" $prod_args -f "$CHART_DIR/values-dev.yaml" 2>&1 |
-  grep -q "host: dev-ws.cartyx.io"; then ok; else bad "values-dev resolves dev ws host"; fi
-# shellcheck disable=SC2086
-if helm template cartyx "$CHART_DIR" $prod_args -f "$CHART_DIR/values-dev.yaml" 2>&1 |
-  grep -q 'value: "staging"'; then ok; else bad "values-dev sets APP_ENV=staging"; fi
-# shellcheck disable=SC2086
-if helm template cartyx "$CHART_DIR" $prod_args -f "$CHART_DIR/values-dev.yaml" 2>&1 |
-  grep -q "memory: 384Mi"; then ok; else bad "values-dev web memory limit"; fi
+render_env() { # render_env <values file> — env values files against BASE_ARGS minus hosts
+  # shellcheck disable=SC2086
+  helm template cartyx "$CHART_DIR" $prod_args -f "$CHART_DIR/$1" 2>&1
+}
+if render_env values-prod.yaml | grep -q "host: app.cartyx.io"; then ok; else bad "values-prod resolves prod hosts"; fi
+if render_env values-dev.yaml | grep -q "host: dev-ws.cartyx.io"; then ok; else bad "values-dev resolves dev ws host"; fi
+if render_env values-dev.yaml | grep -q 'value: "staging"'; then ok; else bad "values-dev sets APP_ENV=staging"; fi
+if render_env values-dev.yaml | grep -q "memory: 384Mi"; then ok; else bad "values-dev web memory limit"; fi
+# Certs are infra-owned on z440: no Certificate object, infra secret names.
+if render_env values-prod.yaml | grep -q "kind: Certificate"; then bad "values-prod must not issue certs"; else ok; fi
+if render_env values-prod.yaml | grep -q "secretName: prod-cartyx-tls"; then ok; else bad "values-prod uses infra tls secret"; fi
+if render_env values-dev.yaml | grep -q "secretName: dev-cartyx-tls"; then ok; else bad "values-dev uses infra tls secret"; fi
+# App Secret is out-of-band on z440: no managed Secret, refs point at 'cartyx'.
+if render_env values-prod.yaml | grep -q "kind: Secret"; then bad "values-prod must not manage the Secret"; else ok; fi
+if render_env values-prod.yaml | grep -qE "name: cartyx$"; then ok; else bad "values-prod refs existingSecret cartyx"; fi
 ```
 
 - [ ] **Step 2: Run to verify they fail**
 
 Run: `bash deploy/charts/cartyx/tests/render-tests.sh`
-Expected: the four new checks FAIL (files don't exist; helm errors on missing `-f`).
+Expected: the new checks FAIL (files don't exist; helm errors on the missing `-f` — the two "must not" checks fail-safe to pass on error output only if it happens to lack the pattern; treat any FAIL line as red).
 
 - [ ] **Step 3: Write the files**
 
 `deploy/charts/cartyx/values-prod.yaml`:
 
 ```yaml
-# Production release: helm -n cartyx-prod -f values-prod.yaml
-# Image tags and secret values are injected by .github/workflows/deploy.yml.
-# Client-baked VITE_PUBLIC_* values live in deploy/build/web-prod.args.
+# Production release: namespace `prod` on cluster z440, installed by the Flux
+# HelmRelease in cartyx-infrastructure (which also carries the image tags —
+# CI bumps them there). Client-baked VITE_PUBLIC_* live in
+# deploy/build/web-prod.args.
 web:
   env:
     APP_ENV: production
     BASE_URL: https://app.cartyx.io
     # OAuth client IDs are public identifiers (they appear in every auth
-    # redirect URL) — fill in and commit; the SECRETS live in the GitHub
-    # `production` Environment.
+    # redirect URL) — fill in and commit; the SECRETS live in the
+    # kubectl-created `cartyx` Secret (see README).
     GOOGLE_CLIENT_ID: ''
     GITHUB_CLIENT_ID: ''
     R2_ACCOUNT_ID: ''
@@ -970,15 +989,23 @@ ingress:
   webHost: app.cartyx.io
   wsHost: ws.cartyx.io
 
+# Certificates are owned by the cartyx-infrastructure repo (per-env, no
+# wildcard — its README forbids consolidating). Reference, don't issue.
 tls:
+  secretName: prod-cartyx-tls
   certificate:
-    clusterIssuer: '' # fill in once: kubectl get clusterissuer
+    enabled: false
+
+secret:
+  create: false
+  existingSecret: cartyx # created out-of-band: see chart README, step 1
 ```
 
 `deploy/charts/cartyx/values-dev.yaml`:
 
 ```yaml
-# Dev-site release: helm -n cartyx-dev -f values-dev.yaml
+# Dev-site release: namespace `dev` on cluster z440, installed by the Flux
+# HelmRelease in cartyx-infrastructure.
 # APP_ENV is `staging`, not `development`: prod-like cookies/uploads/secret
 # enforcement, but labeled distinctly for analytics and DB policy. The
 # `development` value would enable laptop-only local-disk upload fallbacks.
@@ -1005,8 +1032,13 @@ ingress:
   wsHost: dev-ws.cartyx.io
 
 tls:
+  secretName: dev-cartyx-tls
   certificate:
-    clusterIssuer: '' # fill in once: kubectl get clusterissuer
+    enabled: false
+
+secret:
+  create: false
+  existingSecret: cartyx
 ```
 
 `deploy/build/web-prod.args`:
@@ -1045,7 +1077,7 @@ VITE_PUBLIC_POSTHOG_HOST=https://app.posthog.com
 - [ ] **Step 4: Run the tests**
 
 Run: `bash deploy/charts/cartyx/tests/render-tests.sh`
-Expected: all pass (`41 passed, 0 failed`), exit 0.
+Expected: all pass (`47 passed, 0 failed`), exit 0.
 
 - [ ] **Step 5: Commit**
 
@@ -1129,8 +1161,8 @@ git commit -m "ci: helm chart render-test job; fix e2e VITE_PUBLIC_FF_* to boole
 
 **Interfaces:**
 
-- Consumes: chart + values files (Tasks 1–6), `deploy/build/web-{prod,dev}.args` (Task 6), `Dockerfile.web`, `realtime/Dockerfile`.
-- Produces: the deploy pipeline. Expects GitHub Environments `production` and `dev`, each with secrets `MONGODB_URI`, `SESSION_SECRET`, `GOOGLE_CLIENT_SECRET`, `OAUTH_GITHUB_CLIENT_SECRET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `POSTHOG_KEY`; repo-level secrets `TS_AUTHKEY`, `KUBECONFIG_B64`. (GitHub forbids secret names starting with `GITHUB_`, hence `OAUTH_GITHUB_CLIENT_SECRET`.)
+- Consumes: `deploy/build/web-{prod,dev}.args` (Task 6), `Dockerfile.web`, `realtime/Dockerfile`; the marker comments `# ci:web-tag` / `# ci:realtime-tag` in the infra repo's `apps/{dev,prod}/helmrelease.yaml` (Task 11 creates them — this workflow can merge first; it just fails at the bump step until the infra PR lands).
+- Produces: the deploy pipeline. Expects ONE repo secret: `INFRA_REPO_TOKEN` — a fine-grained PAT scoped to `biozal/cartyx-infrastructure`, Contents read+write. No cluster credentials, no Tailscale, no GitHub Environments.
 
 - [ ] **Step 1: Write the workflow**
 
@@ -1142,10 +1174,9 @@ name: Deploy
 on:
   push:
     branches: [dev, main]
-  workflow_dispatch: # manual deploys, including the very first install
+  workflow_dispatch: # manual re-deploys (rebuilds images for the current sha)
 
-# One deploy at a time per branch; queued pushes wait (never cancel a deploy
-# mid-helm-upgrade).
+# One deploy at a time per branch; queued pushes wait.
 concurrency:
   group: deploy-${{ github.ref_name }}
   cancel-in-progress: false
@@ -1156,7 +1187,6 @@ jobs:
     runs-on: ubuntu-latest
     # Guard manual dispatches from feature branches.
     if: contains(fromJSON('["dev", "main"]'), github.ref_name)
-    environment: ${{ github.ref_name == 'main' && 'production' || 'dev' }}
     permissions:
       contents: read
       packages: write
@@ -1192,7 +1222,7 @@ jobs:
       - name: Build and push web image
         # VITE_PUBLIC_* are baked into the client bundle HERE. Changing a
         # feature flag or the ws host = edit deploy/build/web-$DEPLOY_ENV.args
-        # and merge — a helm-only change cannot do it.
+        # and merge — a values-only change cannot do it.
         run: |
           args=()
           while IFS= read -r line; do
@@ -1204,80 +1234,55 @@ jobs:
             -t "${{ steps.tags.outputs.web }}" .
           docker push "${{ steps.tags.outputs.web }}"
 
-      - name: Connect to the tailnet
-        uses: tailscale/github-action@v3
-        with:
-          authkey: ${{ secrets.TS_AUTHKEY }}
-
-      - name: Write kubeconfig
-        run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
-          chmod 600 ~/.kube/config
-          kubectl version # fails fast if the k3s API is unreachable over the tailnet
-
-      - name: Helm upgrade
+      - name: Bump image tags in cartyx-infrastructure
+        # GitOps handoff (the flow the infra README documents): commit the new
+        # tags to the HelmRelease; Flux reconciles within a minute. CI never
+        # holds cluster credentials. The sed anchors are the ci:*-tag marker
+        # comments in apps/<env>/helmrelease.yaml.
         env:
-          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
-          MONGODB_URI: ${{ secrets.MONGODB_URI }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          # GitHub forbids secret names starting with GITHUB_, and custom
-          # GITHUB_* env vars are reserved by Actions — hence this naming.
-          OAUTH_GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_CLIENT_SECRET }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+          INFRA_TOKEN: ${{ secrets.INFRA_REPO_TOKEN }}
         run: |
-          # helm --set-string treats commas/backslashes as structural — escape
-          # them (same rule as deploy/local/deploy-kind.sh; replica-set Mongo
-          # URIs contain commas).
-          esc() {
-            local v="${1//\\/\\\\}"
-            printf '%s' "${v//,/\\,}"
-          }
-          helm upgrade --install cartyx deploy/charts/cartyx \
-            --namespace "cartyx-$DEPLOY_ENV" --create-namespace \
-            -f "deploy/charts/cartyx/values-$DEPLOY_ENV.yaml" \
-            --set web.image.tag="${{ steps.tags.outputs.webtag }}" \
-            --set realtime.image.tag="${{ steps.tags.outputs.sha }}" \
-            --set-string secret.values.sessionSecret="$(esc "$SESSION_SECRET")" \
-            --set-string secret.values.mongodbUri="$(esc "$MONGODB_URI")" \
-            --set-string secret.values.googleClientSecret="$(esc "$GOOGLE_CLIENT_SECRET")" \
-            --set-string secret.values.githubClientSecret="$(esc "$OAUTH_GITHUB_CLIENT_SECRET")" \
-            --set-string secret.values.r2AccessKeyId="$(esc "$R2_ACCESS_KEY_ID")" \
-            --set-string secret.values.r2SecretAccessKey="$(esc "$R2_SECRET_ACCESS_KEY")" \
-            --set-string secret.values.posthogKey="$(esc "$POSTHOG_KEY")" \
-            --wait --timeout 5m
-
-      - name: Verify in-cluster health
-        run: |
-          NS="cartyx-$DEPLOY_ENV"
-          kubectl -n "$NS" rollout status deploy/cartyx-web --timeout=120s
-          kubectl -n "$NS" rollout status deploy/cartyx-realtime --timeout=120s
-          # /healthz + /readyz are 403'd at the ingress by design — probe the
-          # Services from inside the cluster instead.
-          kubectl -n "$NS" run "deploy-healthcheck-${{ steps.tags.outputs.sha }}" \
-            --rm -i --restart=Never --image=curlimages/curl:8.11.1 -- \
-            sh -c "curl -fsS http://cartyx-web:3000/readyz && curl -fsS http://cartyx-realtime:1999/healthz"
+          git clone --depth 1 "https://x-access-token:${INFRA_TOKEN}@github.com/biozal/cartyx-infrastructure.git" /tmp/infra
+          cd /tmp/infra
+          F="apps/$DEPLOY_ENV/helmrelease.yaml"
+          sed -i -E "s|(tag: ).*( # ci:web-tag)|\1${{ steps.tags.outputs.webtag }}\2|" "$F"
+          sed -i -E "s|(tag: ).*( # ci:realtime-tag)|\1'${{ steps.tags.outputs.sha }}'\2|" "$F"
+          git diff --exit-code --quiet && { echo "tags unchanged — nothing to deploy"; exit 0; }
+          git config user.name "cartyx-ci"
+          git config user.email "ci@cartyx.io"
+          git commit -am "deploy(${DEPLOY_ENV}): web ${{ steps.tags.outputs.webtag }}, realtime ${{ steps.tags.outputs.sha }} (cartyx-app@${GITHUB_SHA::7})"
+          git push
 
       - name: Verify public site
-        # Fails if DNS for the host doesn't point at the box, TLS is broken,
-        # or the app isn't serving. This IS the phase acceptance check.
+        # Bounded poll: without cluster credentials CI can't confirm the new
+        # tag rolled out (use `flux get helmreleases -A` on the box for that)
+        # — this catches total breakage: site down, TLS broken, tunnel dead.
+        # Generous window: Flux GitRepository interval + helm upgrade + probes.
         run: |
-          code=$(curl -fsS -o /dev/null -w '%{http_code}' "https://$WEB_HOST/")
-          echo "https://$WEB_HOST/ -> $code"
+          echo "Waiting for https://$WEB_HOST/ to answer 200 (up to 5 minutes)..."
+          for i in $(seq 1 30); do
+            if curl -fsS -o /dev/null "https://$WEB_HOST/"; then
+              echo "https://$WEB_HOST/ -> 200"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Site did not answer 200 within the window" >&2
+          exit 1
 ```
+
+Note on the realtime sed: the HelmRelease keeps the realtime tag single-quoted (`tag: '0000000' # ci:realtime-tag`) because a bare 7-char all-digit sha would parse as a YAML number; the sed replacement preserves the quotes. The web tag is always `prod-`/`dev-`-prefixed and needs none.
 
 - [ ] **Step 2: Validate**
 
-Run: `npx prettier --check .github/workflows/deploy.yml` (write if needed) and eyeball `git diff --staged` after adding — no secrets inline, every `${{ secrets.* }}` flows through `env:` into `run:` via shell vars (never string-interpolated into the script body except the login/kubeconfig steps where GitHub masks them).
+Run: `npx prettier --check .github/workflows/deploy.yml` (write if needed). Eyeball the diff: the only secret is `INFRA_REPO_TOKEN`, flowing through `env:` into the clone URL (GitHub masks it in logs).
 Expected: prettier clean.
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add .github/workflows/deploy.yml
-git commit -m "feat(deploy): auto-deploy workflow — build/push ghcr images, helm upgrade over Tailscale"
+git commit -m "feat(deploy): auto-deploy workflow — build/push ghcr images, bump tags in cartyx-infrastructure for Flux"
 ```
 
 ---
@@ -1349,7 +1354,7 @@ tls:
     enabled: false
 ```
 
-Run: `bash deploy/charts/cartyx/tests/render-tests.sh` — all pass (`43 passed, 0 failed`).
+Run: `bash deploy/charts/cartyx/tests/render-tests.sh` — all pass (`49 passed, 0 failed`).
 
 - [ ] **Step 3: Add the web port mapping to `deploy/local/kind-config.yaml`**
 
@@ -1550,7 +1555,7 @@ git commit -m "feat(deploy): kind path deploys the full cartyx chart (web on :32
 
 **Interfaces:**
 
-- Consumes: everything prior; secret names from Task 8.
+- Consumes: everything prior; the deploy flow from Task 8; the infra-repo objects from Task 11.
 - Produces: the operator runbook; roadmap reflecting the Phase 3/4 scope shift.
 
 - [ ] **Step 1: Write `deploy/charts/cartyx/README.md`**
@@ -1559,17 +1564,26 @@ git commit -m "feat(deploy): kind path deploys the full cartyx chart (web on :32
 # cartyx Helm chart
 
 Deploys the Cartyx app — `web` (TanStack Start/Nitro, port 3000) and
-`realtime` (ws service, port 1999) — as ONE release per environment:
+`realtime` (ws service, port 1999) — as ONE release per environment on the
+Flux-managed k3s cluster (`z440`, github.com/biozal/cartyx-infrastructure):
 
 | Release               | Namespace      | Values file         | Hosts                                |
 | --------------------- | -------------- | ------------------- | ------------------------------------ |
-| `cartyx` (prod)       | `cartyx-prod`  | `values-prod.yaml`  | `app.cartyx.io` / `ws.cartyx.io`     |
-| `cartyx` (dev site)   | `cartyx-dev`   | `values-dev.yaml`   | `dev.cartyx.io` / `dev-ws.cartyx.io` |
+| `cartyx` (prod)       | `prod`         | `values-prod.yaml`  | `app.cartyx.io` / `ws.cartyx.io`     |
+| `cartyx` (dev site)   | `dev`          | `values-dev.yaml`   | `dev.cartyx.io` / `dev-ws.cartyx.io` |
 | `cartyx` (local kind) | `cartyx-local` | `values-local.yaml` | `localhost:3200` / `localhost:1999`  |
 
-Deploys run from `.github/workflows/deploy.yml` on merge to `dev` / `main`
-(or manually via workflow_dispatch). **Nothing deploys from a laptop.**
+**How a deploy works:** merge to `dev`/`main` → `.github/workflows/deploy.yml`
+builds + pushes images to ghcr.io and commits the new tags to the
+`HelmRelease` files in cartyx-infrastructure → Flux reconciles within a
+minute. CI never talks to the cluster; **nothing deploys from a laptop.**
 Render tests: `bash deploy/charts/cartyx/tests/render-tests.sh` (also in CI).
+
+The infra repo owns: namespaces (`dev`, `prod`), per-env TLS Certificates
+(`prod-cartyx-tls` / `dev-cartyx-tls` — do NOT enable this chart's
+Certificate there), the Cloudflare tunnel, and the Flux `HelmRelease` +
+`GitRepository` objects that consume this chart from this repo's `dev`/`main`
+branches.
 
 ## Client-baked vs server env
 
@@ -1577,70 +1591,83 @@ Render tests: `bash deploy/charts/cartyx/tests/render-tests.sh` (also in CI).
 PostHog browser key) are compiled into the client bundle when the image is
 built, from `deploy/build/web-<env>.args`. **Changing one = edit that file,
 merge, let the workflow rebuild.** Server-read env (`MONGODB_URI`,
-`SESSION_SECRET`, OAuth, R2, `APP_ENV`, `BASE_URL`) is live at deploy time
-via this chart.
+`SESSION_SECRET`, OAuth, R2, `APP_ENV`, `BASE_URL`) is live: plain values in
+`values-<env>.yaml`, secrets in the `cartyx` Secret (below).
 
 ## One-time setup
 
-1. **Tailscale**: install on the box, join the tailnet, note the tailnet IP.
-   Bind the k3s API to the tailnet interface / firewall it off the public IP.
-2. **CI auth key**: tailnet admin console → ephemeral + reusable auth key
-   (tag it, e.g. `tag:ci`) → repo secret `TS_AUTHKEY`.
-3. **Kubeconfig**: copy `/etc/rancher/k3s/k3s.yaml`, change `server:` to
-   `https://<tailnet-ip>:6443`, then `base64 -w0` the file → repo secret
-   `KUBECONFIG_B64`.
-4. **GitHub Environments**: create `production` and `dev` (repo Settings →
-   Environments). In each, add: `MONGODB_URI`, `SESSION_SECRET`
-   (≥32 chars), `GOOGLE_CLIENT_SECRET`, `OAUTH_GITHUB_CLIENT_SECRET`
-   (GitHub forbids `GITHUB_*` secret names), `R2_ACCESS_KEY_ID`,
-   `R2_SECRET_ACCESS_KEY`, `POSTHOG_KEY`. Optionally add a
-   required-reviewer rule on `production`.
-5. **Values files**: fill in `GOOGLE_CLIENT_ID` / `GITHUB_CLIENT_ID` /
-   `R2_ACCOUNT_ID` / `R2_BUCKET` / `CDN_URL` in `values-prod.yaml` +
-   `values-dev.yaml` (public identifiers — committing them is fine), and
-   `VITE_PUBLIC_POSTHOG_KEY` in `deploy/build/web-*.args`.
-6. **ClusterIssuer**: `kubectl get clusterissuer` → put the name in both
-   values files (`tls.certificate.clusterIssuer`).
-7. **OAuth redirect URIs**: register `https://app.cartyx.io/auth/callback/*`
-   and `https://dev.cartyx.io/auth/callback/*` with Google/GitHub.
-8. **First deploy**: Actions → Deploy → Run workflow on `dev`.
-   ⚠️ The first push creates the ghcr packages **private** — after it, open
-   github.com/biozal?tab=packages → `cartyx-web` and `cartyx-realtime` →
-   settings → change visibility to **public**, then re-run the workflow
-   (private packages would need an imagePullSecret the chart deliberately
-   doesn't carry). Repeat on `main` once dev verifies.
+1.  **App Secret** (from the box or any kubectl with cluster access — never
+    in git, matching the infra repo's out-of-band pattern):
+
+        kubectl -n prod create secret generic cartyx \
+          --from-literal=sessionSecret='...' \
+          --from-literal=mongodbUri='...' \
+          --from-literal=googleClientSecret='...' \
+          --from-literal=githubClientSecret='...' \
+          --from-literal=r2AccessKeyId='...' \
+          --from-literal=r2SecretAccessKey='...' \
+          --from-literal=posthogKey='...'
+
+    Repeat with `-n dev` and the dev-site values (dev Mongo DB, dev OAuth
+    client secrets if separate). `sessionSecret` must be ≥32 chars — the app
+    refuses to boot in production/staging otherwise.
+
+2.  **Deploy PAT**: fine-grained PAT scoped to `biozal/cartyx-infrastructure`
+    only, permission Contents: read+write → this repo's Actions secret
+    `INFRA_REPO_TOKEN`.
+3.  **Values files**: fill in `GOOGLE_CLIENT_ID` / `GITHUB_CLIENT_ID` /
+    `R2_ACCOUNT_ID` / `R2_BUCKET` / `CDN_URL` in `values-prod.yaml` +
+    `values-dev.yaml` (public identifiers — committing them is fine), and
+    `VITE_PUBLIC_POSTHOG_KEY` in `deploy/build/web-*.args`.
+4.  **OAuth redirect URIs**: register `https://app.cartyx.io/auth/callback/*`
+    and `https://dev.cartyx.io/auth/callback/*` with Google/GitHub.
+5.  **Infra repo PR**: merge the cartyx-infrastructure change that replaces
+    the whoami placeholders with the `HelmRelease` + `GitRepository` objects.
+6.  **First deploy**: merge to `dev` (or Actions → Deploy → Run workflow on
+    `dev`). ⚠️ The first push creates the ghcr packages **private** — open
+    github.com/biozal?tab=packages → `cartyx-web` and `cartyx-realtime` →
+    settings → visibility **public** (private packages would need an
+    imagePullSecret this chart deliberately doesn't carry). Flux retries on
+    its interval; force it from the box with
+    `flux reconcile helmrelease cartyx -n dev`.
+7.  Verify dev, then merge to `main` for prod.
 
 ## Operations
 
-- **Rotate a secret**: update it in the GitHub Environment → re-run Deploy.
-  The pod template's secret checksum changes, so pods restart automatically.
+- **Rotate a secret**: `kubectl -n <env> edit secret cartyx` (or delete +
+  recreate), then `kubectl -n <env> rollout restart deploy/cartyx-web
+deploy/cartyx-realtime` — the checksum auto-restart only covers the
+  chart-managed (kind) Secret, not `existingSecret`.
 - **Flip a client feature flag**: edit `deploy/build/web-<env>.args`, merge.
-- **Roll back**: re-run the Deploy workflow from the last good commit
-  (workflow_dispatch), or `helm rollback cartyx -n cartyx-<env>` from a
-  tailnet machine in an emergency.
+- **Roll back**: revert the tag-bump commit in cartyx-infrastructure (Flux
+  reconciles the old tags back), or re-run Deploy from the last good commit.
+- **Watch a rollout**: on the box, `flux get helmreleases -A` and
+  `kubectl -n <env> get pods -w`.
 - **Realtime is single-replica by design** (in-memory rooms); the chart
   refuses `replicaCount > 1` and uses a Recreate strategy (a deploy = a few
   seconds of WebSocket disconnect; clients reconnect via partysocket).
 
 ## Troubleshooting
 
-| Symptom                                            | Cause / fix                                                                                                                                                                                         |
-| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ErrImagePull` on first install                    | ghcr package is private (fresh packages default private). Make it public — setup step 8.                                                                                                            |
-| Render error `... is required`                     | An image tag / secret / clusterIssuer wasn't passed. The workflow sets tags+secrets; the issuer lives in the values files.                                                                          |
-| `/healthz` from the internet returns 403           | By design (`ingress.blockHealthEndpoints`). Probe in-cluster: `kubectl -n cartyx-<env> run hc --rm -i --restart=Never --image=curlimages/curl -- curl -fsS http://cartyx-web:3000/readyz`.          |
-| Health block objects rejected by the API server    | Traefik v2 CRDs use `ipWhiteList` instead of `ipAllowList` (check: `kubectl -n kube-system describe deploy traefik \| grep -i image`). Edit `templates/middleware.yaml` accordingly or upgrade k3s. |
-| WebSockets fail through Traefik but the site loads | Confirm `ws.cartyx.io` / `dev-ws.cartyx.io` resolve to the box and are **grey-clouded** in Cloudflare (proxied orange-cloud breaks non-HTTP upgrades on nonstandard setups).                        |
-| Web pod restarts under load                        | Liveness only probes `/healthz` (no I/O) — check `kubectl top pod` for memory against the 512Mi/384Mi limits; the Node heap is capped at 400MB via the image CMD.                                   |
+| Symptom                                         | Cause / fix                                                                                                                                                                                         |
+| ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ErrImagePull` on first install                 | ghcr package is private (fresh packages default private). Make it public — setup step 6.                                                                                                            |
+| Pods stuck `ContainerCreating`                  | The `cartyx` Secret doesn't exist in that namespace yet (setup step 1) — expected Flux behavior per the infra README.                                                                               |
+| HelmRelease render error `... is required`      | An image tag went missing — check the `values:` block (marker comments intact?) in the infra repo's helmrelease.yaml; the CI sed anchors on `# ci:web-tag` / `# ci:realtime-tag`.                   |
+| `/healthz` from the internet returns 403        | By design (`ingress.blockHealthEndpoints`). Probe in-cluster: `kubectl -n <env> run hc --rm -i --restart=Never --image=curlimages/curl -- curl -fsS http://cartyx-web:3000/readyz`.                 |
+| Health block objects rejected by the API server | Traefik v2 CRDs use `ipWhiteList` instead of `ipAllowList` (check: `kubectl -n kube-system describe deploy traefik \| grep -i image`). Edit `templates/middleware.yaml` accordingly or upgrade k3s. |
+| WebSockets fail but the site loads              | Check the Cloudflare tunnel hostname routes cover `ws.` / `dev-ws.` and that cloudflared pods are Ready (`kubectl -n cloudflare get pods`); WebSockets ride the tunnel like everything else.        |
+| Web pod restarts under load                     | Liveness only probes `/healthz` (no I/O) — check `kubectl top pod` for memory against the 512Mi/384Mi limits; the Node heap is capped at 400MB via the image CMD.                                   |
+| Deploy green but site serves the old version    | CI can't see the cluster — check `flux get helmreleases -A` on the box; the HelmRelease may have failed upgrade (`kubectl -n <env> describe helmrelease cartyx`).                                   |
 ```
 
 - [ ] **Step 2: Update the roadmap**
 
 In `docs/specs/2026-07-07-selfhost-migration-roadmap.md`:
 
-1. Under the `### Phase 3 — Helm chart for the app` heading, add as the first line: `Design: `2026-07-09-app-helm-chart-design.md`; plan: `2026-07-09-app-helm-chart-plan.md`. Scope grew during design: the auto-deploy workflow moved here from Phase 4; the box is on the LAN (Tailscale is only the CI deploy path); hostnames are app/ws/dev/dev-ws.cartyx.io.`
-2. Replace the Phase 3 bullet `- Install both releases on the cluster manually first (`helm install` from laptop over Tailscale)` with `- Deploys run only via `.github/workflows/deploy.yml` (push to dev/main + workflow_dispatch); secrets in GitHub Environments — nothing installs from a laptop`
-3. In Phase 4, replace the first two bullets (the `deploy.yml` bullet and the `Secrets as GitHub Actions secrets` bullet) with a single line: `- deploy.yml + GitHub Environment secrets shipped in Phase 3 — this phase is cutover + teardown only`
+1. Under the `### Phase 3 — Helm chart for the app` heading, add as the first line: `Design: `2026-07-09-app-helm-chart-design.md`; plan: `2026-07-09-app-helm-chart-plan.md`. Scope grew during design: the auto-deploy moved here from Phase 4 as GitOps — Flux on the cluster (github.com/biozal/cartyx-infrastructure) consumes the chart from this repo; CI pushes images + bumps tags in the infra repo. Hostnames are app/ws/dev/dev-ws.cartyx.io; namespaces dev/prod; ingress via Cloudflare Tunnel.`
+2. Replace the Phase 3 bullet `- Install both releases on the cluster manually first (`helm install` from laptop over Tailscale)` with `- Deploys are Flux-reconciled from cartyx-infrastructure; CI only pushes images and commits tag bumps there — no cluster credentials outside the box`
+3. In Phase 4, replace the first two bullets (the `deploy.yml` bullet and the `Secrets as GitHub Actions secrets` bullet) with a single line: `- deploy.yml (image build + infra-repo tag bump) shipped in Phase 3 — this phase is cutover + teardown only`
 
 - [ ] **Step 3: Final verification sweep**
 
@@ -1658,14 +1685,142 @@ Expected: all green. (Chart files are prettierignored; workflows/md are not.)
 
 ```bash
 git add deploy/charts/cartyx/README.md docs/specs/2026-07-07-selfhost-migration-roadmap.md
-git commit -m "docs(deploy): cartyx chart runbook; roadmap reflects Phase 3/4 scope shift"
+git commit -m "docs(deploy): cartyx chart runbook (Flux GitOps flow); roadmap reflects Phase 3/4 scope shift"
 ```
+
+---
+
+### Task 11: cartyx-infrastructure companion PR (separate repo)
+
+**Files (in a local clone of github.com/biozal/cartyx-infrastructure, branch `cartyx-app-helmrelease`):**
+
+- Create: `apps/sources.yaml`
+- Create: `apps/dev/helmrelease.yaml`
+- Create: `apps/prod/helmrelease.yaml`
+- Modify: `apps/kustomization.yaml`, `apps/dev/kustomization.yaml`, `apps/prod/kustomization.yaml`, `README.md`
+- Delete: `apps/dev/web.yaml`, `apps/dev/ws.yaml`, `apps/dev/ingress.yaml`, `apps/prod/web.yaml`, `apps/prod/ws.yaml`, `apps/prod/ingress.yaml`
+- Keep: `apps/dev/certificate.yaml`, `apps/prod/certificate.yaml` (cert ownership stays here)
+
+**Interfaces:**
+
+- Consumes: the chart at `deploy/charts/cartyx` on the app repo's `dev`/`main` branches (Tasks 1–6) — including `values-dev.yaml` / `values-prod.yaml` referenced via `valuesFiles`.
+- Produces: the `# ci:web-tag` / `# ci:realtime-tag` sed anchors Task 8's workflow depends on. **Do not merge this PR before the app-repo PR merges to `dev`** — the HelmRelease points at `deploy/charts/cartyx` on the `dev` branch, which must exist. (Unmerged order the other way is harmless: the workflow's bump step just fails until this lands.)
+
+- [ ] **Step 1: Clone and branch**
+
+```bash
+git clone https://github.com/biozal/cartyx-infrastructure.git /tmp/cartyx-infrastructure
+cd /tmp/cartyx-infrastructure
+git checkout -b cartyx-app-helmrelease
+```
+
+- [ ] **Step 2: Add the Flux sources**
+
+`apps/sources.yaml`:
+
+```yaml
+---
+# Chart sources: the app repo's deploy/charts/cartyx, tracked per branch so
+# chart changes flow with the same merge that ships the code (dev branch ->
+# dev namespace, main -> prod). Public repo: no credentials.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: cartyx-app-dev
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: https://github.com/biozal/cartyx-app
+  ref:
+    branch: dev
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: cartyx-app-main
+  namespace: flux-system
+spec:
+  interval: 1m
+  url: https://github.com/biozal/cartyx-app
+  ref:
+    branch: main
+```
+
+`apps/kustomization.yaml` becomes:
+
+```yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - sources.yaml
+  - dev
+  - prod
+```
+
+- [ ] **Step 3: Write the HelmReleases**
+
+`apps/dev/helmrelease.yaml`:
+
+```yaml
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: cartyx
+spec:
+  interval: 5m
+  chart:
+    spec:
+      chart: deploy/charts/cartyx
+      # Revision strategy: repackage the chart on every commit to the branch
+      # (the chart version stays 0.1.0; without this, only version bumps
+      # would redeploy template changes).
+      reconcileStrategy: Revision
+      sourceRef:
+        kind: GitRepository
+        name: cartyx-app-dev
+        namespace: flux-system
+      valuesFiles:
+        - deploy/charts/cartyx/values.yaml
+        - deploy/charts/cartyx/values-dev.yaml
+  # Image tags only — everything else lives in the chart's values files.
+  # CI (cartyx-app deploy.yml) seds these lines by their marker comments.
+  values:
+    web:
+      image:
+        tag: dev-0000000 # ci:web-tag
+    realtime:
+      image:
+        tag: '0000000' # ci:realtime-tag
+```
+
+`apps/prod/helmrelease.yaml` — identical except `sourceRef.name: cartyx-app-main`, `valuesFiles` second entry `deploy/charts/cartyx/values-prod.yaml`, and the web tag placeholder `prod-0000000 # ci:web-tag`.
+
+Both env `kustomization.yaml`s: replace the `web.yaml`, `ws.yaml`, `ingress.yaml` entries with `helmrelease.yaml` (keep `certificate.yaml`), then `git rm` the six placeholder files.
+
+Note: the placeholder tags (`dev-0000000`) intentionally point at images that don't exist — the HelmRelease sits failed-but-harmless until the first real deploy bumps them. The kustomization `namespace: dev|prod` fields stamp the HelmRelease into the right namespace; the `sourceRef.namespace: flux-system` cross-namespace reference is explicit and allowed.
+
+- [ ] **Step 4: Update the infra README**
+
+In the secrets table, add the row: `| `cartyx`|`dev`, `prod`|`kubectl create secret generic cartyx ...` (see cartyx-app: deploy/charts/cartyx/README.md) |`
+Replace the "Deploying a new version" section body with: `Merges to cartyx-app's `dev`/`main`do this automatically: its deploy workflow pushes images to ghcr.io and commits the new tags to`apps/\*/helmrelease.yaml`here (anchored on the`# ci:web-tag`/`# ci:realtime-tag` comments). Flux reconciles within a minute. Manual version pin: edit those same lines and commit.`
+
+- [ ] **Step 5: Validate, push, open the PR**
+
+```bash
+kustomize build apps   # or: kubectl kustomize apps — renders without error, no whoami images remain
+git add -A
+git commit -m "feat: cartyx app via Flux HelmRelease from cartyx-app chart (replaces whoami placeholders)"
+git push -u origin cartyx-app-helmrelease
+gh pr create --repo biozal/cartyx-infrastructure --title "Cartyx app via Flux HelmRelease" --body "Replaces the whoami placeholders with HelmReleases consuming deploy/charts/cartyx from the app repo (dev branch -> dev ns, main -> prod ns). Tags are CI-bumped via the # ci:*-tag anchors. Certificates stay here. Merge AFTER cartyx-app's app-helm-chart PR reaches dev."
+```
+
+Expected: `kustomize build apps` renders GitRepositories + HelmReleases + Certificates; PR opens.
 
 ---
 
 ## Acceptance (from the spec — verified after merge, not in this PR)
 
-The PR itself is gated by CI (render tests, unit, e2e). The phase acceptance runs on real infrastructure after merge to `dev`: the Deploy workflow goes green end-to-end, `dev.cartyx.io` serves over TLS, dice rolls relay through `dev-ws.cartyx.io`, and `/healthz` 403s from the public internet. Then the same on `main`. The one-time setup (chart README steps 1–8) must happen between merge and the first green run — expect the first run to fail at image pull until package visibility is flipped (step 8).
+The app-repo PR itself is gated by CI (render tests, unit, e2e). The phase acceptance runs on real infrastructure after merging: (1) app PR → `dev`, (2) infra PR, (3) one-time setup (chart README steps 1–5) done. Then the Deploy workflow goes green, Flux rolls the release, `dev.cartyx.io` serves over TLS through the tunnel, dice rolls relay through `dev-ws.cartyx.io`, and `/healthz` 403s from the public internet. Then the same on `main`. Expect the first run to stall on private ghcr packages until visibility is flipped (README step 6).
 
 ## Out of scope (unchanged from the spec)
 
