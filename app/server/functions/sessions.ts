@@ -6,7 +6,7 @@ import { User } from '../db/models/User';
 import { Campaign } from '../db/models/Campaign';
 import { Session } from '../db/models/Session';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import {
   listSessionsSchema,
   getSessionCatchUpSchema,

@@ -9,7 +9,7 @@ import { Note } from '../db/models/Note';
 import { Character } from '../db/models/Character';
 import { Race } from '../db/models/Race';
 import { Rule } from '../db/models/Rule';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import type {
   GMScreenData,
   WindowData,

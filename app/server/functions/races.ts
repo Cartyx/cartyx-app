@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { Race } from '../db/models/Race';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { normalizeTags } from '../utils/helpers';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { pruneLoreLinks } from '../utils/pruneLoreLinks';

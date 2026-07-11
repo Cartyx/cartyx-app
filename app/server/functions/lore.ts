@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { pruneEventLinks } from '../utils/pruneEventLinks';
-import { serverCaptureException } from '../utils/posthog';
+import { serverCaptureException } from '../utils/telemetry';
 import { Lore } from '../db/models/Lore';
 import { Character } from '../db/models/Character';
 import { Player } from '../db/models/Player';

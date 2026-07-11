@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
-import { serverCaptureException } from '../utils/posthog';
+import { serverCaptureException } from '../utils/telemetry';
 import { Event } from '../db/models/Event';
 import { Calendar } from '../db/models/Calendar';
 import { Character } from '../db/models/Character';

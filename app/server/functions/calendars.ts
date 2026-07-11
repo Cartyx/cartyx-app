@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { AnyBulkWriteOperation } from 'mongoose';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
-import { serverCaptureException } from '../utils/posthog';
+import { serverCaptureException } from '../utils/telemetry';
 import { Calendar } from '../db/models/Calendar';
 import { Event } from '../db/models/Event';
 import {

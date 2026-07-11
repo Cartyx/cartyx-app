@@ -4,7 +4,7 @@ import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
 import { Campaign } from '../db/models/Campaign';
 import { SessionEvent } from '../db/models/SessionEvent';
-import { serverCaptureException } from '../utils/posthog';
+import { serverCaptureException } from '../utils/telemetry';
 import type { SessionEventData } from '~/types/tabletop';
 import { createSessionEventSchema, listSessionEventsSchema } from '~/types/schemas/tabletop';
 

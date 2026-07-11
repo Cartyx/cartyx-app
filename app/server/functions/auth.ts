@@ -3,7 +3,7 @@ import { getSession, clearSession } from '../session';
 import { revokeToken } from '../utils/oauth';
 import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import {
   setRulerColorSchema,
   DEFAULT_RULER_COLOR,
