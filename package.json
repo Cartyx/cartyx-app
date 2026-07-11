@@ -26,7 +26,6 @@
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "build-storybook:full": "node scripts/build-storybook-with-iframe.mjs",
-    "party:dev": "npx partykit dev",
     "realtime:dev": "npm --prefix realtime run dev",
     "check:deps-age": "node scripts/check-package-age.mjs",
     "db:verify": "tsx scripts/mongo-admin.ts verify",
@@ -76,12 +75,7 @@
   },
   "overrides": {
     "esbuild": "^0.28.1",
-    "h3-v2": "npm:h3@2.0.1-rc.19",
-    "partykit": {
-      "miniflare": {
-        "undici": "^6.27.0"
-      }
-    }
+    "h3-v2": "npm:h3@2.0.1-rc.19"
   },
   "devDependencies": {
     "@chromatic-com/storybook": "^5.1.1",
@@ -117,7 +111,6 @@
     "globals": "^17.5.0",
     "happy-dom": "^20.9.0",
     "lefthook": "^2.1.4",
-    "partykit": "^0.0.115",
     "playwright": "^1.59.1",
     "prettier": "^3.5.3",
     "storybook": "^10.4.6",
@@ -125,7 +118,6 @@
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.5",
-    "y-partyserver": "^2.2.0"
+    "vitest": "^4.1.5"
   }
 }
