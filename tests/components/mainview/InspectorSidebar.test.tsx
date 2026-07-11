@@ -17,7 +17,7 @@ const { DEV_FLAGS, enabledFlags } = vi.hoisted(() => {
     settings: 'dev-inspector-settings',
   };
 
-  // Which flags PostHog reports as enabled
+  // Which flags are enabled
   const enabledFlags = new Set<string>([
     DEV_FLAGS.chat,
     DEV_FLAGS.dice,
@@ -234,28 +234,28 @@ describe('InspectorSidebar', () => {
       expect(screen.getByTestId('inspector-tab-chat')).toBeInTheDocument();
     });
 
-    it('hides chat tab when the PostHog flag is disabled', () => {
+    it('hides chat tab when the feature flag is disabled', () => {
       enabledFlags.delete(DEV_FLAGS.chat);
       render(<InspectorSidebar />);
       expect(screen.queryByTestId('inspector-tab-chat')).not.toBeInTheDocument();
       expect(screen.getByTestId('inspector-tab-wiki')).toBeInTheDocument();
     });
 
-    it('hides wiki tab when the PostHog flag is disabled', () => {
+    it('hides wiki tab when the feature flag is disabled', () => {
       enabledFlags.delete(DEV_FLAGS.wiki);
       render(<InspectorSidebar />);
       expect(screen.queryByTestId('inspector-tab-wiki')).not.toBeInTheDocument();
       expect(screen.getByTestId('inspector-tab-chat')).toBeInTheDocument();
     });
 
-    it('hides notes tab when the PostHog flag is disabled', () => {
+    it('hides notes tab when the feature flag is disabled', () => {
       enabledFlags.delete(DEV_FLAGS.notes);
       render(<InspectorSidebar />);
       expect(screen.queryByTestId('inspector-tab-notes')).not.toBeInTheDocument();
       expect(screen.getByTestId('inspector-tab-chat')).toBeInTheDocument();
     });
 
-    it('hides settings tab when the PostHog flag is disabled', () => {
+    it('hides settings tab when the feature flag is disabled', () => {
       enabledFlags.delete(DEV_FLAGS.settings);
       render(<InspectorSidebar />);
       expect(screen.queryByTestId('inspector-tab-settings')).not.toBeInTheDocument();
@@ -297,7 +297,7 @@ describe('InspectorSidebar', () => {
         screen.getByTestId('wiki-panel')
       );
 
-      // Simulate PostHog toggling the wiki flag off
+      // Simulate toggling the wiki flag off
       enabledFlags.delete(DEV_FLAGS.wiki);
       rerender(<InspectorSidebar defaultTab="wiki" />);
 

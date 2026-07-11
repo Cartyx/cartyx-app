@@ -1,12 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const mockServerCaptureException = vi.fn();
-vi.mock('~/server/utils/posthog', () => ({
-  serverCaptureException: (...args: unknown[]) => mockServerCaptureException(...args),
-  serverCaptureEvent: vi.fn(),
-  shutdownPostHog: vi.fn(),
-}));
-
 const mockFindOneAndUpdate = vi.fn();
 const mockFindOne = vi.fn();
 const mockUpdateOne = vi.fn();
@@ -201,13 +194,12 @@ describe('PKCE: token exchange includes code_verifier', () => {
 describe('upsertUser', () => {
   beforeEach(() => {
     vi.resetModules();
-    mockServerCaptureException.mockClear();
     mockFindOneAndUpdate.mockClear();
     mockConnectDB.mockClear();
     mockIsDBConnected.mockReturnValue(true);
   });
 
-  it('captures the exception to PostHog and rethrows when the DB upsert fails', async () => {
+  it('rethrows when the DB upsert fails', async () => {
     const dbError = new Error('MongoDB connection lost');
     mockFindOneAndUpdate.mockRejectedValue(dbError);
 
@@ -227,14 +219,9 @@ describe('upsertUser', () => {
     // the OAuth callback relies on this throw to redirect to an error page rather
     // than logging the user in with an unpersisted "unknown" session.
     await expect(upsertUser(profile)).rejects.toThrow(dbError);
-
-    expect(mockServerCaptureException).toHaveBeenCalledWith(dbError, 'google_123', {
-      action: 'upsertUser',
-      provider: 'google',
-    });
   });
 
-  it('captures and rethrows when the DB is not connected (no broken session)', async () => {
+  it('rethrows when the DB is not connected (no broken session)', async () => {
     mockIsDBConnected.mockReturnValue(false);
 
     const { upsertUser } = await import('~/server/utils/oauth');
@@ -253,35 +240,6 @@ describe('upsertUser', () => {
     // an unpersisted "unknown" session.
     await expect(upsertUser(profile)).rejects.toThrow(/not connected/);
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
-    expect(mockServerCaptureException).toHaveBeenCalledWith(expect.any(Error), 'google_offline', {
-      action: 'upsertUser',
-      provider: 'google',
-    });
-  });
-
-  it('does not capture exception on successful upsert', async () => {
-    mockFindOneAndUpdate.mockResolvedValue({
-      email: 'test@example.com',
-      firstName: 'Test',
-      lastName: 'User',
-      avatarUrl: null,
-      role: 'gm',
-    });
-
-    const { upsertUser } = await import('~/server/utils/oauth');
-    const profile = {
-      id: 'github_456',
-      provider: 'github' as const,
-      name: 'Test User',
-      email: 'test@example.com',
-      avatar: null,
-      accessToken: 'tok',
-      refreshToken: null,
-      tokenIssuedAt: Date.now(),
-    };
-
-    await upsertUser(profile);
-    expect(mockServerCaptureException).not.toHaveBeenCalled();
   });
 
   it('persists provider tokens ENCRYPTED (not plaintext) and never returns them in the session user', async () => {
@@ -351,7 +309,6 @@ describe('upsertUser', () => {
 describe('revokeToken (reads from encrypted server-side store)', () => {
   beforeEach(() => {
     vi.resetModules();
-    mockServerCaptureException.mockClear();
     mockFindOne.mockReset();
     mockUpdateOne.mockReset();
     mockConnectDB.mockClear();
@@ -397,7 +354,6 @@ describe('revokeToken (reads from encrypted server-side store)', () => {
       { providerId: 'google_123' },
       { $unset: { oauthTokens: '' } }
     );
-    expect(mockServerCaptureException).not.toHaveBeenCalled();
   });
 
   it('decrypts the stored GitHub token and calls the GitHub token-delete endpoint', async () => {
@@ -431,7 +387,6 @@ describe('revokeToken (reads from encrypted server-side store)', () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(mockUpdateOne).not.toHaveBeenCalled();
-    expect(mockServerCaptureException).not.toHaveBeenCalled();
   });
 
   it('early-returns when the user document is not found', async () => {
@@ -443,24 +398,9 @@ describe('revokeToken (reads from encrypted server-side store)', () => {
     await revokeToken(sessionUser('google'));
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(mockServerCaptureException).not.toHaveBeenCalled();
   });
 
-  it('captures exception to PostHog when Google token revocation fetch fails', async () => {
-    const fetchError = new Error('Network timeout');
-    globalThis.fetch = vi.fn().mockRejectedValue(fetchError);
-    mockFindOneReturning({ oauthTokens: { accessToken: await storedToken('google-access-xyz') } });
-
-    const { revokeToken } = await import('~/server/utils/oauth');
-    await revokeToken(sessionUser('google', 'google_123'));
-
-    expect(mockServerCaptureException).toHaveBeenCalledWith(fetchError, 'google_123', {
-      action: 'revokeToken',
-      provider: 'google',
-    });
-  });
-
-  it('does not throw and captures exception when the stored token cannot be decrypted (e.g. rotated SESSION_SECRET)', async () => {
+  it('does not throw when the stored token cannot be decrypted (e.g. rotated SESSION_SECRET)', async () => {
     const fetchMock = vi.fn();
     globalThis.fetch = fetchMock;
     // A well-formed encrypted token whose ciphertext/auth tag have been tampered
@@ -478,11 +418,5 @@ describe('revokeToken (reads from encrypted server-side store)', () => {
     // Decryption failed before any provider call or token clear could happen.
     expect(fetchMock).not.toHaveBeenCalled();
     expect(mockUpdateOne).not.toHaveBeenCalled();
-    // The decrypt failure is captured rather than crashing.
-    expect(mockServerCaptureException).toHaveBeenCalledTimes(1);
-    expect(mockServerCaptureException).toHaveBeenCalledWith(expect.any(Error), 'google_123', {
-      action: 'revokeToken',
-      provider: 'google',
-    });
   });
 });

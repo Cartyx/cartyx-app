@@ -72,7 +72,7 @@ assert_contains "chart renders at least one object" "^kind:"
 # --- Task 2: helpers + secret ---
 assert_contains "secret rendered with session key" "sessionSecret:"
 assert_contains "secret rendered with mongo key" "mongodbUri:"
-assert_contains "secret carries all seven keys" "posthogKey:"
+assert_contains "secret carries all six keys" "r2SecretAccessKey:"
 assert_not_contains "existingSecret suppresses managed Secret" "kind: Secret" \
   --set secret.existingSecret=my-secret
 filtered_args=$(args_without secret.values.sessionSecret)

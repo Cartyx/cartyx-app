@@ -107,8 +107,6 @@ up() {
     --build-arg VITE_PUBLIC_FF_WIKI=true \
     --build-arg VITE_PUBLIC_FF_NOTES=true \
     --build-arg VITE_PUBLIC_FF_SETTINGS=true \
-    --build-arg VITE_PUBLIC_POSTHOG_KEY="$(read_env_value VITE_PUBLIC_POSTHOG_KEY || true)" \
-    --build-arg VITE_PUBLIC_POSTHOG_HOST="$(read_env_value VITE_PUBLIC_POSTHOG_HOST || true)" \
     -t "$WEB_IMAGE" "$REPO_ROOT"
 
   log "Loading images into kind..."
@@ -137,7 +135,6 @@ up() {
   add_secret GITHUB_CLIENT_SECRET githubClientSecret
   add_secret R2_ACCESS_KEY_ID r2AccessKeyId
   add_secret R2_SECRET_ACCESS_KEY r2SecretAccessKey
-  add_secret POSTHOG_KEY posthogKey
 
   log "Deploying with Helm..."
   helm upgrade --install "$RELEASE" "$CHART_DIR" \

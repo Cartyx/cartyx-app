@@ -111,10 +111,6 @@ vi.mock('~/server/db/models/GMScreen', () => ({
     create: vi.fn(),
   },
 }));
-vi.mock('~/server/utils/posthog', () => ({
-  serverCaptureException: vi.fn(),
-  serverCaptureEvent: vi.fn(),
-}));
 
 const mockMongoSession = {
   withTransaction: vi.fn(async (fn: () => Promise<void>) => fn()),
@@ -139,7 +135,6 @@ import {
   activateSession,
   campaignInputSchema,
 } from '~/server/functions/campaigns';
-import { serverCaptureEvent } from '~/server/utils/posthog';
 
 const mockSession = {
   id: 'session-user-1',
@@ -574,29 +569,12 @@ describe('createCampaign', () => {
     );
   });
 
-  it('fires campaign_created analytics event on success', async () => {
-    vi.mocked(Campaign.create).mockResolvedValue([
-      { ...makeCampaign(), name: 'My Campaign' },
-    ] as never);
-
-    await _createCampaign({ data: { name: 'My Campaign', description: '' } });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'campaign_created', {
-      campaign_id: 'camp-1',
-      campaign_name: 'My Campaign',
-      has_image: false,
-      has_schedule: false,
-    });
-  });
-
-  it('does not fire analytics when not authenticated', async () => {
+  it('throws when not authenticated', async () => {
     vi.mocked(getSession).mockResolvedValue(null);
 
     await expect(_createCampaign({ data: { name: 'Test', description: '' } })).rejects.toThrow(
       'Not authenticated'
     );
-
-    expect(serverCaptureEvent).not.toHaveBeenCalled();
   });
 
   it('creates a default Session 0 document for the new campaign', async () => {
@@ -787,42 +765,9 @@ describe('joinCampaign', () => {
       'Campaign is not active'
     );
   });
-
-  it('fires campaign_joined analytics event on success', async () => {
-    const campaignDoc = makeCampaign({
-      gameMasterId: 'gm-user',
-      members: [{ userId: 'gm-user', role: 'gm' }],
-    });
-    vi.mocked(Campaign.findOne).mockResolvedValue(campaignDoc as never);
-    const updatedDoc = {
-      ...campaignDoc,
-      members: [...campaignDoc.members, { userId: 'dbuser-1', role: 'player' }],
-    };
-    vi.mocked(Campaign.findOneAndUpdate).mockResolvedValue(updatedDoc as never);
-
-    await _joinCampaign({ data: { inviteCode: 'ABCD-EFGH' } });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'campaign_joined', {
-      campaign_id: 'camp-1',
-    });
-  });
 });
 
 describe('updateCampaign', () => {
-  it('fires campaign_updated analytics event on success', async () => {
-    const campaign = makeCampaign();
-    const saveMock = vi.fn().mockResolvedValue(campaign);
-    vi.mocked(Campaign.findById).mockResolvedValue({ ...campaign, save: saveMock } as never);
-
-    await _updateCampaign({
-      data: { id: 'camp-1', name: 'Updated Name', description: '' },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'campaign_updated', {
-      campaign_id: 'camp-1',
-    });
-  });
-
   it('stores updated links on the campaign', async () => {
     const campaign = makeCampaign();
     const saveMock = vi.fn().mockResolvedValue(campaign);
@@ -841,24 +786,20 @@ describe('updateCampaign', () => {
     expect(campaignObj.links).toEqual([{ name: 'D&D Beyond', url: 'https://dndbeyond.com' }]);
   });
 
-  it('does not fire analytics on auth failure', async () => {
+  it('throws when not authenticated', async () => {
     vi.mocked(getSession).mockResolvedValue(null);
 
     await expect(
       _updateCampaign({ data: { id: 'camp-1', name: 'Test', description: '' } })
     ).rejects.toThrow('Not authenticated');
-
-    expect(serverCaptureEvent).not.toHaveBeenCalled();
   });
 
-  it('does not fire analytics when campaign not found', async () => {
+  it('throws when campaign not found', async () => {
     vi.mocked(Campaign.findById).mockResolvedValue(null);
 
     await expect(
       _updateCampaign({ data: { id: 'nonexistent', name: 'Test', description: '' } })
     ).rejects.toThrow('Campaign not found');
-
-    expect(serverCaptureEvent).not.toHaveBeenCalled();
   });
 });
 
@@ -964,22 +905,6 @@ describe('createCampaign with imagePath (direct R2 upload)', () => {
         },
       })
     ).rejects.toThrow('Invalid image path');
-  });
-
-  it('has_image is true when imagePath is provided', async () => {
-    await _createCampaign({
-      data: {
-        name: 'My Campaign',
-        description: '',
-        imagePath: 'https://cdn.example.com/uploads/campaigns/img.webp',
-      },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith(
-      'session-user-1',
-      'campaign_created',
-      expect.objectContaining({ has_image: true })
-    );
   });
 });
 

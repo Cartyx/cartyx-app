@@ -21,10 +21,6 @@ vi.mock('~/server/db/models/Event', () => ({
   },
 }));
 vi.mock('~/server/functions/gmscreens-helpers', () => ({ removeDocumentRefsFromScreens: vi.fn() }));
-vi.mock('~/server/utils/posthog', () => ({
-  serverCaptureException: vi.fn(),
-  serverCaptureEvent: vi.fn(),
-}));
 vi.mock('~/server/db/models/Character', () => ({ Character: { findById: vi.fn() } }));
 vi.mock('~/server/db/models/Player', () => ({ Player: { findById: vi.fn() } }));
 vi.mock('~/server/db/models/Location', () => ({ Location: { findById: vi.fn() } }));

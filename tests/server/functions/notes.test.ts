@@ -33,10 +33,6 @@ vi.mock('~/server/db/models/Tag', () => ({
     find: vi.fn(),
   },
 }));
-vi.mock('~/server/utils/posthog', () => ({
-  serverCaptureException: vi.fn(),
-  serverCaptureEvent: vi.fn(),
-}));
 vi.mock('~/server/functions/gmscreens-helpers', () => ({
   removeDocumentRefsFromScreens: vi.fn().mockResolvedValue(0),
 }));
@@ -56,7 +52,6 @@ import {
   listNotesSchema,
 } from '~/server/functions/notes';
 import type { NoteListItem } from '~/types/note';
-import { serverCaptureEvent, serverCaptureException } from '~/server/utils/posthog';
 import { removeDocumentRefsFromScreens } from '~/server/functions/gmscreens-helpers';
 
 const mockSession = {
@@ -239,19 +234,6 @@ describe('createNote', () => {
     const createArg = vi.mocked(Note.create).mock.calls[0][0] as Record<string, unknown>;
     expect(createArg).not.toHaveProperty('sessionId');
   });
-
-  it('fires note_created analytics event', async () => {
-    vi.mocked(Note.create).mockResolvedValue(makeNote() as never);
-
-    await _createNote({
-      data: { campaignId: 'camp-1', sessionId: 'sess-1', title: 'T', note: 'B' },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'note_created', {
-      campaign_id: 'camp-1',
-      note_id: 'note-1',
-    });
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -358,21 +340,6 @@ describe('updateNote', () => {
     ).rejects.toThrow('Forbidden');
   });
 
-  it('fires note_updated analytics event', async () => {
-    const existing = makeNote();
-    vi.mocked(Note.findById).mockResolvedValue(existing as never);
-
-    await _updateNote({
-      data: { id: 'note-1', campaignId: 'camp-1', sessionId: 'sess-1', title: 'T', note: 'B' },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'note_updated', {
-      campaign_id: 'camp-1',
-      note_id: 'note-1',
-      updated_by: 'dbuser-1',
-    });
-  });
-
   it('throws when note is read-only', async () => {
     const existing = makeNote({ isReadOnly: true });
     vi.mocked(Note.findById).mockResolvedValue(existing as never);
@@ -383,22 +350,6 @@ describe('updateNote', () => {
       })
     ).rejects.toThrow('Note is read-only');
     expect(existing.save).not.toHaveBeenCalled();
-  });
-
-  it('passes sessionUserId to serverCaptureException on error', async () => {
-    vi.mocked(Note.findById).mockResolvedValue(null);
-
-    await expect(
-      _updateNote({
-        data: { id: 'note-1', campaignId: 'camp-1', sessionId: 'sess-1', title: 'T', note: 'B' },
-      })
-    ).rejects.toThrow('Note not found');
-
-    expect(serverCaptureException).toHaveBeenCalledWith(
-      expect.any(Error),
-      'session-user-1',
-      expect.objectContaining({ action: 'updateNote' })
-    );
   });
 });
 
@@ -654,7 +605,7 @@ describe('deleteNote', () => {
     );
   });
 
-  it('succeeds even when cleanup fails, reporting the cleanup error', async () => {
+  it('succeeds even when cleanup fails', async () => {
     const existing = makeNote({ deleteOne: vi.fn() });
     vi.mocked(Note.findById).mockResolvedValue(existing as never);
     const cleanupError = new Error('MongoDB timeout during cleanup');
@@ -664,29 +615,6 @@ describe('deleteNote', () => {
 
     expect(result.success).toBe(true);
     expect(existing.deleteOne).toHaveBeenCalled();
-    // Cleanup failure is reported but not re-thrown
-    expect(serverCaptureException).toHaveBeenCalledWith(
-      cleanupError,
-      'session-user-1',
-      expect.objectContaining({
-        action: 'deleteNote.cleanup',
-        campaignId: 'camp-1',
-        noteId: 'note-1',
-      })
-    );
-  });
-
-  it('fires note_deleted analytics event', async () => {
-    const existing = makeNote({ deleteOne: vi.fn() });
-    vi.mocked(Note.findById).mockResolvedValue(existing as never);
-
-    await _deleteNote({ data: { id: 'note-1', campaignId: 'camp-1' } });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'note_deleted', {
-      campaign_id: 'camp-1',
-      note_id: 'note-1',
-      deleted_by: 'dbuser-1',
-    });
   });
 });
 

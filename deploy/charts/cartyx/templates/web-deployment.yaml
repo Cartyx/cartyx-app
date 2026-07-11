@@ -58,8 +58,8 @@ spec:
                 secretKeyRef:
                   name: {{ include "cartyx.secretName" . }}
                   key: mongodbUri
-            # The remaining secret keys are optional features (OAuth, R2,
-            # PostHog). `optional: true` lets an existingSecret omit them.
+            # The remaining secret keys are optional features (OAuth, R2).
+            # `optional: true` lets an existingSecret omit them.
             - name: GOOGLE_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
@@ -83,12 +83,6 @@ spec:
                 secretKeyRef:
                   name: {{ include "cartyx.secretName" . }}
                   key: r2SecretAccessKey
-                  optional: true
-            - name: POSTHOG_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ include "cartyx.secretName" . }}
-                  key: posthogKey
                   optional: true
           livenessProbe:
             # /healthz does no I/O; a Mongo outage must not restart the pod.

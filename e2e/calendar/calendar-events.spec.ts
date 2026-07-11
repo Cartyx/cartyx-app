@@ -8,7 +8,7 @@
  *   2. Open the GM-only Events category, click Create, fill in a title, submit
  *      the EventModal, and see the new event appear.
  *
- * Mirrors e2e/lore/lore-editor.spec.ts (fixtures, PostHog/PartyKit mocks, GM
+ * Mirrors e2e/lore/lore-editor.spec.ts (fixtures, PartyKit mocks, GM
  * session via globalSetup).
  *
  * Pre-conditions: `npm run dev:seed` must have run so that the GM session
@@ -17,7 +17,7 @@
  * a production database.
  */
 import { test, expect, openWikiTab } from '../fixtures/tabletop-fixtures';
-import { mockPostHog, blockPartyKit } from '../fixtures/network-mocks';
+import { blockPartyKit } from '../fixtures/network-mocks';
 import type { Page } from '@playwright/test';
 
 /** Navigate to the campaign play page and open the Wiki inspector tab. */
@@ -30,7 +30,6 @@ async function openCalendarWikiPanel(page: Page, campaignUrl: string): Promise<v
 
 test.describe('Calendar & Events', () => {
   test.beforeEach(async ({ page }) => {
-    await mockPostHog(page);
     await blockPartyKit(page);
   });
 

@@ -37,7 +37,6 @@ web:
     R2_ACCOUNT_ID: ''
     R2_BUCKET: ''
     CDN_URL: ''
-    POSTHOG_HOST: 'https://app.posthog.com'
 
 realtime:
   image:
@@ -96,7 +95,6 @@ secret:
     githubClientSecret: ''
     r2AccessKeyId: ''
     r2SecretAccessKey: ''
-    posthogKey: ''
 
 nameOverride: ''
 fullnameOverride: ''

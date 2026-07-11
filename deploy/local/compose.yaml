@@ -34,8 +34,6 @@ services:
       context: ../..
       dockerfile: Dockerfile.web
       args:
-        VITE_PUBLIC_POSTHOG_KEY: ${VITE_PUBLIC_POSTHOG_KEY:-}
-        VITE_PUBLIC_POSTHOG_HOST: ${VITE_PUBLIC_POSTHOG_HOST:-}
         VITE_PUBLIC_FF_CHAT: ${VITE_PUBLIC_FF_CHAT:-}
         VITE_PUBLIC_FF_DICE: ${VITE_PUBLIC_FF_DICE:-}
         VITE_PUBLIC_FF_WIKI: ${VITE_PUBLIC_FF_WIKI:-}

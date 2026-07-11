@@ -1,18 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockIsBackendDown, mockCaptureException, mockGetUploadUrl, mockReportBackendFailure } =
-  vi.hoisted(() => ({
-    mockIsBackendDown: vi.fn(() => false),
-    mockCaptureException: vi.fn(),
-    mockGetUploadUrl: vi.fn(),
-    mockReportBackendFailure: vi.fn(),
-  }));
+const { mockIsBackendDown, mockGetUploadUrl, mockReportBackendFailure } = vi.hoisted(() => ({
+  mockIsBackendDown: vi.fn(() => false),
+  mockGetUploadUrl: vi.fn(),
+  mockReportBackendFailure: vi.fn(),
+}));
 
 vi.mock('~/utils/backend-health', () => ({
   isBackendDown: mockIsBackendDown,
   reportBackendFailure: mockReportBackendFailure,
 }));
-vi.mock('~/providers/PostHogProvider', () => ({ captureException: mockCaptureException }));
 vi.mock('@tanstack/react-start', () => ({
   createServerFn: () => ({
     inputValidator: () => ({ handler: () => mockGetUploadUrl }),
@@ -30,11 +27,10 @@ beforeEach(() => {
 });
 
 describe('uploadToR2 breaker guard', () => {
-  it('fails fast with BackendUnavailableError while the breaker is open, without calling the server or PostHog', async () => {
+  it('fails fast with BackendUnavailableError while the breaker is open, without calling the server', async () => {
     mockIsBackendDown.mockReturnValue(true);
     await expect(uploadToR2(file)).rejects.toBeInstanceOf(BackendUnavailableError);
     expect(mockGetUploadUrl).not.toHaveBeenCalled();
-    expect(mockCaptureException).not.toHaveBeenCalled();
   });
 
   it('proceeds normally when the backend is healthy', async () => {
@@ -53,17 +49,12 @@ describe('uploadToR2 breaker guard', () => {
     fetchSpy.mockRestore();
   });
 
-  it('reports the failure to the circuit breaker before capturing the exception', async () => {
+  it('reports the failure to the circuit breaker', async () => {
     const error = new TypeError('Failed to fetch');
     mockGetUploadUrl.mockRejectedValue(error);
 
     await expect(uploadToR2(file)).rejects.toBe(error);
 
     expect(mockReportBackendFailure).toHaveBeenCalledWith(error);
-    expect(mockCaptureException).toHaveBeenCalledWith(error, {
-      action: 'uploadToR2',
-      fileName: file.name,
-      fileSize: file.size,
-    });
   });
 });

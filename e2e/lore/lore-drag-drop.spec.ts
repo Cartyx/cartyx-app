@@ -15,7 +15,7 @@
  * a production database.
  */
 import { test, expect } from '../fixtures/tabletop-fixtures';
-import { mockPostHog, blockPartyKit } from '../fixtures/network-mocks';
+import { blockPartyKit } from '../fixtures/network-mocks';
 
 /**
  * Dispatch a real HTML5 drop of a wiki document onto the tabletop workspace.
@@ -59,7 +59,6 @@ async function dropOnWorkspace(
 
 test.describe('Lore drag-and-drop onto tabletop', () => {
   test.beforeEach(async ({ page }) => {
-    await mockPostHog(page);
     await blockPartyKit(page);
   });
 
