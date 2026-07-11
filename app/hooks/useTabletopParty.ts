@@ -2,7 +2,7 @@ import usePartySocket from 'partysocket/react';
 import { useCallback, useRef } from 'react';
 import type { TabletopMessage } from '~/types/tabletop';
 
-const PARTYKIT_HOST = import.meta.env.VITE_PUBLIC_PARTYKIT_HOST ?? 'localhost:1999';
+const REALTIME_HOST = import.meta.env.VITE_PUBLIC_PARTYKIT_HOST ?? 'localhost:1999';
 
 export function useTabletopParty(
   campaignId: string | null,
@@ -24,7 +24,7 @@ export function useTabletopParty(
   const roomId = campaignId ? `tabletop-${campaignId}` : '__disabled__';
 
   const socket = usePartySocket({
-    host: PARTYKIT_HOST,
+    host: REALTIME_HOST,
     room: roomId,
     party: 'tabletop',
     query: campaignId ? async () => ({ token: await getToken() }) : () => ({ token: '' }),

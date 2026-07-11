@@ -92,7 +92,7 @@ export interface SessionEventData {
   displayName: string;
 }
 
-// PartyKit message types for tabletop
+// Realtime message types for tabletop
 export type TabletopMessage =
   | { type: 'window:show'; screenId: string; window: WindowData; displayName: string }
   | { type: 'window:close'; screenId: string; windowId: string }

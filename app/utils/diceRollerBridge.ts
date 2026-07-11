@@ -11,7 +11,7 @@ export interface DiceDeliveryReport {
 }
 
 // Window events bridge the dice roller window (TabletopView subtree) to the
-// PartyKit socket owner (InspectorSidebar subtree) — same pattern useBeyond20
+// realtime socket owner (InspectorSidebar subtree) — same pattern useBeyond20
 // uses to relay extension rolls.
 const BROADCAST_EVENT = 'cartyx:dice-broadcast-request';
 const DELIVERY_EVENT = 'cartyx:dice-delivery-report';
