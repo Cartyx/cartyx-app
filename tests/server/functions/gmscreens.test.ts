@@ -2413,9 +2413,53 @@ describe('addStackItem', () => {
     };
   }
 
+  /**
+   * addStackItem's create path is: (1) plain `findOne` to read current
+   * stack/items and compute the cap, (2) atomic conditional `updateOne`
+   * push scoped to the target stack via `arrayFilters`, (3) on success, a
+   * projected `findOne(...).lean()` re-fetch of the matched stack (to learn
+   * the pushed item's Mongoose-assigned `_id`). This wires up steps 2-3 for
+   * the "atomic push succeeds" case.
+   */
+  function mockSuccessfulAtomicPush(createdItem: Record<string, unknown>) {
+    vi.mocked(GMScreen.updateOne).mockResolvedValueOnce({
+      acknowledged: true,
+      matchedCount: 1,
+      modifiedCount: 1,
+      upsertedCount: 0,
+      upsertedId: null,
+    } as never);
+    vi.mocked(GMScreen.findOne).mockReturnValueOnce({
+      lean: vi.fn().mockResolvedValue({ stacks: [{ items: [createdItem] }] }),
+    } as never);
+  }
+
+  /**
+   * Simulates "lost the atomic create race": the conditional `updateOne`
+   * matches nothing (someone else added the item first, or the stack hit
+   * cap), so the code falls back to a plain re-fetch (`refreshedScreen`) and
+   * returns the winning item instead of pushing a duplicate.
+   */
+  function mockLostAtomicPushRace(refreshedScreen: Record<string, unknown>) {
+    vi.mocked(GMScreen.updateOne).mockResolvedValueOnce({
+      acknowledged: true,
+      matchedCount: 0,
+      modifiedCount: 0,
+      upsertedCount: 0,
+      upsertedId: null,
+    } as never);
+    vi.mocked(GMScreen.findOne).mockResolvedValueOnce(refreshedScreen as never);
+  }
+
   it('adds a new item to a stack', async () => {
     const screen = makeScreenWithStack([]);
-    vi.mocked(GMScreen.findOne).mockResolvedValue(screen as never);
+    vi.mocked(GMScreen.findOne).mockResolvedValueOnce(screen as never);
+    mockSuccessfulAtomicPush({
+      _id: 'si-1',
+      collection: 'note',
+      documentId: 'note-1',
+      label: 'Gandalf',
+    });
 
     const result = await _addStackItem({
       data: {
@@ -2433,7 +2477,30 @@ describe('addStackItem', () => {
     expect(result.item.collection).toBe('note');
     expect(result.item.documentId).toBe('note-1');
     expect(result.item.label).toBe('Gandalf');
-    expect(screen.save).toHaveBeenCalled();
+
+    // The dedupe AND cap guarantees live in the filter shape: assert the
+    // atomic update excludes any stack that already has an item for this
+    // ref, and gates on that specific stack's item count vs the cap.
+    const [filter, update, options] = vi.mocked(GMScreen.updateOne).mock.calls[0]!;
+    expect(filter).toMatchObject({
+      _id: 'screen-1',
+      campaignId: 'camp-1',
+      stacks: {
+        $elemMatch: {
+          _id: 'stack-1',
+          items: { $not: { $elemMatch: { collection: 'note', documentId: 'note-1' } } },
+        },
+      },
+    });
+    expect(update).toMatchObject({
+      $push: {
+        'stacks.$[stack].items': expect.objectContaining({
+          collection: 'note',
+          documentId: 'note-1',
+        }),
+      },
+    });
+    expect(options).toMatchObject({ arrayFilters: [{ 'stack._id': 'stack-1' }] });
   });
 
   it('returns existed: true for duplicate collection+documentId', async () => {
@@ -2458,6 +2525,8 @@ describe('addStackItem', () => {
     expect(result.item.id).toBe('si-1');
     expect(result.item.label).toBe('Existing');
     expect(screen.save).not.toHaveBeenCalled();
+    // The fast-path duplicate check never attempts the atomic push.
+    expect(GMScreen.updateOne).not.toHaveBeenCalled();
   });
 
   it('enforces the stack item cap', async () => {
@@ -2519,7 +2588,13 @@ describe('addStackItem', () => {
 
   it('defaults label to empty string when not provided', async () => {
     const screen = makeScreenWithStack([]);
-    vi.mocked(GMScreen.findOne).mockResolvedValue(screen as never);
+    vi.mocked(GMScreen.findOne).mockResolvedValueOnce(screen as never);
+    mockSuccessfulAtomicPush({
+      _id: 'si-1',
+      collection: 'note',
+      documentId: 'note-1',
+      label: '',
+    });
 
     const result = await _addStackItem({
       data: {
@@ -2532,6 +2607,193 @@ describe('addStackItem', () => {
     });
 
     expect(result.item.label).toBe('');
+  });
+
+  // -------------------------------------------------------------------
+  // Atomicity / dedupe-race pinning
+  // -------------------------------------------------------------------
+
+  it('does not add a duplicate on a sequential double-call for the same ref', async () => {
+    // Call 1: nothing exists yet, atomic push succeeds.
+    const screenRead1 = makeScreenWithStack([]);
+    vi.mocked(GMScreen.findOne).mockResolvedValueOnce(screenRead1 as never);
+    const createdItem = {
+      _id: 'si-1',
+      collection: 'note',
+      documentId: 'note-1',
+      label: 'Gandalf',
+    };
+    mockSuccessfulAtomicPush(createdItem);
+
+    const first = await _addStackItem({
+      data: {
+        screenId: 'screen-1',
+        campaignId: 'camp-1',
+        stackId: 'stack-1',
+        collection: 'note',
+        documentId: 'note-1',
+        label: 'Gandalf',
+      },
+    });
+    expect(first.existed).toBe(false);
+
+    // Call 2: the in-memory read now reflects the persisted item (this is
+    // what a real second request would see after the first one committed),
+    // so it takes the fast-path "duplicate" branch — same as before this fix.
+    const screenRead2 = makeScreenWithStack([createdItem]);
+    vi.mocked(GMScreen.findOne).mockResolvedValueOnce(screenRead2 as never);
+
+    const second = await _addStackItem({
+      data: {
+        screenId: 'screen-1',
+        campaignId: 'camp-1',
+        stackId: 'stack-1',
+        collection: 'note',
+        documentId: 'note-1',
+        label: 'Gandalf',
+      },
+    });
+
+    expect(second.existed).toBe(true);
+    expect(second.item.id).toBe('si-1');
+    // Only one atomic push was ever attempted across both calls.
+    expect(GMScreen.updateOne).toHaveBeenCalledTimes(1);
+  });
+
+  it('closes the create/create race: a second call that reads stale state before the first commits is rejected by the atomic filter and returns the winner instead of duplicating', async () => {
+    // Both calls read the stack as empty (simulates the TOCTOU window: two
+    // concurrent requests, neither sees the other's write yet).
+    const screenRead = makeScreenWithStack([]);
+    vi.mocked(GMScreen.findOne).mockResolvedValueOnce(screenRead as never);
+
+    const createdItem = {
+      _id: 'si-1',
+      collection: 'note',
+      documentId: 'note-1',
+      label: 'Gandalf',
+    };
+    // First call's atomic push wins.
+    mockSuccessfulAtomicPush(createdItem);
+
+    const first = await _addStackItem({
+      data: {
+        screenId: 'screen-1',
+        campaignId: 'camp-1',
+        stackId: 'stack-1',
+        collection: 'note',
+        documentId: 'note-1',
+        label: 'Gandalf',
+      },
+    });
+    expect(first.existed).toBe(false);
+
+    // Second call also read the stack as empty (same stale snapshot), so it
+    // too attempts the create path — but this time the atomic filter loses
+    // the race (matchedCount 0) because the stack now has the item the
+    // first call just pushed. It must fall back to returning the real,
+    // persisted item rather than creating a second one.
+    const screenRead2 = makeScreenWithStack([]);
+    vi.mocked(GMScreen.findOne).mockResolvedValueOnce(screenRead2 as never);
+    const refreshedScreen = makeScreenWithStack([{ ...createdItem }]);
+    mockLostAtomicPushRace(refreshedScreen);
+
+    const second = await _addStackItem({
+      data: {
+        screenId: 'screen-1',
+        campaignId: 'camp-1',
+        stackId: 'stack-1',
+        collection: 'note',
+        documentId: 'note-1',
+        label: 'Gandalf',
+      },
+    });
+
+    expect(second.existed).toBe(true);
+    expect(second.item.id).toBe('si-1');
+    // The losing call never pushed a second item: exactly one item ends up
+    // in the "canonical" (refreshed) stack.
+    expect((refreshedScreen.stacks[0] as { items: unknown[] }).items).toHaveLength(1);
+  });
+
+  it('closes the cap race: two concurrent adds of DIFFERENT refs at length cap-1 in the same stack — exactly one succeeds, the loser gets the cap error', async () => {
+    // Both calls read the stack at 49 items (one below the cap), so both
+    // pass the early app-level length check. Without the cap folded into
+    // the atomic filter, both pushes would land and the stack would end up
+    // with 51 items (the schema validator doesn't run on updateOne pushes).
+    const fortyNineItems = Array.from({ length: 49 }, (_, i) => ({
+      _id: `si-${i}`,
+      collection: 'note',
+      documentId: `note-${i}`,
+      label: `Item ${i}`,
+    }));
+    const screenA = makeScreenWithStack([...fortyNineItems]);
+    const screenB = makeScreenWithStack([...fortyNineItems]);
+    vi.mocked(GMScreen.findOne)
+      .mockResolvedValueOnce(screenA as never) // call A's initial read
+      .mockResolvedValueOnce(screenB as never); // call B's initial read
+
+    // A's atomic push wins (filter matched: dedupe clear AND size 49 < 50).
+    mockSuccessfulAtomicPush({
+      _id: 'si-a',
+      collection: 'note',
+      documentId: 'note-a',
+      label: 'A',
+    });
+    // B's push loses: the $expr size condition no longer matches (the stack
+    // now has 50 items). B re-fetches canonical state, does NOT find its own
+    // ref (different ref from A's — this is a cap loss, not a dedupe loss),
+    // sees length >= cap, and must throw the cap error.
+    vi.mocked(GMScreen.updateOne).mockResolvedValueOnce({
+      acknowledged: true,
+      matchedCount: 0,
+      modifiedCount: 0,
+      upsertedCount: 0,
+      upsertedId: null,
+    } as never);
+    const refreshedAtCap = makeScreenWithStack([
+      ...fortyNineItems,
+      { _id: 'si-a', collection: 'note', documentId: 'note-a', label: 'A' },
+    ]);
+    vi.mocked(GMScreen.findOne).mockResolvedValueOnce(refreshedAtCap as never);
+
+    const [resultA, resultB] = await Promise.allSettled([
+      _addStackItem({
+        data: {
+          screenId: 'screen-1',
+          campaignId: 'camp-1',
+          stackId: 'stack-1',
+          collection: 'note',
+          documentId: 'note-a',
+          label: 'A',
+        },
+      }),
+      _addStackItem({
+        data: {
+          screenId: 'screen-1',
+          campaignId: 'camp-1',
+          stackId: 'stack-1',
+          collection: 'note',
+          documentId: 'note-b',
+          label: 'B',
+        },
+      }),
+    ]);
+
+    expect(resultA.status).toBe('fulfilled');
+    if (resultA.status === 'fulfilled') {
+      expect(resultA.value.existed).toBe(false);
+      expect(resultA.value.item.documentId).toBe('note-a');
+    }
+    expect(resultB.status).toBe('rejected');
+    if (resultB.status === 'rejected') {
+      expect(String(resultB.reason)).toContain('A stack cannot contain more than 50 items');
+    }
+
+    // Both pushes carried the cap condition ($expr) scoped to this stack.
+    for (const call of vi.mocked(GMScreen.updateOne).mock.calls) {
+      const filter = call[0] as { $expr?: unknown };
+      expect(filter.$expr).toBeDefined();
+    }
   });
 });
 

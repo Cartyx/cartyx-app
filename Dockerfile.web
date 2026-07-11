@@ -47,6 +47,14 @@ ENV VITE_PUBLIC_FF_CHAT=$VITE_PUBLIC_FF_CHAT \
     VITE_PUBLIC_PARTYKIT_HOST=$VITE_PUBLIC_PARTYKIT_HOST \
     VITE_PUBLIC_GLITCHTIP_DSN=$VITE_PUBLIC_GLITCHTIP_DSN \
     VITE_PUBLIC_UMAMI_WEBSITE_ID=$VITE_PUBLIC_UMAMI_WEBSITE_ID
+# public/index.html is the static landing page that shadows the React `/`
+# route in production (served straight from public/ by Nitro, not by the
+# app). Inject the Umami tracker into its <!-- UMAMI_TRACKER --> placeholder
+# only when a website ID was actually supplied at build time — local/dev
+# builds without VITE_PUBLIC_UMAMI_WEBSITE_ID stay tracker-free.
+RUN if [ -n "$VITE_PUBLIC_UMAMI_WEBSITE_ID" ]; then \
+      sed -i "s|<!-- UMAMI_TRACKER -->|<script defer src=\"https://umami.cartyx.io/script.js\" data-website-id=\"$VITE_PUBLIC_UMAMI_WEBSITE_ID\"></script>|" public/index.html; \
+    fi
 RUN npm run build
 
 FROM node:22-alpine

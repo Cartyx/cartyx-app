@@ -81,3 +81,24 @@ export async function openWikiTab(page: Page): Promise<void> {
     await expect(wikiTab).toHaveAttribute('aria-selected', 'true', { timeout: 1000 });
   }).toPass({ timeout: 20_000 });
 }
+
+/**
+ * Click a Tabletop screen tab and wait for it to actually take effect.
+ *
+ * Same hydration hazard as openWikiTab: on a cold `vite dev` server a click
+ * fired before React attaches its event listeners lands on inert SSR markup
+ * and silently no-ops, leaving the wrong screen active — everything that
+ * depends on the target screen's contents (e.g. a pre-seeded floating
+ * window) then fails or times out with a confusing error far from the real
+ * cause. Retry the click until the tab is provably selected instead of a
+ * fixed sleep.
+ */
+export async function openTabletopTab(page: Page, screenId: string): Promise<void> {
+  const tab = page.getByTestId(`tabletop-tab-${screenId}`);
+  await expect(tab).toBeVisible();
+
+  await expect(async () => {
+    await tab.click();
+    await expect(tab).toHaveAttribute('aria-selected', 'true', { timeout: 1000 });
+  }).toPass({ timeout: 20_000 });
+}

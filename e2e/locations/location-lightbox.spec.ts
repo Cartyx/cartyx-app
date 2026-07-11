@@ -8,7 +8,7 @@
  *    pre-opened as a `collection: 'location'` floating window.
  *  - The seeded location has one image titled fixtureImageTitle.
  */
-import { test, expect } from '../fixtures/tabletop-fixtures';
+import { test, expect, openTabletopTab } from '../fixtures/tabletop-fixtures';
 import { blockPartyKit } from '../fixtures/network-mocks';
 
 test.describe('Location image gallery — lightbox (Tabletop floating window flow)', () => {
@@ -29,8 +29,11 @@ test.describe('Location image gallery — lightbox (Tabletop floating window flo
     await expect(page.getByTestId('tabletop-view')).toBeVisible();
 
     // Switch to the E2E-owned tabletop screen — the active screen on first load
-    // may be the user's pre-existing "Default" screen, not ours.
-    await page.getByTestId(`tabletop-tab-${screenId}`).click();
+    // may be the user's pre-existing "Default" screen, not ours. On a cold
+    // dev server a click fired before hydration lands on inert SSR markup
+    // and silently no-ops, so retry until the tab is provably selected
+    // (same guard as openWikiTab from the #490-era e2e fix wave).
+    await openTabletopTab(page, screenId);
 
     // The floating window for the seeded location should now be on the canvas.
     const locationWindow = page.getByRole('dialog', { name: locationName });
@@ -69,7 +72,7 @@ test.describe('Location image gallery — lightbox (Tabletop floating window flo
   }) => {
     await page.goto(tabletopUrl);
     await expect(page.getByTestId('tabletop-view')).toBeVisible();
-    await page.getByTestId(`tabletop-tab-${screenId}`).click();
+    await openTabletopTab(page, screenId);
 
     const locationWindow = page.getByRole('dialog', { name: locationName });
     await expect(locationWindow).toBeVisible();
