@@ -36,6 +36,11 @@ export default [
       '@typescript-eslint/no-explicit-any': 'warn',
       'react/react-in-jsx-scope': 'off',
       'no-console': ['warn', { allow: ['warn', 'error'] }],
+      // base eslint:recommended's no-undef fires on ambient DOM/TS types
+      // (e.g. RequestInit) in .ts/.tsx files. typescript-eslint's official
+      // guidance is to disable no-undef for TypeScript — tsc already catches
+      // real undefined identifiers. https://typescript-eslint.io/troubleshooting/faqs/eslint/#i-am-using-a-rule-from-eslint-core-and-it-doesnt-work-correctly-with-typescript-code
+      'no-undef': 'off',
     },
     settings: { react: { version: 'detect' } },
   },
@@ -96,6 +101,7 @@ export default [
       'app/routeTree.gen.ts',
       'jest.config.cjs',
       'scripts/**',
+      'realtime/dist/',
     ],
   },
   ...pluginQuery.configs['flat/recommended'],
