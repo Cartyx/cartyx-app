@@ -8,7 +8,7 @@ import {
 import { Component, type ReactNode, type ErrorInfo } from 'react';
 import { ConnectionBanner } from '~/components/ConnectionBanner';
 import { AuthProvider } from '~/providers/AuthProvider';
-import { PostHogProvider, captureException } from '~/providers/PostHogProvider';
+import { TelemetryProvider, captureException } from '~/providers/TelemetryProvider';
 import { QueryProvider } from '~/providers/QueryProvider';
 import '~/styles/globals.css';
 
@@ -64,6 +64,19 @@ export const Route = createRootRoute({
       },
     ],
     links: [{ rel: 'icon', href: '/favicon.ico' }],
+    scripts: [
+      // Umami page-view/event tracking; only emitted when the platform env
+      // var is baked in (absent locally/CI = no script tag, no tracking).
+      ...(import.meta.env.VITE_PUBLIC_UMAMI_WEBSITE_ID
+        ? [
+            {
+              src: 'https://umami.cartyx.io/script.js',
+              defer: true,
+              'data-website-id': import.meta.env.VITE_PUBLIC_UMAMI_WEBSITE_ID as string,
+            },
+          ]
+        : []),
+    ],
   }),
   component: RootComponent,
 });
@@ -77,13 +90,13 @@ function RootComponent() {
       <body>
         <QueryProvider>
           <AuthProvider>
-            <PostHogProvider>
+            <TelemetryProvider>
               <ErrorBoundary>
                 <ConnectionBanner />
                 <ScrollRestoration />
                 <Outlet />
               </ErrorBoundary>
-            </PostHogProvider>
+            </TelemetryProvider>
           </AuthProvider>
         </QueryProvider>
         <Scripts />

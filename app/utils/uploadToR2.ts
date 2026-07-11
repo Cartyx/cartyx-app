@@ -1,5 +1,5 @@
 import { createServerFn } from '@tanstack/react-start';
-import { captureException } from '~/providers/PostHogProvider';
+import { captureException } from '~/providers/TelemetryProvider';
 import { getUploadUrlSchema } from '~/types/schemas/uploads';
 import { isBackendDown, reportBackendFailure } from '~/utils/backend-health';
 import { BackendUnavailableError } from '~/utils/error-classification';
