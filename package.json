@@ -65,7 +65,7 @@
     "partysocket": "^1.3.0",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "react-easy-crop": "^5.5.7",
+    "react-easy-crop": "^6.0.2",
     "react-konva": "^19.2.3",
     "react-markdown": "^10.1.0",
     "remark-gfm": "^4.0.1",
