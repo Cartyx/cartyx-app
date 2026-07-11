@@ -11,8 +11,9 @@ import * as Sentry from '@sentry/browser';
  * considered instead, but `npm run build` never passes `--mode`, so both the
  * dev.cartyx.io and app.cartyx.io images resolve MODE to 'production' —
  * using it would mislabel dev-environment errors as prod in GlitchTip, which
- * is worse than omitting. Wiring a real per-environment value is Task 12's
- * job (a new VITE_PUBLIC_APP_ENV build arg), not this task's.
+ * is worse than omitting. This is intentionally not being wired up: each
+ * environment already has its own GlitchTip DSN, so an `environment` tag
+ * would be redundant.
  */
 const dsn = import.meta.env.VITE_PUBLIC_GLITCHTIP_DSN as string | undefined;
 
@@ -40,6 +41,7 @@ export function captureException(
 type Umami = { track: (event: string, data?: Record<string, unknown>) => void };
 
 export function captureEvent(event: string, properties?: Record<string, unknown>): void {
+  if (typeof window === 'undefined') return;
   const umami = (window as Window & { umami?: Umami }).umami;
   umami?.track(event, properties);
 }

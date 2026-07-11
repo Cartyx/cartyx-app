@@ -49,7 +49,20 @@ describe('server telemetry', () => {
       },
     });
     // eslint-disable-next-line no-undef -- see above
-    expect((init as RequestInit).headers).toMatchObject({ 'User-Agent': expect.any(String) });
+    expect((init as RequestInit).headers).toMatchObject({
+      'User-Agent': expect.stringMatching(/^Mozilla\//),
+    });
+  });
+
+  it('serverCaptureEvent survives an aborting fetch without throwing', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockRejectedValue(Object.assign(new Error('aborted'), { name: 'AbortError' }))
+    );
+    const { serverCaptureEvent } = await import('~/server/utils/telemetry');
+    await expect(
+      serverCaptureEvent('user-1', 'campaign.created', { plan: 'free' })
+    ).resolves.toBeUndefined();
   });
 
   it('is a no-op without env vars', async () => {

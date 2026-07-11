@@ -7,6 +7,10 @@ import * as Sentry from '@sentry/node';
  * intentionally preserved so this replacement telemetry stack drops in
  * without touching callers.
  */
+// Umami discards bot-looking UAs (isbot); a browser UA is required for server events to be recorded.
+const UMAMI_UA =
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
 let initialized = false;
 function ensureInit(): boolean {
   const dsn = process.env.GLITCHTIP_DSN;
@@ -41,7 +45,7 @@ export async function serverCaptureEvent(
   try {
     await fetch(`${host}/api/send`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'User-Agent': 'cartyx-server/1.0' },
+      headers: { 'Content-Type': 'application/json', 'User-Agent': UMAMI_UA },
       body: JSON.stringify({
         type: 'event',
         payload: {
@@ -52,6 +56,7 @@ export async function serverCaptureEvent(
           data: { ...properties, distinctId },
         },
       }),
+      signal: AbortSignal.timeout(2000),
     });
   } catch {
     // fire-and-forget: telemetry must never fail the caller
