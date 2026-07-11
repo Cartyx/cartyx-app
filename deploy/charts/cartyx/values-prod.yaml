@@ -18,6 +18,8 @@ web:
     CDN_URL: https://cdn.cartyx.io
     GLITCHTIP_DSN: https://1fd010e17ff4468fa6e3b07c94fcd31b@glitchtip.cartyx.io/1
     UMAMI_WEBSITE_ID: 7ef99b87-59b5-46c5-922f-d4e66ccb51d6
+    # In-cluster path — avoids the pod -> Cloudflare -> tunnel hairpin for server events.
+    UMAMI_HOST: http://umami.platform.svc:3000
 
 ingress:
   webHost: app.cartyx.io
