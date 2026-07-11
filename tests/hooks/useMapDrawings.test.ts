@@ -13,8 +13,8 @@ import type { MapDrawingData } from '~/types/mapDrawing';
 /**
  * Unit coverage for the drawing cache helpers — these are the functions the
  * realtime (party) message handler calls to apply remote changes, so they are
- * the deterministic stand-in for the multiplayer sync path (PartyKit itself is
- * not run by the test harness).
+ * the deterministic stand-in for the multiplayer sync path (the realtime
+ * service itself is not run by the test harness).
  */
 
 const CID = 'c1';

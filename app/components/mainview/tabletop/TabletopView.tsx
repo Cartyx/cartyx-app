@@ -174,7 +174,7 @@ export function TabletopView({
     setPings((prev) => prev.filter((p) => p.id !== id));
   }, []);
 
-  // PartyKit message handler
+  // Realtime message handler
   const handleMessage = useCallback(
     (msg: TabletopMessage) => {
       switch (msg.type) {

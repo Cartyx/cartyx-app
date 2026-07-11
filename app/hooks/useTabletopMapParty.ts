@@ -5,7 +5,7 @@ import type { MapTextData } from '~/types/mapText';
 import type { MapDrawingData } from '~/types/mapDrawing';
 import { parseTabletopMapMessage } from '~/types/schemas/tabletopMessage';
 
-const PARTYKIT_HOST = import.meta.env.VITE_PUBLIC_PARTYKIT_HOST ?? 'localhost:1999';
+const REALTIME_HOST = import.meta.env.VITE_PUBLIC_PARTYKIT_HOST ?? 'localhost:1999';
 
 /** Message shape sent on the `tabletop-map` party channel. */
 export type TabletopMapMessage =
@@ -89,11 +89,11 @@ export function useTabletopMapParty(
   const roomId = campaignId ? `tabletop-map-${campaignId}` : '__disabled__';
 
   const socket = usePartySocket({
-    host: PARTYKIT_HOST,
+    host: REALTIME_HOST,
     room: roomId,
-    // Party names must be valid JS identifiers (PartyKit interpolates them
-    // into generated code) AND match its /^[a-z0-9_-]+$/ config schema, so
-    // underscore is the only separator that satisfies both.
+    // Must be a PartyName registered in realtime/src/auth.ts; the underscore
+    // is kept from the PartyKit era so the wire URL (/parties/tabletop_map/…)
+    // stays unchanged.
     party: 'tabletop_map',
     query: campaignId ? async () => ({ token: await getToken() }) : () => ({ token: '' }),
     onOpen() {

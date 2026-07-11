@@ -97,8 +97,8 @@ function createR2Client(): { client: S3Client; bucket: string } | null {
 
 /**
  * Best-effort broadcast of a `map:active-changed` event to the `tabletop-map`
- * PartyKit room so every connected client invalidates/refetches the active map
- * right away, regardless of which UI triggered the mutation. A party outage
+ * realtime room so every connected client invalidates/refetches the active map
+ * right away, regardless of which UI triggered the mutation. A realtime outage
  * must never fail the DB write, so all errors are swallowed.
  *
  * Host resolution: `REALTIME_INTERNAL_HOST` is the server-side runtime var —
@@ -129,7 +129,7 @@ export async function broadcastActiveMapChanged(
     Boolean(internalHost) || host.startsWith('localhost') || host.startsWith('127.0.0.1');
   const protocol = isLocal ? 'http' : 'https';
   // Mirrors `useTabletopMapParty`: party `tabletop_map` (underscore — the
-  // partykit.json key), room `tabletop-map-<campaignId>`.
+  // PartyName registered in realtime/src/auth.ts), room `tabletop-map-<campaignId>`.
   const url = `${protocol}://${host}/parties/tabletop_map/tabletop-map-${campaignId}`;
   try {
     const { createPartyBroadcastToken } = await import('../session');

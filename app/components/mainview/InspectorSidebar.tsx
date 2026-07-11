@@ -145,7 +145,7 @@ export function InspectorSidebar({
     setSaveError: setDiceSaveError,
   } = useDiceRolls(viewingSessionId, effectiveCampaignId, isViewingActive);
 
-  // Combined PartyKit message handler
+  // Combined realtime message handler
   const handlePartyMessage = useCallback(
     (msg: unknown) => {
       handleChatPartyMessage(msg);

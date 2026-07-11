@@ -78,7 +78,7 @@ export function useDiceRolls(sessionId: string, campaignId: string, isActiveSess
       const diceMessages = allMessages.filter(
         (m) => m.type === 'DICE'
       ) as unknown as DiceRollMessage[];
-      console.debug(`[PartyKit] HISTORY received diceCount=${diceMessages.length}`);
+      console.debug(`[Realtime] HISTORY received diceCount=${diceMessages.length}`);
       setLiveRolls(diceMessages);
     } else if (msgType === 'DICE') {
       const diceMsg = parsed as unknown as DiceRollMessage;
@@ -125,7 +125,7 @@ export function useDiceRolls(sessionId: string, campaignId: string, isActiveSess
       const wsMessage = { ...message, type: 'DICE' as const };
       pendingSaves.current.add(message.id);
       socket.send(JSON.stringify(wsMessage));
-      console.debug(`[PartyKit] Message sent type=DICE id=${message.id}`);
+      console.debug(`[Realtime] Message sent type=DICE id=${message.id}`);
     },
     [sessionId, campaignId]
   );
