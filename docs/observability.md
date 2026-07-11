@@ -44,9 +44,9 @@ Grafana patch the secret and restart the deployment instead).
 - **Metrics**: Explore → datasource **VictoriaMetrics** (Prometheus-compatible;
   e.g. `container_memory_working_set_bytes{namespace="prod"}`).
 - **Alerting**: four provisioned rules (pod crash-looping, container memory
-  > 90 % of limit, disk >80 %, log pipeline silent 15 min) route to the
-  > **#cartyx-alerts** Discord channel via webhook. Test it: Alerting → Contact
-  > points → discord → Test.
+  above 90 % of limit, disk above 80 %, log pipeline silent 15 min) route to
+  the **#cartyx-alerts** Discord channel via webhook. Test it: Alerting →
+  Contact points → discord → Test.
 
 ## GlitchTip — errors
 
