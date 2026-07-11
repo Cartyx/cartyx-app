@@ -3,16 +3,16 @@
 # VITE_PUBLIC_* values are baked into the client bundle at BUILD time — prod
 # and dev need separate image builds with different --build-arg values, not
 # one image with different runtime env. Server-read env (MONGODB_URI,
-# SESSION_SECRET, APP_ENV, R2_*, POSTHOG_KEY, BASE_URL, ...) is injected at
+# SESSION_SECRET, APP_ENV, R2_*, BASE_URL, ...) is injected at
 # runtime.
 #
 # Local build (pulls VITE_PUBLIC_* from your shell / .env):
 #   set -a; source .env; set +a
 #   docker build -f Dockerfile.web \
-#     --build-arg VITE_PUBLIC_POSTHOG_KEY --build-arg VITE_PUBLIC_POSTHOG_HOST \
 #     --build-arg VITE_PUBLIC_FF_CHAT --build-arg VITE_PUBLIC_FF_DICE \
 #     --build-arg VITE_PUBLIC_FF_WIKI --build-arg VITE_PUBLIC_FF_NOTES \
 #     --build-arg VITE_PUBLIC_FF_SETTINGS --build-arg VITE_PUBLIC_PARTYKIT_HOST \
+#     --build-arg VITE_PUBLIC_GLITCHTIP_DSN --build-arg VITE_PUBLIC_UMAMI_WEBSITE_ID \
 #     -t cartyx-web:local .
 FROM node:22-alpine AS build
 WORKDIR /app
@@ -31,22 +31,22 @@ RUN npm ci --ignore-scripts
 COPY tsconfig.json vite.config.ts ./
 COPY app ./app
 COPY public ./public
-ARG VITE_PUBLIC_POSTHOG_KEY
-ARG VITE_PUBLIC_POSTHOG_HOST
 ARG VITE_PUBLIC_FF_CHAT
 ARG VITE_PUBLIC_FF_DICE
 ARG VITE_PUBLIC_FF_WIKI
 ARG VITE_PUBLIC_FF_NOTES
 ARG VITE_PUBLIC_FF_SETTINGS
 ARG VITE_PUBLIC_PARTYKIT_HOST
-ENV VITE_PUBLIC_POSTHOG_KEY=$VITE_PUBLIC_POSTHOG_KEY \
-    VITE_PUBLIC_POSTHOG_HOST=$VITE_PUBLIC_POSTHOG_HOST \
-    VITE_PUBLIC_FF_CHAT=$VITE_PUBLIC_FF_CHAT \
+ARG VITE_PUBLIC_GLITCHTIP_DSN
+ARG VITE_PUBLIC_UMAMI_WEBSITE_ID
+ENV VITE_PUBLIC_FF_CHAT=$VITE_PUBLIC_FF_CHAT \
     VITE_PUBLIC_FF_DICE=$VITE_PUBLIC_FF_DICE \
     VITE_PUBLIC_FF_WIKI=$VITE_PUBLIC_FF_WIKI \
     VITE_PUBLIC_FF_NOTES=$VITE_PUBLIC_FF_NOTES \
     VITE_PUBLIC_FF_SETTINGS=$VITE_PUBLIC_FF_SETTINGS \
-    VITE_PUBLIC_PARTYKIT_HOST=$VITE_PUBLIC_PARTYKIT_HOST
+    VITE_PUBLIC_PARTYKIT_HOST=$VITE_PUBLIC_PARTYKIT_HOST \
+    VITE_PUBLIC_GLITCHTIP_DSN=$VITE_PUBLIC_GLITCHTIP_DSN \
+    VITE_PUBLIC_UMAMI_WEBSITE_ID=$VITE_PUBLIC_UMAMI_WEBSITE_ID
 RUN npm run build
 
 FROM node:22-alpine

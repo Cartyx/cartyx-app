@@ -10,7 +10,7 @@
  * a production database.
  */
 import { test, expect, openWikiTab } from '../fixtures/tabletop-fixtures';
-import { mockPostHog, blockPartyKit } from '../fixtures/network-mocks';
+import { blockPartyKit } from '../fixtures/network-mocks';
 
 const LORE_TITLE = 'E2E Lore Editor Fixture';
 
@@ -30,7 +30,6 @@ async function openLorePanel(
 
 test.describe('Lore editor (create flow)', () => {
   test.beforeEach(async ({ page }) => {
-    await mockPostHog(page);
     await blockPartyKit(page);
   });
 

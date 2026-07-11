@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '~/hooks/useAuth';
 import { showToast } from '~/components/Toast';
 import { formatInviteCode } from '~/utils/helpers';
-import { captureEvent } from '~/utils/posthog-client';
+import { captureEvent } from '~/utils/telemetry-client';
 import { LegalFooter } from '~/components/LegalFooter';
 
 export const Route = createFileRoute('/')({

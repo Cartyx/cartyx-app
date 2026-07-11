@@ -35,10 +35,6 @@ vi.mock('~/server/utils/pruneLoreLinks', () => ({
 vi.mock('~/server/utils/requireCampaignMember', () => ({
   requireCampaignMember: vi.fn(),
 }));
-vi.mock('~/server/utils/posthog', () => ({
-  serverCaptureException: vi.fn(),
-  serverCaptureEvent: vi.fn(),
-}));
 
 import { getSession } from '~/server/session';
 import { User } from '~/server/db/models/User';

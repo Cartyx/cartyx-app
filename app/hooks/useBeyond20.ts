@@ -1,5 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
-import { captureEvent } from '~/utils/posthog-client';
+import { captureEvent } from '~/utils/telemetry-client';
 
 interface Beyond20Roll {
   action: string;

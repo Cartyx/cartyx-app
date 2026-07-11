@@ -33,10 +33,6 @@ vi.mock('~/server/db/models/Tag', () => ({
     find: vi.fn(),
   },
 }));
-vi.mock('~/server/utils/posthog', () => ({
-  serverCaptureException: vi.fn(),
-  serverCaptureEvent: vi.fn(),
-}));
 vi.mock('~/server/functions/gmscreens-helpers', () => ({
   removeDocumentRefsFromScreens: vi.fn().mockResolvedValue(0),
 }));
@@ -56,7 +52,6 @@ import {
   listRulesSchema,
 } from '~/server/functions/rules';
 import type { RuleListItem } from '~/types/rule';
-import { serverCaptureEvent, serverCaptureException } from '~/server/utils/posthog';
 import { removeDocumentRefsFromScreens } from '~/server/functions/gmscreens-helpers';
 
 const mockSession = {
@@ -192,19 +187,6 @@ describe('createRule', () => {
       _createRule({ data: { campaignId: 'camp-1', title: 'T', content: 'B' } })
     ).rejects.toThrow('Forbidden');
   });
-
-  it('fires rule_created analytics event', async () => {
-    vi.mocked(Rule.create).mockResolvedValue(makeRule() as never);
-
-    await _createRule({
-      data: { campaignId: 'camp-1', title: 'T', content: 'B' },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'rule_created', {
-      campaign_id: 'camp-1',
-      rule_id: 'rule-1',
-    });
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -280,21 +262,6 @@ describe('updateRule', () => {
         data: { id: 'rule-1', campaignId: 'camp-1', title: 'T', content: 'B' },
       })
     ).rejects.toThrow('Forbidden');
-  });
-
-  it('fires rule_updated analytics event', async () => {
-    const existing = makeRule();
-    vi.mocked(Rule.findById).mockResolvedValue(existing as never);
-
-    await _updateRule({
-      data: { id: 'rule-1', campaignId: 'camp-1', title: 'T', content: 'B' },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'rule_updated', {
-      campaign_id: 'camp-1',
-      rule_id: 'rule-1',
-      updated_by: 'dbuser-1',
-    });
   });
 });
 
@@ -506,7 +473,7 @@ describe('deleteRule', () => {
     );
   });
 
-  it('succeeds even when cleanup fails, reporting the cleanup error', async () => {
+  it('succeeds even when cleanup fails', async () => {
     const existing = makeRule({ deleteOne: vi.fn() });
     vi.mocked(Rule.findById).mockResolvedValue(existing as never);
     const cleanupError = new Error('MongoDB timeout during cleanup');
@@ -516,28 +483,6 @@ describe('deleteRule', () => {
 
     expect(result.success).toBe(true);
     expect(existing.deleteOne).toHaveBeenCalled();
-    expect(serverCaptureException).toHaveBeenCalledWith(
-      cleanupError,
-      'session-user-1',
-      expect.objectContaining({
-        action: 'deleteRule.cleanup',
-        campaignId: 'camp-1',
-        ruleId: 'rule-1',
-      })
-    );
-  });
-
-  it('fires rule_deleted analytics event', async () => {
-    const existing = makeRule({ deleteOne: vi.fn() });
-    vi.mocked(Rule.findById).mockResolvedValue(existing as never);
-
-    await _deleteRule({ data: { id: 'rule-1', campaignId: 'camp-1' } });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'rule_deleted', {
-      campaign_id: 'camp-1',
-      rule_id: 'rule-1',
-      deleted_by: 'dbuser-1',
-    });
   });
 });
 

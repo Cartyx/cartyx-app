@@ -25,9 +25,6 @@ const policyMock = vi.hoisted(() => ({
 vi.mock('mongoose', () => ({ default: mongooseMock }));
 vi.mock('~/server/db/bootstrap', () => bootstrapMock);
 vi.mock('~/server/db/policy', () => policyMock);
-vi.mock('~/server/utils/posthog', () => ({
-  serverCaptureException: vi.fn(),
-}));
 
 import { connectDB, isDBConnected, __resetConnectPromiseForTests } from '~/server/db/connection';
 

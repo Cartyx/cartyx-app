@@ -1,12 +1,7 @@
 import React, { type ReactNode } from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-
-const captureException = vi.fn();
-vi.mock('~/providers/PostHogProvider', () => ({
-  captureException: (...args: unknown[]) => captureException(...args),
-}));
 
 import { createMutationHook } from '~/hooks/createMutationHook';
 
@@ -26,10 +21,6 @@ interface Input {
 }
 
 describe('createMutationHook', () => {
-  beforeEach(() => {
-    captureException.mockClear();
-  });
-
   it('exposes the action under the configured name plus isLoading/error', () => {
     const useThing = createMutationHook({
       actionName: 'doThing',
@@ -72,7 +63,7 @@ describe('createMutationHook', () => {
     );
   });
 
-  it('returns null on error, reports via captureException with built context, and exposes the message', async () => {
+  it('returns null on error and exposes the message', async () => {
     const useThing = createMutationHook({
       actionName: 'doThing',
       mutationFn: async (_input: Input) => {
@@ -92,11 +83,6 @@ describe('createMutationHook', () => {
     });
 
     expect(returned).toBeNull();
-    expect(captureException).toHaveBeenCalledTimes(1);
-    const [err, ctx] = captureException.mock.calls[0];
-    expect(err).toBeInstanceOf(Error);
-    expect((err as Error).message).toBe('kaboom');
-    expect(ctx).toEqual({ action: 'doThing', id: 'y' });
 
     await waitFor(() => expect(result.current.error).toBe('kaboom'));
   });

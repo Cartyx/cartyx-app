@@ -138,15 +138,6 @@ jobs:
       VITE_PUBLIC_FF_WIKI: 'true'
       VITE_PUBLIC_FF_NOTES: 'true'
       VITE_PUBLIC_FF_SETTINGS: 'true'
-      # posthog-js only initializes when a key is present (PostHogProvider.tsx
-      # returns early without one), PostHog no longer gates feature flags
-      # (they are baked booleans since #490), but specs that exercise
-      # analytics mocking still need an initialized client. Dummy key; the
-      # host must contain "posthog" so mockPostHog's route matcher
-      # intercepts the flags request. Specs that don't mock PostHog just get
-      # fast 401s from the real host.
-      VITE_PUBLIC_POSTHOG_KEY: phc_e2e_dummy_key_not_a_secret
-      VITE_PUBLIC_POSTHOG_HOST: https://app.posthog.com
     steps:
       - name: Checkout code
         uses: actions/checkout@v7

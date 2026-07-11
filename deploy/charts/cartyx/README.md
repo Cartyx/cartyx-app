@@ -24,8 +24,8 @@ branches.
 
 ## Client-baked vs server env
 
-`VITE_PUBLIC_*` values (feature flags, the browser-facing ws host, the
-PostHog browser key) are compiled into the client bundle when the image is
+`VITE_PUBLIC_*` values (feature flags, the browser-facing ws host) are
+compiled into the client bundle when the image is
 built, from `deploy/build/web-<env>.args`. **Changing one = edit that file,
 merge, let the workflow rebuild.** Server-read env (`MONGODB_URI`,
 `SESSION_SECRET`, OAuth, R2, `APP_ENV`, `BASE_URL`) is live: plain values in
@@ -42,8 +42,7 @@ merge, let the workflow rebuild.** Server-read env (`MONGODB_URI`,
           --from-literal=googleClientSecret='...' \
           --from-literal=githubClientSecret='...' \
           --from-literal=r2AccessKeyId='...' \
-          --from-literal=r2SecretAccessKey='...' \
-          --from-literal=posthogKey='...'
+          --from-literal=r2SecretAccessKey='...'
 
     Repeat with `-n dev` and the dev-site values (dev Mongo DB, dev OAuth
     client secrets if separate). `sessionSecret` must be ≥32 chars — the app
@@ -54,8 +53,7 @@ merge, let the workflow rebuild.** Server-read env (`MONGODB_URI`,
     `INFRA_REPO_TOKEN`.
 3.  **Values files**: fill in `GOOGLE_CLIENT_ID` / `GITHUB_CLIENT_ID` /
     `R2_ACCOUNT_ID` / `R2_BUCKET` / `CDN_URL` in `values-prod.yaml` +
-    `values-dev.yaml` (public identifiers — committing them is fine), and
-    `VITE_PUBLIC_POSTHOG_KEY` in `deploy/build/web-*.args`.
+    `values-dev.yaml` (public identifiers — committing them is fine).
 4.  **OAuth redirect URIs**: register `https://app.cartyx.io/auth/callback/*`
     and `https://dev.cartyx.io/auth/callback/*` with Google/GitHub.
 5.  **Infra repo PR**: merge the cartyx-infrastructure change that replaces

@@ -1,6 +1,6 @@
 import { SignJWT, jwtVerify } from 'jose';
 import { getCookie, setCookie, deleteCookie } from '@tanstack/react-start/server';
-import { serverCaptureException } from './utils/posthog';
+import { serverCaptureException } from './utils/telemetry';
 import { resolveEnvironment } from './db/policy';
 
 export interface SessionUser {

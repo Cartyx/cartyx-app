@@ -5,7 +5,7 @@ import { User } from '../db/models/User';
 import { Campaign } from '../db/models/Campaign';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { Rule } from '../db/models/Rule';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { normalizeTags } from '../utils/helpers';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { ensureTags as ensureTagsFn } from './tags';

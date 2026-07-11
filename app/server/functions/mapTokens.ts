@@ -5,7 +5,7 @@ import { MapToken } from '../db/models/MapToken';
 import { Player } from '../db/models/Player';
 import { Character } from '../db/models/Character';
 import { Monster } from '../db/models/Monster';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import type { MapTokenData } from '~/types/mapToken';
 import type { TokenSource } from '~/types/schemas/mapTokens';
 import {

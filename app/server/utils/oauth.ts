@@ -3,7 +3,7 @@ import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
 import type { SessionUser } from '../session';
 import { providerConfigured } from './helpers';
-import { serverCaptureException } from './posthog';
+import { serverCaptureException } from './telemetry';
 import { encryptToken, decryptToken } from './tokenCrypto';
 
 export { providerConfigured };

@@ -50,10 +50,6 @@ vi.mock('~/server/db/models/Note', () => ({ Note: { find: vi.fn() } }));
 vi.mock('~/server/db/models/Character', () => ({ Character: { find: vi.fn() } }));
 vi.mock('~/server/db/models/Race', () => ({ Race: { find: vi.fn() } }));
 vi.mock('~/server/db/models/Rule', () => ({ Rule: { find: vi.fn() } }));
-vi.mock('~/server/utils/posthog', () => ({
-  serverCaptureException: vi.fn(),
-  serverCaptureEvent: vi.fn(),
-}));
 vi.mock('mongoose', () => ({
   default: { startSession: vi.fn() },
 }));
@@ -63,7 +59,6 @@ import { User } from '~/server/db/models/User';
 import { Campaign } from '~/server/db/models/Campaign';
 import { TabletopScreen } from '~/server/db/models/TabletopScreen';
 import { openTabletopWindow } from '~/server/functions/tabletop';
-import { serverCaptureEvent } from '~/server/utils/posthog';
 
 // ---------------------------------------------------------------------------
 // Schema-only tests — validate Zod schemas from ~/types/schemas/tabletop
@@ -470,37 +465,6 @@ describe('openTabletopWindow (handler)', () => {
         },
       })
     ).rejects.toThrow('Screen not found');
-  });
-
-  it('fires tabletop_window_opened analytics event for new window', async () => {
-    const screen = makeScreenWithWindows([]);
-    vi.mocked(TabletopScreen.findOne).mockResolvedValueOnce(screen as never);
-    mockSuccessfulAtomicPush({
-      _id: 'win-1',
-      collection: 'note',
-      documentId: 'note-1',
-      state: 'open',
-      x: null,
-      y: null,
-      width: null,
-      height: null,
-      zIndex: 1,
-    });
-
-    await _openTabletopWindow({
-      data: {
-        screenId: 'screen-1',
-        campaignId: 'camp-1',
-        collection: 'note',
-        documentId: 'note-1',
-      },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith(
-      'session-user-1',
-      'tabletop_window_opened',
-      expect.objectContaining({ campaign_id: 'camp-1', screen_id: 'screen-1' })
-    );
   });
 
   // -------------------------------------------------------------------

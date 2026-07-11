@@ -1,9 +1,9 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
-import { Topbar } from '~/components/Topbar'
+import { createFileRoute, Link } from '@tanstack/react-router';
+import { Topbar } from '~/components/Topbar';
 
 export const Route = createFileRoute('/privacy')({
   component: PrivacyPage,
-})
+});
 
 export function PrivacyPage() {
   return (
@@ -43,9 +43,9 @@ export function PrivacyPage() {
               <li className="flex gap-2">
                 <span className="text-blue-400 flex-shrink-0">·</span>
                 <span>
-                  <strong className="text-slate-200">Account information</strong> — your name,
-                  email address, and profile avatar, provided by your OAuth provider (Google,
-                  GitHub, or Apple) when you sign in.
+                  <strong className="text-slate-200">Account information</strong> — your name, email
+                  address, and profile avatar, provided by your OAuth provider (Google, GitHub, or
+                  Apple) when you sign in.
                 </span>
               </li>
               <li className="flex gap-2">
@@ -59,8 +59,10 @@ export function PrivacyPage() {
                 <span className="text-blue-400 flex-shrink-0">·</span>
                 <span>
                   <strong className="text-slate-200">Usage analytics</strong> — anonymised feature
-                  usage events collected via PostHog (e.g. which features you interact with). These
-                  are used solely to improve the software.
+                  usage events (e.g. which features you interact with) and error reports, collected
+                  by Umami and GlitchTip, self-hosted on our own infrastructure. These are used
+                  solely to improve the software; no data is shared with third-party analytics
+                  providers.
                 </span>
               </li>
             </ul>
@@ -95,8 +97,8 @@ export function PrivacyPage() {
               We do not sell, rent, or trade your personal information to anyone. Period.
             </p>
             <p className="mt-3">
-              We do not share your data with third parties for advertising or marketing purposes.
-              We have no plans to do so in the future.
+              We do not share your data with third parties for advertising or marketing purposes. We
+              have no plans to do so in the future.
             </p>
           </section>
 
@@ -119,15 +121,17 @@ export function PrivacyPage() {
               <li className="flex gap-2">
                 <span className="text-blue-400 flex-shrink-0">·</span>
                 <span>
-                  <strong className="text-slate-200">Cloudflare R2</strong> — stores campaign
-                  images you upload.
+                  <strong className="text-slate-200">Cloudflare R2</strong> — stores campaign images
+                  you upload.
                 </span>
               </li>
               <li className="flex gap-2">
                 <span className="text-blue-400 flex-shrink-0">·</span>
                 <span>
-                  <strong className="text-slate-200">PostHog</strong> — collects anonymised
-                  analytics events to help us understand feature usage.
+                  <strong className="text-slate-200">Umami &amp; GlitchTip</strong> — self-hosted on
+                  our own infrastructure; collect anonymised analytics events and error reports to
+                  help us understand feature usage and fix bugs. No data is shared with third-party
+                  analytics providers.
                 </span>
               </li>
               <li className="flex gap-2">
@@ -147,7 +151,8 @@ export function PrivacyPage() {
             <p>
               Cartyx uses session cookies only. These cookies are strictly necessary to keep you
               signed in while you use the app. We do not use advertising cookies, tracking pixels,
-              or third-party analytics cookies beyond PostHog (described above).
+              or third-party analytics cookies — analytics and error reports go to Umami and
+              GlitchTip (described above), both self-hosted on our own infrastructure.
             </p>
           </section>
 
@@ -156,8 +161,8 @@ export function PrivacyPage() {
               DATA RETENTION
             </h2>
             <p>
-              We retain your account and campaign data for as long as your account is active.
-              If you stop using Cartyx, your data remains stored until you request deletion.
+              We retain your account and campaign data for as long as your account is active. If you
+              stop using Cartyx, your data remains stored until you request deletion.
             </p>
           </section>
 
@@ -207,5 +212,5 @@ export function PrivacyPage() {
         </div>
       </main>
     </div>
-  )
+  );
 }

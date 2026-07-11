@@ -12,7 +12,7 @@
 import { onlineManager } from '@tanstack/react-query';
 import { createCircuitBreaker, type CircuitBreaker } from '~/utils/circuit-breaker';
 import { isInfrastructureFailure } from '~/utils/error-classification';
-import { captureEvent } from '~/utils/posthog-client';
+import { captureEvent } from '~/utils/telemetry-client';
 // ~/server/functions/rpc is the sanctioned client-safe RPC facade (createServerFn
 // strips the server body from the client bundle; see rpc.ts header comment), not a
 // raw ~/server/* module.

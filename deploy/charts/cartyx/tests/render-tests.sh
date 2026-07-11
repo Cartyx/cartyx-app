@@ -72,7 +72,7 @@ assert_contains "chart renders at least one object" "^kind:"
 # --- Task 2: helpers + secret ---
 assert_contains "secret rendered with session key" "sessionSecret:"
 assert_contains "secret rendered with mongo key" "mongodbUri:"
-assert_contains "secret carries all seven keys" "posthogKey:"
+assert_contains "secret carries all six keys" "r2SecretAccessKey:"
 assert_not_contains "existingSecret suppresses managed Secret" "kind: Secret" \
   --set secret.existingSecret=my-secret
 filtered_args=$(args_without secret.values.sessionSecret)
@@ -166,6 +166,20 @@ if helm template cartyx "$CHART_DIR" $local_args -f "$CHART_DIR/values-local.yam
 # shellcheck disable=SC2086
 if helm template cartyx "$CHART_DIR" $local_args -f "$CHART_DIR/values-local.yaml" 2>&1 |
   grep -qE "kind: (Ingress|Certificate|Middleware)"; then bad "values-local disables ingress stack"; else ok; fi
+
+# --- Task 12: telemetry env (GLITCHTIP_DSN / UMAMI_WEBSITE_ID) ---
+assert_not_contains "empty GLITCHTIP_DSN is omitted" "name: GLITCHTIP_DSN"
+assert_not_contains "empty UMAMI_WEBSITE_ID is omitted" "name: UMAMI_WEBSITE_ID"
+assert_contains "non-empty GLITCHTIP_DSN renders" "name: GLITCHTIP_DSN" \
+  --set web.env.GLITCHTIP_DSN=https://key@glitchtip.test/1
+assert_contains "non-empty UMAMI_WEBSITE_ID renders" "name: UMAMI_WEBSITE_ID" \
+  --set web.env.UMAMI_WEBSITE_ID=test-website-id
+prod_out=$(render_env values-prod.yaml)
+dev_out=$(render_env values-dev.yaml)
+echo "$prod_out" | grep -q "value: \"https://1fd010e17ff4468fa6e3b07c94fcd31b@glitchtip.cartyx.io/1\"" \
+  && ok || bad "values-prod GLITCHTIP_DSN resolves"
+echo "$dev_out" | grep -q "value: \"4cde88ee-3ef0-4104-adb0-6247d4ecbb30\"" \
+  && ok || bad "values-dev UMAMI_WEBSITE_ID resolves"
 
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"

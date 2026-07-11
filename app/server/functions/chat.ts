@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { getSession } from '../session';
 import { connectDB, isDBConnected } from '../db/connection';
 import { Message } from '../db/models/Message';
-import { serverCaptureException } from '../utils/posthog';
+import { serverCaptureException } from '../utils/telemetry';
 import { listMessagesSchema, saveMessageSchema } from '~/types/schemas/chat';
 import { requireSessionAccess } from './sessionAccess';
 

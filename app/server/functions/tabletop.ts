@@ -6,7 +6,7 @@ import { User } from '../db/models/User';
 import { Campaign } from '../db/models/Campaign';
 import { TabletopScreen, TABLETOP_LIMITS } from '../db/models/TabletopScreen';
 import { TabletopPlayerState } from '../db/models/TabletopPlayerState';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { hydrateRefs } from './tabletop-hydration';
 import type {
   TabletopScreenData,
@@ -121,24 +121,20 @@ function serializePlayerState(doc: {
     campaignId: String(doc.campaignId),
     userId: String(doc.userId),
     activeScreenId: doc.activeScreenId ? String(doc.activeScreenId) : null,
-    viewports: (doc.viewports ?? []).map(
-      (v): ViewportData => ({
-        screenId: String(v.screenId),
-        zoom: v.zoom ?? 1,
-        panX: v.panX ?? 0,
-        panY: v.panY ?? 0,
-      })
-    ),
-    windowOverrides: (doc.windowOverrides ?? []).map(
-      (wo): WindowOverrideData => ({
-        windowId: wo.windowId ?? '',
-        x: wo.x ?? 0,
-        y: wo.y ?? 0,
-        width: wo.width ?? 0,
-        height: wo.height ?? 0,
-        state: WINDOW_STATES.includes(wo.state as WS) ? (wo.state as WS) : 'open',
-      })
-    ),
+    viewports: (doc.viewports ?? []).map((v): ViewportData => ({
+      screenId: String(v.screenId),
+      zoom: v.zoom ?? 1,
+      panX: v.panX ?? 0,
+      panY: v.panY ?? 0,
+    })),
+    windowOverrides: (doc.windowOverrides ?? []).map((wo): WindowOverrideData => ({
+      windowId: wo.windowId ?? '',
+      x: wo.x ?? 0,
+      y: wo.y ?? 0,
+      width: wo.width ?? 0,
+      height: wo.height ?? 0,
+      state: WINDOW_STATES.includes(wo.state as WS) ? (wo.state as WS) : 'open',
+    })),
   };
 }
 

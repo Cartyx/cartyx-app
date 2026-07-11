@@ -1,6 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { createServerFn } from '@tanstack/react-start';
-import { captureException } from '~/providers/PostHogProvider';
+import { captureException } from '~/providers/TelemetryProvider';
 import { compressImage } from '~/utils/compressImage';
 import { uploadToR2 } from '~/utils/uploadToR2';
 import { queryKeys } from '~/utils/queryKeys';

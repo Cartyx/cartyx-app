@@ -11,6 +11,12 @@ updates:
       - 'dependencies'
     commit-message:
       prefix: 'chore(deps)'
+    # Bundle minor/patch bumps into a single weekly PR instead of one PR per
+    # package. Majors stay individual so each break is reviewed on its own.
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: ['minor', 'patch']
     # Cooldown — wait 10 days after a version is published before opening
     # a PR for it. Defends against supply-chain attacks where a compromised
     # maintainer publishes a malicious version: 10 days is well within the
@@ -70,6 +76,19 @@ updates:
       # move it manually alongside each react-start update, matching the
       # exact version react-start declares in its dependencies.
       - dependency-name: '@tanstack/react-router'
+      # react-start is the other half of the lockstep: a standalone
+      # react-start bump drags in a second router-core copy just the same.
+      # Bump both together manually (router pinned to the exact version the
+      # new react-start declares).
+      - dependency-name: '@tanstack/react-start'
+
+      # --- @types/node major boundary ---
+      # Runtime is pinned to Node 22 (engines + k3s images). @types/node
+      # majors track Node majors and would type-check against APIs the
+      # runtime doesn't have. Take minors/patches only; bump the major
+      # manually together with the Node runtime upgrade.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
 
       # --- zod 5 boundary ---
       # zod 5 will be the next breaking release after 4. The 3→4 migration

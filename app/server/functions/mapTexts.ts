@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { Map as MapModel } from '../db/models/Map';
 import { MapText } from '../db/models/MapText';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import type { MapTextData } from '~/types/mapText';
 import {
   listMapTextsSchema,

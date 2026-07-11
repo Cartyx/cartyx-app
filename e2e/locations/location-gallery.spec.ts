@@ -5,7 +5,7 @@
  * floating window flow, since the GM edit modal doesn't render LocationGallery).
  */
 import { test, expect, openWikiTab } from '../fixtures/tabletop-fixtures';
-import { mockPostHog, mockR2DirectUpload } from '../fixtures/network-mocks';
+import { mockR2DirectUpload } from '../fixtures/network-mocks';
 import type { Page } from '@playwright/test';
 
 const TINY_PNG = Buffer.from(
@@ -34,7 +34,6 @@ async function openLocationAsGm(page: Page, campaignUrl: string, locationName: s
 
 test.describe('Location image gallery (GM edit flow)', () => {
   test.beforeEach(async ({ page }) => {
-    await mockPostHog(page);
     await mockR2DirectUpload(page);
   });
 

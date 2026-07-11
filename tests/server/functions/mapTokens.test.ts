@@ -29,10 +29,6 @@ vi.mock('~/server/db/models/MapToken', () => ({
 vi.mock('~/server/db/models/Player', () => ({ Player: { findOne: vi.fn() } }));
 vi.mock('~/server/db/models/Character', () => ({ Character: { findOne: vi.fn() } }));
 vi.mock('~/server/db/models/Monster', () => ({ Monster: { findOne: vi.fn() } }));
-vi.mock('~/server/utils/posthog', () => ({
-  serverCaptureException: vi.fn(),
-  serverCaptureEvent: vi.fn(),
-}));
 
 import { getSession } from '~/server/session';
 import { User } from '~/server/db/models/User';

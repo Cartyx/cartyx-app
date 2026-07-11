@@ -5,7 +5,7 @@ import { User } from '../db/models/User';
 import { Campaign } from '../db/models/Campaign';
 import { Monster } from '../db/models/Monster';
 import { normalizeTags } from '../utils/helpers';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { ensureTags as ensureTagsFn } from './tags';
 import type { MonsterData, MonsterListItem } from '~/types/monster';
 import type { MonsterSize, FeatureSection } from '~/types/schemas/monsters';
@@ -73,8 +73,7 @@ function serializeMonsterListItem(r: MonsterDoc): MonsterListItem {
       xp: ((r.cr as { xp?: number } | undefined)?.xp as number | undefined) ?? 0,
       proficiencyBonus:
         ((r.cr as { proficiencyBonus?: number } | undefined)?.proficiencyBonus as
-          | number
-          | undefined) ?? 2,
+          number | undefined) ?? 2,
     },
     picture: (r.picture as string) ?? '',
     tags: (r.tags as string[]) ?? [],

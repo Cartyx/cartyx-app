@@ -4,7 +4,7 @@ import { getUploadUrlSchema } from '~/types/schemas/uploads';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import crypto from 'node:crypto';
-import { serverCaptureException } from '../utils/posthog';
+import { serverCaptureException } from '../utils/telemetry';
 
 const ALLOWED_TYPES = new Map([
   ['image/webp', 'webp'],

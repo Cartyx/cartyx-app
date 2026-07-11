@@ -4,7 +4,7 @@ import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { Map as MapModel } from '../db/models/Map';
 import { TabletopScreen } from '../db/models/TabletopScreen';
 import { Location } from '../db/models/Location';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import type { MapData, MapListItem, MapScale, MapGridOverlay } from '~/types/map';
 import {
   listMapsSchema,
