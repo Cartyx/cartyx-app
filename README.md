@@ -127,6 +127,8 @@ Cartyx runs its own self-hosted observability stack — no third-party analytics
 
 Telemetry is configured via `GLITCHTIP_DSN` / `UMAMI_WEBSITE_ID` (server, runtime) and `VITE_PUBLIC_GLITCHTIP_DSN` / `VITE_PUBLIC_UMAMI_WEBSITE_ID` (client, baked in at build time) — all four are optional and default to a safe no-op when unset. See `.env.example`.
 
+URLs, logins, and day-to-day usage for all three UIs: [docs/observability.md](docs/observability.md).
+
 ## Component Library
 
 The published Storybook is available at [https://biozal.github.io/cartyx-app](https://biozal.github.io/cartyx-app).
