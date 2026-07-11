@@ -9,7 +9,7 @@ web:
     # OAuth client IDs are public identifiers (they appear in every auth
     # redirect URL) — fill in and commit; the SECRETS live in the
     # kubectl-created `cartyx` Secret (see README).
-    GOOGLE_CLIENT_ID: 771084537830-mqaa7q6rpe4k87nalgqlu7bu2lt8qam2.apps.googleusercontent.com
+    GOOGLE_CLIENT_ID: 771084537830-ivq72v3vhfmundul3lcflocfur5tfpqg.apps.googleusercontent.com
     # GitHub OAuth apps allow ONE callback host each — prod needs its own
     # OAuth app (callback https://app.cartyx.io/auth/callback/github).
     GITHUB_CLIENT_ID: Ov2limoxRabMkVtRi3x
