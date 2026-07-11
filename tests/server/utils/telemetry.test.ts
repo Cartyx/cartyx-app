@@ -37,8 +37,6 @@ describe('server telemetry', () => {
     const fetchMock = fetch as unknown as ReturnType<typeof vi.fn>;
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe('https://umami.cartyx.io/api/send');
-    // RequestInit is a TS ambient DOM type, not a runtime global; no-undef doesn't know TS type positions.
-    // eslint-disable-next-line no-undef
     const body = JSON.parse((init as RequestInit).body as string);
     expect(body).toMatchObject({
       type: 'event',
@@ -48,7 +46,6 @@ describe('server telemetry', () => {
         data: { plan: 'free', distinctId: 'user-1' },
       },
     });
-    // eslint-disable-next-line no-undef -- see above
     expect((init as RequestInit).headers).toMatchObject({
       'User-Agent': expect.stringMatching(/^Mozilla\//),
     });

@@ -1373,7 +1373,11 @@ export const deleteStack = async ({ data }: { data: z.infer<typeof deleteStackSc
 /**
  * **Duplicate rule:** A stack cannot contain two items with the same
  * `collection + documentId`.  If a duplicate is detected the call returns
- * `{ success: true, existed: true }` without modifying the stack.
+ * `{ success: true, existed: true }` without modifying the stack. Enforced
+ * atomically via a conditional `updateOne` filter — the same pattern
+ * `openWindow`/`openTabletopWindow` use — so that two concurrent calls for
+ * the same ref cannot both push an item, and two concurrent adds of
+ * *different* refs cannot both land past the per-stack item cap.
  */
 
 export { addStackItemSchema };
@@ -1402,7 +1406,9 @@ export const addStackItem = async ({ data }: { data: z.infer<typeof addStackItem
       stack.items = [];
     }
 
-    // Duplicate check
+    // Duplicate check — fast-path only. Like openWindow's `existing` check,
+    // this reads a possibly-stale snapshot; the authoritative dedupe/cap
+    // enforcement is the conditional filter in the atomic update below.
     const duplicate = stack.items.find(
       (item: { collection?: string; documentId?: unknown }) =>
         item.collection === data.collection && String(item.documentId) === data.documentId
@@ -1415,24 +1421,130 @@ export const addStackItem = async ({ data }: { data: z.infer<typeof addStackItem
       throw new Error(`A stack cannot contain more than ${GMSCREEN_LIMITS.MAX_STACK_ITEMS} items`);
     }
 
-    stack.items.push({
+    const newItem = {
       collection: data.collection,
       documentId: data.documentId,
       label: data.label,
-    });
-    screen.updatedAt = new Date();
-    await screen.save();
+    };
 
-    const created = stack.items[stack.items.length - 1];
+    // Atomic conditional push — this is the fix for the check-then-write
+    // race: two concurrent calls can both pass the `duplicate`/cap checks
+    // above (both read the array before either write lands), but this
+    // filter is re-evaluated by Mongo against the *current* document at
+    // write time. The `stacks.$elemMatch` clause requires the target stack
+    // to exist AND have no item for this ref yet (dedupe); the `$expr`
+    // clause requires that specific stack's item count to be under the cap
+    // — needed because schema validators don't run on updateOne pushes, so
+    // without it two concurrent adds of *different* refs at length cap-1
+    // would land cap+1 items in the same stack.
+    const pushResult = await GMScreen.updateOne(
+      {
+        _id: data.screenId,
+        campaignId: data.campaignId,
+        stacks: {
+          $elemMatch: {
+            _id: data.stackId,
+            items: {
+              $not: {
+                $elemMatch: { collection: data.collection, documentId: data.documentId },
+              },
+            },
+          },
+        },
+        $expr: {
+          $lt: [
+            {
+              $size: {
+                $reduce: {
+                  input: { $ifNull: ['$stacks', []] },
+                  initialValue: [],
+                  in: {
+                    $cond: [
+                      { $eq: [{ $toString: '$$this._id' }, data.stackId] },
+                      { $ifNull: ['$$this.items', []] },
+                      '$$value',
+                    ],
+                  },
+                },
+              },
+            },
+            GMSCREEN_LIMITS.MAX_STACK_ITEMS,
+          ],
+        },
+      },
+      {
+        $push: { 'stacks.$[stack].items': newItem },
+        $set: { updatedAt: new Date() },
+      },
+      {
+        arrayFilters: [{ 'stack._id': data.stackId }],
+      }
+    );
+
+    if (pushResult.modifiedCount > 0) {
+      // Re-fetch the matched stack subdoc so we can find the pushed item's
+      // Mongoose-assigned _id.
+      const refetched = (await GMScreen.findOne(
+        { _id: data.screenId, campaignId: data.campaignId, 'stacks._id': data.stackId },
+        { 'stacks.$': 1 }
+      ).lean()) as {
+        stacks?: Array<{
+          items?: Array<{ _id: unknown; collection?: string; documentId: unknown; label?: string }>;
+        }>;
+      } | null;
+      const created = refetched?.stacks?.[0]?.items?.find(
+        (item) => item.collection === data.collection && String(item.documentId) === data.documentId
+      );
+      if (!created) throw new Error('Stack item not found after creation');
+
+      serverCaptureEvent(sessionUserId, 'gmscreen_stack_item_added', {
+        campaign_id: data.campaignId,
+        screen_id: data.screenId,
+        stack_id: data.stackId,
+        item_id: String(created._id),
+      });
+
+      return { success: true, item: serializeStackItem(created), existed: false };
+    }
+
+    // The filter didn't match: either another concurrent call added an item
+    // for this ref first (dedupe loss), or a concurrent add of a *different*
+    // ref filled the last cap slot in this stack ($expr loss), or the
+    // screen/stack was deleted. Re-fetch canonical state to tell these apart:
+    // ref present → return it as existed; ref absent at cap → cap error;
+    // otherwise stack/screen not found.
+    const refreshed = await GMScreen.findOne({
+      _id: data.screenId,
+      campaignId: data.campaignId,
+    });
+    if (!refreshed) throw new Error('Screen not found');
+    if (!refreshed.stacks) refreshed.stacks = [];
+    const refreshedStack = refreshed.stacks.find(
+      (s: { _id: unknown }) => String(s._id) === data.stackId
+    );
+    if (!refreshedStack) throw new Error('Stack not found');
+    if (!refreshedStack.items) refreshedStack.items = [];
+    const race = refreshedStack.items.find(
+      (item: { collection?: string; documentId?: unknown }) =>
+        item.collection === data.collection && String(item.documentId) === data.documentId
+    );
+    if (!race) {
+      if (refreshedStack.items.length >= GMSCREEN_LIMITS.MAX_STACK_ITEMS) {
+        throw new Error(
+          `A stack cannot contain more than ${GMSCREEN_LIMITS.MAX_STACK_ITEMS} items`
+        );
+      }
+      throw new Error('Stack not found');
+    }
 
     serverCaptureEvent(sessionUserId, 'gmscreen_stack_item_added', {
       campaign_id: data.campaignId,
       screen_id: data.screenId,
       stack_id: data.stackId,
-      item_id: String(created._id),
+      item_id: String(race._id),
     });
 
-    return { success: true, item: serializeStackItem(created), existed: false };
+    return { success: true, item: serializeStackItem(race), existed: true };
   } catch (e) {
     serverCaptureException(e, sessionUserId, {
       action: 'addStackItem',
