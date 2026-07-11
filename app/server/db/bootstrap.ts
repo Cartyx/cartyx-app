@@ -1,7 +1,7 @@
 import type { BootstrapEnvironment, BootstrapPolicy } from './policy';
 import { getBootstrapPolicy } from './policy';
 import { ensureCollections, syncCollectionsAndIndexes, inspectIndexes } from './inspect';
-import { serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureEvent } from '../utils/telemetry';
 
 let bootstrapped = false;
 let bootstrapPromise: Promise<void> | null = null;

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { getSession } from '../session';
 import { connectDB, isDBConnected } from '../db/connection';
 import { DiceRoll } from '../db/models/DiceRoll';
-import { serverCaptureException } from '../utils/posthog';
+import { serverCaptureException } from '../utils/telemetry';
 import { listDiceRollsSchema, saveDiceRollSchema } from '~/types/schemas/diceRolls';
 import { requireSessionAccess } from './sessionAccess';
 

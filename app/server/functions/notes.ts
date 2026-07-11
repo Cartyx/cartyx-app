@@ -4,7 +4,7 @@ import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
 import { Campaign } from '../db/models/Campaign';
 import { Note } from '../db/models/Note';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { normalizeTags } from '../utils/helpers';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { ensureTags as ensureTagsFn } from './tags';

@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { bootstrapDB, isBootstrapped } from './bootstrap';
 import { getBootstrapPolicy } from './policy';
-import { serverCaptureException } from '../utils/posthog';
+import { serverCaptureException } from '../utils/telemetry';
 
 let connectPromise: Promise<typeof mongoose> | null = null;
 

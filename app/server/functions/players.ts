@@ -7,7 +7,7 @@ import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { Player } from '../db/models/Player';
 import { Character } from '../db/models/Character';
 import { Lore } from '../db/models/Lore';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { pruneLoreLinks } from '../utils/pruneLoreLinks';
 import { pruneEventLinks } from '../utils/pruneEventLinks';

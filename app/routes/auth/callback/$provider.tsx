@@ -9,7 +9,7 @@ import {
   upsertUser,
 } from '~/server/utils/oauth';
 import { setSession } from '~/server/session';
-import { serverCaptureException, serverCaptureEvent } from '~/server/utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '~/server/utils/telemetry';
 
 const VALID_PROVIDERS = ['google', 'github', 'apple'] as const;
 

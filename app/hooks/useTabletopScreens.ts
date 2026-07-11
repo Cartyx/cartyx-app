@@ -1,7 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import type { TabletopScreenData, TabletopScreenDetailData } from '~/types/tabletop';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { captureException } from '~/providers/PostHogProvider';
+import { captureException } from '~/providers/TelemetryProvider';
 import { queryKeys } from '~/utils/queryKeys';
 import {
   listTabletopScreensSchema,

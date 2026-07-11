@@ -1,4 +1,4 @@
-import { captureEvent } from '~/utils/posthog-client';
+import { captureEvent } from '~/utils/telemetry-client';
 import { isBackendDown, reportBackendFailure, whenBackendUp } from '~/utils/backend-health';
 import { isInfrastructureFailure } from '~/utils/error-classification';
 

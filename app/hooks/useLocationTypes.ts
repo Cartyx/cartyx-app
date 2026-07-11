@@ -1,7 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import type { LocationTypeData } from '~/types/location';
-import { captureException } from '~/providers/PostHogProvider';
+import { captureException } from '~/providers/TelemetryProvider';
 import { queryKeys } from '~/utils/queryKeys';
 import {
   listLocationTypesSchema,

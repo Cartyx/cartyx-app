@@ -12,7 +12,7 @@ import { Campaign } from '../db/models/Campaign';
 import { Location } from '../db/models/Location';
 import { Character } from '../db/models/Character';
 import { Player } from '../db/models/Player';
-import { serverCaptureEvent, serverCaptureException } from '../utils/posthog';
+import { serverCaptureEvent, serverCaptureException } from '../utils/telemetry';
 import {
   scanOrphanImagesSchema,
   deleteOrphanImagesSchema,

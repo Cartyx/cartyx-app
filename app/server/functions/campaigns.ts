@@ -13,7 +13,7 @@ import {
   saveUploadedFile,
   MAX_IMAGE_BASE64_LENGTH,
 } from '../utils/helpers';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { formatSchedule } from '~/utils/date';
 import type { CampaignData } from '~/types/campaign';
 import {

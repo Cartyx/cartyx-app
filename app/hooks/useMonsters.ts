@@ -1,6 +1,6 @@
 import { createServerFn } from '@tanstack/react-start';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { captureException } from '~/providers/PostHogProvider';
+import { captureException } from '~/providers/TelemetryProvider';
 import { queryKeys } from '~/utils/queryKeys';
 import type { MonsterData, MonsterListItem } from '~/types/monster';
 import {

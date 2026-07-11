@@ -14,6 +14,8 @@ web:
     R2_ACCOUNT_ID: '66cc5f108c96110512e86fc8346a7558'
     R2_BUCKET: cartyx-dev
     CDN_URL: https://cdn-dev.cartyx.io
+    GLITCHTIP_DSN: https://0cb27f44eaa9497fbff9a1e7ce803915@glitchtip.cartyx.io/2
+    UMAMI_WEBSITE_ID: 4cde88ee-3ef0-4104-adb0-6247d4ecbb30
   resources:
     limits:
       memory: 384Mi

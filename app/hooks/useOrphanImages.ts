@@ -1,6 +1,6 @@
 import { createServerFn } from '@tanstack/react-start';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { captureException } from '~/providers/PostHogProvider';
+import { captureException } from '~/providers/TelemetryProvider';
 import { queryKeys } from '~/utils/queryKeys';
 import {
   scanOrphanImagesSchema,

@@ -6,7 +6,7 @@ import { useCreateCampaign } from '~/hooks/useCampaigns';
 import { Topbar } from '~/components/Topbar';
 import { PixelButton } from '~/components/PixelButton';
 import { ImagePlus, Swords } from 'lucide-react';
-import { captureEvent } from '~/utils/posthog-client';
+import { captureEvent } from '~/utils/telemetry-client';
 import { FormInput } from '~/components/FormInput';
 import { FormTextarea } from '~/components/FormTextarea';
 import { FormSelect } from '~/components/FormSelect';

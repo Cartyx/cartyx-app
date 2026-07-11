@@ -37,6 +37,11 @@ web:
     R2_ACCOUNT_ID: ''
     R2_BUCKET: ''
     CDN_URL: ''
+    # DSNs/website IDs are not secrets — they ship in the client bundle too
+    # (VITE_PUBLIC_* counterparts in deploy/build/web-<env>.args). Absent =
+    # telemetry disabled (see app/server/utils/telemetry.ts).
+    GLITCHTIP_DSN: ''
+    UMAMI_WEBSITE_ID: ''
 
 realtime:
   image:

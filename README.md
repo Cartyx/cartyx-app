@@ -117,6 +117,16 @@ function ExperimentalPanel() {
 
 Changing a flag value requires a rebuild (dev-server restart or a new image build).
 
+## Observability
+
+Cartyx runs its own self-hosted observability stack — no third-party analytics providers:
+
+- **[glitchtip.cartyx.io](https://glitchtip.cartyx.io)** — error tracking (Sentry-protocol ingest). Client and server errors are captured via `app/utils/telemetry-client.ts` and `app/server/utils/telemetry.ts`.
+- **[umami.cartyx.io](https://umami.cartyx.io)** — privacy-friendly page-view and event analytics.
+- **[grafana.cartyx.io](https://grafana.cartyx.io)** — cluster metrics, logs, and dashboards.
+
+Telemetry is configured via `GLITCHTIP_DSN` / `UMAMI_WEBSITE_ID` (server, runtime) and `VITE_PUBLIC_GLITCHTIP_DSN` / `VITE_PUBLIC_UMAMI_WEBSITE_ID` (client, baked in at build time) — all four are optional and default to a safe no-op when unset. See `.env.example`.
+
 ## Component Library
 
 The published Storybook is available at [https://biozal.github.io/cartyx-app](https://biozal.github.io/cartyx-app).

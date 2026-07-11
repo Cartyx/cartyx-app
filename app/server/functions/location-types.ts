@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { Location } from '../db/models/Location';
 import { LocationType, seedDefaultLocationTypes } from '../db/models/LocationType';
-import { serverCaptureException, serverCaptureEvent } from '../utils/posthog';
+import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import type { LocationTypeData } from '~/types/location';
 import {
   listLocationTypesSchema,

@@ -4,7 +4,7 @@ import { connectDB, isDBConnected } from '../db/connection';
 import { User } from '../db/models/User';
 import { Campaign } from '../db/models/Campaign';
 import { Tag } from '../db/models/Tag';
-import { serverCaptureException } from '../utils/posthog';
+import { serverCaptureException } from '../utils/telemetry';
 import { normalizeTags } from '../utils/helpers';
 import type { TagListItem } from '~/types/tag';
 import { listTagsSchema, ensureTagsSchema } from '~/types/tag';
