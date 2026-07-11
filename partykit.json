@@ -1,8 +1,0 @@
-{
-  "name": "cartyx-party",
-  "main": "party/index.ts",
-  "parties": {
-    "tabletop": "party/tabletop.ts",
-    "tabletop_map": "party/tabletop-map.ts"
-  }
-}
