@@ -8,6 +8,3 @@ VITE_PUBLIC_FF_DICE=true
 VITE_PUBLIC_FF_WIKI=true
 VITE_PUBLIC_FF_NOTES=true
 VITE_PUBLIC_FF_SETTINGS=true
-# PostHog is unused (dead account; Phase 5 replaces it with Umami/GlitchTip) — leave empty.
-VITE_PUBLIC_POSTHOG_KEY=
-VITE_PUBLIC_POSTHOG_HOST=https://app.posthog.com

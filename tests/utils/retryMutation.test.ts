@@ -1,10 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.mock('~/utils/posthog-client', () => ({
-  captureException: vi.fn(),
-  captureEvent: vi.fn(),
-}));
-
 const { mockIsBackendDown, mockWhenBackendUp, mockReportBackendFailure } = vi.hoisted(() => ({
   mockIsBackendDown: vi.fn(() => false),
   mockWhenBackendUp: vi.fn(() => Promise.resolve()),
@@ -19,7 +14,6 @@ vi.mock('~/utils/backend-health', () => ({
 
 import { withRetry } from '~/utils/retryMutation';
 import type { RetryContext } from '~/utils/retryMutation';
-import { captureEvent as captureEventMock } from '~/utils/posthog-client';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -189,15 +183,6 @@ describe('withRetry breaker-wait deadline', () => {
     expect(result).toBeNull();
     expect(fn).not.toHaveBeenCalled();
     expect(onExhausted).toHaveBeenCalledWith(ctx, expect.any(Error));
-    expect(captureEventMock).toHaveBeenCalledWith(
-      'party.mongo_save_failed',
-      expect.objectContaining({
-        sessionId: ctx.sessionId,
-        campaignId: ctx.campaignId,
-        messageType: ctx.messageType,
-        messageId: ctx.messageId,
-      })
-    );
   });
 
   it('proceeds and succeeds if the breaker recovers before the deadline (30s)', async () => {

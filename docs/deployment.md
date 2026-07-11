@@ -312,32 +312,23 @@ git push origin dev
 | `GITHUB_CLIENT_SECRET` | prod GitHub OAuth app client secret |
 | `R2_BUCKET`            | `cartyx-production`                 |
 | `CDN_URL`              | `https://cdn.cartyx.io`             |
-| `POSTHOG_KEY`          | prod PostHog project API key        |
 
 ### Preview / Dev Only
 
-| Variable               | Value                                         |
-| ---------------------- | --------------------------------------------- |
-| `MONGODB_URI`          | `mongodb+srv://...` (dev cluster)             |
-| `BASE_URL`             | `https://dev.cartyx.io`                       |
-| `GOOGLE_CLIENT_ID`     | dev Google OAuth client ID                    |
-| `GOOGLE_CLIENT_SECRET` | dev Google OAuth client secret                |
-| `GITHUB_CLIENT_ID`     | dev GitHub OAuth app client ID                |
-| `GITHUB_CLIENT_SECRET` | dev GitHub OAuth app client secret            |
-| `R2_BUCKET`            | `cartyx-dev`                                  |
-| `CDN_URL`              | `https://cdn-dev.cartyx.io`                   |
-| `POSTHOG_KEY`          | dev PostHog project API key (or same as prod) |
+| Variable               | Value                              |
+| ---------------------- | ---------------------------------- |
+| `MONGODB_URI`          | `mongodb+srv://...` (dev cluster)  |
+| `BASE_URL`             | `https://dev.cartyx.io`            |
+| `GOOGLE_CLIENT_ID`     | dev Google OAuth client ID         |
+| `GOOGLE_CLIENT_SECRET` | dev Google OAuth client secret     |
+| `GITHUB_CLIENT_ID`     | dev GitHub OAuth app client ID     |
+| `GITHUB_CLIENT_SECRET` | dev GitHub OAuth app client secret |
+| `R2_BUCKET`            | `cartyx-dev`                       |
+| `CDN_URL`              | `https://cdn-dev.cartyx.io`        |
 
-### PostHog Analytics and Feature Flags (Optional)
+### Feature Flags
 
-| Variable                   | Description                                       |
-| -------------------------- | ------------------------------------------------- |
-| `VITE_PUBLIC_POSTHOG_KEY`  | Client-side PostHog project key                   |
-| `VITE_PUBLIC_POSTHOG_HOST` | PostHog host (default: `https://app.posthog.com`) |
-| `POSTHOG_KEY`              | Server-side PostHog project key                   |
-| `POSTHOG_HOST`             | Server-side PostHog host                          |
-
-Client-side feature flags use the same `VITE_PUBLIC_POSTHOG_*` variables as analytics. When a user signs in or out, the app refreshes their PostHog identity so person-targeted flags update without a redeploy.
+Client-side feature flags are plain booleans baked into the client bundle from `VITE_PUBLIC_FF_*` build args at build time. Changing a flag requires an image rebuild, not an env change. (PostHog analytics was removed; Phase 5 introduces the replacement telemetry stack.)
 
 ### Local Development Only
 
@@ -524,8 +515,9 @@ are missing, blocking the deploy.
 
 ### Bootstrap observability
 
-The runtime bootstrap emits structured log events and PostHog analytics events
-at each phase so operators can monitor startup health:
+The runtime bootstrap emits structured log events (and telemetry events through
+the `serverCaptureEvent` wrapper) at each phase so operators can monitor startup
+health:
 
 | Event                  | When                                         | Key fields                                                                                                                                                                                         |
 | ---------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -543,9 +535,10 @@ Console logs follow a structured `key=value` format for easy parsing:
 [bootstrap] failure env=production action=verify duration_ms=15 error=timed out after 10000ms
 ```
 
-All events are also sent to PostHog via `serverCaptureEvent` when a PostHog key
-is configured. Use these events to build dashboards or alerts for bootstrap
-duration regressions, unexpected drift, or startup failures.
+The `serverCaptureEvent` wrapper is currently a no-op (PostHog was removed);
+Phase 5 re-points it at the replacement telemetry stack, at which point these
+events can drive dashboards or alerts for bootstrap duration regressions,
+unexpected drift, or startup failures.
 
 ### Schema as source of truth
 

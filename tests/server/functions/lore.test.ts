@@ -23,10 +23,6 @@ vi.mock('~/server/db/models/Lore', () => ({
 vi.mock('~/server/functions/gmscreens-helpers', () => ({
   removeDocumentRefsFromScreens: vi.fn(),
 }));
-vi.mock('~/server/utils/posthog', () => ({
-  serverCaptureException: vi.fn(),
-  serverCaptureEvent: vi.fn(),
-}));
 // Mock the entity models used for link-label resolution
 vi.mock('~/server/db/models/Character', () => ({ Character: { findById: vi.fn() } }));
 vi.mock('~/server/db/models/Player', () => ({ Player: { findById: vi.fn() } }));

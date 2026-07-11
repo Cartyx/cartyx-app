@@ -16,7 +16,7 @@ host port **3200**, realtime on **1999**.
 
 Both paths read secrets from the repo-root `.env`. For docker-compose specifically,
 you must run the command from the **repo root** with `--env-file .env` so the
-`VITE_PUBLIC_*` build args (feature flags, PostHog keys) interpolate into the `web`
+`VITE_PUBLIC_*` build args (feature flags) interpolate into the `web`
 image at build time — running it any other way, or omitting `--env-file .env`, builds
 `web` with those flags unset.
 

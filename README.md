@@ -22,7 +22,7 @@ npm run dev            # http://localhost:3000
 - **Session Scheduling** — Weekly/bi-weekly/monthly with timezone support
 - **Image Uploads** — Campaign images stored on Cloudflare R2
 - **Access Control** — GM and player roles with owner-only actions
-- **Product Analytics & Feature Flags** — PostHog integration for usage insights and progressive feature rollouts
+- **Feature Flags** — build-time flags baked into the client bundle for progressive rollouts
 
 ## Tech Stack
 
@@ -35,7 +35,6 @@ npm run dev            # http://localhost:3000
 | **Database**      | MongoDB Atlas ([Mongoose](https://mongoosejs.com))                                  |
 | **Image Storage** | [Cloudflare R2](https://developers.cloudflare.com/r2/) (S3-compatible)              |
 | **Dates**         | [Day.js](https://day.js.org) with timezone + relative time plugins                  |
-| **Analytics**     | [PostHog](https://posthog.com) (React SDK + Node SDK)                               |
 | **Build**         | [Vite](https://vitejs.dev) + [Nitro](https://nitro.build/)                          |
 | **Testing**       | [Vitest](https://vitest.dev) + [React Testing Library](https://testing-library.com) |
 | **Linting**       | ESLint (flat config) + Prettier                                                     |
@@ -54,7 +53,7 @@ app/
 ├── server/
 │   ├── functions/   # Server functions (auth, campaigns, uploads)
 │   ├── models/      # Mongoose models
-│   └── utils/       # Server utilities (OAuth, PostHog, helpers)
+│   └── utils/       # Server utilities (OAuth, helpers)
 ├── styles/          # Global CSS (Tailwind)
 ├── utils/           # Client utilities (date, image compression)
 ├── client.tsx       # Client entry point
@@ -102,30 +101,21 @@ Both scripts require `MONGODB_URI` to be set and refuse to run against productio
 
 ## Feature Flags
 
-Client-side feature flags are available through [`app/utils/featureFlags.tsx`](app/utils/featureFlags.tsx), which wraps PostHog's React hooks with a small app-level API:
+Client-side feature flags are plain booleans baked into the client bundle from `VITE_PUBLIC_FF_*` env values at build time, read through [`app/utils/featureFlags.tsx`](app/utils/featureFlags.tsx):
 
 ```tsx
-import { FeatureFlagGate, useFeatureFlag } from '~/utils/featureFlags';
+import { useOptionalFeatureFlag } from '~/utils/featureFlags';
 
 function ExperimentalPanel() {
-  const { isEnabled, isLoading, payload } = useFeatureFlag('experimental-panel');
+  const { isEnabled } = useOptionalFeatureFlag(import.meta.env.VITE_PUBLIC_FF_EXPERIMENTAL);
 
-  if (isLoading) return null;
   if (!isEnabled) return null;
 
-  return <section>{JSON.stringify(payload)}</section>;
-}
-
-function Page() {
-  return (
-    <FeatureFlagGate flag="experimental-panel" fallback={null}>
-      <ExperimentalPanel />
-    </FeatureFlagGate>
-  );
+  return <section>…</section>;
 }
 ```
 
-Set `VITE_PUBLIC_POSTHOG_KEY` locally or in Vercel for client-side flag evaluation. User identification is synchronized through the shared PostHog provider so person-targeted flags refresh after sign-in/sign-out.
+Changing a flag value requires a rebuild (dev-server restart or a new image build).
 
 ## Component Library
 

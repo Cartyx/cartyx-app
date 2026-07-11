@@ -1,38 +1,6 @@
 import type { Page } from '@playwright/test';
 
 /**
- * Stub PostHog endpoints so feature flags resolve to enabled and we never hit
- * the real service. Without this the InspectorSidebar tab list never resolves
- * (all tabs gated on PostHog feature flags) and tests hang on "Loading panels...".
- *
- * The matcher is anchored to cross-origin URLs containing "posthog" — local Vite
- * source files (PostHogProvider.tsx, posthog-client.ts) must NOT be intercepted.
- */
-export async function mockPostHog(page: Page): Promise<void> {
-  const flagNames = [
-    'inspector-wiki-dev',
-    'inspector-chat-dev',
-    'inspector-notepad-dev',
-    'inspector-settings-dev',
-    'cartyx-dice-dev',
-  ];
-  const enabledFlags = Object.fromEntries(flagNames.map((f) => [f, true]));
-
-  await page.route(/^https?:\/\/[^/]*posthog[^/]*\//i, async (route) => {
-    const url = route.request().url();
-    if (/\/(decide|flags)/.test(url)) {
-      await route.fulfill({
-        status: 200,
-        contentType: 'application/json',
-        body: JSON.stringify({ featureFlags: enabledFlags, featureFlagPayloads: {} }),
-      });
-      return;
-    }
-    await route.fulfill({ status: 200, contentType: 'application/json', body: '{}' });
-  });
-}
-
-/**
  * Stub the R2 PUT so the upload spec doesn't write real bytes to Cloudflare R2
  * on every run. We deliberately do NOT mock `getUploadUrl` — TanStack Start
  * server-fn responses use a custom wire format (`x-tss-serialized` headers

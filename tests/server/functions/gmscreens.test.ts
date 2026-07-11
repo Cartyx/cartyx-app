@@ -59,10 +59,6 @@ vi.mock('~/server/db/models/Rule', () => ({
     find: vi.fn(),
   },
 }));
-vi.mock('~/server/utils/posthog', () => ({
-  serverCaptureException: vi.fn(),
-  serverCaptureEvent: vi.fn(),
-}));
 
 const mockMongoSession = {
   withTransaction: vi.fn(async (fn: () => Promise<unknown>) => fn()),
@@ -120,7 +116,6 @@ import type {
   StackItemData,
 } from '~/types/gmscreen';
 import { removeDocumentRefsFromScreens } from '~/server/functions/gmscreens-helpers';
-import { serverCaptureEvent, serverCaptureException } from '~/server/utils/posthog';
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -446,27 +441,6 @@ describe('createGMScreen', () => {
     await expect(
       _createGMScreen({ data: { campaignId: 'camp-1', name: 'Collider' } })
     ).rejects.toThrow('Could not create the screen due to a conflict. Please try again.');
-
-    // Failure is captured exactly once (no double-reporting)
-    expect(serverCaptureException).toHaveBeenCalledTimes(1);
-  });
-
-  it('fires gmscreen_created analytics event', async () => {
-    vi.mocked(GMScreen.findOne).mockReturnValue({
-      sort: vi.fn().mockReturnValue({
-        select: vi.fn().mockReturnValue({
-          session: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(null) }),
-        }),
-      }),
-    } as never);
-    vi.mocked(GMScreen.create).mockResolvedValue([makeScreen()] as never);
-
-    await _createGMScreen({ data: { campaignId: 'camp-1', name: 'New' } });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'gmscreen_created', {
-      campaign_id: 'camp-1',
-      screen_id: 'screen-1',
-    });
   });
 });
 
@@ -513,17 +487,6 @@ describe('renameGMScreen', () => {
     await expect(
       _renameGMScreen({ data: { id: 'screen-1', campaignId: 'camp-1', name: 'Duplicate' } })
     ).rejects.toThrow('A screen with that name already exists in this campaign');
-  });
-
-  it('fires gmscreen_renamed analytics event', async () => {
-    vi.mocked(GMScreen.findById).mockResolvedValue(makeScreen() as never);
-
-    await _renameGMScreen({ data: { id: 'screen-1', campaignId: 'camp-1', name: 'Renamed' } });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'gmscreen_renamed', {
-      campaign_id: 'camp-1',
-      screen_id: 'screen-1',
-    });
   });
 });
 
@@ -578,28 +541,6 @@ describe('deleteGMScreen', () => {
     await expect(
       _deleteGMScreen({ data: { id: 'nonexistent', campaignId: 'camp-1' } })
     ).rejects.toThrow('Screen not found');
-  });
-
-  it('fires gmscreen_deleted analytics event', async () => {
-    vi.mocked(GMScreen.findOne).mockReturnValue({
-      session: vi.fn().mockResolvedValue(makeScreen()),
-    } as never);
-    vi.mocked(GMScreen.countDocuments).mockReturnValue({
-      session: vi.fn().mockResolvedValue(2),
-    } as never);
-    vi.mocked(GMScreen.deleteOne).mockReturnValue({
-      session: vi.fn().mockResolvedValue({}),
-    } as never);
-    vi.mocked(GMScreen.find).mockReturnValue({
-      sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
-    } as never);
-
-    await _deleteGMScreen({ data: { id: 'screen-1', campaignId: 'camp-1' } });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'gmscreen_deleted', {
-      campaign_id: 'camp-1',
-      screen_id: 'screen-1',
-    });
   });
 });
 
@@ -727,27 +668,6 @@ describe('reorderGMScreens', () => {
         data: { campaignId: 'camp-1', screenIds: ['screen-1', 'screen-2'] },
       })
     ).rejects.toThrow('Missing screen screen-3 in reorder request');
-  });
-
-  it('fires gmscreens_reordered analytics event', async () => {
-    vi.mocked(GMScreen.find).mockReturnValueOnce({
-      session: vi.fn().mockReturnValue({
-        lean: vi.fn().mockResolvedValue([{ _id: 'screen-1' }, { _id: 'screen-2' }]),
-      }),
-    } as never);
-    vi.mocked(GMScreen.bulkWrite).mockResolvedValue({} as never);
-    vi.mocked(GMScreen.find).mockReturnValueOnce({
-      sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
-    } as never);
-
-    await _reorderGMScreens({
-      data: { campaignId: 'camp-1', screenIds: ['screen-2', 'screen-1'] },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'gmscreens_reordered', {
-      campaign_id: 'camp-1',
-      screen_count: 2,
-    });
   });
 });
 
@@ -1569,40 +1489,6 @@ describe('openWindow', () => {
     expect(Array.isArray(screen.windows)).toBe(true);
   });
 
-  it('fires gmscreen_window_opened analytics event for new window', async () => {
-    const screen = makeScreenWithWindows([]);
-    vi.mocked(GMScreen.findOne).mockResolvedValueOnce(screen as never);
-    mockSuccessfulAtomicPush({
-      _id: 'win-1',
-      collection: 'note',
-      documentId: 'note-1',
-      state: 'open',
-      x: null,
-      y: null,
-      width: null,
-      height: null,
-      zIndex: 1,
-    });
-
-    await _openWindow({
-      data: {
-        screenId: 'screen-1',
-        campaignId: 'camp-1',
-        collection: 'note',
-        documentId: 'note-1',
-      },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith(
-      'session-user-1',
-      'gmscreen_window_opened',
-      expect.objectContaining({
-        campaign_id: 'camp-1',
-        screen_id: 'screen-1',
-      })
-    );
-  });
-
   // -------------------------------------------------------------------
   // Atomicity / dedupe-race pinning
   // -------------------------------------------------------------------
@@ -1864,28 +1750,6 @@ describe('openWindow', () => {
       });
     }
   });
-
-  it('fires gmscreen_window_focused analytics event for existing window', async () => {
-    const screen = makeScreenWithWindows([
-      { _id: 'win-1', collection: 'note', documentId: 'note-1', state: 'hidden', zIndex: 0 },
-    ]);
-    vi.mocked(GMScreen.findOne).mockResolvedValue(screen as never);
-
-    await _openWindow({
-      data: {
-        screenId: 'screen-1',
-        campaignId: 'camp-1',
-        collection: 'note',
-        documentId: 'note-1',
-      },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'gmscreen_window_focused', {
-      campaign_id: 'camp-1',
-      screen_id: 'screen-1',
-      window_id: 'win-1',
-    });
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2128,21 +1992,7 @@ describe('closeWindow', () => {
     ).rejects.toThrow('Screen not found');
   });
 
-  it('fires gmscreen_window_closed analytics event', async () => {
-    vi.mocked(GMScreen.updateOne).mockResolvedValue({ matchedCount: 1, modifiedCount: 1 } as never);
-
-    await _closeWindow({
-      data: { screenId: 'screen-1', campaignId: 'camp-1', windowId: 'win-1' },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'gmscreen_window_closed', {
-      campaign_id: 'camp-1',
-      screen_id: 'screen-1',
-      window_id: 'win-1',
-    });
-  });
-
-  it('does not fire analytics or churn state when window was not present (no-op close)', async () => {
+  it('does not churn state when window was not present (no-op close)', async () => {
     // matchedCount 0 because the filter includes windows._id — screen exists but window doesn't
     vi.mocked(GMScreen.updateOne).mockResolvedValue({ matchedCount: 0, modifiedCount: 0 } as never);
     vi.mocked(GMScreen.countDocuments).mockResolvedValue(1 as never);
@@ -2152,7 +2002,6 @@ describe('closeWindow', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(serverCaptureEvent).not.toHaveBeenCalled();
     // Verify updatedAt was not touched — updateOne filter didn't match, so no $set ran
     expect(GMScreen.updateOne).toHaveBeenCalledWith(
       { _id: 'screen-1', campaignId: 'camp-1', 'windows._id': 'nonexistent-win' },
@@ -2392,24 +2241,6 @@ describe('createStack', () => {
     expect(Array.isArray(screen.stacks)).toBe(true);
     expect(screen.stacks).toHaveLength(1);
   });
-
-  it('fires gmscreen_stack_created analytics event', async () => {
-    const screen = makeScreenWithStacks([]);
-    vi.mocked(GMScreen.findOne).mockResolvedValue(screen as never);
-
-    await _createStack({
-      data: { screenId: 'screen-1', campaignId: 'camp-1', name: 'NPCs' },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith(
-      'session-user-1',
-      'gmscreen_stack_created',
-      expect.objectContaining({
-        campaign_id: 'camp-1',
-        screen_id: 'screen-1',
-      })
-    );
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2452,20 +2283,6 @@ describe('renameStack', () => {
         data: { screenId: 'screen-1', campaignId: 'camp-1', stackId: 'nonexistent', name: 'New' },
       })
     ).rejects.toThrow('Stack not found');
-  });
-
-  it('fires gmscreen_stack_renamed analytics event', async () => {
-    vi.mocked(GMScreen.updateOne).mockResolvedValue({ matchedCount: 1, modifiedCount: 1 } as never);
-
-    await _renameStack({
-      data: { screenId: 'screen-1', campaignId: 'camp-1', stackId: 'stack-1', name: 'Renamed' },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'gmscreen_stack_renamed', {
-      campaign_id: 'camp-1',
-      screen_id: 'screen-1',
-      stack_id: 'stack-1',
-    });
   });
 });
 
@@ -2526,20 +2343,6 @@ describe('moveStack', () => {
       })
     ).rejects.toThrow('Stack not found');
   });
-
-  it('fires gmscreen_stack_moved analytics event', async () => {
-    vi.mocked(GMScreen.updateOne).mockResolvedValue({ matchedCount: 1, modifiedCount: 1 } as never);
-
-    await _moveStack({
-      data: { screenId: 'screen-1', campaignId: 'camp-1', stackId: 'stack-1', x: 50, y: 60 },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'gmscreen_stack_moved', {
-      campaign_id: 'camp-1',
-      screen_id: 'screen-1',
-      stack_id: 'stack-1',
-    });
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2584,21 +2387,6 @@ describe('deleteStack', () => {
     });
 
     expect(result.success).toBe(true);
-    expect(serverCaptureEvent).not.toHaveBeenCalled();
-  });
-
-  it('fires gmscreen_stack_deleted analytics event', async () => {
-    vi.mocked(GMScreen.updateOne).mockResolvedValue({ matchedCount: 1, modifiedCount: 1 } as never);
-
-    await _deleteStack({
-      data: { screenId: 'screen-1', campaignId: 'camp-1', stackId: 'stack-1' },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith('session-user-1', 'gmscreen_stack_deleted', {
-      campaign_id: 'camp-1',
-      screen_id: 'screen-1',
-      stack_id: 'stack-1',
-    });
   });
 });
 
@@ -2729,32 +2517,6 @@ describe('addStackItem', () => {
     ).rejects.toThrow('Stack not found');
   });
 
-  it('fires gmscreen_stack_item_added analytics event', async () => {
-    const screen = makeScreenWithStack([]);
-    vi.mocked(GMScreen.findOne).mockResolvedValue(screen as never);
-
-    await _addStackItem({
-      data: {
-        screenId: 'screen-1',
-        campaignId: 'camp-1',
-        stackId: 'stack-1',
-        collection: 'note',
-        documentId: 'note-1',
-        label: 'Test',
-      },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith(
-      'session-user-1',
-      'gmscreen_stack_item_added',
-      expect.objectContaining({
-        campaign_id: 'camp-1',
-        screen_id: 'screen-1',
-        stack_id: 'stack-1',
-      })
-    );
-  });
-
   it('defaults label to empty string when not provided', async () => {
     const screen = makeScreenWithStack([]);
     vi.mocked(GMScreen.findOne).mockResolvedValue(screen as never);
@@ -2831,7 +2593,6 @@ describe('removeStackItem', () => {
     expect(result.success).toBe(true);
     expect(screen.stacks[0]!.items).toHaveLength(1);
     expect(screen.save).not.toHaveBeenCalled();
-    expect(serverCaptureEvent).not.toHaveBeenCalled();
   });
 
   it('throws when screen is not found', async () => {
@@ -2858,28 +2619,6 @@ describe('removeStackItem', () => {
         },
       })
     ).rejects.toThrow('Stack not found');
-  });
-
-  it('fires gmscreen_stack_item_removed analytics event', async () => {
-    const screen = makeScreenWithStackItems([
-      { _id: 'si-1', collection: 'note', documentId: 'note-1', label: 'Gandalf' },
-    ]);
-    vi.mocked(GMScreen.findOne).mockResolvedValue(screen as never);
-
-    await _removeStackItem({
-      data: { screenId: 'screen-1', campaignId: 'camp-1', stackId: 'stack-1', itemId: 'si-1' },
-    });
-
-    expect(serverCaptureEvent).toHaveBeenCalledWith(
-      'session-user-1',
-      'gmscreen_stack_item_removed',
-      {
-        campaign_id: 'camp-1',
-        screen_id: 'screen-1',
-        stack_id: 'stack-1',
-        item_id: 'si-1',
-      }
-    );
   });
 });
 

@@ -38,10 +38,6 @@ vi.mock('~/server/db/models/Session', () => ({
     updateOne: vi.fn(),
   },
 }));
-vi.mock('~/server/utils/posthog', () => ({
-  serverCaptureException: vi.fn(),
-  serverCaptureEvent: vi.fn(),
-}));
 
 import { getSession } from '~/server/session';
 import { User } from '~/server/db/models/User';

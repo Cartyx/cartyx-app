@@ -12,7 +12,6 @@ import { join } from 'node:path';
 import { test, expect, type Page } from '@playwright/test';
 import { MongoClient, ObjectId, type Db } from 'mongodb';
 import { decodeJwt } from 'jose';
-import { mockPostHog } from '../fixtures/network-mocks';
 
 test.describe.configure({ mode: 'serial', timeout: 90_000 });
 
@@ -139,7 +138,6 @@ async function mockMainParty(page: Page): Promise<void> {
 }
 
 async function openRoller(page: Page): Promise<void> {
-  await mockPostHog(page);
   await mockMainParty(page);
   await page.goto(`/campaigns/${campaignId}/play?tab=tabletop`);
   await expect(page.getByTestId('tabletop-workspace')).toBeVisible({ timeout: 30_000 });

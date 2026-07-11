@@ -1,14 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SignJWT } from 'jose';
 
-// Mock PostHog server capture for testing exception logging
-const mockServerCaptureException = vi.fn();
-vi.mock('~/server/utils/posthog', () => ({
-  serverCaptureException: (...args: unknown[]) => mockServerCaptureException(...args),
-  serverCaptureEvent: vi.fn(),
-  shutdownPostHog: vi.fn(),
-}));
-
 // Test the session module in isolation
 describe('session', () => {
   let getCookieMock: ReturnType<typeof vi.fn>;
@@ -19,7 +11,6 @@ describe('session', () => {
 
   beforeEach(async () => {
     vi.resetModules();
-    mockServerCaptureException.mockClear();
     savedEnv.APP_ENV = process.env.APP_ENV;
     savedEnv.NODE_ENV = process.env.NODE_ENV;
     process.env.SESSION_SECRET = 'test-secret-for-unit-tests-at-least-32-chars';
@@ -51,35 +42,6 @@ describe('session', () => {
     const { getSession } = await import('~/server/session');
     const result = await getSession();
     expect(result).toBeNull();
-  });
-
-  it('getSession captures exception to PostHog on invalid token', async () => {
-    getCookieMock.mockReturnValue('invalid.token.here');
-    const { getSession } = await import('~/server/session');
-    await getSession();
-    expect(mockServerCaptureException).toHaveBeenCalledWith(
-      expect.anything(),
-      undefined,
-      expect.objectContaining({ action: 'getSession', step: 'jwtVerify' })
-    );
-  });
-
-  it('getSession tags expected JWT errors as handled', async () => {
-    getCookieMock.mockReturnValue('invalid.token.here');
-    const { getSession } = await import('~/server/session');
-    await getSession();
-    expect(mockServerCaptureException).toHaveBeenCalledWith(
-      expect.anything(),
-      undefined,
-      expect.objectContaining({ handled: expect.any(Boolean) })
-    );
-  });
-
-  it('getSession does not capture exception when no cookie', async () => {
-    getCookieMock.mockReturnValue(undefined);
-    const { getSession } = await import('~/server/session');
-    await getSession();
-    expect(mockServerCaptureException).not.toHaveBeenCalled();
   });
 
   it('getSession returns user for valid token', async () => {

@@ -9,11 +9,10 @@
  *  - The seeded location has one image titled fixtureImageTitle.
  */
 import { test, expect } from '../fixtures/tabletop-fixtures';
-import { mockPostHog, blockPartyKit } from '../fixtures/network-mocks';
+import { blockPartyKit } from '../fixtures/network-mocks';
 
 test.describe('Location image gallery — lightbox (Tabletop floating window flow)', () => {
   test.beforeEach(async ({ page }) => {
-    await mockPostHog(page);
     await blockPartyKit(page);
   });
 
