@@ -87,6 +87,8 @@ Design: `2026-07-09-app-helm-chart-design.md`; plan: `2026-07-09-app-helm-chart-
 
 ### Phase 5 — Observability platform (replaces PostHog)
 
+**Status: shipped 2026-07-11.** Platform (Grafana/GlitchTip/Umami/VictoriaLogs/VictoriaMetrics/Alloy/shared Postgres) deployed via `cartyx-infrastructure`'s `platform/` (per-component HelmReleases, NOT the umbrella chart this section originally sketched — see `docs/specs/2026-07-11-observability-platform-design.md`). App telemetry swapped in PR #505, promoted #506. Deferred: Discord webhook live-test; VictoriaMetrics replaced Prometheus.
+
 - `deploy/charts/platform/`: umbrella with dependencies — Grafana, Prometheus (kube-prometheus-stack or plain prometheus chart), VictoriaLogs (`victoria-logs-single`), Alloy, GlitchTip (official chart), Umami, shared Postgres (single StatefulSet, two databases)
 - Code swaps in `app/`:
   - `captureException` → `@sentry/browser` / `@sentry/node` with GlitchTip DSN (wrappers in `app/utils/posthog-client.ts` + `app/server/utils/posthog.ts` keep their call sites; rename files in the process)

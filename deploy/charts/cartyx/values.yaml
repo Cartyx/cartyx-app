@@ -42,6 +42,7 @@ web:
     # telemetry disabled (see app/server/utils/telemetry.ts).
     GLITCHTIP_DSN: ''
     UMAMI_WEBSITE_ID: ''
+    UMAMI_HOST: ''
 
 realtime:
   image:

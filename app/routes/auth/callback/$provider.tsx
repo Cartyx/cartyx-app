@@ -51,7 +51,8 @@ const handleCallback = createServerFn({ method: 'GET' })
 
         const user = await upsertUser(profile);
         await setSession(user);
-        await serverCaptureEvent(user.id, 'user_logged_in', { provider });
+        // Fire-and-forget: telemetry must never block or fail login.
+        void serverCaptureEvent(user.id, 'user_logged_in', { provider });
         return { redirectTo: '/campaigns' };
       } catch (e) {
         const errMessage = e instanceof Error ? e.message : String(e);
