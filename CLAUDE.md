@@ -13,8 +13,8 @@ data, Cloudflare R2 + CDN for images, self-hosted observability
   ~24 pre-existing warnings are the baseline).
 - `bash deploy/charts/cartyx/tests/render-tests.sh` — Helm chart assertions;
   REQUIRED whenever anything under `deploy/charts/` changes (also a CI job).
-- `npm run e2e` — Playwright; needs `VITE_PUBLIC_FF_*` env vars set or feature
-  tabs never render. CI handles this; locally see `.env.example`.
+- `npm run e2e` — Playwright; all inspector tabs (Chat/Dice/Wiki/Notes/Settings)
+  render unconditionally — the old `VITE_PUBLIC_FF_*` gating was removed.
 - `deploy/charts/` is prettierignored — don't format it.
 
 ## Branching and deploys

@@ -1,41 +1,11 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { InspectorSidebar } from '~/components/mainview/InspectorSidebar';
 import { useDiceRolls } from '~/hooks/useDiceRolls';
 import { usePartySession } from '~/hooks/usePartySession';
 import { requestDiceBroadcast, onDiceDelivery } from '~/utils/diceRollerBridge';
-
-// Env var names used per-environment (set in Vercel)
-const { DEV_FLAGS, enabledFlags } = vi.hoisted(() => {
-  const DEV_FLAGS = {
-    chat: 'dev-inspector-chat',
-    dice: 'dev-inspector-dice',
-    wiki: 'dev-inspector-wiki',
-    notes: 'dev-inspector-notes',
-    settings: 'dev-inspector-settings',
-  };
-
-  // Which flags are enabled
-  const enabledFlags = new Set<string>([
-    DEV_FLAGS.chat,
-    DEV_FLAGS.dice,
-    DEV_FLAGS.wiki,
-    DEV_FLAGS.notes,
-    DEV_FLAGS.settings,
-  ]);
-
-  return { DEV_FLAGS, enabledFlags };
-});
-let isLoadingFlags = false;
-
-vi.mock('~/utils/featureFlags', () => ({
-  useOptionalFeatureFlag: (flag: string) => ({
-    isEnabled: Boolean(flag) && enabledFlags.has(flag) && !isLoadingFlags,
-    isLoading: isLoadingFlags && Boolean(flag),
-  }),
-}));
 
 // WikiPanel internally uses tanstack-router's useParams + the campaign hook
 // to decide whether to show the GM-only Monsters category. Mock it out so
@@ -93,24 +63,6 @@ vi.mock('~/hooks/useBeyond20', () => ({
   useBeyond20: vi.fn(() => ({ isConnected: false })),
 }));
 
-beforeEach(() => {
-  isLoadingFlags = false;
-  vi.stubEnv('VITE_PUBLIC_FF_CHAT', DEV_FLAGS.chat);
-  vi.stubEnv('VITE_PUBLIC_FF_DICE', DEV_FLAGS.dice);
-  vi.stubEnv('VITE_PUBLIC_FF_WIKI', DEV_FLAGS.wiki);
-  vi.stubEnv('VITE_PUBLIC_FF_NOTES', DEV_FLAGS.notes);
-  vi.stubEnv('VITE_PUBLIC_FF_SETTINGS', DEV_FLAGS.settings);
-  enabledFlags.add(DEV_FLAGS.chat);
-  enabledFlags.add(DEV_FLAGS.dice);
-  enabledFlags.add(DEV_FLAGS.wiki);
-  enabledFlags.add(DEV_FLAGS.notes);
-  enabledFlags.add(DEV_FLAGS.settings);
-});
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
-
 describe('InspectorSidebar', () => {
   it('defaults to the chat tab', () => {
     render(<InspectorSidebar />);
@@ -119,7 +71,7 @@ describe('InspectorSidebar', () => {
     );
   });
 
-  it('renders all 5 tab buttons when all flags are enabled', () => {
+  it('renders all 5 tab buttons', () => {
     render(<InspectorSidebar />);
     expect(screen.getByTestId('inspector-tab-chat')).toBeInTheDocument();
     expect(screen.getByTestId('inspector-tab-dice')).toBeInTheDocument();
@@ -189,144 +141,11 @@ describe('InspectorSidebar', () => {
     expect(screen.getByTestId('inspector-tab-dice')).toHaveAttribute('aria-selected', 'true');
   });
 
-  it('handleKeyDown does nothing when no tabs are available', () => {
-    enabledFlags.clear();
-    render(<InspectorSidebar />);
-    const tablist = screen.getByRole('tablist');
-    // Should not throw
-    fireEvent.keyDown(tablist, { key: 'ArrowRight' });
-  });
-
   it('tab buttons have type=button', () => {
     render(<InspectorSidebar />);
     const buttons = screen.getAllByRole('tab');
     buttons.forEach((btn) => {
       expect(btn).toHaveAttribute('type', 'button');
-    });
-  });
-
-  describe('feature flags', () => {
-    it('hides chat tab when VITE_PUBLIC_FF_CHAT env var is not set', () => {
-      vi.stubEnv('VITE_PUBLIC_FF_CHAT', '');
-      render(<InspectorSidebar />);
-      expect(screen.queryByTestId('inspector-tab-chat')).not.toBeInTheDocument();
-      expect(screen.getByTestId('inspector-tab-wiki')).toBeInTheDocument();
-    });
-
-    it('hides wiki tab when VITE_PUBLIC_FF_WIKI env var is not set', () => {
-      vi.stubEnv('VITE_PUBLIC_FF_WIKI', '');
-      render(<InspectorSidebar />);
-      expect(screen.queryByTestId('inspector-tab-wiki')).not.toBeInTheDocument();
-      expect(screen.getByTestId('inspector-tab-chat')).toBeInTheDocument();
-    });
-
-    it('hides notes tab when VITE_PUBLIC_FF_NOTES env var is not set', () => {
-      vi.stubEnv('VITE_PUBLIC_FF_NOTES', '');
-      render(<InspectorSidebar />);
-      expect(screen.queryByTestId('inspector-tab-notes')).not.toBeInTheDocument();
-      expect(screen.getByTestId('inspector-tab-chat')).toBeInTheDocument();
-    });
-
-    it('hides settings tab when VITE_PUBLIC_FF_SETTINGS env var is not set', () => {
-      vi.stubEnv('VITE_PUBLIC_FF_SETTINGS', '');
-      render(<InspectorSidebar />);
-      expect(screen.queryByTestId('inspector-tab-settings')).not.toBeInTheDocument();
-      expect(screen.getByTestId('inspector-tab-chat')).toBeInTheDocument();
-    });
-
-    it('hides chat tab when the feature flag is disabled', () => {
-      enabledFlags.delete(DEV_FLAGS.chat);
-      render(<InspectorSidebar />);
-      expect(screen.queryByTestId('inspector-tab-chat')).not.toBeInTheDocument();
-      expect(screen.getByTestId('inspector-tab-wiki')).toBeInTheDocument();
-    });
-
-    it('hides wiki tab when the feature flag is disabled', () => {
-      enabledFlags.delete(DEV_FLAGS.wiki);
-      render(<InspectorSidebar />);
-      expect(screen.queryByTestId('inspector-tab-wiki')).not.toBeInTheDocument();
-      expect(screen.getByTestId('inspector-tab-chat')).toBeInTheDocument();
-    });
-
-    it('hides notes tab when the feature flag is disabled', () => {
-      enabledFlags.delete(DEV_FLAGS.notes);
-      render(<InspectorSidebar />);
-      expect(screen.queryByTestId('inspector-tab-notes')).not.toBeInTheDocument();
-      expect(screen.getByTestId('inspector-tab-chat')).toBeInTheDocument();
-    });
-
-    it('hides settings tab when the feature flag is disabled', () => {
-      enabledFlags.delete(DEV_FLAGS.settings);
-      render(<InspectorSidebar />);
-      expect(screen.queryByTestId('inspector-tab-settings')).not.toBeInTheDocument();
-      expect(screen.getByTestId('inspector-tab-chat')).toBeInTheDocument();
-    });
-
-    it('falls back to chat when defaultTab is wiki and wiki flag is disabled', () => {
-      enabledFlags.delete(DEV_FLAGS.wiki);
-      render(<InspectorSidebar defaultTab="wiki" />);
-      expect(screen.getByTestId('inspector-panel')).toContainElement(
-        screen.getByRole('combobox', { name: 'Session selector' })
-      );
-    });
-
-    it('shows loading state when all flagged tabs are loading and none are available yet', () => {
-      isLoadingFlags = true;
-      enabledFlags.clear();
-      render(<InspectorSidebar />);
-      expect(screen.getByText('Loading panels...')).toBeInTheDocument();
-      expect(screen.queryByRole('tab')).not.toBeInTheDocument();
-    });
-
-    it('shows "No panels available" when all flagged tabs are disabled and not loading', () => {
-      enabledFlags.clear();
-      render(<InspectorSidebar />);
-      expect(screen.queryByRole('tab')).not.toBeInTheDocument();
-      expect(screen.queryByText('Loading panels...')).not.toBeInTheDocument();
-      expect(screen.getByText('No panels available')).toBeInTheDocument();
-    });
-
-    it('switches active panel to chat when the active tab flag (wiki) is toggled off at runtime', async () => {
-      const user = userEvent.setup();
-      const { rerender } = render(<InspectorSidebar defaultTab="wiki" />);
-
-      // Wiki tab is active on first render
-      await user.click(screen.getByTestId('inspector-tab-wiki'));
-      expect(screen.getByTestId('inspector-tab-wiki')).toHaveAttribute('aria-selected', 'true');
-      expect(screen.getByTestId('inspector-panel')).toContainElement(
-        screen.getByTestId('wiki-panel')
-      );
-
-      // Simulate toggling the wiki flag off
-      enabledFlags.delete(DEV_FLAGS.wiki);
-      rerender(<InspectorSidebar defaultTab="wiki" />);
-
-      // Wiki tab should disappear and chat panel should now be active
-      expect(screen.queryByTestId('inspector-tab-wiki')).not.toBeInTheDocument();
-      expect(screen.getByTestId('inspector-tab-chat')).toHaveAttribute('aria-selected', 'true');
-      expect(screen.getByTestId('inspector-panel')).toContainElement(
-        screen.getByRole('combobox', { name: 'Session selector' })
-      );
-    });
-
-    it('restores default tab when it becomes available after initial render', async () => {
-      // 1. Initial render with wiki flag disabled, but defaultTab="wiki"
-      enabledFlags.delete(DEV_FLAGS.wiki);
-      const { rerender } = render(<InspectorSidebar defaultTab="wiki" />);
-
-      // It should fall back to chat
-      expect(screen.getByTestId('inspector-tab-chat')).toHaveAttribute('aria-selected', 'true');
-      expect(screen.queryByTestId('inspector-tab-wiki')).not.toBeInTheDocument();
-
-      // 2. Simulate flags finishing loading (wiki flag enabled)
-      enabledFlags.add(DEV_FLAGS.wiki);
-      rerender(<InspectorSidebar defaultTab="wiki" />);
-
-      // It should now restore wiki as the active tab
-      expect(screen.getByTestId('inspector-tab-wiki')).toHaveAttribute('aria-selected', 'true');
-      expect(screen.getByTestId('inspector-panel')).toContainElement(
-        screen.getByTestId('wiki-panel')
-      );
     });
   });
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Playwright e2e against the containerized stack (web + realtime) from
 # deploy/local/compose.yaml. Run from the REPO ROOT via: npm run e2e:container
-# Requires: filled .env (dev Atlas, VITE_PUBLIC_FF_*=true), seeded DB
+# Requires: filled .env (dev Atlas), seeded DB
 # (npm run dev:seed), Docker running.
 set -euo pipefail
 

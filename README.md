@@ -22,7 +22,6 @@ npm run dev            # http://localhost:3000
 - **Session Scheduling** — Weekly/bi-weekly/monthly with timezone support
 - **Image Uploads** — Campaign images stored on Cloudflare R2
 - **Access Control** — GM and player roles with owner-only actions
-- **Feature Flags** — build-time flags baked into the client bundle for progressive rollouts
 
 ## Tech Stack
 
@@ -98,24 +97,6 @@ npm run dev:clear -- --force   # skip confirmation
 ```
 
 Both scripts require `MONGODB_URI` to be set and refuse to run against production databases.
-
-## Feature Flags
-
-Client-side feature flags are plain booleans baked into the client bundle from `VITE_PUBLIC_FF_*` env values at build time, read through [`app/utils/featureFlags.tsx`](app/utils/featureFlags.tsx):
-
-```tsx
-import { useOptionalFeatureFlag } from '~/utils/featureFlags';
-
-function ExperimentalPanel() {
-  const { isEnabled } = useOptionalFeatureFlag(import.meta.env.VITE_PUBLIC_FF_EXPERIMENTAL);
-
-  if (!isEnabled) return null;
-
-  return <section>…</section>;
-}
-```
-
-Changing a flag value requires a rebuild (dev-server restart or a new image build).
 
 ## Observability
 

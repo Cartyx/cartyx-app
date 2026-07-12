@@ -10,7 +10,6 @@ import {
   Layers,
   ChevronLeft,
 } from 'lucide-react';
-import { useOptionalFeatureFlag } from '~/utils/featureFlags';
 import type { ToolWindowId } from './tabletop/toolWindowState';
 
 export type ToolType =
@@ -50,11 +49,7 @@ export function ToolBar({
   openWindows = [],
   isGM = false,
 }: ToolBarProps) {
-  // The interactive dice roller ships behind the same boolean flag as the Dice feed tab.
-  const diceFlag = useOptionalFeatureFlag(import.meta.env.VITE_PUBLIC_FF_DICE ?? '');
-  const visibleTools = tools.filter(
-    (t) => (!t.gmOnly || isGM) && (t.id !== 'dice' || diceFlag.isEnabled)
-  );
+  const visibleTools = tools.filter((t) => !t.gmOnly || isGM);
   return (
     <div className="flex flex-col items-center h-full py-2 bg-[#080A12]">
       {!collapsed && (
