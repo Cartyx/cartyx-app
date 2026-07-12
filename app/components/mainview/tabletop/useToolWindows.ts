@@ -32,18 +32,37 @@ export function useToolWindows(
   const elsRef = useRef(new Map<ToolWindowId, HTMLDivElement>());
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
 
-  // Observe the workspace size (same pattern as useViewport).
+  // Observe the workspace size (same pattern as useViewport). Unlike
+  // useViewport's containerRef — attached by the same component that owns the
+  // ref, present from that component's first render — this hook can be
+  // instantiated by a parent (TabletopView) before the ref's element exists
+  // (e.g. while a "Loading tabletop…" placeholder renders in its place). A
+  // dependency of `[containerRef]` alone would never re-run once the real
+  // element mounts, since the ref *object* never changes — only `.current`
+  // does, and effects don't see that. Poll via rAF until the element shows
+  // up, then attach the observer normally.
   useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const update = () => {
+    let ro: ResizeObserver | undefined;
+    let rafId: number | undefined;
+    const update = (el: HTMLElement) => {
       const rect = el.getBoundingClientRect();
       setContainerSize({ width: rect.width, height: rect.height });
     };
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
+    const attach = () => {
+      const el = containerRef.current;
+      if (!el) {
+        rafId = requestAnimationFrame(attach);
+        return;
+      }
+      update(el);
+      ro = new ResizeObserver(() => update(el));
+      ro.observe(el);
+    };
+    attach();
+    return () => {
+      if (rafId !== undefined) cancelAnimationFrame(rafId);
+      ro?.disconnect();
+    };
   }, [containerRef]);
 
   // Sync geometry entries with the open set: new ids start unplaced; closed

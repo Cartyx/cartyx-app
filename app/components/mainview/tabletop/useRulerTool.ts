@@ -11,8 +11,7 @@ import { clamp } from './ActiveMapStage.geometry';
 
 /** A measurement endpoint: a fixed image-space point, or a live token center. */
 export type MeasurePoint =
-  | { kind: 'point'; x: number; y: number }
-  | { kind: 'token'; tokenId: string };
+  { kind: 'point'; x: number; y: number } | { kind: 'token'; tokenId: string };
 
 interface DomPoint {
   x: number;
@@ -68,18 +67,11 @@ export function useRulerTool({
   // Per-user measurement line color (persisted on the user record).
   const { color: rulerColor, setColor: setRulerColor } = useRulerColor();
 
-  // The ruler settings popup is shown while the tool is active; closing it hides
-  // just the popup (the ruler stays usable). Re-opens when re-selected.
-  const [rulerPanelOpen, setRulerPanelOpen] = useState(false);
-
-  // Clear the measurement whenever the ruler tool is deselected; (re)open the
-  // settings popup whenever it's selected.
+  // Clear the measurement whenever the ruler tool is deselected.
   useEffect(() => {
     if (!rulerActive) {
       setMeasurePoints([]);
       setMeasureCursor(null);
-    } else {
-      setRulerPanelOpen(true);
     }
   }, [rulerActive]);
 
@@ -193,8 +185,6 @@ export function useRulerTool({
     measurement,
     rulerColor,
     setRulerColor,
-    rulerPanelOpen,
-    setRulerPanelOpen,
     resetMeasurement,
     pickTokenForMeasure,
     onBackgroundPointerDown,

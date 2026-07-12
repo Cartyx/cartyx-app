@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { ToolBar } from './ToolBar';
 import type { ToolType } from './ToolBar';
+import type { ToolWindowId } from './tabletop/toolWindowState';
 import { InspectorSidebar } from './InspectorSidebar';
 import { ChevronLeft } from 'lucide-react';
 
@@ -17,6 +18,8 @@ interface MainViewProps {
   /** Controlled active tool. When omitted, MainView manages it internally. */
   activeTool?: ToolType;
   onToolChange?: (tool: ToolType) => void;
+  /** Open tool windows (highlighted on the toolbar alongside the active tool). */
+  openToolWindows?: ToolWindowId[];
   /** Whether the viewer is a GM (gates GM-only toolbar tools). */
   isGM?: boolean;
 }
@@ -30,6 +33,7 @@ export function MainView({
   sessions,
   activeTool: controlledTool,
   onToolChange,
+  openToolWindows = [],
   isGM = false,
 }: MainViewProps) {
   // Tool state is controlled only when BOTH props are supplied. If `activeTool`
@@ -91,6 +95,7 @@ export function MainView({
               onToolChange={setActiveTool}
               collapsed={toolbarCollapsed}
               onToggleCollapse={() => setToolbarCollapsed((c) => !c)}
+              openWindows={openToolWindows}
               isGM={isGM}
             />
           </div>

@@ -13,7 +13,10 @@ import {
   Eye,
   EyeOff,
   Type,
+  Type as TypeIcon,
   Pencil,
+  Ruler as RulerIcon,
+  Layers as LayersIcon,
   Trash2,
 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -44,6 +47,9 @@ import { LayersPanel } from './LayersPanel';
 import { RulerSettingsPanel } from './RulerSettingsPanel';
 import { useRulerTool } from './useRulerTool';
 import { RulerOverlay } from './RulerOverlay';
+import { ToolWindow } from './ToolWindow';
+import { TOOL_WINDOW_META, type ToolWindowId } from './toolWindowState';
+import type { ToolWindowManager } from './useToolWindows';
 import { useViewport, type Viewport } from './useViewport';
 import { MapDrawingLayer } from './MapDrawingLayer';
 import { MapTextLayer } from './MapTextLayer';
@@ -73,10 +79,10 @@ interface ActiveMapStageProps {
   currentUserId: string | null;
   /** Broadcaster for the tabletop-map party. */
   onBroadcast: (msg: TabletopMapMessage) => void;
-  /** Whether the GM's Layers panel (toolbar Layer tool) is open. */
-  layerPanelOpen?: boolean;
-  /** Close the Layers panel (resets the toolbar tool). */
-  onCloseLayerPanel?: () => void;
+  /** Open tool windows (drawing/text/ruler/layer render inside the stage). */
+  openToolWindows: ToolWindowId[];
+  /** Geometry manager shared with TabletopView (dice renders up there). */
+  windowManager: ToolWindowManager;
   /** Whether the measurement (ruler) tool is active. */
   rulerActive?: boolean;
   /** Whether the text tool is active (click to write, click text to select). */
@@ -114,8 +120,8 @@ export function ActiveMapStage({
   isGM,
   currentUserId,
   onBroadcast,
-  layerPanelOpen = false,
-  onCloseLayerPanel,
+  openToolWindows,
+  windowManager,
   rulerActive = false,
   textActive = false,
   drawingActive = false,
@@ -155,12 +161,6 @@ export function ActiveMapStage({
   // Text-tool settings (the brush) — local to this client.
   const [textColor, setTextColor] = useState('#fbbf24');
   const [textFontSize, setTextFontSize] = useState(16);
-  // Draggable position of the settings panel (workspace px), clamped on drag
-  // AND on workspace resize so it can never be lost behind the toolbar /
-  // off-screen (where the stage's overflow-hidden would clip it away). Shared
-  // by the text + drawing tools (only one panel is shown at a time).
-  const [panelPos, setPanelPos] = useState({ x: 12, y: 12 });
-  const panelRef = useRef<HTMLDivElement | null>(null);
   // The in-progress text being typed (image-space anchor + value), and the
   // currently selected text (for deletion).
   const [textDraft, setTextDraft] = useState<{
@@ -542,13 +542,6 @@ export function ActiveMapStage({
         moved: boolean;
       }
     | {
-        mode: 'panel';
-        startClientX: number;
-        startClientY: number;
-        startX: number;
-        startY: number;
-      }
-    | {
         mode: 'draw';
         kind: 'pencil';
         /** Flattened map-local points captured so far. */
@@ -599,7 +592,7 @@ export function ActiveMapStage({
       };
   const dragRef = useRef<DragState>({ mode: 'idle' });
   const [dragMode, setDragMode] = useState<
-    'idle' | 'pan' | 'token' | 'text' | 'panel' | 'draw' | 'erase' | 'resize' | 'move'
+    'idle' | 'pan' | 'token' | 'text' | 'draw' | 'erase' | 'resize' | 'move'
   >('idle');
 
   const onPanPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -753,24 +746,6 @@ export function ActiveMapStage({
     [cancelTextDraft, clearSelection]
   );
 
-  // Begin dragging the settings panel by its header (clamped on move).
-  const beginPanelDrag = useCallback(
-    (e: ReactPointerEvent<HTMLDivElement>) => {
-      if (e.button !== 0) return;
-      e.stopPropagation();
-      (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-      dragRef.current = {
-        mode: 'panel',
-        startClientX: e.clientX,
-        startClientY: e.clientY,
-        startX: panelPos.x,
-        startY: panelPos.y,
-      };
-      setDragMode('panel');
-    },
-    [panelPos]
-  );
-
   // Begin resizing the selected drawing from its corner handle (own/GM only).
   const beginDrawingResize = useCallback(
     (d: MapDrawingData, e: ReactPointerEvent<HTMLButtonElement>) => {
@@ -880,30 +855,6 @@ export function ActiveMapStage({
     ]
   );
 
-  // Clamp a panel position so the whole panel stays inside the workspace,
-  // using its real measured size (its height varies with content).
-  const clampPanelPos = useCallback(
-    (pos: { x: number; y: number }) => {
-      const pw = panelRef.current?.offsetWidth ?? 240;
-      const ph = panelRef.current?.offsetHeight ?? 240;
-      const maxX = Math.max(0, containerSize.width - pw);
-      const maxY = Math.max(0, containerSize.height - ph);
-      return { x: clamp(pos.x, 0, maxX), y: clamp(pos.y, 0, maxY) };
-    },
-    [containerSize.width, containerSize.height]
-  );
-
-  // Keep the panel on-screen when the workspace resizes (inspector toggles,
-  // window resize, etc.) — otherwise a panel dragged toward an edge would be
-  // clipped away and look "lost".
-  useEffect(() => {
-    if (!textActive && !drawingActive) return;
-    setPanelPos((pos) => {
-      const c = clampPanelPos(pos);
-      return c.x === pos.x && c.y === pos.y ? pos : c;
-    });
-  }, [textActive, drawingActive, containerSize.width, containerSize.height, clampPanelPos]);
-
   // Update both the brush and (if a text is selected) that text on the map, so
   // changing size/color visibly resizes/recolors the selected text. Persists +
   // broadcasts. The server is the authority on whether the change is allowed.
@@ -1009,14 +960,6 @@ export function ActiveMapStage({
         d.lastBroadcastAt = now;
         onBroadcast({ type: 'text:moved', mapId: map.id, textId: d.textId, x: nx, y: ny });
       }
-    } else if (d.mode === 'panel') {
-      // Clamp within the workspace so the panel stays fully visible.
-      setPanelPos(
-        clampPanelPos({
-          x: d.startX + (e.clientX - d.startClientX),
-          y: d.startY + (e.clientY - d.startClientY),
-        })
-      );
     } else if (d.mode === 'draw' && d.kind === 'pencil') {
       const img = domToImage(e.clientX, e.clientY);
       if (!img) return;
@@ -1503,56 +1446,65 @@ export function ActiveMapStage({
         />
       )}
 
-      {/* Layers panel (GM only, toggled by the toolbar's Layer tool) */}
-      {isGM && layerPanelOpen && (
-        <LayersPanel
-          activeLayer={activeLayer}
-          hiddenLayers={hiddenLayers}
-          tokenCounts={tokenCounts}
-          onSelectLayer={setActiveLayer}
-          onToggleLayer={toggleLayerVisibility}
-          onClose={() => onCloseLayerPanel?.()}
-        />
+      {/* Tool windows — unified chrome, placed/dragged by the shared manager. */}
+      {isGM && openToolWindows.includes('layer') && (
+        <ToolWindow
+          title={TOOL_WINDOW_META.layer.title}
+          icon={LayersIcon}
+          {...windowManager.getWindowProps('layer')}
+        >
+          <LayersPanel
+            activeLayer={activeLayer}
+            hiddenLayers={hiddenLayers}
+            tokenCounts={tokenCounts}
+            onSelectLayer={setActiveLayer}
+            onToggleLayer={toggleLayerVisibility}
+          />
+        </ToolWindow>
       )}
 
-      {/* Measurement settings popup (shown while the ruler tool is active) */}
-      {rulerActive && ruler.rulerPanelOpen && (
-        <RulerSettingsPanel
-          color={ruler.rulerColor}
-          onChangeColor={ruler.setRulerColor}
-          onClose={() => ruler.setRulerPanelOpen(false)}
-        />
+      {openToolWindows.includes('ruler') && (
+        <ToolWindow
+          title={TOOL_WINDOW_META.ruler.title}
+          icon={RulerIcon}
+          {...windowManager.getWindowProps('ruler')}
+        >
+          <RulerSettingsPanel color={ruler.rulerColor} onChangeColor={ruler.setRulerColor} />
+        </ToolWindow>
       )}
 
-      {/* Text settings popup — always open while the text tool is active, so the
-          size/color controls are available whenever text can be written/edited. */}
-      {textActive && (
-        <TextSettingsPanel
-          color={textColor}
-          onChangeColor={applyTextColor}
-          fontSize={textFontSize}
-          onChangeFontSize={applyTextFontSize}
-          position={panelPos}
-          onHeaderPointerDown={beginPanelDrag}
-          rootRef={panelRef}
-        />
+      {openToolWindows.includes('text') && (
+        <ToolWindow
+          title={TOOL_WINDOW_META.text.title}
+          icon={TypeIcon}
+          {...windowManager.getWindowProps('text')}
+        >
+          <TextSettingsPanel
+            color={textColor}
+            onChangeColor={applyTextColor}
+            fontSize={textFontSize}
+            onChangeFontSize={applyTextFontSize}
+          />
+        </ToolWindow>
       )}
 
-      {/* Drawing settings popup — always open while the drawing tool is active. */}
-      {drawingActive && (
-        <DrawingSettingsPanel
-          shape={drawShape}
-          onChangeShape={setDrawShape}
-          color={drawColor}
-          onChangeColor={setDrawColor}
-          strokeWidth={drawShape === 'eraser' ? drawEraserSize : drawStrokeWidth}
-          onChangeStrokeWidth={drawShape === 'eraser' ? setDrawEraserSize : setDrawStrokeWidth}
-          filled={drawFilled}
-          onToggleFilled={() => setDrawFilled((v) => !v)}
-          position={panelPos}
-          onHeaderPointerDown={beginPanelDrag}
-          rootRef={panelRef}
-        />
+      {isGM && openToolWindows.includes('drawing') && (
+        <ToolWindow
+          title={TOOL_WINDOW_META.drawing.title}
+          icon={Pencil}
+          {...windowManager.getWindowProps('drawing')}
+        >
+          <DrawingSettingsPanel
+            shape={drawShape}
+            onChangeShape={setDrawShape}
+            color={drawColor}
+            onChangeColor={setDrawColor}
+            strokeWidth={drawShape === 'eraser' ? drawEraserSize : drawStrokeWidth}
+            onChangeStrokeWidth={drawShape === 'eraser' ? setDrawEraserSize : setDrawStrokeWidth}
+            filled={drawFilled}
+            onToggleFilled={() => setDrawFilled((v) => !v)}
+          />
+        </ToolWindow>
       )}
 
       {/* GM "clear all drawings" confirmation dialog. */}

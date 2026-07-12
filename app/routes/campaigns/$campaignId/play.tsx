@@ -13,6 +13,12 @@ import { TabletopView } from '~/components/mainview/TabletopView';
 import { GMScreensView } from '~/components/mainview/gmscreens';
 import type { TabId } from '~/components/mainview/TabNavigation';
 import type { ToolType } from '~/components/mainview/ToolBar';
+import {
+  applyToolClick,
+  applyWindowClose,
+  type ToolUiState,
+  type ToolWindowId,
+} from '~/components/mainview/tabletop/toolWindowState';
 import { CatchUpWidget } from '~/components/mainview/widgets/CatchUpWidget';
 import { CampaignTimelineWidget } from '~/components/mainview/widgets/CampaignTimelineWidget';
 import { useCalendar } from '~/hooks/useCalendar';
@@ -87,9 +93,18 @@ function PlayPageContent() {
 
   const { activePlayer, isLoading: isPlayerLoading } = useActivePlayerContext();
 
-  // Toolbar tool is owned here so the Tabletop (a MainView child) can react to
-  // it — e.g. the Layer tool opens the map's Layers panel.
-  const [activeTool, setActiveTool] = useState<ToolType>('pointer');
+  // Toolbar tool + open tool windows are owned here so both the ToolBar (a
+  // MainView concern) and the Tabletop can react to them. Semantics live in
+  // the pure toolWindowState reducer.
+  const [toolUi, setToolUi] = useState<ToolUiState>({ activeTool: 'pointer', openWindows: [] });
+  const handleToolClick = useCallback(
+    (tool: ToolType) => setToolUi((s) => applyToolClick(s, tool)),
+    []
+  );
+  const handleToolWindowClose = useCallback(
+    (id: ToolWindowId) => setToolUi((s) => applyWindowClose(s, id)),
+    []
+  );
 
   const activeSession = campaign?.sessions.find((s) => s.status === 'active');
 
@@ -130,8 +145,9 @@ function PlayPageContent() {
           showToolbar={effectiveTab === 'tabletop'}
           campaignId={campaignId}
           sessions={campaign?.sessions}
-          activeTool={activeTool}
-          onToolChange={setActiveTool}
+          activeTool={toolUi.activeTool}
+          onToolChange={handleToolClick}
+          openToolWindows={toolUi.openWindows}
           isGM={campaign?.isGM ?? false}
         >
           {needsNewPlayer && (
@@ -184,8 +200,10 @@ function PlayPageContent() {
               currentUserId={campaign?.currentUserId ?? null}
               getToken={getTabletopToken}
               sessionId={activeSession?.id ?? null}
-              activeTool={activeTool}
-              onToolChange={setActiveTool}
+              activeTool={toolUi.activeTool}
+              onToolChange={handleToolClick}
+              openToolWindows={toolUi.openWindows}
+              onCloseToolWindow={handleToolWindowClose}
             />
           </div>
           {campaign?.isGM && (

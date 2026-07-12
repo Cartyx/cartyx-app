@@ -1,4 +1,4 @@
-import { Eye, EyeOff, X, Layers } from 'lucide-react';
+import { Eye, EyeOff } from 'lucide-react';
 import { MAP_LAYERS, type MapLayerId, type TokenLayerId } from '~/types/mapLayer';
 
 interface LayersPanelProps {
@@ -7,14 +7,13 @@ interface LayersPanelProps {
   tokenCounts: Record<TokenLayerId, number>;
   onSelectLayer: (id: MapLayerId) => void;
   onToggleLayer: (id: MapLayerId) => void;
-  onClose: () => void;
 }
 
 /**
- * LayersPanel — GM-only popup (opened from the toolbar's Layer tool) for
- * choosing the active working layer and toggling each layer's visibility on
- * the GM's own screen. Layers are listed highest → lowest, matching how they
- * stack on the map.
+ * LayersPanel — GM-only content (opened from the toolbar's Layer tool,
+ * hosted inside a shared {@link ToolWindow}) for choosing the active working
+ * layer and toggling each layer's visibility on the GM's own screen. Layers
+ * are listed highest → lowest, matching how they stack on the map.
  */
 export function LayersPanel({
   activeLayer,
@@ -22,34 +21,9 @@ export function LayersPanel({
   tokenCounts,
   onSelectLayer,
   onToggleLayer,
-  onClose,
 }: LayersPanelProps) {
   return (
-    <div
-      // Stop pointer events from reaching the stage (which would pan/deselect).
-      onPointerDown={(e) => e.stopPropagation()}
-      className="absolute left-3 top-3 z-40 w-60 overflow-hidden rounded-lg border border-white/10 bg-[#0D1117]/95 shadow-2xl backdrop-blur-sm"
-      data-testid="layers-panel"
-      role="group"
-      aria-label="Map layers"
-    >
-      <div className="flex items-center justify-between border-b border-white/[0.07] px-3 py-2">
-        <div className="flex items-center gap-1.5">
-          <Layers className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
-          <h2 className="font-sans text-xs font-bold uppercase tracking-widest text-slate-300">
-            Layers
-          </h2>
-        </div>
-        <button
-          type="button"
-          aria-label="Close layers panel"
-          onClick={onClose}
-          className="flex h-6 w-6 items-center justify-center rounded text-slate-400 hover:bg-white/10 hover:text-slate-200"
-        >
-          <X className="h-3.5 w-3.5" />
-        </button>
-      </div>
-
+    <div className="w-60" data-testid="layers-panel" role="group" aria-label="Map layers">
       <ul className="py-1">
         {MAP_LAYERS.map((layer) => {
           const isActive = layer.id === activeLayer;

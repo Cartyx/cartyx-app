@@ -11,22 +11,18 @@ import {
   ChevronLeft,
 } from 'lucide-react';
 import { useOptionalFeatureFlag } from '~/utils/featureFlags';
+import type { ToolWindowId } from './tabletop/toolWindowState';
 
 export type ToolType =
-  | 'pointer'
-  | 'hand'
-  | 'drawing'
-  | 'text'
-  | 'ruler'
-  | 'dice'
-  | 'stamp'
-  | 'layer';
+  'pointer' | 'hand' | 'drawing' | 'text' | 'ruler' | 'dice' | 'stamp' | 'layer';
 
 export interface ToolBarProps {
   activeTool: ToolType;
   onToolChange: (tool: ToolType) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  /** Tool windows currently open — their icons render highlighted too. */
+  openWindows?: ToolWindowId[];
   /** When false, GM-only tools (e.g. Drawing) are hidden. */
   isGM?: boolean;
 }
@@ -51,6 +47,7 @@ export function ToolBar({
   onToolChange,
   collapsed,
   onToggleCollapse,
+  openWindows = [],
   isGM = false,
 }: ToolBarProps) {
   // The interactive dice roller ships behind the same boolean flag as the Dice feed tab.
@@ -63,7 +60,7 @@ export function ToolBar({
       {!collapsed && (
         <div id="toolbar-tools" className="flex flex-col items-center gap-1 flex-1">
           {visibleTools.map(({ id, icon: Icon, label }) => {
-            const isActive = id === activeTool;
+            const isActive = id === activeTool || (openWindows as string[]).includes(id);
             return (
               <button
                 key={id}

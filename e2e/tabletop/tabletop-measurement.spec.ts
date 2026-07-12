@@ -168,6 +168,7 @@ async function gotoTabletop(page: import('@playwright/test').Page) {
 
 async function selectRuler(page: import('@playwright/test').Page) {
   await page.getByTestId('tool-ruler').click();
+  await expect(page.getByTestId('tool-window-ruler')).toBeVisible();
 }
 
 test.beforeAll(async () => {

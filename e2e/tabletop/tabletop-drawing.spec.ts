@@ -148,6 +148,7 @@ async function gotoTabletop(page: Page) {
 
 async function selectDrawingTool(page: Page) {
   await page.getByTestId('tool-drawing').click();
+  await expect(page.getByTestId('tool-window-drawing')).toBeVisible();
   await expect(page.getByTestId('drawing-settings-panel')).toBeVisible();
 }
 
@@ -229,8 +230,12 @@ test('selecting the drawing tool opens a settings popup with shape/color/size/fi
   await fill.click();
   await expect(fill).toHaveAttribute('aria-pressed', 'true');
 
-  // No close affordance — it stays open while the tool is active.
-  await expect(page.getByRole('button', { name: 'Close drawing settings' })).toHaveCount(0);
+  // Unified chrome: grip + icon + title header, and a close X that closes the
+  // window and reverts the toolbar to pointer.
+  await expect(page.getByTestId('tool-window-drawing-header')).toContainText('Draw');
+  await page.getByTestId('tool-window-drawing-close').click();
+  await expect(page.getByTestId('tool-window-drawing')).toHaveCount(0);
+  await expect(page.getByTestId('tool-pointer')).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('pencil click-drag draws a stroke that renders and persists', async ({ page }) => {
