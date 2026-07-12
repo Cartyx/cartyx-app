@@ -608,6 +608,7 @@ export function TabletopView({
             textActive={activeTool === 'text'}
             drawingActive={activeTool === 'drawing'}
             pointerActive={activeTool === 'pointer'}
+            handActive={activeTool === 'hand'}
             openToolWindows={openToolWindows}
             windowManager={toolWindowManager}
           />

@@ -91,6 +91,8 @@ interface ActiveMapStageProps {
   drawingActive?: boolean;
   /** Whether the pointer tool is active (select/resize/delete drawings). */
   pointerActive?: boolean;
+  /** Whether the hand tool is active (background drag always pans). */
+  handActive?: boolean;
 }
 
 const MOVE_BROADCAST_HZ = 30;
@@ -126,6 +128,7 @@ export function ActiveMapStage({
   textActive = false,
   drawingActive = false,
   pointerActive = false,
+  handActive = false,
 }: ActiveMapStageProps) {
   // Viewport (zoom/pan) + the image↔DOM transform that every tool reads from.
   const {
@@ -484,6 +487,27 @@ export function ActiveMapStage({
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedTextId, texts, canModifyText, removeText]);
 
+  // Space held = temporary hand tool (pan with any tool). Ignored while typing.
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  useEffect(() => {
+    const isTyping = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    };
+    const down = (e: KeyboardEvent) => {
+      if (e.key === ' ' && !isTyping(e.target)) setSpaceHeld(true);
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key === ' ') setSpaceHeld(false);
+    };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+    };
+  }, []);
+
   const toggleLayerVisibility = useCallback((id: MapLayerId) => {
     setHiddenLayers((cur) => {
       const next = new Set(cur);
@@ -596,73 +620,90 @@ export function ActiveMapStage({
   >('idle');
 
   const onPanPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    // Ruler tool: a background click drops/relocates the measurement anchor
-    // (clicks on tokens are handled by MapToken). No pan/select while measuring.
-    if (rulerActive) {
-      ruler.onBackgroundPointerDown(e);
-      return;
-    }
-    // Text tool: a background click writes text. If a draft is already open,
-    // this click just commits it (via the input's blur) and opens nothing new;
-    // clicking an existing text (handled there) selects it instead.
-    if (textActive) {
-      if (textDraft) return;
-      const img = domToImage(e.clientX, e.clientY);
-      if (img) {
-        openTextDraft({ x: clamp(img.x, 0, map.imageWidth), y: clamp(img.y, 0, map.imageHeight) });
-      }
-      return;
-    }
-    // Drawing tool: a press on the map begins a stroke / shape / erase.
-    if (drawingActive) {
-      const img = domToImage(e.clientX, e.clientY);
-      if (!img) return;
-      const ix = clamp(img.x, 0, map.imageWidth);
-      const iy = clamp(img.y, 0, map.imageHeight);
-      (e.target as Element).setPointerCapture?.(e.pointerId);
-      if (drawShape === 'eraser') {
-        const erased = new Set<string>();
-        dragRef.current = { mode: 'erase', erased };
-        setDragMode('erase');
-        eraseAt(ix, iy, erased);
+    // Middle-button drag pans with ANY tool (preventDefault stops autoscroll).
+    const middlePan = e.button === 1;
+    if (middlePan) e.preventDefault();
+    else if (e.button !== 0) return;
+
+    if (!middlePan) {
+      // Ruler tool: a background click drops/relocates the measurement anchor
+      // (clicks on tokens are handled by MapToken). No pan/select while measuring.
+      if (rulerActive) {
+        ruler.onBackgroundPointerDown(e);
         return;
       }
-      if (drawShape === 'pencil') {
-        dragRef.current = { mode: 'draw', kind: 'pencil', points: [ix, iy], lastX: ix, lastY: iy };
+      // Text tool: a background click writes text. If a draft is already open,
+      // this click just commits it (via the input's blur) and opens nothing new;
+      // clicking an existing text (handled there) selects it instead.
+      if (textActive) {
+        if (textDraft) return;
+        const img = domToImage(e.clientX, e.clientY);
+        if (img) {
+          openTextDraft({
+            x: clamp(img.x, 0, map.imageWidth),
+            y: clamp(img.y, 0, map.imageHeight),
+          });
+        }
+        return;
+      }
+      // Drawing tool: a press on the map begins a stroke / shape / erase.
+      if (drawingActive) {
+        const img = domToImage(e.clientX, e.clientY);
+        if (!img) return;
+        const ix = clamp(img.x, 0, map.imageWidth);
+        const iy = clamp(img.y, 0, map.imageHeight);
+        (e.target as Element).setPointerCapture?.(e.pointerId);
+        if (drawShape === 'eraser') {
+          const erased = new Set<string>();
+          dragRef.current = { mode: 'erase', erased };
+          setDragMode('erase');
+          eraseAt(ix, iy, erased);
+          return;
+        }
+        if (drawShape === 'pencil') {
+          dragRef.current = {
+            mode: 'draw',
+            kind: 'pencil',
+            points: [ix, iy],
+            lastX: ix,
+            lastY: iy,
+          };
+          setDrawPreview({
+            kind: 'pencil',
+            color: drawColor,
+            strokeWidth: drawStrokeWidth,
+            filled: false,
+            points: [ix, iy],
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+          });
+          setDragMode('draw');
+          return;
+        }
+        const kind = drawShape === 'square' ? 'rect' : 'ellipse';
+        dragRef.current = { mode: 'draw', kind, startX: ix, startY: iy, curX: ix, curY: iy };
         setDrawPreview({
-          kind: 'pencil',
+          kind,
           color: drawColor,
           strokeWidth: drawStrokeWidth,
-          filled: false,
-          points: [ix, iy],
-          x: 0,
-          y: 0,
+          filled: drawFilled,
+          points: [],
+          x: ix,
+          y: iy,
           width: 0,
           height: 0,
         });
         setDragMode('draw');
         return;
       }
-      const kind = drawShape === 'square' ? 'rect' : 'ellipse';
-      dragRef.current = { mode: 'draw', kind, startX: ix, startY: iy, curX: ix, curY: iy };
-      setDrawPreview({
-        kind,
-        color: drawColor,
-        strokeWidth: drawStrokeWidth,
-        filled: drawFilled,
-        points: [],
-        x: ix,
-        y: iy,
-        width: 0,
-        height: 0,
-      });
-      setDragMode('draw');
-      return;
     }
-    // Background click deselects any selected token/drawing + closes menus.
+
+    // Background press: always deselect; pan only for hand / Space / middle.
     setSelectedDrawingId(null);
     clearSelection();
+    if (!middlePan && !handActive && !spaceHeld) return;
     (e.target as Element).setPointerCapture?.(e.pointerId);
     dragRef.current = {
       mode: 'pan',
@@ -1225,13 +1266,15 @@ export function ActiveMapStage({
   });
 
   const cursorClass =
-    rulerActive || drawingActive
-      ? 'cursor-crosshair'
-      : textActive
-        ? 'cursor-text'
-        : dragMode === 'pan'
-          ? 'cursor-grabbing'
-          : 'cursor-grab';
+    dragMode === 'pan'
+      ? 'cursor-grabbing'
+      : handActive || spaceHeld
+        ? 'cursor-grab'
+        : rulerActive || drawingActive
+          ? 'cursor-crosshair'
+          : textActive
+            ? 'cursor-text'
+            : 'cursor-default';
 
   // Text + drawings both live on the Spell FX / Drawing layer, so each is
   // visible only when its own per-viewer zoom-toolbar toggle is on AND the GM
@@ -1351,6 +1394,7 @@ export function ActiveMapStage({
         visible={textVisible}
         texts={texts}
         textActive={textActive}
+        pointerActive={pointerActive}
         canModify={canModifyText}
         selectedTextId={selectedTextId}
         effectiveScale={effectiveScale}

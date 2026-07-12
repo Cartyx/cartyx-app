@@ -7,6 +7,8 @@ interface MapTextLayerProps {
   texts: MapTextData[];
   /** Text tool active → text is draggable/selectable/editable. */
   textActive: boolean;
+  /** Pointer tool active → text is also draggable/selectable/editable. */
+  pointerActive: boolean;
   canModify: (t: MapTextData) => boolean;
   selectedTextId: string | null;
   effectiveScale: number;
@@ -37,6 +39,7 @@ export function MapTextLayer({
   visible,
   texts,
   textActive,
+  pointerActive,
   canModify,
   selectedTextId,
   effectiveScale,
@@ -59,7 +62,7 @@ export function MapTextLayer({
         texts.map((t) => {
           if (draft?.editingId === t.id) return null;
           const selected = selectedTextId === t.id;
-          const interactive = textActive && canModify(t);
+          const interactive = (textActive || pointerActive) && canModify(t);
           return (
             <button
               key={t.id}
