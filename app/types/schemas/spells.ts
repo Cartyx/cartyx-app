@@ -19,7 +19,7 @@ const diceSchema = z.object({
 
 const castingTimeSchema = z.object({
   value: z.number().int().min(0),
-  unit: z.enum(CASTING_TIME_UNITS as unknown as [string, ...string[]]),
+  unit: z.enum(CASTING_TIME_UNITS),
   reactionCondition: z.string().optional(),
 });
 
@@ -31,32 +31,32 @@ const componentsSchema = z.object({
 });
 
 const rangeSchema = z.object({
-  type: z.enum(RANGE_TYPES as unknown as [string, ...string[]]),
+  type: z.enum(RANGE_TYPES),
   distance: z.number().int().min(0).optional(),
 });
 
 const durationSchema = z.object({
-  type: z.enum(DURATION_TYPES as unknown as [string, ...string[]]),
+  type: z.enum(DURATION_TYPES),
   value: z.number().int().min(0).optional(),
-  unit: z.enum(DURATION_UNITS as unknown as [string, ...string[]]).optional(),
+  unit: z.enum(DURATION_UNITS).optional(),
   concentration: z.boolean().default(false),
 });
 
 const higherLevelScalingSchema = z.object({
   enabled: z.boolean().default(false),
-  type: z.enum(SCALING_TYPES as unknown as [string, ...string[]]).optional(),
+  type: z.enum(SCALING_TYPES).optional(),
 });
 
 const attackSaveSchema = z.object({
   kind: z.enum(['attack', 'save', 'none']).default('none'),
   attackType: z.enum(['melee', 'ranged']).optional(),
-  saveAbility: z.enum(SAVE_ABILITIES as unknown as [string, ...string[]]).optional(),
+  saveAbility: z.enum(SAVE_ABILITIES).optional(),
   saveEffect: z.string().optional(),
 });
 
 const modifierSchema = z.object({
   id: z.string().min(1),
-  type: z.enum(MODIFIER_TYPES as unknown as [string, ...string[]]),
+  type: z.enum(MODIFIER_TYPES),
   dice: diceSchema.optional(),
   fixedValue: z.number().int().optional(),
   damageType: z.string().optional(),
@@ -66,7 +66,7 @@ const modifierSchema = z.object({
 
 const conditionSchema = z.object({
   id: z.string().min(1),
-  action: z.enum(CONDITION_ACTIONS as unknown as [string, ...string[]]),
+  action: z.enum(CONDITION_ACTIONS),
   condition: z.string().min(1),
 });
 
@@ -77,7 +77,7 @@ const higherLevelSchema = z.object({
 });
 
 const areaOfEffectSchema = z.object({
-  shape: z.enum(AOE_SHAPES as unknown as [string, ...string[]]).default('none'),
+  shape: z.enum(AOE_SHAPES).default('none'),
   size: z.number().int().min(0).optional(),
   width: z.number().int().min(0).optional(),
 });
@@ -88,7 +88,7 @@ export const spellFieldsShape = {
   description: z.string().trim().min(1, 'Description is required'),
   imageUrl: z.string().url().optional(),
   level: z.number().int().min(0).max(9),
-  school: z.enum(SPELL_SCHOOLS as unknown as [string, ...string[]]),
+  school: z.enum(SPELL_SCHOOLS),
   version: z.string().optional(),
   castingTime: castingTimeSchema,
   components: componentsSchema,
@@ -131,7 +131,7 @@ export const listSpellsSchema = z.object({
   search: z.string().optional(),
   tags: z.array(z.string()).optional(),
   level: z.number().int().min(0).max(9).optional(),
-  school: z.enum(SPELL_SCHOOLS as unknown as [string, ...string[]]).optional(),
+  school: z.enum(SPELL_SCHOOLS).optional(),
 });
 
 export const getSpellSchema = z.object({

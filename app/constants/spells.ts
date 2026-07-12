@@ -11,7 +11,7 @@ import type {
   ScalingType,
 } from '~/types/spell';
 
-export const SPELL_SCHOOLS: readonly SpellSchool[] = [
+export const SPELL_SCHOOLS = [
   'abjuration',
   'conjuration',
   'divination',
@@ -22,7 +22,7 @@ export const SPELL_SCHOOLS: readonly SpellSchool[] = [
   'transmutation',
 ] as const;
 
-export const SPELL_CLASSES: readonly string[] = [
+export const SPELL_CLASSES = [
   'Bard',
   'Cleric',
   'Druid',
@@ -33,23 +33,11 @@ export const SPELL_CLASSES: readonly string[] = [
   'Wizard',
 ] as const;
 
-export const CASTING_TIME_UNITS: readonly CastingTimeUnit[] = [
-  'action',
-  'bonus',
-  'reaction',
-  'minute',
-  'hour',
-] as const;
+export const CASTING_TIME_UNITS = ['action', 'bonus', 'reaction', 'minute', 'hour'] as const;
 
-export const RANGE_TYPES: readonly RangeType[] = [
-  'self',
-  'touch',
-  'ranged',
-  'sight',
-  'unlimited',
-] as const;
+export const RANGE_TYPES = ['self', 'touch', 'ranged', 'sight', 'unlimited'] as const;
 
-export const DURATION_TYPES: readonly DurationType[] = [
+export const DURATION_TYPES = [
   'instantaneous',
   'timed',
   'concentration',
@@ -57,41 +45,17 @@ export const DURATION_TYPES: readonly DurationType[] = [
   'special',
 ] as const;
 
-export const DURATION_UNITS: readonly DurationUnit[] = ['round', 'minute', 'hour', 'day'] as const;
+export const DURATION_UNITS = ['round', 'minute', 'hour', 'day'] as const;
 
-export const SAVE_ABILITIES: readonly SaveAbility[] = [
-  'str',
-  'dex',
-  'con',
-  'int',
-  'wis',
-  'cha',
-] as const;
+export const SAVE_ABILITIES = ['str', 'dex', 'con', 'int', 'wis', 'cha'] as const;
 
-export const AOE_SHAPES: readonly AoeShape[] = [
-  'none',
-  'sphere',
-  'cone',
-  'cube',
-  'line',
-  'cylinder',
-] as const;
+export const AOE_SHAPES = ['none', 'sphere', 'cone', 'cube', 'line', 'cylinder'] as const;
 
-export const MODIFIER_TYPES: readonly ModifierType[] = [
-  'damage',
-  'healing',
-  'bonus',
-  'proficiency',
-  'other',
-] as const;
+export const MODIFIER_TYPES = ['damage', 'healing', 'bonus', 'proficiency', 'other'] as const;
 
-export const CONDITION_ACTIONS: readonly ConditionAction[] = [
-  'applies',
-  'removes',
-  'suppresses',
-] as const;
+export const CONDITION_ACTIONS = ['applies', 'removes', 'suppresses'] as const;
 
-export const SCALING_TYPES: readonly ScalingType[] = ['spell-scale', 'character-level'] as const;
+export const SCALING_TYPES = ['spell-scale', 'character-level'] as const;
 
 /** Spell level 0 renders as "Cantrip". */
 export function formatSpellLevel(level: number): string {

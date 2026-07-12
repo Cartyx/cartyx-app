@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createSpellSchema, listSpellsSchema } from '~/types/schemas/spells';
+import { createSpellSchema, listSpellsSchema, updateSpellSchema } from '~/types/schemas/spells';
 
 const validSpell = {
   campaignId: 'c1',
@@ -32,6 +32,17 @@ describe('createSpellSchema', () => {
 
   it('rejects level above 9', () => {
     expect(() => createSpellSchema.parse({ ...validSpell, level: 10 })).toThrow();
+  });
+});
+
+describe('updateSpellSchema', () => {
+  it('requires id field', () => {
+    expect(() => updateSpellSchema.parse({ ...validSpell })).toThrow();
+  });
+
+  it('accepts a valid spell with id', () => {
+    const parsed = updateSpellSchema.parse({ ...validSpell, id: 's1' });
+    expect(parsed.id).toBe('s1');
   });
 });
 
