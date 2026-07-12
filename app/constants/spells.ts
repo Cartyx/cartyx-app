@@ -1,15 +1,4 @@
-import type {
-  SpellSchool,
-  CastingTimeUnit,
-  RangeType,
-  DurationType,
-  DurationUnit,
-  SaveAbility,
-  AoeShape,
-  ModifierType,
-  ConditionAction,
-  ScalingType,
-} from '~/types/spell';
+import type { SpellSchool } from '~/types/spell';
 
 export const SPELL_SCHOOLS = [
   'abjuration',
