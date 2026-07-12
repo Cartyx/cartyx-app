@@ -1,8 +1,8 @@
 /**
  * E2E for the unified tool-window system: cross-cutting behavior that isn't
  * specific to any single tool (Draw/Text/Measurement/Dice/Layers) — windows
- * auto-place without overlapping, and every window shares the same chrome
- * (grip + icon + title header, close X).
+ * cascade on open (overlapping, stepped down-and-right), and every window
+ * shares the same chrome (grip + icon + title header, close X).
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -137,15 +137,21 @@ test.afterAll(async () => {
   await client.close();
 });
 
-test('two tool windows open side by side without overlapping', async ({ page }) => {
+test('a second tool window cascades over the first instead of tiling beside it', async ({
+  page,
+}) => {
   await gotoTabletop(page);
   await page.getByTestId('tool-drawing').click();
   await page.getByTestId('tool-layer').click();
   const a = (await page.getByTestId('tool-window-drawing').boundingBox())!;
   const b = (await page.getByTestId('tool-window-layer').boundingBox())!;
+  // Cascade: the second window steps down-and-right by one cascade step and
+  // overlaps the first, rather than being auto-tiled to a separate slot.
   const overlaps =
     a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
-  expect(overlaps).toBe(false);
+  expect(overlaps).toBe(true);
+  expect(Math.round(b.x - a.x)).toBe(28); // TOOL_WINDOW_CASCADE_STEP
+  expect(Math.round(b.y - a.y)).toBe(28);
 });
 
 test('every tool window shows grip, icon+title, and close X', async ({ page }) => {
