@@ -8,6 +8,7 @@ import {
 import type { MapTokenData } from '~/types/mapToken';
 import { useRulerColor } from '~/hooks/useUserPreferences';
 import { clamp } from './ActiveMapStage.geometry';
+import { imageToDomPoint } from './viewportMath';
 
 /** A measurement endpoint: a fixed image-space point, or a live token center. */
 export type MeasurePoint =
@@ -144,10 +145,10 @@ export function useRulerTool({
     const committedImg = measurePoints.map(resolve).filter((p): p is DomPoint => p !== null);
     if (committedImg.length === 0) return null;
 
-    const toDom = (p: DomPoint) => ({
-      x: imageOffsetX + p.x * effectiveScale,
-      y: imageOffsetY + p.y * effectiveScale,
-    });
+    // Same transform the click used (via useViewport.domToImage), so a placed
+    // anchor renders back exactly under the cursor at any zoom/pan.
+    const toDom = (p: DomPoint) =>
+      imageToDomPoint(p, { effectiveScale, imageOffsetX, imageOffsetY });
     const committed = committedImg.map(toDom);
     const imgVerts = measureCursor ? [...committedImg, measureCursor] : committedImg;
     const domVerts = imgVerts.map(toDom);
