@@ -1,0 +1,124 @@
+import { Pencil } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import type { SpellData } from '~/types/spell';
+import { MARKDOWN_PROSE_CLASSES } from '~/utils/markdownProseClasses';
+import { formatSpellLevel, formatSchool } from '~/constants/spells';
+import {
+  formatCastingTime,
+  formatRange,
+  formatDuration,
+  formatComponents,
+  formatAttackSave,
+  formatDamageEffect,
+} from './spellFormat';
+
+function Cell({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="min-w-0">
+      <div className="text-[9px] font-sans font-bold uppercase tracking-widest text-slate-500">
+        {label}
+      </div>
+      <div className="text-xs font-semibold text-slate-200 truncate">{value}</div>
+    </div>
+  );
+}
+
+interface SpellWindowProps {
+  spell: SpellData;
+  onEdit?: () => void;
+}
+
+export function SpellWindow({ spell, onEdit }: SpellWindowProps) {
+  return (
+    <div className="flex flex-col h-full">
+      <div className="flex items-start justify-between gap-2 px-4 pt-3 shrink-0">
+        <div>
+          <h3 className="text-base font-bold text-slate-100">{spell.name}</h3>
+          <p className="text-[11px] italic text-slate-500">
+            {formatSpellLevel(spell.level)} · {formatSchool(spell.school)}
+            {spell.ritual ? ' (ritual)' : ''}
+          </p>
+        </div>
+        {spell.canEdit && onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="shrink-0 p-1 rounded bg-white/[0.05] hover:bg-white/[0.1] text-slate-400 hover:text-white transition-colors"
+            aria-label="Edit spell"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
+      <div className="grid grid-cols-4 gap-3 px-4 py-3 mt-2 border-y border-white/[0.05] shrink-0">
+        <Cell label="Level" value={formatSpellLevel(spell.level)} />
+        <Cell label="Casting Time" value={formatCastingTime(spell.castingTime)} />
+        <Cell label="Range/Area" value={formatRange(spell.range)} />
+        <Cell label="Components" value={formatComponents(spell.components)} />
+        <Cell label="Duration" value={formatDuration(spell.duration)} />
+        <Cell label="School" value={formatSchool(spell.school)} />
+        <Cell label="Attack/Save" value={formatAttackSave(spell.attackSave)} />
+        <Cell label="Damage/Effect" value={formatDamageEffect(spell)} />
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 min-h-0">
+        {spell.components.material && spell.components.materialDescription && (
+          <p className="text-[11px] text-slate-500 mb-3">
+            <span className="font-semibold">Material:</span> {spell.components.materialDescription}
+          </p>
+        )}
+        <div className={MARKDOWN_PROSE_CLASSES}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{spell.description}</ReactMarkdown>
+        </div>
+
+        {spell.higherLevels.length > 0 && (
+          <div className="mt-4 border-t border-white/[0.05] pt-3">
+            <div className="text-[9px] font-bold uppercase tracking-widest text-slate-500 mb-1">
+              At Higher Levels
+            </div>
+            {spell.higherLevels.map((h) => (
+              <p key={h.id} className="text-xs text-slate-300 mb-1">
+                <span className="font-semibold">Level {h.level}:</span> {h.description}
+              </p>
+            ))}
+          </div>
+        )}
+
+        {spell.classes.length > 0 && (
+          <div className="mt-4 flex flex-wrap gap-1">
+            {spell.classes.map((c) => (
+              <span
+                key={c}
+                className="inline-flex items-center px-2 py-0.5 rounded bg-white/[0.05] border border-white/[0.07] text-slate-300 text-[10px] font-semibold"
+              >
+                {c}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {spell.tags.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1">
+            {spell.tags.map((tag) => (
+              <span
+                key={tag}
+                className="inline-flex items-center px-2 py-0.5 rounded-full bg-blue-500/10 border border-blue-500/20 text-blue-400 font-sans font-bold text-[9px] tracking-tight"
+              >
+                #{tag}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {spell.source === 'srd' && (
+          <p className="mt-4 text-[10px] text-slate-600 italic">
+            Content from the SRD 5.2.1, © Wizards of the Coast, licensed under CC-BY-4.0. See
+            Settings → SRD Licensing.
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
