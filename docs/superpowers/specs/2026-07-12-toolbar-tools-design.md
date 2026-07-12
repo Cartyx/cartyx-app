@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-12
 **Branch:** `tools-fixes` (targets `dev`)
-**Status:** Approved design, pending implementation plan
+**Status:** Implemented (see docs/superpowers/plans/2026-07-12-toolbar-tools.md)
 
 ## Problem
 

@@ -102,6 +102,7 @@ export default [
       'jest.config.cjs',
       'scripts/**',
       'realtime/dist/',
+      '.claude/worktrees/**',
     ],
   },
   ...pluginQuery.configs['flat/recommended'],
