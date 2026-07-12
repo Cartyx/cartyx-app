@@ -152,6 +152,7 @@ async function gotoTabletop(page: Page) {
 
 async function selectRuler(page: Page) {
   await page.getByTestId('tool-ruler').click();
+  await expect(page.getByTestId('tool-window-ruler')).toBeVisible();
 }
 
 /** Draw a measurement between the two provisioned tokens (deterministic). */
@@ -219,10 +220,13 @@ test('selecting the ruler tool opens the measurement settings popup', async ({ p
   await gotoTabletop(page);
   await selectRuler(page);
   await expect(page.getByTestId('ruler-settings-panel')).toBeVisible();
-  // It can be dismissed without leaving the ruler tool.
-  await page.getByRole('button', { name: 'Close measurement settings' }).click();
-  await expect(page.getByTestId('ruler-settings-panel')).toBeHidden();
-  await expect(page.getByTestId('active-map-stage')).toHaveCSS('cursor', 'crosshair');
+  await expect(page.getByTestId('tool-window-ruler-header')).toContainText('Measurement');
+
+  // Closing the window also deactivates the ruler tool (reverts to pointer).
+  await page.getByTestId('tool-window-ruler-close').click();
+  await expect(page.getByTestId('tool-window-ruler')).toHaveCount(0);
+  await expect(page.getByTestId('tool-pointer')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('active-map-stage')).not.toHaveCSS('cursor', 'crosshair');
 });
 
 test('picking a color changes the live measurement line and label color', async ({ page }) => {

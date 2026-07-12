@@ -135,6 +135,7 @@ async function gotoTabletop(page: Page) {
 
 async function selectTextTool(page: Page) {
   await page.getByTestId('tool-text').click();
+  await expect(page.getByTestId('tool-window-text')).toBeVisible();
   await expect(page.getByTestId('text-settings-panel')).toBeVisible();
 }
 
@@ -198,8 +199,12 @@ test('selecting the text tool opens a settings popup with size + color', async (
   await expect(panel.getByTestId('text-size-24')).toHaveAttribute('aria-pressed', 'true');
   await expect(panel.getByRole('button', { name: 'Select color #e74c3c' })).toBeVisible();
 
-  // The panel has no close affordance — it stays open while the tool is active.
-  await expect(page.getByRole('button', { name: 'Close text settings' })).toHaveCount(0);
+  // Unified chrome: grip + icon + title header, and a close X that closes the
+  // window and reverts the toolbar to pointer.
+  await expect(page.getByTestId('tool-window-text-header')).toContainText('Text');
+  await page.getByTestId('tool-window-text-close').click();
+  await expect(page.getByTestId('tool-window-text')).toHaveCount(0);
+  await expect(page.getByTestId('tool-pointer')).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('the settings panel stays open while writing, moving, and editing text', async ({ page }) => {
@@ -241,9 +246,9 @@ test('the settings panel can be dragged and stays within the workspace', async (
   await gotoTabletop(page);
   await selectTextTool(page);
 
-  const panel = page.getByTestId('text-settings-panel');
-  const header = page.getByTestId('text-settings-panel-header');
-  const stage = (await page.getByTestId('active-map-stage').boundingBox())!;
+  const panel = page.getByTestId('tool-window-text');
+  const header = page.getByTestId('tool-window-text-header');
+  const stage = (await page.getByTestId('tabletop-workspace').boundingBox())!;
   const before = (await panel.boundingBox())!;
 
   // Drag the header down-right — the panel follows.
@@ -274,11 +279,11 @@ test('the panel stays visible after the workspace shrinks (it is not lost)', asy
   await gotoTabletop(page);
   await selectTextTool(page);
 
-  const panel = page.getByTestId('text-settings-panel');
-  const header = page.getByTestId('text-settings-panel-header');
+  const panel = page.getByTestId('tool-window-text');
+  const header = page.getByTestId('tool-window-text-header');
 
   // Drag the panel toward the bottom-right edge of the (large) workspace.
-  const stage0 = (await page.getByTestId('active-map-stage').boundingBox())!;
+  const stage0 = (await page.getByTestId('tabletop-workspace').boundingBox())!;
   const h = (await header.boundingBox())!;
   await page.mouse.move(h.x + h.width / 2, h.y + h.height / 2);
   await page.mouse.down();
@@ -290,7 +295,7 @@ test('the panel stays visible after the workspace shrinks (it is not lost)', asy
   await page.waitForTimeout(300);
 
   // The panel re-clamps fully inside the smaller workspace — still visible.
-  const stage1 = (await page.getByTestId('active-map-stage').boundingBox())!;
+  const stage1 = (await page.getByTestId('tabletop-workspace').boundingBox())!;
   await expect(panel).toBeVisible();
   const p = (await panel.boundingBox())!;
   expect(p.x).toBeGreaterThanOrEqual(stage1.x - 1);

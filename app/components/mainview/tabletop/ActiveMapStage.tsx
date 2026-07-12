@@ -13,7 +13,10 @@ import {
   Eye,
   EyeOff,
   Type,
+  Type as TypeIcon,
   Pencil,
+  Ruler as RulerIcon,
+  Layers as LayersIcon,
   Trash2,
 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -44,6 +47,9 @@ import { LayersPanel } from './LayersPanel';
 import { RulerSettingsPanel } from './RulerSettingsPanel';
 import { useRulerTool } from './useRulerTool';
 import { RulerOverlay } from './RulerOverlay';
+import { ToolWindow } from './ToolWindow';
+import { TOOL_WINDOW_META, type ToolWindowId } from './toolWindowState';
+import type { ToolWindowManager } from './useToolWindows';
 import { useViewport, type Viewport } from './useViewport';
 import { MapDrawingLayer } from './MapDrawingLayer';
 import { MapTextLayer } from './MapTextLayer';
@@ -73,10 +79,10 @@ interface ActiveMapStageProps {
   currentUserId: string | null;
   /** Broadcaster for the tabletop-map party. */
   onBroadcast: (msg: TabletopMapMessage) => void;
-  /** Whether the GM's Layers panel (toolbar Layer tool) is open. */
-  layerPanelOpen?: boolean;
-  /** Close the Layers panel (resets the toolbar tool). */
-  onCloseLayerPanel?: () => void;
+  /** Open tool windows (drawing/text/ruler/layer render inside the stage). */
+  openToolWindows: ToolWindowId[];
+  /** Geometry manager shared with TabletopView (dice renders up there). */
+  windowManager: ToolWindowManager;
   /** Whether the measurement (ruler) tool is active. */
   rulerActive?: boolean;
   /** Whether the text tool is active (click to write, click text to select). */
@@ -85,6 +91,8 @@ interface ActiveMapStageProps {
   drawingActive?: boolean;
   /** Whether the pointer tool is active (select/resize/delete drawings). */
   pointerActive?: boolean;
+  /** Whether the hand tool is active (background drag always pans). */
+  handActive?: boolean;
 }
 
 const MOVE_BROADCAST_HZ = 30;
@@ -114,12 +122,13 @@ export function ActiveMapStage({
   isGM,
   currentUserId,
   onBroadcast,
-  layerPanelOpen = false,
-  onCloseLayerPanel,
+  openToolWindows,
+  windowManager,
   rulerActive = false,
   textActive = false,
   drawingActive = false,
   pointerActive = false,
+  handActive = false,
 }: ActiveMapStageProps) {
   // Viewport (zoom/pan) + the image↔DOM transform that every tool reads from.
   const {
@@ -155,12 +164,6 @@ export function ActiveMapStage({
   // Text-tool settings (the brush) — local to this client.
   const [textColor, setTextColor] = useState('#fbbf24');
   const [textFontSize, setTextFontSize] = useState(16);
-  // Draggable position of the settings panel (workspace px), clamped on drag
-  // AND on workspace resize so it can never be lost behind the toolbar /
-  // off-screen (where the stage's overflow-hidden would clip it away). Shared
-  // by the text + drawing tools (only one panel is shown at a time).
-  const [panelPos, setPanelPos] = useState({ x: 12, y: 12 });
-  const panelRef = useRef<HTMLDivElement | null>(null);
   // The in-progress text being typed (image-space anchor + value), and the
   // currently selected text (for deletion).
   const [textDraft, setTextDraft] = useState<{
@@ -484,6 +487,33 @@ export function ActiveMapStage({
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedTextId, texts, canModifyText, removeText]);
 
+  // Space held = temporary hand tool (pan with any tool). Ignored while typing.
+  const [spaceHeld, setSpaceHeld] = useState(false);
+  useEffect(() => {
+    const isTyping = (t: EventTarget | null) => {
+      const el = t as HTMLElement | null;
+      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    };
+    const down = (e: KeyboardEvent) => {
+      if (e.key === ' ' && !isTyping(e.target)) setSpaceHeld(true);
+    };
+    const up = (e: KeyboardEvent) => {
+      if (e.key === ' ') setSpaceHeld(false);
+    };
+    // If focus leaves the window while Space is held (alt-tab, devtools,
+    // another app), the keyup never fires and spaceHeld would stick —
+    // background drag would keep panning until Space is tapped again.
+    const onBlur = () => setSpaceHeld(false);
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    window.addEventListener('blur', onBlur);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', onBlur);
+    };
+  }, []);
+
   const toggleLayerVisibility = useCallback((id: MapLayerId) => {
     setHiddenLayers((cur) => {
       const next = new Set(cur);
@@ -542,13 +572,6 @@ export function ActiveMapStage({
         moved: boolean;
       }
     | {
-        mode: 'panel';
-        startClientX: number;
-        startClientY: number;
-        startX: number;
-        startY: number;
-      }
-    | {
         mode: 'draw';
         kind: 'pencil';
         /** Flattened map-local points captured so far. */
@@ -599,77 +622,97 @@ export function ActiveMapStage({
       };
   const dragRef = useRef<DragState>({ mode: 'idle' });
   const [dragMode, setDragMode] = useState<
-    'idle' | 'pan' | 'token' | 'text' | 'panel' | 'draw' | 'erase' | 'resize' | 'move'
+    'idle' | 'pan' | 'token' | 'text' | 'draw' | 'erase' | 'resize' | 'move'
   >('idle');
 
   const onPanPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    // Ruler tool: a background click drops/relocates the measurement anchor
-    // (clicks on tokens are handled by MapToken). No pan/select while measuring.
-    if (rulerActive) {
-      ruler.onBackgroundPointerDown(e);
-      return;
-    }
-    // Text tool: a background click writes text. If a draft is already open,
-    // this click just commits it (via the input's blur) and opens nothing new;
-    // clicking an existing text (handled there) selects it instead.
-    if (textActive) {
-      if (textDraft) return;
-      const img = domToImage(e.clientX, e.clientY);
-      if (img) {
-        openTextDraft({ x: clamp(img.x, 0, map.imageWidth), y: clamp(img.y, 0, map.imageHeight) });
-      }
-      return;
-    }
-    // Drawing tool: a press on the map begins a stroke / shape / erase.
-    if (drawingActive) {
-      const img = domToImage(e.clientX, e.clientY);
-      if (!img) return;
-      const ix = clamp(img.x, 0, map.imageWidth);
-      const iy = clamp(img.y, 0, map.imageHeight);
-      (e.target as Element).setPointerCapture?.(e.pointerId);
-      if (drawShape === 'eraser') {
-        const erased = new Set<string>();
-        dragRef.current = { mode: 'erase', erased };
-        setDragMode('erase');
-        eraseAt(ix, iy, erased);
+    // Middle-button drag pans with ANY tool (preventDefault stops autoscroll).
+    const middlePan = e.button === 1;
+    if (middlePan) e.preventDefault();
+    else if (e.button !== 0) return;
+    // Held Space is a temporary hand tool: like middle-button, it pans with
+    // ANY tool, bypassing the ruler/text/drawing handlers below.
+    const panOverride = middlePan || spaceHeld;
+
+    if (!panOverride) {
+      // Ruler tool: a background click drops/relocates the measurement anchor
+      // (clicks on tokens are handled by MapToken). No pan/select while measuring.
+      if (rulerActive) {
+        ruler.onBackgroundPointerDown(e);
         return;
       }
-      if (drawShape === 'pencil') {
-        dragRef.current = { mode: 'draw', kind: 'pencil', points: [ix, iy], lastX: ix, lastY: iy };
+      // Text tool: a background click writes text. If a draft is already open,
+      // this click just commits it (via the input's blur) and opens nothing new;
+      // clicking an existing text (handled there) selects it instead.
+      if (textActive) {
+        if (textDraft) return;
+        const img = domToImage(e.clientX, e.clientY);
+        if (img) {
+          openTextDraft({
+            x: clamp(img.x, 0, map.imageWidth),
+            y: clamp(img.y, 0, map.imageHeight),
+          });
+        }
+        return;
+      }
+      // Drawing tool: a press on the map begins a stroke / shape / erase.
+      if (drawingActive) {
+        const img = domToImage(e.clientX, e.clientY);
+        if (!img) return;
+        const ix = clamp(img.x, 0, map.imageWidth);
+        const iy = clamp(img.y, 0, map.imageHeight);
+        (e.target as Element).setPointerCapture?.(e.pointerId);
+        if (drawShape === 'eraser') {
+          const erased = new Set<string>();
+          dragRef.current = { mode: 'erase', erased };
+          setDragMode('erase');
+          eraseAt(ix, iy, erased);
+          return;
+        }
+        if (drawShape === 'pencil') {
+          dragRef.current = {
+            mode: 'draw',
+            kind: 'pencil',
+            points: [ix, iy],
+            lastX: ix,
+            lastY: iy,
+          };
+          setDrawPreview({
+            kind: 'pencil',
+            color: drawColor,
+            strokeWidth: drawStrokeWidth,
+            filled: false,
+            points: [ix, iy],
+            x: 0,
+            y: 0,
+            width: 0,
+            height: 0,
+          });
+          setDragMode('draw');
+          return;
+        }
+        const kind = drawShape === 'square' ? 'rect' : 'ellipse';
+        dragRef.current = { mode: 'draw', kind, startX: ix, startY: iy, curX: ix, curY: iy };
         setDrawPreview({
-          kind: 'pencil',
+          kind,
           color: drawColor,
           strokeWidth: drawStrokeWidth,
-          filled: false,
-          points: [ix, iy],
-          x: 0,
-          y: 0,
+          filled: drawFilled,
+          points: [],
+          x: ix,
+          y: iy,
           width: 0,
           height: 0,
         });
         setDragMode('draw');
         return;
       }
-      const kind = drawShape === 'square' ? 'rect' : 'ellipse';
-      dragRef.current = { mode: 'draw', kind, startX: ix, startY: iy, curX: ix, curY: iy };
-      setDrawPreview({
-        kind,
-        color: drawColor,
-        strokeWidth: drawStrokeWidth,
-        filled: drawFilled,
-        points: [],
-        x: ix,
-        y: iy,
-        width: 0,
-        height: 0,
-      });
-      setDragMode('draw');
-      return;
     }
-    // Background click deselects any selected token/drawing + closes menus.
+
+    // Background press: always deselect; pan only for hand / Space / middle.
     setSelectedDrawingId(null);
     clearSelection();
+    if (!panOverride && !handActive) return;
     (e.target as Element).setPointerCapture?.(e.pointerId);
     dragRef.current = {
       mode: 'pan',
@@ -751,24 +794,6 @@ export function ActiveMapStage({
       setDragMode('text');
     },
     [cancelTextDraft, clearSelection]
-  );
-
-  // Begin dragging the settings panel by its header (clamped on move).
-  const beginPanelDrag = useCallback(
-    (e: ReactPointerEvent<HTMLDivElement>) => {
-      if (e.button !== 0) return;
-      e.stopPropagation();
-      (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
-      dragRef.current = {
-        mode: 'panel',
-        startClientX: e.clientX,
-        startClientY: e.clientY,
-        startX: panelPos.x,
-        startY: panelPos.y,
-      };
-      setDragMode('panel');
-    },
-    [panelPos]
   );
 
   // Begin resizing the selected drawing from its corner handle (own/GM only).
@@ -880,30 +905,6 @@ export function ActiveMapStage({
     ]
   );
 
-  // Clamp a panel position so the whole panel stays inside the workspace,
-  // using its real measured size (its height varies with content).
-  const clampPanelPos = useCallback(
-    (pos: { x: number; y: number }) => {
-      const pw = panelRef.current?.offsetWidth ?? 240;
-      const ph = panelRef.current?.offsetHeight ?? 240;
-      const maxX = Math.max(0, containerSize.width - pw);
-      const maxY = Math.max(0, containerSize.height - ph);
-      return { x: clamp(pos.x, 0, maxX), y: clamp(pos.y, 0, maxY) };
-    },
-    [containerSize.width, containerSize.height]
-  );
-
-  // Keep the panel on-screen when the workspace resizes (inspector toggles,
-  // window resize, etc.) — otherwise a panel dragged toward an edge would be
-  // clipped away and look "lost".
-  useEffect(() => {
-    if (!textActive && !drawingActive) return;
-    setPanelPos((pos) => {
-      const c = clampPanelPos(pos);
-      return c.x === pos.x && c.y === pos.y ? pos : c;
-    });
-  }, [textActive, drawingActive, containerSize.width, containerSize.height, clampPanelPos]);
-
   // Update both the brush and (if a text is selected) that text on the map, so
   // changing size/color visibly resizes/recolors the selected text. Persists +
   // broadcasts. The server is the authority on whether the change is allowed.
@@ -964,12 +965,13 @@ export function ActiveMapStage({
   );
 
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    // Ruler tool: the live endpoint follows the cursor until a fixed end is set.
-    if (rulerActive) {
+    const d = dragRef.current;
+    // Ruler tool: the live endpoint follows the cursor until a fixed end is
+    // set — unless a pan is in progress (middle-button / Space override).
+    if (rulerActive && d.mode !== 'pan') {
       ruler.onPointerMove(e);
       return;
     }
-    const d = dragRef.current;
     if (d.mode === 'idle') return;
     if (d.mode === 'pan') {
       setViewport({
@@ -1009,14 +1011,6 @@ export function ActiveMapStage({
         d.lastBroadcastAt = now;
         onBroadcast({ type: 'text:moved', mapId: map.id, textId: d.textId, x: nx, y: ny });
       }
-    } else if (d.mode === 'panel') {
-      // Clamp within the workspace so the panel stays fully visible.
-      setPanelPos(
-        clampPanelPos({
-          x: d.startX + (e.clientX - d.startClientX),
-          y: d.startY + (e.clientY - d.startClientY),
-        })
-      );
     } else if (d.mode === 'draw' && d.kind === 'pencil') {
       const img = domToImage(e.clientX, e.clientY);
       if (!img) return;
@@ -1282,13 +1276,15 @@ export function ActiveMapStage({
   });
 
   const cursorClass =
-    rulerActive || drawingActive
-      ? 'cursor-crosshair'
-      : textActive
-        ? 'cursor-text'
-        : dragMode === 'pan'
-          ? 'cursor-grabbing'
-          : 'cursor-grab';
+    dragMode === 'pan'
+      ? 'cursor-grabbing'
+      : handActive || spaceHeld
+        ? 'cursor-grab'
+        : rulerActive || drawingActive
+          ? 'cursor-crosshair'
+          : textActive
+            ? 'cursor-text'
+            : 'cursor-default';
 
   // Text + drawings both live on the Spell FX / Drawing layer, so each is
   // visible only when its own per-viewer zoom-toolbar toggle is on AND the GM
@@ -1408,6 +1404,7 @@ export function ActiveMapStage({
         visible={textVisible}
         texts={texts}
         textActive={textActive}
+        pointerActive={pointerActive}
         canModify={canModifyText}
         selectedTextId={selectedTextId}
         effectiveScale={effectiveScale}
@@ -1457,7 +1454,7 @@ export function ActiveMapStage({
           <button
             type="button"
             aria-label="Close menu"
-            className="fixed inset-0 z-40 cursor-default"
+            className="fixed inset-0 z-50 cursor-default"
             onPointerDown={(e) => {
               e.stopPropagation();
               setContextMenu(null);
@@ -1466,7 +1463,7 @@ export function ActiveMapStage({
           <div
             role="menu"
             onPointerDown={(e) => e.stopPropagation()}
-            className="absolute z-50 w-52 overflow-hidden rounded border border-white/10 bg-[#080A12] shadow-xl"
+            className="absolute z-[51] w-52 overflow-hidden rounded border border-white/10 bg-[#080A12] shadow-xl"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
             <div className="border-b border-white/[0.07] px-3 py-1.5 font-sans text-[10px] uppercase tracking-widest text-slate-500">
@@ -1503,56 +1500,65 @@ export function ActiveMapStage({
         />
       )}
 
-      {/* Layers panel (GM only, toggled by the toolbar's Layer tool) */}
-      {isGM && layerPanelOpen && (
-        <LayersPanel
-          activeLayer={activeLayer}
-          hiddenLayers={hiddenLayers}
-          tokenCounts={tokenCounts}
-          onSelectLayer={setActiveLayer}
-          onToggleLayer={toggleLayerVisibility}
-          onClose={() => onCloseLayerPanel?.()}
-        />
+      {/* Tool windows — unified chrome, placed/dragged by the shared manager. */}
+      {isGM && openToolWindows.includes('layer') && (
+        <ToolWindow
+          title={TOOL_WINDOW_META.layer.title}
+          icon={LayersIcon}
+          {...windowManager.getWindowProps('layer')}
+        >
+          <LayersPanel
+            activeLayer={activeLayer}
+            hiddenLayers={hiddenLayers}
+            tokenCounts={tokenCounts}
+            onSelectLayer={setActiveLayer}
+            onToggleLayer={toggleLayerVisibility}
+          />
+        </ToolWindow>
       )}
 
-      {/* Measurement settings popup (shown while the ruler tool is active) */}
-      {rulerActive && ruler.rulerPanelOpen && (
-        <RulerSettingsPanel
-          color={ruler.rulerColor}
-          onChangeColor={ruler.setRulerColor}
-          onClose={() => ruler.setRulerPanelOpen(false)}
-        />
+      {openToolWindows.includes('ruler') && (
+        <ToolWindow
+          title={TOOL_WINDOW_META.ruler.title}
+          icon={RulerIcon}
+          {...windowManager.getWindowProps('ruler')}
+        >
+          <RulerSettingsPanel color={ruler.rulerColor} onChangeColor={ruler.setRulerColor} />
+        </ToolWindow>
       )}
 
-      {/* Text settings popup — always open while the text tool is active, so the
-          size/color controls are available whenever text can be written/edited. */}
-      {textActive && (
-        <TextSettingsPanel
-          color={textColor}
-          onChangeColor={applyTextColor}
-          fontSize={textFontSize}
-          onChangeFontSize={applyTextFontSize}
-          position={panelPos}
-          onHeaderPointerDown={beginPanelDrag}
-          rootRef={panelRef}
-        />
+      {openToolWindows.includes('text') && (
+        <ToolWindow
+          title={TOOL_WINDOW_META.text.title}
+          icon={TypeIcon}
+          {...windowManager.getWindowProps('text')}
+        >
+          <TextSettingsPanel
+            color={textColor}
+            onChangeColor={applyTextColor}
+            fontSize={textFontSize}
+            onChangeFontSize={applyTextFontSize}
+          />
+        </ToolWindow>
       )}
 
-      {/* Drawing settings popup — always open while the drawing tool is active. */}
-      {drawingActive && (
-        <DrawingSettingsPanel
-          shape={drawShape}
-          onChangeShape={setDrawShape}
-          color={drawColor}
-          onChangeColor={setDrawColor}
-          strokeWidth={drawShape === 'eraser' ? drawEraserSize : drawStrokeWidth}
-          onChangeStrokeWidth={drawShape === 'eraser' ? setDrawEraserSize : setDrawStrokeWidth}
-          filled={drawFilled}
-          onToggleFilled={() => setDrawFilled((v) => !v)}
-          position={panelPos}
-          onHeaderPointerDown={beginPanelDrag}
-          rootRef={panelRef}
-        />
+      {isGM && openToolWindows.includes('drawing') && (
+        <ToolWindow
+          title={TOOL_WINDOW_META.drawing.title}
+          icon={Pencil}
+          {...windowManager.getWindowProps('drawing')}
+        >
+          <DrawingSettingsPanel
+            shape={drawShape}
+            onChangeShape={setDrawShape}
+            color={drawColor}
+            onChangeColor={setDrawColor}
+            strokeWidth={drawShape === 'eraser' ? drawEraserSize : drawStrokeWidth}
+            onChangeStrokeWidth={drawShape === 'eraser' ? setDrawEraserSize : setDrawStrokeWidth}
+            filled={drawFilled}
+            onToggleFilled={() => setDrawFilled((v) => !v)}
+          />
+        </ToolWindow>
       )}
 
       {/* GM "clear all drawings" confirmation dialog. */}

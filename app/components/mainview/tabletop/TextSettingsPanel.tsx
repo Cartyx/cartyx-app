@@ -1,5 +1,3 @@
-import type { PointerEvent as ReactPointerEvent, RefObject } from 'react';
-import { Type, GripVertical } from 'lucide-react';
 import { ColorPicker } from '~/components/shared/ColorPicker';
 import { MIN_MAP_TEXT_FONT_SIZE, MAX_MAP_TEXT_FONT_SIZE } from '~/types/schemas/mapTexts';
 
@@ -13,52 +11,20 @@ interface TextSettingsPanelProps {
   /** Current font size (map-local px). */
   fontSize: number;
   onChangeFontSize: (size: number) => void;
-  /** Panel position within the workspace (px). */
-  position: { x: number; y: number };
-  /** Begin dragging the panel by its header. */
-  onHeaderPointerDown: (e: ReactPointerEvent<HTMLDivElement>) => void;
-  /** Ref to the root element, used by the parent to measure + clamp it. */
-  rootRef: RefObject<HTMLDivElement | null>;
 }
 
 /**
- * Settings popup for the text tool — pick a font size and color, then click
- * the map to write. Always shown while the text tool is active (no close
- * affordance). Draggable by its header and clamped to the workspace so it can
- * never be lost behind the toolbar / off-screen.
+ * Settings content for the text tool — pick a font size and color, then click
+ * the map to write. Hosted inside a shared {@link ToolWindow}.
  */
 export function TextSettingsPanel({
   color,
   onChangeColor,
   fontSize,
   onChangeFontSize,
-  position,
-  onHeaderPointerDown,
-  rootRef,
 }: TextSettingsPanelProps) {
   return (
-    <div
-      ref={rootRef}
-      onPointerDown={(e) => e.stopPropagation()}
-      className="absolute z-40 w-60 overflow-hidden rounded-lg border border-white/10 bg-[#0D1117]/95 shadow-2xl backdrop-blur-sm"
-      style={{ left: position.x, top: position.y }}
-      data-testid="text-settings-panel"
-      role="group"
-      aria-label="Text settings"
-    >
-      {/* Header — drag handle */}
-      <div
-        onPointerDown={onHeaderPointerDown}
-        className="flex cursor-move items-center gap-1.5 border-b border-white/[0.07] px-3 py-2"
-        data-testid="text-settings-panel-header"
-      >
-        <GripVertical className="h-3.5 w-3.5 text-slate-500" aria-hidden="true" />
-        <Type className="h-3.5 w-3.5 text-slate-400" aria-hidden="true" />
-        <h2 className="font-sans text-xs font-bold uppercase tracking-widest text-slate-300">
-          Text
-        </h2>
-      </div>
-
+    <div className="w-60" data-testid="text-settings-panel" role="group" aria-label="Text settings">
       <div className="px-3 py-3">
         {/* Font size */}
         <span
@@ -114,8 +80,7 @@ export function TextSettingsPanel({
       </div>
 
       <p className="border-t border-white/[0.07] px-3 py-2 font-sans text-[10px] leading-snug text-slate-500">
-        Drag this header to move it. Click the map to write; click text to select, then change its
-        size/color or press Delete.
+        Click the map to write; click text to select, then change its size/color or press Delete.
       </p>
     </div>
   );

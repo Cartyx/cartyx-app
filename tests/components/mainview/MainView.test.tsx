@@ -1,5 +1,5 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -32,6 +32,18 @@ vi.mock('~/hooks/usePartySession', () => ({
 vi.mock('~/hooks/useBeyond20', () => ({
   useBeyond20: vi.fn(() => ({ isConnected: false })),
 }));
+// This suite only exercises the MainView shell (toolbar/inspector chrome),
+// not inspector tab content — mock the heavy panels so components like
+// WikiPanel (which needs router context) never mount here.
+vi.mock('~/components/wiki/WikiPanel', () => ({
+  WikiPanel: () => <div data-testid="wiki-panel" />,
+}));
+vi.mock('~/components/mainview/NotesPanel', () => ({
+  NotesPanel: () => <div data-testid="notes-panel" />,
+}));
+vi.mock('~/components/mainview/SettingsPanel', () => ({
+  SettingsPanel: () => <div data-testid="settings-panel" />,
+}));
 
 import { MainView } from '~/components/mainview/MainView';
 
@@ -58,18 +70,6 @@ describe('MainView', () => {
   beforeEach(() => {
     // Default: mobile viewport (< lg), so isDesktop = false in all standard tests
     mockMatchMedia(0);
-    // This suite only exercises the MainView shell (toolbar/inspector chrome),
-    // not inspector tab content — keep all inspector tabs disabled so panels
-    // like WikiPanel (which needs router context) never mount here.
-    vi.stubEnv('VITE_PUBLIC_FF_CHAT', '');
-    vi.stubEnv('VITE_PUBLIC_FF_DICE', '');
-    vi.stubEnv('VITE_PUBLIC_FF_WIKI', '');
-    vi.stubEnv('VITE_PUBLIC_FF_NOTES', '');
-    vi.stubEnv('VITE_PUBLIC_FF_SETTINGS', '');
-  });
-
-  afterEach(() => {
-    vi.unstubAllEnvs();
   });
 
   it('renders children', () => {

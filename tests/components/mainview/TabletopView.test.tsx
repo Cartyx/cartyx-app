@@ -1,6 +1,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { TabletopScreenData, TabletopScreenDetailData } from '~/types/tabletop';
 
@@ -128,6 +129,8 @@ describe('TabletopView', () => {
         currentUserId={null}
         getToken={mockGetToken}
         sessionId={null}
+        openToolWindows={[]}
+        onCloseToolWindow={vi.fn()}
       />,
       {
         wrapper: Wrapper,
@@ -145,6 +148,8 @@ describe('TabletopView', () => {
         currentUserId={null}
         getToken={mockGetToken}
         sessionId={null}
+        openToolWindows={[]}
+        onCloseToolWindow={vi.fn()}
       />,
       {
         wrapper: Wrapper,
@@ -161,6 +166,8 @@ describe('TabletopView', () => {
         currentUserId={null}
         getToken={mockGetToken}
         sessionId={null}
+        openToolWindows={[]}
+        onCloseToolWindow={vi.fn()}
       />,
       {
         wrapper: Wrapper,
@@ -170,53 +177,55 @@ describe('TabletopView', () => {
     expect(screen.getByTestId('tabletop-canvas')).toBeInTheDocument();
   });
 
-  it('opens the dice roller window when the dice tool is selected and reverts the tool', () => {
-    const onToolChange = vi.fn();
-    const { rerender } = render(
+  it('renders the dice tool window when "dice" is in openToolWindows', () => {
+    render(
       <TabletopView
         campaignId="c1"
         isGM={true}
         currentUserId={null}
         getToken={mockGetToken}
         sessionId={null}
-        activeTool="ruler"
-        onToolChange={onToolChange}
+        openToolWindows={['dice']}
+        onCloseToolWindow={vi.fn()}
       />,
       { wrapper: Wrapper }
     );
-    expect(screen.queryByTestId('fwm-window-dice-roller')).not.toBeInTheDocument();
+    expect(screen.getByTestId('tool-window-dice-header')).toHaveTextContent('Dice Roller');
+    expect(screen.getByTestId('dice-roller-panel')).toBeInTheDocument();
+  });
 
-    rerender(
+  it('does not render the dice tool window when "dice" is not in openToolWindows', () => {
+    render(
       <TabletopView
         campaignId="c1"
         isGM={true}
         currentUserId={null}
         getToken={mockGetToken}
         sessionId={null}
-        activeTool="dice"
-        onToolChange={onToolChange}
-      />
+        openToolWindows={[]}
+        onCloseToolWindow={vi.fn()}
+      />,
+      { wrapper: Wrapper }
     );
-    expect(screen.getByTestId('fwm-window-dice-roller')).toHaveTextContent('Dice Roller');
-    expect(onToolChange).toHaveBeenCalledWith('ruler');
+    expect(screen.queryByTestId('tool-window-dice')).not.toBeInTheDocument();
   });
 
-  it('keeps the dice window a singleton across repeated dice-tool selections', () => {
-    const onToolChange = vi.fn();
-    const props = {
-      campaignId: 'c1',
-      isGM: true,
-      currentUserId: null,
-      getToken: mockGetToken,
-      sessionId: null,
-      onToolChange,
-    };
-    const { rerender } = render(<TabletopView {...props} activeTool="pointer" />, {
-      wrapper: Wrapper,
-    });
-    rerender(<TabletopView {...props} activeTool="dice" />);
-    rerender(<TabletopView {...props} activeTool="pointer" />);
-    rerender(<TabletopView {...props} activeTool="dice" />);
-    expect(screen.getAllByTestId('fwm-window-dice-roller')).toHaveLength(1);
+  it('closing the dice window calls onCloseToolWindow with "dice"', async () => {
+    const user = userEvent.setup();
+    const onCloseToolWindow = vi.fn();
+    render(
+      <TabletopView
+        campaignId="c1"
+        isGM={true}
+        currentUserId={null}
+        getToken={mockGetToken}
+        sessionId={null}
+        openToolWindows={['dice']}
+        onCloseToolWindow={onCloseToolWindow}
+      />,
+      { wrapper: Wrapper }
+    );
+    await user.click(screen.getByTestId('tool-window-dice-close'));
+    expect(onCloseToolWindow).toHaveBeenCalledWith('dice');
   });
 });

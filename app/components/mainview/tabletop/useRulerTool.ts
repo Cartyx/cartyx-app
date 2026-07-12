@@ -8,11 +8,11 @@ import {
 import type { MapTokenData } from '~/types/mapToken';
 import { useRulerColor } from '~/hooks/useUserPreferences';
 import { clamp } from './ActiveMapStage.geometry';
+import { imageToDomPoint } from './viewportMath';
 
 /** A measurement endpoint: a fixed image-space point, or a live token center. */
 export type MeasurePoint =
-  | { kind: 'point'; x: number; y: number }
-  | { kind: 'token'; tokenId: string };
+  { kind: 'point'; x: number; y: number } | { kind: 'token'; tokenId: string };
 
 interface DomPoint {
   x: number;
@@ -68,18 +68,11 @@ export function useRulerTool({
   // Per-user measurement line color (persisted on the user record).
   const { color: rulerColor, setColor: setRulerColor } = useRulerColor();
 
-  // The ruler settings popup is shown while the tool is active; closing it hides
-  // just the popup (the ruler stays usable). Re-opens when re-selected.
-  const [rulerPanelOpen, setRulerPanelOpen] = useState(false);
-
-  // Clear the measurement whenever the ruler tool is deselected; (re)open the
-  // settings popup whenever it's selected.
+  // Clear the measurement whenever the ruler tool is deselected.
   useEffect(() => {
     if (!rulerActive) {
       setMeasurePoints([]);
       setMeasureCursor(null);
-    } else {
-      setRulerPanelOpen(true);
     }
   }, [rulerActive]);
 
@@ -88,6 +81,25 @@ export function useRulerTool({
     setMeasurePoints([]);
     setMeasureCursor(null);
   }, []);
+
+  // Esc cancels an in-progress measurement so the user can pan/zoom or move to
+  // another part of the map without the live line following the cursor and
+  // clicks extending it. Only acts while the ruler is active and a line exists;
+  // otherwise it lets other Esc handlers (selection clears, etc.) run. Ignored
+  // while typing in a field.
+  useEffect(() => {
+    if (!rulerActive) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || measurePoints.length === 0) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))
+        return;
+      e.preventDefault();
+      resetMeasurement();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [rulerActive, measurePoints.length, resetMeasurement]);
 
   // Picking a token while measuring. Shift adds it as a waypoint and keeps the
   // line live; a plain pick with an existing line completes the measurement at
@@ -152,10 +164,10 @@ export function useRulerTool({
     const committedImg = measurePoints.map(resolve).filter((p): p is DomPoint => p !== null);
     if (committedImg.length === 0) return null;
 
-    const toDom = (p: DomPoint) => ({
-      x: imageOffsetX + p.x * effectiveScale,
-      y: imageOffsetY + p.y * effectiveScale,
-    });
+    // Same transform the click used (via useViewport.domToImage), so a placed
+    // anchor renders back exactly under the cursor at any zoom/pan.
+    const toDom = (p: DomPoint) =>
+      imageToDomPoint(p, { effectiveScale, imageOffsetX, imageOffsetY });
     const committed = committedImg.map(toDom);
     const imgVerts = measureCursor ? [...committedImg, measureCursor] : committedImg;
     const domVerts = imgVerts.map(toDom);
@@ -193,8 +205,6 @@ export function useRulerTool({
     measurement,
     rulerColor,
     setRulerColor,
-    rulerPanelOpen,
-    setRulerPanelOpen,
     resetMeasurement,
     pickTokenForMeasure,
     onBackgroundPointerDown,

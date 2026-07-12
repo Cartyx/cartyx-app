@@ -3,10 +3,5 @@
 # These compile into the browser bundle — changing one requires an image
 # rebuild + redeploy (merge to main), not a helm change.
 VITE_PUBLIC_PARTYKIT_HOST=ws.cartyx.io
-VITE_PUBLIC_FF_CHAT=true
-VITE_PUBLIC_FF_DICE=true
-VITE_PUBLIC_FF_WIKI=true
-VITE_PUBLIC_FF_NOTES=true
-VITE_PUBLIC_FF_SETTINGS=true
 VITE_PUBLIC_GLITCHTIP_DSN=https://1fd010e17ff4468fa6e3b07c94fcd31b@glitchtip.cartyx.io/1
 VITE_PUBLIC_UMAMI_WEBSITE_ID=7ef99b87-59b5-46c5-922f-d4e66ccb51d6

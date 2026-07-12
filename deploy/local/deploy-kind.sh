@@ -102,11 +102,6 @@ up() {
   log "Building web image $WEB_IMAGE (client env baked at build time)..."
   docker build -f "$REPO_ROOT/Dockerfile.web" \
     --build-arg VITE_PUBLIC_PARTYKIT_HOST=localhost:1999 \
-    --build-arg VITE_PUBLIC_FF_CHAT=true \
-    --build-arg VITE_PUBLIC_FF_DICE=true \
-    --build-arg VITE_PUBLIC_FF_WIKI=true \
-    --build-arg VITE_PUBLIC_FF_NOTES=true \
-    --build-arg VITE_PUBLIC_FF_SETTINGS=true \
     -t "$WEB_IMAGE" "$REPO_ROOT"
 
   log "Loading images into kind..."

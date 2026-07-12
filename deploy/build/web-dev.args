@@ -1,10 +1,5 @@
 # Client-baked build args for the DEV web image (ghcr.io/biozal/cartyx-web:dev-<sha>).
 # KEY=VALUE lines; consumed as --build-arg by .github/workflows/deploy.yml.
 VITE_PUBLIC_PARTYKIT_HOST=dev-ws.cartyx.io
-VITE_PUBLIC_FF_CHAT=true
-VITE_PUBLIC_FF_DICE=true
-VITE_PUBLIC_FF_WIKI=true
-VITE_PUBLIC_FF_NOTES=true
-VITE_PUBLIC_FF_SETTINGS=true
 VITE_PUBLIC_GLITCHTIP_DSN=https://0cb27f44eaa9497fbff9a1e7ce803915@glitchtip.cartyx.io/2
 VITE_PUBLIC_UMAMI_WEBSITE_ID=4cde88ee-3ef0-4104-adb0-6247d4ecbb30
