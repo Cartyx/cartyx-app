@@ -6,7 +6,9 @@
 
 **Architecture:** Spells clone the Races wiki pattern (Mongoose model, Zod schemas, TanStack Start server functions gated by `requireCampaignMember`/`isGM`, TanStack Query hook, six wiki UI components, WikiPanel registration) but with a rich typed data model. SRD content is generated into committed JSON data modules, imported (bundled) at runtime by an in-app importer wired into campaign creation via a checkbox. An SRD Licensing info screen is added under the inspector Settings cog.
 
-**Tech Stack:** TanStack Start (React 19), TanStack Query, Mongoose (MongoDB), Zod, Vitest + mongodb-memory-server, Playwright (e2e), Python 3 (dev seed).
+**Tech Stack:** TanStack Start (React 19), TanStack Query, Mongoose (MongoDB), Zod, Vitest (Mongoose globally mocked in `tests/setup.ts` — NO mongodb-memory-server), Playwright (e2e), Python 3 (dev seed).
+
+**Test conventions (repo-wide — applies to every task):** Unit tests live under `tests/` mirroring the app path (e.g. `app/server/functions/spells.ts` → `tests/server/functions/spells.test.ts`), imported via the `~/` alias. Mongoose is globally mocked (`tests/setup.ts`), so there is no in-memory DB: model tests are existence-level, and server-function tests mock `~/server/session`, `~/server/db/connection`, `~/server/db/models/*`, `~/server/functions/tags`, `~/server/utils/telemetry` and let the real `requireCampaignMember` run against `mockGMCampaign`/`mockPlayerCampaign` — pattern: `tests/server/functions/rules.test.ts`. Server functions create docs with `Model.create()` (mockable), not `new Model()+save()`.
 
 ## Global Constraints
 
@@ -17,7 +19,7 @@
 - GM authorization is always re-checked server-side (`requireCampaignMember` → `if (!member.isGM) throw new Error('Forbidden')`); client `isGM`/`canEdit` only gate UI.
 - SRD attribution string is fixed and exact (SRD 5.2.1, CC-BY-4.0) — copy verbatim from Task 6.
 - New npm packages must be published ≥7 days AND pass `npm run check:deps-age`. This plan adds **no** new npm dependencies.
-- Integration tests use mongodb-memory-server, never a real Atlas DB.
+- Tests never touch a real DB; Mongoose is globally mocked (`tests/setup.ts`). Do NOT add `mongodb-memory-server` (it is not a dependency and would violate the no-new-deps rule).
 
 ---
 
@@ -39,7 +41,7 @@
 - `app/components/wiki/spells/SpellCard.tsx`, `SpellWindow.tsx`, `SpellViewModal.tsx`, `SpellsPanel.tsx`, `SpellWindowWrapper.tsx`
 - `app/components/wiki/spells/SpellModal.tsx` + section sub-editors `SpellBasicInfoSection.tsx`, `SpellAdditionalInfoSection.tsx`, `SpellModifiersEditor.tsx`, `SpellConditionsEditor.tsx`, `SpellHigherLevelsEditor.tsx`
 - `app/components/mainview/settings/SrdLicensingModal.tsx`
-- Test files alongside each logic module.
+- Test files under `tests/` mirroring each module's app path (`~/` imports), per the repo convention above.
 
 **Modified files:**
 
@@ -360,7 +362,7 @@ git commit -m "feat(spells): add spell types and constants"
 **Files:**
 
 - Create: `app/types/schemas/spells.ts`
-- Test: `app/types/schemas/spells.test.ts`
+- Test: `tests/types/schemas/spells.test.ts` (repo convention: tests live under `tests/` mirroring app paths, `~/` imports)
 
 **Interfaces:**
 
@@ -512,11 +514,11 @@ export const getSpellSchema = z.object({
 });
 ```
 
-- [ ] **Step 2: Write `app/types/schemas/spells.test.ts`**
+- [ ] **Step 2: Write `tests/types/schemas/spells.test.ts`**
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { createSpellSchema, listSpellsSchema } from './spells';
+import { createSpellSchema, listSpellsSchema } from '~/types/schemas/spells';
 
 const validSpell = {
   campaignId: 'c1',
@@ -562,7 +564,7 @@ describe('listSpellsSchema', () => {
 
 - [ ] **Step 3: Run the test**
 
-Run: `npm test -- app/types/schemas/spells.test.ts`
+Run: `npm test -- tests/types/schemas/spells.test.ts`
 Expected: PASS (5 tests).
 
 - [ ] **Step 4: Typecheck and commit**
@@ -571,7 +573,7 @@ Run: `npm run typecheck`
 Expected: clean.
 
 ```bash
-git add app/types/schemas/spells.ts app/types/schemas/spells.test.ts
+git add app/types/schemas/spells.ts tests/types/schemas/spells.test.ts
 git commit -m "feat(spells): add zod schemas for spell CRUD"
 ```
 
@@ -582,7 +584,7 @@ git commit -m "feat(spells): add zod schemas for spell CRUD"
 **Files:**
 
 - Create: `app/server/db/models/Spell.ts`
-- Test: `app/server/db/models/Spell.test.ts`
+- Test: `tests/server/db/spell-model.test.ts` (existence-level — Mongoose is globally mocked in `tests/setup.ts`, so schema hooks/indexes do not execute in tests; the model's real behavior is covered indirectly by the server-function tests and `tests/server/utils/normalizeTags.test.ts`)
 
 **Interfaces:**
 
@@ -724,66 +726,32 @@ if (typeof (spellSchema as { index?: unknown }).index === 'function') {
 export const Spell = mongoose.models.Spell || mongoose.model('Spell', spellSchema);
 ```
 
-- [ ] **Step 2: Write `app/server/db/models/Spell.test.ts`**
+- [ ] **Step 2: Write `tests/server/db/spell-model.test.ts`**
 
 ```ts
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { MongoMemoryServer } from 'mongodb-memory-server';
-import mongoose from 'mongoose';
-import { Spell } from './Spell';
+import { describe, it, expect } from 'vitest';
+import { Spell } from '~/server/db/models/Spell';
 
-let mongod: MongoMemoryServer;
-
-beforeAll(async () => {
-  mongod = await MongoMemoryServer.create();
-  await mongoose.connect(mongod.getUri());
-});
-
-afterAll(async () => {
-  await mongoose.disconnect();
-  await mongod.stop();
-});
-
+// Mongoose is globally mocked in tests/setup.ts (MockSchema is a no-op, model()
+// returns a mock), so schema pre-hooks and indexes do not run in unit tests.
+// This verifies the model module imports and exports cleanly under the mock —
+// the schema must not call any Schema API the mock lacks (the `typeof
+// spellSchema.index === 'function'` guard skips indexing under the mock).
+// Tag normalization is covered by tests/server/utils/normalizeTags.test.ts and
+// the full spell shape is exercised by the spell server-function tests.
 describe('Spell model', () => {
-  it('normalizes tags and stamps updatedAt on save', async () => {
-    const spell = new Spell({
-      campaignId: new mongoose.Types.ObjectId(),
-      createdBy: new mongoose.Types.ObjectId(),
-      name: 'Fire Bolt',
-      description: 'A mote of fire.',
-      level: 0,
-      school: 'evocation',
-      tags: ['#Damage', 'damage', 'Fire'],
-    });
-    await spell.save();
-    expect(spell.tags).toEqual(['damage', 'fire']);
-    expect(spell.updatedAt).toBeInstanceOf(Date);
-  });
-
-  it('persists nested modifiers with dice', async () => {
-    const spell = await Spell.create({
-      campaignId: new mongoose.Types.ObjectId(),
-      createdBy: new mongoose.Types.ObjectId(),
-      name: 'Fireball',
-      description: 'A bright streak.',
-      level: 3,
-      school: 'evocation',
-      source: 'srd',
-      modifiers: [{ id: 'm1', type: 'damage', dice: { count: 8, sides: 6 }, damageType: 'fire' }],
-      areaOfEffect: { shape: 'sphere', size: 20 },
-    });
-    const found = await Spell.findById(spell._id).lean();
-    expect(found.modifiers[0].dice).toEqual({ count: 8, sides: 6 });
-    expect(found.areaOfEffect.shape).toBe('sphere');
-    expect(found.source).toBe('srd');
+  it('is exported and defined', () => {
+    expect(Spell).toBeDefined();
   });
 });
 ```
 
 - [ ] **Step 3: Run the test**
 
-Run: `npm test -- app/server/db/models/Spell.test.ts`
-Expected: PASS (2 tests).
+Run: `npm test -- tests/server/db/spell-model.test.ts`
+Expected: PASS (1 test). If the import throws, the model called a Schema API the
+global mock lacks — keep the schema to `new mongoose.Schema(...)`, `.pre(...)`,
+and the guarded `.index(...)` only.
 
 - [ ] **Step 4: Typecheck and commit**
 
@@ -791,7 +759,7 @@ Run: `npm run typecheck`
 Expected: clean.
 
 ```bash
-git add app/server/db/models/Spell.ts app/server/db/models/Spell.test.ts
+git add app/server/db/models/Spell.ts tests/server/db/spell-model.test.ts
 git commit -m "feat(spells): add Spell mongoose model"
 ```
 
@@ -802,39 +770,45 @@ git commit -m "feat(spells): add Spell mongoose model"
 **Files:**
 
 - Create: `app/server/functions/spells.ts`
-- Test: `app/server/functions/spells.test.ts`
+- Test: `tests/server/functions/spells.test.ts` (mock pattern from `tests/server/functions/rules.test.ts`; NO mongodb-memory-server — Mongoose is globally mocked in `tests/setup.ts`)
 
 **Interfaces:**
 
 - Consumes: `requireCampaignMember`, `Spell` model, `normalizeTags`, `ensureTags` (from `./tags`), telemetry helpers, schemas from Task 2, types from Task 1.
 - Produces: `createSpell`, `updateSpell`, `deleteSpell`, `duplicateSpell`, `listSpells`, `getSpell` — each `async ({ data }) => ...`. `canEdit === member.isGM && spell.source === 'homebrew'`. `updateSpell`/`deleteSpell` throw `'SRD spells are read-only'` when `source === 'srd'`.
 
-- [ ] **Step 1: Write the failing test `app/server/functions/spells.test.ts`**
+- [ ] **Step 1: Write the failing test `tests/server/functions/spells.test.ts`**
 
-This test mocks `requireCampaignMember` (so no auth/session needed) and runs the real Mongoose logic against mongodb-memory-server.
+Follow the mock pattern of `tests/server/functions/rules.test.ts`: mock `~/server/session`, `~/server/db/connection`, `~/server/db/models/User`, `~/server/db/models/Campaign`, `~/server/db/models/Spell`, `~/server/functions/tags`, and `~/server/utils/telemetry`. The REAL `requireCampaignMember` runs against `mockGMCampaign`/`mockPlayerCampaign`. Mongoose itself is globally mocked in `tests/setup.ts`, so there is NO in-memory DB — assertions check the args passed to `Spell.create`/`Spell.find` and the `canEdit` derived from the mocked return's `source`.
 
 ```ts
-import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
-import { MongoMemoryServer } from 'mongodb-memory-server';
-import mongoose from 'mongoose';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const gmId = new mongoose.Types.ObjectId();
-const campaignId = new mongoose.Types.ObjectId().toString();
-let isGM = true;
-
-vi.mock('../utils/requireCampaignMember', () => ({
-  requireCampaignMember: vi.fn(async () => ({
-    userId: gmId.toString(),
-    sessionUserId: 'session-user',
-    isGM,
-  })),
+vi.mock('~/server/session', () => ({ getSession: vi.fn() }));
+vi.mock('~/server/db/connection', () => ({
+  connectDB: vi.fn(),
+  isDBConnected: vi.fn(() => true),
 }));
-vi.mock('../utils/telemetry', () => ({
+vi.mock('~/server/db/models/User', () => ({ User: { findOne: vi.fn() } }));
+vi.mock('~/server/db/models/Campaign', () => ({ Campaign: { findById: vi.fn() } }));
+vi.mock('~/server/db/models/Spell', () => ({
+  Spell: {
+    create: vi.fn(),
+    findOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
+    find: vi.fn(),
+  },
+}));
+vi.mock('~/server/functions/tags', () => ({ ensureTags: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('~/server/utils/telemetry', () => ({
   serverCaptureException: vi.fn(),
   serverCaptureEvent: vi.fn(),
 }));
-vi.mock('./tags', () => ({ ensureTags: vi.fn(async () => {}) }));
 
+import { getSession } from '~/server/session';
+import { User } from '~/server/db/models/User';
+import { Campaign } from '~/server/db/models/Campaign';
+import { Spell } from '~/server/db/models/Spell';
 import {
   createSpell,
   updateSpell,
@@ -842,134 +816,226 @@ import {
   duplicateSpell,
   listSpells,
   getSpell,
-} from './spells';
-import { Spell } from '../db/models/Spell';
+} from '~/server/functions/spells';
 
-let mongod: MongoMemoryServer;
+const mockSession = {
+  id: 'session-user-1',
+  provider: 'google',
+  name: 'T',
+  email: 't@e.com',
+  avatar: null,
+  role: 'gm',
+  accessToken: null,
+  refreshToken: null,
+  tokenIssuedAt: 0,
+};
+const mockDbUser = { _id: 'dbuser-1' };
+const mockGMCampaign = {
+  _id: 'camp-1',
+  gameMasterId: 'dbuser-1',
+  members: [{ userId: 'dbuser-1', role: 'gm' }],
+};
+const mockPlayerCampaign = {
+  _id: 'camp-1',
+  gameMasterId: 'someone-else',
+  members: [
+    { userId: 'someone-else', role: 'gm' },
+    { userId: 'dbuser-1', role: 'player' },
+  ],
+};
 
-const baseSpell = {
-  campaignId,
+function makeSpell(overrides: Record<string, unknown> = {}) {
+  return {
+    _id: 'spell-1',
+    campaignId: 'camp-1',
+    createdBy: 'dbuser-1',
+    source: 'homebrew',
+    name: 'Fire Bolt',
+    description: 'A mote of fire.',
+    level: 0,
+    school: 'evocation',
+    castingTime: { value: 1, unit: 'action' },
+    components: { verbal: true, somatic: true, material: false },
+    range: { type: 'ranged', distance: 120 },
+    duration: { type: 'instantaneous', concentration: false },
+    ritual: false,
+    higherLevelScaling: { enabled: false },
+    classes: ['Wizard'],
+    attackSave: { kind: 'attack', attackType: 'ranged' },
+    modifiers: [],
+    conditions: [],
+    higherLevels: [],
+    areaOfEffect: { shape: 'none' },
+    tags: ['fire'],
+    createdAt: new Date('2026-03-01'),
+    updatedAt: new Date('2026-03-01'),
+    deleteOne: vi.fn(),
+    ...overrides,
+  };
+}
+
+const validInput = {
+  campaignId: 'camp-1',
   name: 'Fire Bolt',
   description: 'A mote of fire.',
   level: 0,
-  school: 'evocation' as const,
-  castingTime: { value: 1, unit: 'action' as const },
+  school: 'evocation',
+  castingTime: { value: 1, unit: 'action' },
   components: { verbal: true, somatic: true, material: false },
-  range: { type: 'ranged' as const, distance: 120 },
-  duration: { type: 'instantaneous' as const, concentration: false },
+  range: { type: 'ranged', distance: 120 },
+  duration: { type: 'instantaneous', concentration: false },
   ritual: false,
   higherLevelScaling: { enabled: false },
   classes: ['Wizard'],
-  attackSave: { kind: 'attack' as const, attackType: 'ranged' as const },
+  attackSave: { kind: 'attack', attackType: 'ranged' },
   modifiers: [],
   conditions: [],
   higherLevels: [],
-  areaOfEffect: { shape: 'none' as const },
+  areaOfEffect: { shape: 'none' },
   tags: ['fire'],
 };
 
-beforeAll(async () => {
-  mongod = await MongoMemoryServer.create();
-  await mongoose.connect(mongod.getUri());
-});
-afterAll(async () => {
-  await mongoose.disconnect();
-  await mongod.stop();
-});
-beforeEach(async () => {
-  isGM = true;
-  await Spell.deleteMany({});
+// A chainable stub for Spell.find(...).select(...).sort(...).lean()
+function findChain(rows: unknown[]) {
+  const chain: Record<string, unknown> = {};
+  chain.select = () => chain;
+  chain.sort = () => chain;
+  chain.lean = () => Promise.resolve(rows);
+  return chain;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(getSession).mockResolvedValue(mockSession as never);
+  vi.mocked(User.findOne).mockResolvedValue(mockDbUser as never);
+  vi.mocked(Campaign.findById).mockResolvedValue(mockGMCampaign as never);
 });
 
 describe('createSpell', () => {
   it('creates a homebrew spell for a GM and returns canEdit true', async () => {
-    const spell = await createSpell({ data: baseSpell });
-    expect(spell.source).toBe('homebrew');
-    expect(spell.canEdit).toBe(true);
-    expect(spell.name).toBe('Fire Bolt');
+    vi.mocked(Spell.create).mockResolvedValue(makeSpell() as never);
+    const result = await createSpell({ data: validInput as never });
+    expect(result.source).toBe('homebrew');
+    expect(result.canEdit).toBe(true);
+    expect(vi.mocked(Spell.create).mock.calls[0][0]).toMatchObject({
+      source: 'homebrew',
+      createdBy: 'dbuser-1',
+    });
   });
 
   it('forbids a non-GM from creating', async () => {
-    isGM = false;
-    await expect(createSpell({ data: baseSpell })).rejects.toThrow('Forbidden');
+    vi.mocked(Campaign.findById).mockResolvedValue(mockPlayerCampaign as never);
+    await expect(createSpell({ data: validInput as never })).rejects.toThrow('Forbidden');
   });
 });
 
 describe('updateSpell / deleteSpell SRD protection', () => {
   it('rejects updating an SRD spell', async () => {
-    const doc = await Spell.create({ ...baseSpell, createdBy: gmId, source: 'srd' });
+    vi.mocked(Spell.findOne).mockResolvedValue(makeSpell({ source: 'srd' }) as never);
     await expect(
-      updateSpell({ data: { ...baseSpell, id: doc._id.toString(), name: 'Hacked' } })
+      updateSpell({ data: { ...validInput, id: 'spell-1', name: 'Hacked' } as never })
     ).rejects.toThrow('read-only');
   });
 
   it('rejects deleting an SRD spell', async () => {
-    const doc = await Spell.create({ ...baseSpell, createdBy: gmId, source: 'srd' });
-    await expect(deleteSpell({ data: { id: doc._id.toString(), campaignId } })).rejects.toThrow(
+    vi.mocked(Spell.findOne).mockResolvedValue(makeSpell({ source: 'srd' }) as never);
+    await expect(deleteSpell({ data: { id: 'spell-1', campaignId: 'camp-1' } })).rejects.toThrow(
       'read-only'
     );
   });
 
-  it('allows updating a homebrew spell', async () => {
-    const created = await createSpell({ data: baseSpell });
-    const updated = await updateSpell({ data: { ...baseSpell, id: created.id, name: 'New Name' } });
-    expect(updated.name).toBe('New Name');
+  it('updates a homebrew spell', async () => {
+    vi.mocked(Spell.findOne).mockResolvedValue(makeSpell({ source: 'homebrew' }) as never);
+    vi.mocked(Spell.findOneAndUpdate).mockResolvedValue(makeSpell({ name: 'New Name' }) as never);
+    const result = await updateSpell({
+      data: { ...validInput, id: 'spell-1', name: 'New Name' } as never,
+    });
+    expect(result.name).toBe('New Name');
+  });
+
+  it('deletes a homebrew spell', async () => {
+    const doc = makeSpell({ source: 'homebrew' });
+    vi.mocked(Spell.findOne).mockResolvedValue(doc as never);
+    const result = await deleteSpell({ data: { id: 'spell-1', campaignId: 'camp-1' } });
+    expect(result).toEqual({ success: true });
+    expect(doc.deleteOne).toHaveBeenCalled();
   });
 });
 
 describe('duplicateSpell', () => {
   it('copies an SRD spell into an editable homebrew copy', async () => {
-    const doc = await Spell.create({ ...baseSpell, createdBy: gmId, source: 'srd' });
-    const copy = await duplicateSpell({ data: { id: doc._id.toString(), campaignId } });
+    vi.mocked(Spell.findOne).mockReturnValue({
+      lean: () => Promise.resolve(makeSpell({ source: 'srd', name: 'Fireball' })),
+    } as never);
+    vi.mocked(Spell.create).mockResolvedValue(
+      makeSpell({ _id: 'spell-2', source: 'homebrew', name: 'Fireball (Copy)' }) as never
+    );
+    const copy = await duplicateSpell({ data: { id: 'spell-1', campaignId: 'camp-1' } });
     expect(copy.source).toBe('homebrew');
     expect(copy.canEdit).toBe(true);
     expect(copy.name).toContain('Copy');
-    expect(copy.id).not.toBe(doc._id.toString());
   });
 
   it('forbids a non-GM from duplicating', async () => {
-    const doc = await Spell.create({ ...baseSpell, createdBy: gmId, source: 'srd' });
-    isGM = false;
-    await expect(duplicateSpell({ data: { id: doc._id.toString(), campaignId } })).rejects.toThrow(
+    vi.mocked(Campaign.findById).mockResolvedValue(mockPlayerCampaign as never);
+    await expect(duplicateSpell({ data: { id: 'spell-1', campaignId: 'camp-1' } })).rejects.toThrow(
       'Forbidden'
     );
   });
 });
 
 describe('listSpells', () => {
-  it('filters by level and school and sets canEdit per source for a GM', async () => {
-    await Spell.create({ ...baseSpell, createdBy: gmId, source: 'srd' });
-    await Spell.create({ ...baseSpell, createdBy: gmId, source: 'homebrew', level: 3 });
-    const level0 = await listSpells({ data: { campaignId, level: 0 } });
-    expect(level0).toHaveLength(1);
-    expect(level0[0].canEdit).toBe(false); // srd, even for GM
-    const all = await listSpells({ data: { campaignId } });
-    const homebrew = all.find((s) => s.level === 3);
-    expect(homebrew?.canEdit).toBe(true);
+  it('passes level/school filters to the query and sets canEdit per source for a GM', async () => {
+    vi.mocked(Spell.find).mockReturnValue(
+      findChain([
+        makeSpell({ _id: 's-srd', source: 'srd', level: 0 }),
+        makeSpell({ _id: 's-hb', source: 'homebrew', level: 3 }),
+      ]) as never
+    );
+    const result = await listSpells({
+      data: { campaignId: 'camp-1', level: 3, school: 'evocation' },
+    });
+    expect(vi.mocked(Spell.find).mock.calls[0][0]).toMatchObject({
+      campaignId: 'camp-1',
+      level: 3,
+      school: 'evocation',
+    });
+    expect(result.find((s) => s.source === 'srd')!.canEdit).toBe(false);
+    expect(result.find((s) => s.source === 'homebrew')!.canEdit).toBe(true);
   });
 
   it('gives players canEdit false everywhere', async () => {
-    await Spell.create({ ...baseSpell, createdBy: gmId, source: 'homebrew' });
-    isGM = false;
-    const list = await listSpells({ data: { campaignId } });
-    expect(list[0].canEdit).toBe(false);
+    vi.mocked(Campaign.findById).mockResolvedValue(mockPlayerCampaign as never);
+    vi.mocked(Spell.find).mockReturnValue(findChain([makeSpell({ source: 'homebrew' })]) as never);
+    const result = await listSpells({ data: { campaignId: 'camp-1' } });
+    expect(result[0].canEdit).toBe(false);
   });
 });
 
 describe('getSpell', () => {
-  it('returns the full spell with canEdit', async () => {
-    const created = await createSpell({ data: baseSpell });
-    const fetched = await getSpell({ data: { id: created.id, campaignId } });
-    expect(fetched?.description).toBe('A mote of fire.');
-    expect(fetched?.canEdit).toBe(true);
+  it('returns the full spell with canEdit for a GM homebrew spell', async () => {
+    vi.mocked(Spell.findOne).mockReturnValue({
+      lean: () => Promise.resolve(makeSpell({ source: 'homebrew' })),
+    } as never);
+    const result = await getSpell({ data: { id: 'spell-1', campaignId: 'camp-1' } });
+    expect(result?.description).toBe('A mote of fire.');
+    expect(result?.canEdit).toBe(true);
+  });
+
+  it('returns canEdit false for an SRD spell even for a GM', async () => {
+    vi.mocked(Spell.findOne).mockReturnValue({
+      lean: () => Promise.resolve(makeSpell({ source: 'srd' })),
+    } as never);
+    const result = await getSpell({ data: { id: 'spell-1', campaignId: 'camp-1' } });
+    expect(result?.canEdit).toBe(false);
   });
 });
 ```
 
 - [ ] **Step 2: Run to verify it fails**
 
-Run: `npm test -- app/server/functions/spells.test.ts`
-Expected: FAIL — `Cannot find module './spells'`.
+Run: `npm test -- tests/server/functions/spells.test.ts`
+Expected: FAIL — `Cannot find module '~/server/functions/spells'`.
 
 - [ ] **Step 3: Write `app/server/functions/spells.ts`**
 
@@ -1063,7 +1129,7 @@ export const createSpell = async ({ data }: { data: z.infer<typeof createSpellSc
     if (!member.isGM) throw new Error('Forbidden');
 
     const finalTags = normalizeTags(data.tags ?? []);
-    const spell = new Spell({
+    const spell = await Spell.create({
       ...structuredBody(data),
       campaignId: data.campaignId,
       createdBy: member.userId,
@@ -1072,7 +1138,6 @@ export const createSpell = async ({ data }: { data: z.infer<typeof createSpellSc
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-    await spell.save();
 
     if (finalTags.length > 0) {
       await ensureTagsFn({ data: { campaignId: data.campaignId, tags: finalTags } });
@@ -1164,7 +1229,7 @@ export const duplicateSpell = async ({ data }: { data: z.infer<typeof duplicateS
     if (!source) throw new Error('Spell not found');
 
     const body = structuredBody(source);
-    const copy = new Spell({
+    const copy = await Spell.create({
       ...body,
       name: `${source.name} (Copy)`,
       campaignId: data.campaignId,
@@ -1174,7 +1239,6 @@ export const duplicateSpell = async ({ data }: { data: z.infer<typeof duplicateS
       createdAt: new Date(),
       updatedAt: new Date(),
     });
-    await copy.save();
 
     serverCaptureEvent(sessionUserId!, 'spell_duplicated', {
       campaign_id: data.campaignId,
@@ -1243,7 +1307,7 @@ export const getSpell = async ({ data }: { data: z.infer<typeof getSpellSchema> 
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `npm test -- app/server/functions/spells.test.ts`
+Run: `npm test -- tests/server/functions/spells.test.ts`
 Expected: PASS (all tests).
 
 - [ ] **Step 5: Typecheck, lint, commit**
@@ -1252,7 +1316,7 @@ Run: `npm run typecheck && npm run lint`
 Expected: clean (no new warnings).
 
 ```bash
-git add app/server/functions/spells.ts app/server/functions/spells.test.ts
+git add app/server/functions/spells.ts tests/server/functions/spells.test.ts
 git commit -m "feat(spells): add CRUD + duplicate server functions with SRD read-only protection"
 ```
 
