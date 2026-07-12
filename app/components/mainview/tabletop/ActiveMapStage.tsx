@@ -500,11 +500,17 @@ export function ActiveMapStage({
     const up = (e: KeyboardEvent) => {
       if (e.key === ' ') setSpaceHeld(false);
     };
+    // If focus leaves the window while Space is held (alt-tab, devtools,
+    // another app), the keyup never fires and spaceHeld would stick —
+    // background drag would keep panning until Space is tapped again.
+    const onBlur = () => setSpaceHeld(false);
     window.addEventListener('keydown', down);
     window.addEventListener('keyup', up);
+    window.addEventListener('blur', onBlur);
     return () => {
       window.removeEventListener('keydown', down);
       window.removeEventListener('keyup', up);
+      window.removeEventListener('blur', onBlur);
     };
   }, []);
 
@@ -1448,7 +1454,7 @@ export function ActiveMapStage({
           <button
             type="button"
             aria-label="Close menu"
-            className="fixed inset-0 z-40 cursor-default"
+            className="fixed inset-0 z-50 cursor-default"
             onPointerDown={(e) => {
               e.stopPropagation();
               setContextMenu(null);
@@ -1457,7 +1463,7 @@ export function ActiveMapStage({
           <div
             role="menu"
             onPointerDown={(e) => e.stopPropagation()}
-            className="absolute z-50 w-52 overflow-hidden rounded border border-white/10 bg-[#080A12] shadow-xl"
+            className="absolute z-[51] w-52 overflow-hidden rounded border border-white/10 bg-[#080A12] shadow-xl"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
             <div className="border-b border-white/[0.07] px-3 py-1.5 font-sans text-[10px] uppercase tracking-widest text-slate-500">

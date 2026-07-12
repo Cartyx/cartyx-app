@@ -21,7 +21,7 @@ export function MonsterBatchDialog({
       role="presentation"
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
-      className="absolute inset-0 z-40 flex items-center justify-center bg-black/60"
+      className="absolute inset-0 z-50 flex items-center justify-center bg-black/60"
       data-testid="monster-batch-dialog"
     >
       <div

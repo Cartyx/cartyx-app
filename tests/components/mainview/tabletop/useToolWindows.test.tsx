@@ -20,6 +20,30 @@ function Harness({ open, onClose }: { open: ToolWindowId[]; onClose: (id: ToolWi
   );
 }
 
+/**
+ * Regression harness for a window id that is open but never mounts a
+ * ToolWindow — the real-world case is a tabletop screen with no active map,
+ * where drawing/text/ruler windows never render (they live inside
+ * ActiveMapStage). `elsRef` in the hook never gets an entry for `id`, so the
+ * measure/place effect must not spin.
+ */
+function NoMountHarness({
+  open,
+  onClose,
+  onRender,
+}: {
+  open: ToolWindowId[];
+  onClose: (id: ToolWindowId) => void;
+  onRender: () => void;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  onRender();
+  // Intentionally never render a ToolWindow for `open` — simulates the
+  // no-map screen where the window id has no mounted element.
+  useToolWindows(open, ref, onClose);
+  return <div ref={ref} style={{ width: 1200, height: 800, position: 'relative' }} />;
+}
+
 describe('useToolWindows', () => {
   it('marks a newly opened window as placed (visible) after measure', async () => {
     render(<Harness open={['dice']} onClose={() => {}} />);
@@ -42,8 +66,60 @@ describe('useToolWindows', () => {
     const dice = screen.getByTestId('tool-window-dice');
     const layer = screen.getByTestId('tool-window-layer');
     await waitFor(() => expect(layer.style.visibility).toBe('visible'));
-    const layerZ = Number(layer.style.zIndex);
     fireEvent.pointerDown(dice);
-    await waitFor(() => expect(Number(dice.style.zIndex)).toBeGreaterThan(layerZ));
+    // Compare live values — focus() renumbers the whole band on every call
+    // (see the z-band normalization test below), so `layer`'s zIndex may
+    // itself shift when `dice` is promoted; what matters is the relative
+    // order at the moment of assertion.
+    await waitFor(() =>
+      expect(Number(dice.style.zIndex)).toBeGreaterThan(Number(layer.style.zIndex))
+    );
   });
+
+  it('keeps focus z-index normalized below the modal band (50) across many alternating focuses', async () => {
+    render(<Harness open={['dice', 'layer']} onClose={() => {}} />);
+    const dice = screen.getByTestId('tool-window-dice');
+    const layer = screen.getByTestId('tool-window-layer');
+    await waitFor(() => expect(layer.style.visibility).toBe('visible'));
+
+    for (let i = 0; i < 20; i++) {
+      fireEvent.pointerDown(i % 2 === 0 ? dice : layer);
+      const top = i % 2 === 0 ? dice : layer;
+      const other = i % 2 === 0 ? layer : dice;
+      await waitFor(() =>
+        expect(Number(top.style.zIndex)).toBeGreaterThan(Number(other.style.zIndex))
+      );
+    }
+
+    expect(Number(dice.style.zIndex)).toBeLessThan(50);
+    expect(Number(layer.style.zIndex)).toBeLessThan(50);
+  });
+
+  it('does not loop when an open window id never mounts an element (no map on screen)', async () => {
+    const renderCountRef = { current: 0 };
+    render(
+      <NoMountHarness
+        open={['text']}
+        onClose={() => {}}
+        onRender={() => {
+          renderCountRef.current += 1;
+        }}
+      />
+    );
+
+    // Give the buggy version room to spin: if the measure/place effect churns
+    // state every pass, the harness will re-render far more than a handful
+    // of times within this window.
+    await waitFor(
+      () => {
+        expect(renderCountRef.current).toBeLessThan(10);
+      },
+      { timeout: 2000, interval: 20 }
+    );
+
+    // Settle further and confirm it really stopped, not just slowed down.
+    const countAfterFirstCheck = renderCountRef.current;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(renderCountRef.current).toBe(countAfterFirstCheck);
+  }, 5000);
 });

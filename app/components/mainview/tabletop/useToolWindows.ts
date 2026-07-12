@@ -11,7 +11,13 @@ interface WindowGeom {
   placed: boolean;
 }
 
-/** Above the map/overlays (which top out at z-30), below modals (z-50). */
+/**
+ * Above the map/overlays (which top out at z-30), below dialogs and the
+ * token context-menu backdrop (z-50+). `focus()` re-ranks all open windows
+ * from Z_BASE+1 upward on every call, so this band never grows past
+ * Z_BASE + openWindows.length regardless of how many times windows are
+ * refocused — it can't climb into the dialog band.
+ */
 const Z_BASE = 40;
 const FALLBACK_SIZE = 240;
 
@@ -106,15 +112,21 @@ export function useToolWindows(
         .filter((id) => next[id]?.placed)
         .map((id) => ({ x: next[id]!.x, y: next[id]!.y, ...sizeOf(id) }));
       let zTop = Math.max(Z_BASE, ...Object.values(next).map((g) => g?.zIndex ?? Z_BASE));
+      let placedAny = false;
       for (const id of unplaced) {
-        if (!elsRef.current.get(id)) continue; // not mounted yet — next commit
+        if (!elsRef.current.get(id)) continue; // not mounted yet (or never will be) — next commit
         const size = sizeOf(id);
         const pos = placeToolWindow(size, placedRects, containerSize);
         zTop += 1;
         next[id] = { ...pos, zIndex: zTop, placed: true };
         placedRects.push({ ...pos, ...size });
+        placedAny = true;
       }
-      return next;
+      // No id in `unplaced` had a mounted element this pass — e.g. a window
+      // id is open but its ToolWindow never renders (no active map). Return
+      // `prev` unchanged so this effect doesn't re-fire forever on a new
+      // `next` object with identical values.
+      return placedAny ? next : prev;
     });
   }, [openWindows, geoms, containerSize, sizeOf]);
 
@@ -148,6 +160,10 @@ export function useToolWindows(
     });
   }, [containerSize, clampPos]);
 
+  // Re-rank all open windows' z-indexes from Z_BASE+1 upward with the
+  // focused one on top (mirrors FloatingWindowManager's normalization) so
+  // repeated alternating focuses never push windows past the modal band
+  // (Z_BASE + count is always << 50 for the handful of tool windows).
   const focus = useCallback((id: ToolWindowId) => {
     setGeoms((prev) => {
       const g = prev[id];
@@ -156,7 +172,16 @@ export function useToolWindows(
       if (g.zIndex === zTop && Object.values(prev).filter((x) => x?.zIndex === zTop).length === 1) {
         return prev;
       }
-      return { ...prev, [id]: { ...g, zIndex: zTop + 1 } };
+      const ids = Object.keys(prev) as ToolWindowId[];
+      const others = ids
+        .filter((i) => prev[i] && i !== id)
+        .sort((a, b) => prev[a]!.zIndex - prev[b]!.zIndex);
+      const order = [...others, id];
+      const next: typeof prev = { ...prev };
+      order.forEach((oid, i) => {
+        next[oid] = { ...prev[oid]!, zIndex: Z_BASE + 1 + i };
+      });
+      return next;
     });
   }, []);
 
