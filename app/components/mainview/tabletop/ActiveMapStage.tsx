@@ -624,8 +624,11 @@ export function ActiveMapStage({
     const middlePan = e.button === 1;
     if (middlePan) e.preventDefault();
     else if (e.button !== 0) return;
+    // Held Space is a temporary hand tool: like middle-button, it pans with
+    // ANY tool, bypassing the ruler/text/drawing handlers below.
+    const panOverride = middlePan || spaceHeld;
 
-    if (!middlePan) {
+    if (!panOverride) {
       // Ruler tool: a background click drops/relocates the measurement anchor
       // (clicks on tokens are handled by MapToken). No pan/select while measuring.
       if (rulerActive) {
@@ -703,7 +706,7 @@ export function ActiveMapStage({
     // Background press: always deselect; pan only for hand / Space / middle.
     setSelectedDrawingId(null);
     clearSelection();
-    if (!middlePan && !handActive && !spaceHeld) return;
+    if (!panOverride && !handActive) return;
     (e.target as Element).setPointerCapture?.(e.pointerId);
     dragRef.current = {
       mode: 'pan',
@@ -956,12 +959,13 @@ export function ActiveMapStage({
   );
 
   const onPointerMove = (e: ReactPointerEvent<HTMLDivElement>) => {
-    // Ruler tool: the live endpoint follows the cursor until a fixed end is set.
-    if (rulerActive) {
+    const d = dragRef.current;
+    // Ruler tool: the live endpoint follows the cursor until a fixed end is
+    // set — unless a pan is in progress (middle-button / Space override).
+    if (rulerActive && d.mode !== 'pan') {
       ruler.onPointerMove(e);
       return;
     }
-    const d = dragRef.current;
     if (d.mode === 'idle') return;
     if (d.mode === 'pan') {
       setViewport({

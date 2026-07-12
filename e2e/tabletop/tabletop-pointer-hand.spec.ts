@@ -249,6 +249,33 @@ test('space+drag pans with the pointer tool active', async ({ page }) => {
   expect(after!.x - before!.x).toBeGreaterThan(100);
 });
 
+test('space+drag pans with the ruler tool active (and ruler works after release)', async ({
+  page,
+}) => {
+  await gotoTabletop(page);
+  const mapImg = page.locator('[data-testid="active-map-stage"] img');
+  await page.getByTestId('tool-ruler').click();
+  await expect(page.getByTestId('tool-window-ruler')).toBeVisible();
+  const before = await mapImg.boundingBox();
+  const stage = page.getByTestId('active-map-stage');
+  const box = (await stage.boundingBox())!;
+
+  // Space bypasses the ruler handler: the drag pans and drops NO anchor.
+  await page.keyboard.down(' ');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 150, box.y + box.height / 2, { steps: 5 });
+  await page.mouse.up();
+  await page.keyboard.up(' ');
+  const after = await mapImg.boundingBox();
+  expect(after!.x - before!.x).toBeGreaterThan(100);
+  await expect(page.getByTestId('ruler-anchor')).toHaveCount(0);
+
+  // With Space released the ruler behaves normally: a click drops an anchor.
+  await page.mouse.click(box.x + box.width * 0.6, box.y + box.height * 0.6);
+  await expect(page.getByTestId('ruler-anchor')).toHaveCount(1);
+});
+
 test('text is movable with the pointer tool', async ({ page }) => {
   await gotoTabletop(page);
   await page.getByTestId('tool-pointer').click();
