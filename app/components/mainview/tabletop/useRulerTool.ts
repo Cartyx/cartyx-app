@@ -82,6 +82,25 @@ export function useRulerTool({
     setMeasureCursor(null);
   }, []);
 
+  // Esc cancels an in-progress measurement so the user can pan/zoom or move to
+  // another part of the map without the live line following the cursor and
+  // clicks extending it. Only acts while the ruler is active and a line exists;
+  // otherwise it lets other Esc handlers (selection clears, etc.) run. Ignored
+  // while typing in a field.
+  useEffect(() => {
+    if (!rulerActive) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || measurePoints.length === 0) return;
+      const el = e.target as HTMLElement | null;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable))
+        return;
+      e.preventDefault();
+      resetMeasurement();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [rulerActive, measurePoints.length, resetMeasurement]);
+
   // Picking a token while measuring. Shift adds it as a waypoint and keeps the
   // line live; a plain pick with an existing line completes the measurement at
   // the token (token→token, frozen); with no line yet it begins a fresh one.
