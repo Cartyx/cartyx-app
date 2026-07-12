@@ -21,7 +21,7 @@ Follows the Races UI templates exactly (`app/components/wiki/races/*`), adapted 
 **Files:**
 
 - Create: `app/components/wiki/spells/spellFormat.ts`
-- Create: `app/components/wiki/spells/spellFormat.test.ts`
+- Create: `tests/components/wiki/spells/spellFormat.test.ts` (tests live under `tests/`, `~/` imports)
 - Create: `app/components/wiki/spells/SpellCard.tsx`
 
 **Interfaces:**
@@ -105,11 +105,16 @@ export function formatDamageEffect(spell: SpellData): string {
 }
 ```
 
-- [ ] **Step 2: Write `app/components/wiki/spells/spellFormat.test.ts`**
+- [ ] **Step 2: Write `tests/components/wiki/spells/spellFormat.test.ts`**
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { formatRange, formatDuration, formatComponents, formatDamageEffect } from './spellFormat';
+import {
+  formatRange,
+  formatDuration,
+  formatComponents,
+  formatDamageEffect,
+} from '~/components/wiki/spells/spellFormat';
 import type { SpellData } from '~/types/spell';
 
 describe('spell display formatters', () => {
@@ -138,7 +143,7 @@ describe('spell display formatters', () => {
 
 - [ ] **Step 3: Run the test**
 
-Run: `npm test -- app/components/wiki/spells/spellFormat.test.ts`
+Run: `npm test -- tests/components/wiki/spells/spellFormat.test.ts`
 Expected: PASS (4 tests).
 
 - [ ] **Step 4: Write `app/components/wiki/spells/SpellCard.tsx`**
@@ -218,24 +223,25 @@ Run: `npm run typecheck && npm run lint`
 Expected: clean.
 
 ```bash
-git add app/components/wiki/spells/spellFormat.ts app/components/wiki/spells/spellFormat.test.ts app/components/wiki/spells/SpellCard.tsx
+git add app/components/wiki/spells/spellFormat.ts tests/components/wiki/spells/spellFormat.test.ts app/components/wiki/spells/SpellCard.tsx
 git commit -m "feat(spells): add display formatters and SpellCard"
 ```
 
 ---
 
-## Task 7: SpellWindow (display card) + SpellViewModal + SpellWindowWrapper
+## Task 7: SpellWindow (display card) + SpellViewModal
 
 **Files:**
 
 - Create: `app/components/wiki/spells/SpellWindow.tsx`
 - Create: `app/components/wiki/spells/SpellViewModal.tsx`
-- Create: `app/components/wiki/spells/SpellWindowWrapper.tsx`
 
 **Interfaces:**
 
 - Consumes: `useSpell` (Task 5), formatters (Task 6), `formatSpellLevel`/`formatSchool` (Task 1).
-- Produces: `SpellWindow` (`{ spell: SpellData, onEdit?: () => void }`), `SpellViewModal` (`{ isOpen, onClose, spellId, campaignId }`), `SpellWindowWrapper` + `EditSpellModalWrapper`.
+- Produces: `SpellWindow` (`{ spell: SpellData, onEdit?: () => void }`), `SpellViewModal` (`{ isOpen, onClose, spellId, campaignId }`).
+
+> Note: `SpellWindowWrapper`/`EditSpellModalWrapper` (GM-screen embedding) are **out of scope for Phase 1** — nothing consumes them here (GM-screen spell embedding is deferred with the tabletop work). Do not create them; that also avoids an unused file importing `SpellModal` (Task 10).
 
 - [ ] **Step 1: Write `app/components/wiki/spells/SpellWindow.tsx`**
 
@@ -446,64 +452,14 @@ export function SpellViewModal({ isOpen, onClose, spellId, campaignId }: SpellVi
 }
 ```
 
-- [ ] **Step 3: Write `app/components/wiki/spells/SpellWindowWrapper.tsx`**
+- [ ] **Step 3: Typecheck**
 
-```tsx
-import { SpellWindow } from './SpellWindow';
-import { SpellModal } from './SpellModal';
-import { useSpell } from '~/hooks/useSpells';
+Run: `npm run typecheck` → clean. (`SpellWindow` and `SpellViewModal` only depend on Task 5/6 which are merged, so this compiles cleanly with no deferral.)
 
-export function EditSpellModalWrapper({
-  campaignId,
-  spellId,
-  onClose,
-}: {
-  campaignId: string;
-  spellId: string;
-  onClose: () => void;
-}) {
-  return <SpellModal isOpen onClose={onClose} campaignId={campaignId} spellId={spellId} />;
-}
-
-export function SpellWindowWrapper({
-  spellId,
-  campaignId,
-  onEdit,
-}: {
-  spellId: string;
-  campaignId: string;
-  onEdit: () => void;
-}) {
-  const { spell, isLoading } = useSpell(spellId, campaignId);
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-xs text-slate-500 animate-pulse">Loading spell...</p>
-      </div>
-    );
-  }
-  if (!spell) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <p className="text-xs text-slate-500">Spell not found</p>
-      </div>
-    );
-  }
-  return <SpellWindow spell={spell} onEdit={onEdit} />;
-}
-```
-
-> Note: `SpellWindowWrapper.tsx` imports `SpellModal` (Task 10). Implement Tasks 8–10 before typechecking this file, or temporarily stub the import. Recommended order: do Tasks 8, 9, 10, then 7’s wrapper compiles.
-
-- [ ] **Step 4: Defer typecheck of the wrapper**
-
-Typecheck `SpellWindow` + `SpellViewModal` now by temporarily commenting the `SpellModal` import and `EditSpellModalWrapper` body; restore after Task 10. Run: `npm run typecheck` → clean.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add app/components/wiki/spells/SpellWindow.tsx app/components/wiki/spells/SpellViewModal.tsx app/components/wiki/spells/SpellWindowWrapper.tsx
+git add app/components/wiki/spells/SpellWindow.tsx app/components/wiki/spells/SpellViewModal.tsx
 git commit -m "feat(spells): add SpellWindow display card and view modal"
 ```
 
@@ -811,7 +767,7 @@ git commit -m "feat(spells): add modifiers/conditions/higher-levels sub-editors"
 **Files:**
 
 - Create: `app/components/wiki/spells/spellForm.ts` (form state type + empty default + `spellToForm` / `formToInput`)
-- Create: `app/components/wiki/spells/spellForm.test.ts`
+- Create: `tests/components/wiki/spells/spellForm.test.ts` (tests live under `tests/`, `~/` imports)
 - Create: `app/components/wiki/spells/SpellBasicInfoSection.tsx`
 - Create: `app/components/wiki/spells/SpellAdditionalInfoSection.tsx`
 
@@ -1016,11 +972,11 @@ export function formToInput(form: SpellForm, campaignId: string, id?: string) {
 }
 ```
 
-- [ ] **Step 2: Write `app/components/wiki/spells/spellForm.test.ts`**
+- [ ] **Step 2: Write `tests/components/wiki/spells/spellForm.test.ts`**
 
 ```ts
 import { describe, it, expect } from 'vitest';
-import { EMPTY_SPELL_FORM, formToInput, spellToForm } from './spellForm';
+import { EMPTY_SPELL_FORM, formToInput, spellToForm } from '~/components/wiki/spells/spellForm';
 import { createSpellSchema, updateSpellSchema } from '~/types/schemas/spells';
 import type { SpellData } from '~/types/spell';
 
@@ -1084,7 +1040,7 @@ describe('formToInput', () => {
 
 - [ ] **Step 3: Run the test**
 
-Run: `npm test -- app/components/wiki/spells/spellForm.test.ts`
+Run: `npm test -- tests/components/wiki/spells/spellForm.test.ts`
 Expected: PASS (3 tests).
 
 - [ ] **Step 4: Write `app/components/wiki/spells/SpellBasicInfoSection.tsx`**
@@ -1411,7 +1367,7 @@ Run: `npm run typecheck && npm run lint`
 Expected: clean.
 
 ```bash
-git add app/components/wiki/spells/spellForm.ts app/components/wiki/spells/spellForm.test.ts app/components/wiki/spells/SpellBasicInfoSection.tsx app/components/wiki/spells/SpellAdditionalInfoSection.tsx
+git add app/components/wiki/spells/spellForm.ts tests/components/wiki/spells/spellForm.test.ts app/components/wiki/spells/SpellBasicInfoSection.tsx app/components/wiki/spells/SpellAdditionalInfoSection.tsx
 git commit -m "feat(spells): add spell form model and basic/additional form sections"
 ```
 
@@ -1690,15 +1646,13 @@ export function SpellModal({ isOpen, onClose, campaignId, spellId }: SpellModalP
 }
 ```
 
-- [ ] **Step 2: Restore the `SpellWindowWrapper` import from Task 7** (uncomment `SpellModal` import and `EditSpellModalWrapper` body).
-
-- [ ] **Step 3: Typecheck, lint, commit**
+- [ ] **Step 2: Typecheck, lint, commit**
 
 Run: `npm run typecheck && npm run lint`
 Expected: clean.
 
 ```bash
-git add app/components/wiki/spells/SpellModal.tsx app/components/wiki/spells/SpellWindowWrapper.tsx
+git add app/components/wiki/spells/SpellModal.tsx
 git commit -m "feat(spells): add SpellModal with full parity form and duplicate action"
 ```
 
