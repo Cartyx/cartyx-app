@@ -21,9 +21,19 @@ describe('applyToolClick', () => {
     expect(applyToolClick(s, 'ruler')).toEqual(idle);
   });
 
-  it('switching modal tools swaps the modal window', () => {
+  it('switching modal tools keeps both windows open, moving only the active mode', () => {
     const s = applyToolClick(idle, 'text');
-    expect(applyToolClick(s, 'ruler')).toEqual({ activeTool: 'ruler', openWindows: ['ruler'] });
+    expect(applyToolClick(s, 'ruler')).toEqual({
+      activeTool: 'ruler',
+      openWindows: ['text', 'ruler'],
+    });
+  });
+
+  it('lets every modal window stay open at once across mode switches', () => {
+    let s = applyToolClick(idle, 'drawing');
+    s = applyToolClick(s, 'text');
+    s = applyToolClick(s, 'ruler');
+    expect(s).toEqual({ activeTool: 'ruler', openWindows: ['drawing', 'text', 'ruler'] });
   });
 
   it('dice toggles its window without changing the active tool', () => {
@@ -37,9 +47,12 @@ describe('applyToolClick', () => {
     expect(s).toEqual({ activeTool: 'pointer', openWindows: ['dice', 'layer'] });
   });
 
-  it('selecting pointer/hand closes the modal window but keeps dice/layer open', () => {
+  it('selecting pointer/hand keeps all windows open, only changing the active tool', () => {
     const s = applyToolClick(applyToolClick(idle, 'dice'), 'text');
-    expect(applyToolClick(s, 'hand')).toEqual({ activeTool: 'hand', openWindows: ['dice'] });
+    expect(applyToolClick(s, 'hand')).toEqual({
+      activeTool: 'hand',
+      openWindows: ['dice', 'text'],
+    });
   });
 });
 

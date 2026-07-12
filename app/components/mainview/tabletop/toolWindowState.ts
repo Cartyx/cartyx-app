@@ -21,10 +21,18 @@ export interface ToolUiState {
   openWindows: ToolWindowId[];
 }
 
-const keepWindowOnly = (open: ToolWindowId[]) =>
-  open.filter((id) => id === 'dice' || id === 'layer');
+const addWindow = (open: ToolWindowId[], id: ToolWindowId) =>
+  open.includes(id) ? open : [...open, id];
 
-/** Toolbar icon click → next {activeTool, openWindows}. Pure. */
+/**
+ * Toolbar icon click → next {activeTool, openWindows}. Pure.
+ *
+ * Window open/closed state is independent of the active map mode: every tool
+ * window can be open at once. Only `activeTool` is single-valued — you can be
+ * drawing OR measuring OR typing at one moment, but each window persists
+ * across mode switches. Windows close only via their X (applyWindowClose) or
+ * by re-clicking the tool that is currently active.
+ */
 export function applyToolClick(state: ToolUiState, clicked: ToolType): ToolUiState {
   if (WINDOW_ONLY_TOOLS.has(clicked)) {
     const id = clicked as ToolWindowId;
@@ -36,13 +44,14 @@ export function applyToolClick(state: ToolUiState, clicked: ToolType): ToolUiSta
   if (MODAL_TOOLS.has(clicked)) {
     const id = clicked as ToolWindowId;
     if (state.activeTool === clicked) {
-      // Toggle off: close the window, revert to pointer.
+      // Toggle off: close this window, revert to pointer. Other windows stay.
       return { activeTool: 'pointer', openWindows: state.openWindows.filter((w) => w !== id) };
     }
-    return { activeTool: clicked, openWindows: [...keepWindowOnly(state.openWindows), id] };
+    // Activate this mode and open its window; all other windows stay open.
+    return { activeTool: clicked, openWindows: addWindow(state.openWindows, id) };
   }
-  // pointer / hand / stamp — plain mode switch; modal windows follow their mode.
-  return { activeTool: clicked, openWindows: keepWindowOnly(state.openWindows) };
+  // pointer / hand / stamp — plain mode switch; all open windows persist.
+  return { activeTool: clicked, openWindows: state.openWindows };
 }
 
 /** Window X (or programmatic close) → next state. Pure. */

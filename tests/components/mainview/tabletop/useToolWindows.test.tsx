@@ -54,6 +54,31 @@ describe('useToolWindows', () => {
     expect(win.style.top).toBe('12px');
   });
 
+  it('remembers a dragged position and restores it when the window is reopened', async () => {
+    const { rerender } = render(<Harness open={['dice']} onClose={() => {}} />);
+    const win = screen.getByTestId('tool-window-dice');
+    await waitFor(() => expect(win.style.visibility).toBe('visible'));
+
+    // Drag the header away from the origin slot.
+    fireEvent.pointerDown(screen.getByTestId('tool-window-dice-header'));
+    fireEvent.pointerMove(window, { clientX: 140, clientY: 90 });
+    fireEvent.pointerUp(window);
+
+    const movedLeft = win.style.left;
+    const movedTop = win.style.top;
+    expect(movedLeft).not.toBe('12px'); // actually moved off the origin
+
+    // Close, then reopen — it should return to where it was dragged, not
+    // re-cascade to the origin.
+    rerender(<Harness open={[]} onClose={() => {}} />);
+    rerender(<Harness open={['dice']} onClose={() => {}} />);
+
+    const reopened = screen.getByTestId('tool-window-dice');
+    await waitFor(() => expect(reopened.style.visibility).toBe('visible'));
+    expect(reopened.style.left).toBe(movedLeft);
+    expect(reopened.style.top).toBe(movedTop);
+  });
+
   it('routes the close button to onCloseWindow', async () => {
     const onClose = vi.fn();
     render(<Harness open={['dice']} onClose={onClose} />);

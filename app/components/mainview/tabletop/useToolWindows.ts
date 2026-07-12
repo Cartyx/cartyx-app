@@ -71,16 +71,16 @@ export function useToolWindows(
     };
   }, [containerRef]);
 
-  // Sync geometry entries with the open set: new ids start unplaced; closed
-  // ids are dropped so a reopened window is re-placed fresh.
+  // Sync geometry entries with the open set: a never-before-seen id starts
+  // unplaced (auto-cascaded on first open). Geometry is *retained* when a
+  // window closes, so reopening it restores the last position the user
+  // dragged it to rather than re-placing from scratch.
   useEffect(() => {
     setGeoms((prev) => {
-      const next: typeof prev = {};
-      let changed = Object.keys(prev).length !== openWindows.length;
+      let changed = false;
+      const next = { ...prev };
       for (const id of openWindows) {
-        if (prev[id]) {
-          next[id] = prev[id];
-        } else {
+        if (!next[id]) {
           next[id] = {
             x: TOOL_WINDOW_MARGIN,
             y: TOOL_WINDOW_MARGIN,
