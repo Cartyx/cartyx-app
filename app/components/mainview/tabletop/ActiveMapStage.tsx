@@ -17,6 +17,7 @@ import {
   Pencil,
   Ruler as RulerIcon,
   Layers as LayersIcon,
+  Circle as CircleIcon,
   Trash2,
 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -42,10 +43,21 @@ import {
   applyDrawingRemoveFromCache,
   applyDrawingsClearToCache,
 } from '~/hooks/useMapDrawings';
+import {
+  useMapAoE,
+  useMapAoEMutations,
+  applyAoeAddToCache,
+  applyAoeRemoveFromCache,
+  applyAoeClearToCache,
+} from '~/hooks/useMapAoE';
 import { MapToken } from './MapToken';
 import { LayersPanel } from './LayersPanel';
 import { RulerSettingsPanel } from './RulerSettingsPanel';
 import { useRulerTool } from './useRulerTool';
+import { useAoeTool } from './useAoeTool';
+import { MapAoELayer } from './MapAoELayer';
+import { AoeSettingsPanel } from './AoeSettingsPanel';
+import type { AoeInput } from './aoeGeometry';
 import { RulerOverlay } from './RulerOverlay';
 import { ToolWindow } from './ToolWindow';
 import { TOOL_WINDOW_META, type ToolWindowId } from './toolWindowState';
@@ -69,6 +81,7 @@ import {
   movedGeometry,
 } from './ActiveMapStage.geometry';
 import type { MapLayerId } from '~/types/mapLayer';
+import type { AoeShape, MapAoEData } from '~/types/mapAoe';
 import type { TabletopMapMessage } from '~/hooks/useTabletopMapParty';
 
 interface ActiveMapStageProps {
@@ -85,6 +98,8 @@ interface ActiveMapStageProps {
   windowManager: ToolWindowManager;
   /** Whether the measurement (ruler) tool is active. */
   rulerActive?: boolean;
+  /** Whether the Spell AoE tool is active (click to place a template). */
+  aoeActive?: boolean;
   /** Whether the text tool is active (click to write, click text to select). */
   textActive?: boolean;
   /** Whether the drawing tool is active (draw shapes / erase on the map). */
@@ -125,6 +140,7 @@ export function ActiveMapStage({
   openToolWindows,
   windowManager,
   rulerActive = false,
+  aoeActive = false,
   textActive = false,
   drawingActive = false,
   pointerActive = false,
@@ -204,6 +220,17 @@ export function ActiveMapStage({
     width: number;
     height: number;
   } | null>(null);
+
+  // Spell AoE templates — shared, persisted, multiplayer. Any member can place a
+  // template; deletion is gated to the author or a GM (server-enforced). The tool
+  // settings (shape/size/width/color) are the local "brush" for this client.
+  const { data: aoes = [] } = useMapAoE(campaignId, map.id);
+  const aoeMutations = useMapAoEMutations(campaignId, map.id);
+  const [aoeShape, setAoeShape] = useState<AoeShape>('sphere');
+  const [aoeSizeFt, setAoeSizeFt] = useState(20);
+  const [aoeWidthFt, setAoeWidthFt] = useState(5);
+  const [aoeColor, setAoeColor] = useState('#3b82f6');
+  const [selectedAoeId, setSelectedAoeId] = useState<string | null>(null);
 
   // Layers — GM-local working layer + per-layer visibility (GM's own view;
   // players never gain this panel so it stays empty for them).
@@ -310,6 +337,18 @@ export function ActiveMapStage({
   // drawing mutation is GM-only. So only a GM may modify any drawing. Kept as a
   // per-drawing predicate to match the MapDrawingLayer `canModify` prop shape.
   const canModifyDrawing = useCallback((_d: MapDrawingData) => isGM, [isGM]);
+
+  // A player may delete only their own AoE template; a GM may delete anyone's.
+  // The server enforces this; the client mirrors it for affordances.
+  const canModifyAoe = useCallback(
+    (a: MapAoEData) => isGM || (currentUserId != null && a.createdBy === currentUserId),
+    [isGM, currentUserId]
+  );
+
+  // Clear the AoE selection when the tool is deselected.
+  useEffect(() => {
+    if (!aoeActive) setSelectedAoeId(null);
+  }, [aoeActive]);
 
   // Clear the drawing preview + selection when the drawing tool is deselected.
   useEffect(() => {
@@ -539,6 +578,83 @@ export function ActiveMapStage({
     imageHeight: map.imageHeight,
   });
 
+  // Spell AoE tool — a ruler-style placement state machine. Committing a
+  // template persists it (optimistically added to the cache) and broadcasts to
+  // peers. Like the ruler, it short-circuits the stage pointer handlers below.
+  const commitAoe = useCallback(
+    (committed: AoeInput & { color: string }) => {
+      aoeMutations.create.mutate(committed, {
+        onSuccess: (res) => {
+          applyAoeAddToCache(qc, campaignId, map.id, res.aoe);
+          onBroadcast({ type: 'aoe:added', mapId: map.id, aoe: res.aoe });
+        },
+      });
+    },
+    [aoeMutations.create, qc, campaignId, map.id, onBroadcast]
+  );
+
+  const aoe = useAoeTool({
+    aoeActive,
+    shape: aoeShape,
+    sizeFt: aoeSizeFt,
+    widthFt: aoeWidthFt,
+    color: aoeColor,
+    domToImage,
+    pixelsPerSquare: map.scale.pixelsPerSquare,
+    feetPerSquare: map.scale.feetPerSquare,
+    imageWidth: map.imageWidth,
+    imageHeight: map.imageHeight,
+    onCommit: commitAoe,
+  });
+
+  const removeAoe = useCallback(
+    (aoeId: string) => {
+      applyAoeRemoveFromCache(qc, campaignId, map.id, aoeId);
+      aoeMutations.remove.mutate(aoeId, {
+        onSuccess: () => onBroadcast({ type: 'aoe:removed', mapId: map.id, aoeId }),
+      });
+      setSelectedAoeId((cur) => (cur === aoeId ? null : cur));
+    },
+    [qc, campaignId, map.id, aoeMutations.remove, onBroadcast]
+  );
+
+  const clearAllAoe = useCallback(() => {
+    if (!isGM) return;
+    applyAoeClearToCache(qc, campaignId, map.id);
+    setSelectedAoeId(null);
+    aoeMutations.clear.mutate(undefined, {
+      onSuccess: () => onBroadcast({ type: 'aoe:cleared', mapId: map.id }),
+    });
+  }, [isGM, qc, campaignId, map.id, aoeMutations.clear, onBroadcast]);
+
+  // Keyboard: Delete/Backspace removes the selected AoE (permission-gated); Esc
+  // clears the selection. Not GM-gated — players can delete their own template.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tgt = e.target as HTMLElement | null;
+      if (tgt) {
+        const tag = tgt.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tgt.isContentEditable)
+          return;
+      }
+      if (e.key === 'Escape') {
+        if (selectedAoeId) {
+          e.preventDefault();
+          setSelectedAoeId(null);
+        }
+        return;
+      }
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (!selectedAoeId) return;
+      const a = aoes.find((x) => x.id === selectedAoeId);
+      if (!a || !canModifyAoe(a)) return;
+      e.preventDefault();
+      removeAoe(a.id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedAoeId, aoes, canModifyAoe, removeAoe]);
+
   // -------------------------------------------------------------------------
   // Pointer drag — either pans the viewport (drag on background) or moves a
   // token (drag started on a token). The MapToken component reports drag
@@ -635,6 +751,12 @@ export function ActiveMapStage({
     const panOverride = middlePan || spaceHeld;
 
     if (!panOverride) {
+      // Spell AoE tool: a click places/aims a template. Fully owns the pointer
+      // while active (no pan/select), like the ruler.
+      if (aoeActive) {
+        aoe.onPointerDown(e);
+        return;
+      }
       // Ruler tool: a background click drops/relocates the measurement anchor
       // (clicks on tokens are handled by MapToken). No pan/select while measuring.
       if (rulerActive) {
@@ -972,6 +1094,12 @@ export function ActiveMapStage({
       ruler.onPointerMove(e);
       return;
     }
+    // Spell AoE tool: aim a directional template's second point as the cursor
+    // moves (unless a pan override is in progress).
+    if (aoeActive && d.mode !== 'pan') {
+      aoe.onPointerMove(e);
+      return;
+    }
     if (d.mode === 'idle') return;
     if (d.mode === 'pan') {
       setViewport({
@@ -1280,7 +1408,7 @@ export function ActiveMapStage({
       ? 'cursor-grabbing'
       : handActive || spaceHeld
         ? 'cursor-grab'
-        : rulerActive || drawingActive
+        : rulerActive || drawingActive || aoeActive
           ? 'cursor-crosshair'
           : textActive
             ? 'cursor-text'
@@ -1305,6 +1433,13 @@ export function ActiveMapStage({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onDoubleClick={(e) => {
+        // Spell AoE tool: a double-click cancels an in-progress directional
+        // placement (mirrors the ruler's reset).
+        if (aoeActive) {
+          e.preventDefault();
+          aoe.reset();
+          return;
+        }
         // Ruler tool: a double-click resets the measurement — the tool stops
         // drawing until the next click (also clears a multi-point polyline).
         if (!rulerActive) return;
@@ -1356,6 +1491,20 @@ export function ActiveMapStage({
           data-testid="map-grid-overlay"
         />
       )}
+
+      {/* Spell AoE templates (shared) — one SVG overlay above the map/grid but
+          BENEATH drawings/tokens, so the tint reads as a floor effect. */}
+      <MapAoELayer
+        visible={!spellFxHidden}
+        aoes={aoes}
+        preview={aoe.preview}
+        effectiveScale={effectiveScale}
+        imageOffsetX={imageOffsetX}
+        imageOffsetY={imageOffsetY}
+        selectedId={selectedAoeId}
+        onSelect={setSelectedAoeId}
+        canModify={canModifyAoe}
+      />
 
       {/* Drawing layer (shared) — one SVG overlay above the map/grid, plus the
           selected drawing's bounding box + corner resize handle. */}
@@ -1538,6 +1687,27 @@ export function ActiveMapStage({
             onChangeColor={applyTextColor}
             fontSize={textFontSize}
             onChangeFontSize={applyTextFontSize}
+          />
+        </ToolWindow>
+      )}
+
+      {openToolWindows.includes('aoe') && (
+        <ToolWindow
+          title={TOOL_WINDOW_META.aoe.title}
+          icon={CircleIcon}
+          {...windowManager.getWindowProps('aoe')}
+        >
+          <AoeSettingsPanel
+            shape={aoeShape}
+            onShape={setAoeShape}
+            sizeFt={aoeSizeFt}
+            onSizeFt={setAoeSizeFt}
+            widthFt={aoeWidthFt}
+            onWidthFt={setAoeWidthFt}
+            color={aoeColor}
+            onColor={setAoeColor}
+            onClearAll={clearAllAoe}
+            canClearAll={isGM}
           />
         </ToolWindow>
       )}
