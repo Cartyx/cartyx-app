@@ -79,14 +79,17 @@ const aoeData = z.object({
   shape: z.enum(['sphere', 'cone', 'cube', 'line', 'cylinder']),
   originX: num,
   originY: num,
-  sizePx: num.max(MAX_AOE_PX),
-  widthPx: num.max(MAX_AOE_PX).optional(),
+  // Match the create schema so a forged peer frame can't inject a degenerate
+  // template (negative/zero radius, non-hex color) even transiently.
+  sizePx: num.positive().max(MAX_AOE_PX),
+  widthPx: num.positive().max(MAX_AOE_PX).optional(),
   rotation: num,
-  color: z.string(),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
   label: z.string().max(60).optional(),
   createdBy: z.string(),
-  // `.default('')` tolerates older senders that predate this field.
-  createdByName: z.string().default(''),
+  // `.default('')` tolerates older senders that predate this field; a generous
+  // cap blocks a giant-text abuse without rejecting legitimate long names.
+  createdByName: z.string().max(200).default(''),
   createdAt: isoDate,
   updatedAt: isoDate,
 });

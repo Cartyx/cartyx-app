@@ -159,9 +159,25 @@ just above the grid, below `MapDrawingLayer`/tokens).
   `aoe:cleared`) — **GM-only** (shown only to the GM; server rejects non-GM).
 - Templates persist on the map until removed (they don't auto-expire).
 
-## 7. Out of scope (this phase)
+## 7. Delivered beyond the original design (follow-up requests)
 
-- Drag-to-resize / drag-to-move existing templates (place + delete only).
+The following were added during implementation, on top of the original
+"place + delete only" scope, and are part of the shipped feature:
+
+- **Drag-to-move** existing templates with the pointer tool (owner/GM), exactly
+  like map text: optimistic + throttled `aoe:moved` broadcast, `moveMapAoE`
+  persist with a `final` broadcast on release.
+- **Placer name + optional label** drawn in the effect: the caster's name is
+  denormalized onto the doc at create time (`createdByName`, server-set); an
+  optional user `label` (e.g. the spell name) can be entered in the panel. Both
+  render as small, semi-transparent, outlined text anchored at the shape's
+  **centroid** (so a cone/line label doesn't hide the caster's token at the apex).
+- **Per-viewer visibility toggle** — an always-available "Show spell effects"
+  control (not GM-gated) that hides/shows AoE for that viewer only.
+
+## Out of scope (this phase)
+
+- Drag-to-**resize** existing templates (move is supported; resize is not).
 - Grid snapping of the origin.
 - Auto-fill from a specific spell's `areaOfEffect`/`range` ("Show on map from a
   spell" — a later enhancement; the data is already stored on spells).

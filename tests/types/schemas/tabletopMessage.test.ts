@@ -65,7 +65,7 @@ describe('parseTabletopMapMessage', () => {
     originY: 5,
     sizePx: 100,
     rotation: 0,
-    color: '#f00',
+    color: '#ff0000',
     label: 'Fireball',
     createdBy: 'u1',
     createdByName: 'Ada Lovelace',
@@ -128,6 +128,17 @@ describe('parseTabletopMapMessage', () => {
       parseTabletopMapMessage({ type: 'aoe:removed', mapId: 'm1', aoeId: 'a1' })
     ).not.toBeNull();
     expect(parseTabletopMapMessage({ type: 'aoe:cleared', mapId: 'm1' })).not.toBeNull();
+  });
+
+  it('rejects an aoe:added frame with a degenerate size or non-hex color', () => {
+    // Non-positive radius — a forged frame can't inject a zero/negative shape.
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: { ...fullAoe, sizePx: 0 } })
+    ).toBeNull();
+    // Non-hex color must be rejected (matches the create schema).
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: { ...fullAoe, color: 'red' } })
+    ).toBeNull();
   });
 
   it('accepts a well-formed aoe:moved frame', () => {
