@@ -7,6 +7,7 @@ import { getMe } from '~/server/functions/rpc';
 import { useCampaign } from '~/hooks/useCampaigns';
 import { useActivePlayerContext } from '~/providers/ActivePlayerProvider';
 import { CampaignHeader } from '~/components/mainview/CampaignHeader';
+import { Toast } from '~/components/Toast';
 import { DashboardView } from '~/components/mainview/DashboardView';
 import { MainView } from '~/components/mainview/MainView';
 import { TabletopView } from '~/components/mainview/TabletopView';
@@ -219,6 +220,7 @@ function PlayPageContent() {
           )}
         </MainView>
       </div>
+      <Toast />
     </div>
   );
 }

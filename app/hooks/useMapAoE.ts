@@ -1,6 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { captureException } from '~/providers/TelemetryProvider';
+import { showToast } from '~/components/Toast';
 import { queryKeys } from '~/utils/queryKeys';
 import type { MapAoEData, AoeShape } from '~/types/mapAoe';
 import {
@@ -69,11 +70,12 @@ export function useMapAoEMutations(campaignId: string, mapId: string) {
   const qc = useQueryClient();
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: queryKeys.mapAoe.list(campaignId, mapId) });
-  // On failure, reconcile the optimistic cache with server truth (a removed /
-  // moved / cleared template reappears / reverts) instead of leaving a lie —
-  // mirrors useMapDrawings.
-  const onError = (action: string) => (e: unknown) => {
+  // On failure: tell the user, log it, and reconcile the optimistic cache with
+  // server truth (a removed / moved / cleared template reappears / reverts)
+  // instead of leaving a lie — mirrors useMapDrawings.
+  const onError = (action: string, userMessage: string) => (e: unknown) => {
     captureException(e, { action });
+    showToast(userMessage, 'error');
     invalidate();
   };
 
@@ -91,7 +93,10 @@ export function useMapAoEMutations(campaignId: string, mapId: string) {
       return await createMapAoEFn({ data: { campaignId, mapId, ...input } });
     },
     onSuccess: invalidate,
-    onError: onError('useMapAoEMutations.create'),
+    onError: onError(
+      'useMapAoEMutations.create',
+      'Couldn’t place the spell effect. Please try again.'
+    ),
   });
 
   const remove = useMutation({
@@ -99,7 +104,10 @@ export function useMapAoEMutations(campaignId: string, mapId: string) {
       return await removeMapAoEFn({ data: { campaignId, mapId, id: aoeId } });
     },
     onSuccess: invalidate,
-    onError: onError('useMapAoEMutations.remove'),
+    onError: onError(
+      'useMapAoEMutations.remove',
+      'Couldn’t delete the spell effect. Please try again.'
+    ),
   });
 
   const clear = useMutation({
@@ -107,7 +115,10 @@ export function useMapAoEMutations(campaignId: string, mapId: string) {
       return await clearMapAoEFn({ data: { campaignId, mapId } });
     },
     onSuccess: invalidate,
-    onError: onError('useMapAoEMutations.clear'),
+    onError: onError(
+      'useMapAoEMutations.clear',
+      'Couldn’t clear the spell effects. Please try again.'
+    ),
   });
 
   const move = useMutation({
@@ -123,7 +134,10 @@ export function useMapAoEMutations(campaignId: string, mapId: string) {
       });
     },
     onSuccess: invalidate,
-    onError: onError('useMapAoEMutations.move'),
+    onError: onError(
+      'useMapAoEMutations.move',
+      'Couldn’t move the spell effect. Please try again.'
+    ),
   });
 
   return { create, remove, clear, move };
