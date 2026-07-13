@@ -206,24 +206,42 @@ export function OrganizationModal({
 
               {/* Visibility toggle */}
               <div className="flex items-center gap-4">
-                <button
-                  type="button"
-                  onClick={() => setIsPublic(false)}
-                  disabled={isDisabled}
-                  className={`h-8 px-3 rounded-lg border flex items-center gap-2 transition-all text-xs ${!isPublic ? 'bg-blue-600/10 border-blue-500/50 text-blue-300' : 'bg-white/[0.03] border-white/[0.07] text-slate-500 hover:border-white/20'}`}
+                <label
+                  className={`flex items-center gap-2 ${isDisabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
                 >
-                  <Lock className="h-3 w-3" />
-                  <span className="font-bold">Private (GM only)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsPublic(true)}
-                  disabled={isDisabled}
-                  className={`h-8 px-3 rounded-lg border flex items-center gap-2 transition-all text-xs ${isPublic ? 'bg-emerald-600/10 border-emerald-500/50 text-emerald-300' : 'bg-white/[0.03] border-white/[0.07] text-slate-500 hover:border-white/20'}`}
+                  <input
+                    type="radio"
+                    name="org-visibility"
+                    checked={!isPublic}
+                    onChange={() => setIsPublic(false)}
+                    disabled={isDisabled}
+                    className="sr-only"
+                  />
+                  <div
+                    className={`h-8 px-3 rounded-lg border flex items-center gap-2 transition-all text-xs ${!isPublic ? 'bg-blue-600/10 border-blue-500/50 text-blue-300' : 'bg-white/[0.03] border-white/[0.07] text-slate-500 hover:border-white/20'}`}
+                  >
+                    <Lock className="h-3 w-3" />
+                    <span className="font-bold">Private (GM only)</span>
+                  </div>
+                </label>
+                <label
+                  className={`flex items-center gap-2 ${isDisabled ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
                 >
-                  <Globe className="h-3 w-3" />
-                  <span className="font-bold">Public</span>
-                </button>
+                  <input
+                    type="radio"
+                    name="org-visibility"
+                    checked={isPublic}
+                    onChange={() => setIsPublic(true)}
+                    disabled={isDisabled}
+                    className="sr-only"
+                  />
+                  <div
+                    className={`h-8 px-3 rounded-lg border flex items-center gap-2 transition-all text-xs ${isPublic ? 'bg-emerald-600/10 border-emerald-500/50 text-emerald-300' : 'bg-white/[0.03] border-white/[0.07] text-slate-500 hover:border-white/20'}`}
+                  >
+                    <Globe className="h-3 w-3" />
+                    <span className="font-bold">Public</span>
+                  </div>
+                </label>
               </div>
 
               <MarkdownEditor
