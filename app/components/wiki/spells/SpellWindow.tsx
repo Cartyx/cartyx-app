@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Pencil } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -12,6 +13,7 @@ import {
   formatAttackSave,
   formatDamageEffect,
 } from './spellFormat';
+import { scaledDice, rollSpellModifier } from './spellDice';
 
 function Cell({ label, value }: { label: string; value: string }) {
   return (
@@ -30,6 +32,16 @@ interface SpellWindowProps {
 }
 
 export function SpellWindow({ spell, onEdit }: SpellWindowProps) {
+  const rollable = spell.modifiers.filter((m) => m.dice);
+  const scaling = spell.higherLevelScaling;
+  const [castLevel, setCastLevel] = useState(scaling.type === 'character-level' ? 1 : spell.level);
+  const [crit, setCrit] = useState(false);
+
+  const levelOptions =
+    scaling.type === 'character-level'
+      ? Array.from({ length: 20 }, (_, i) => i + 1)
+      : Array.from({ length: 10 - spell.level }, (_, i) => spell.level + i);
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-start justify-between gap-2 px-4 pt-3 shrink-0">
@@ -62,6 +74,58 @@ export function SpellWindow({ spell, onEdit }: SpellWindowProps) {
         <Cell label="Attack/Save" value={formatAttackSave(spell.attackSave)} />
         <Cell label="Damage/Effect" value={formatDamageEffect(spell)} />
       </div>
+
+      {rollable.length > 0 && (
+        <div className="px-4 py-3 border-b border-white/[0.05] shrink-0 space-y-2">
+          <div className="flex items-center gap-3 flex-wrap">
+            {scaling.enabled && (
+              <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-400">
+                {scaling.type === 'character-level' ? 'Character level' : 'Slot level'}
+                <select
+                  value={castLevel}
+                  onChange={(e) => setCastLevel(Number(e.target.value))}
+                  className="bg-[#080A12] border border-white/[0.07] rounded px-2 py-1 text-xs text-white"
+                >
+                  {levelOptions.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-400">
+              <input
+                type="checkbox"
+                checked={crit}
+                onChange={(e) => setCrit(e.target.checked)}
+                className="h-3.5 w-3.5 accent-blue-600"
+              />
+              Crit
+            </label>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {rollable.map((m) => {
+              const dice = scaledDice(m, spell, castLevel);
+              if (!dice) return null;
+              const label = `${crit ? dice.count * 2 : dice.count}d${dice.sides}${
+                m.damageType ? ` ${m.damageType}` : m.type === 'healing' ? ' healing' : ''
+              }`;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => rollSpellModifier({ spell, modifier: m, castLevel, crit })}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-300 text-xs font-semibold hover:bg-blue-500/20 transition-colors"
+                  data-testid={`roll-${m.id}`}
+                >
+                  <span aria-hidden>⚄</span> {label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-4 min-h-0">
         {spell.components.material && spell.components.materialDescription && (
