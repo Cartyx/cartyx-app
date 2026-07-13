@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { SPELL_SCHOOLS, formatSpellLevel, formatSchool } from './spells';
+import { SPELL_SCHOOLS, formatSpellLevel, formatSchool } from '~/constants/spells';
 
 describe('spell constants', () => {
   it('has the eight schools of magic', () => {
