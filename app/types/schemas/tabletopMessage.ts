@@ -68,6 +68,22 @@ const drawingData = z.object({
   updatedAt: isoDate,
 });
 
+const aoeData = z.object({
+  id,
+  mapId: id,
+  campaignId: id,
+  shape: z.enum(['sphere', 'cone', 'cube', 'line', 'cylinder']),
+  originX: num,
+  originY: num,
+  sizePx: num,
+  widthPx: num.optional(),
+  rotation: num,
+  color: z.string(),
+  createdBy: z.string(),
+  createdAt: isoDate,
+  updatedAt: isoDate,
+});
+
 const messageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('map:active-changed'),
@@ -109,6 +125,9 @@ const messageSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('drawing:removed'), mapId: id, drawingId: id }),
   z.object({ type: z.literal('drawing:cleared'), mapId: id }),
+  z.object({ type: z.literal('aoe:added'), mapId: id, aoe: aoeData }),
+  z.object({ type: z.literal('aoe:removed'), mapId: id, aoeId: id }),
+  z.object({ type: z.literal('aoe:cleared'), mapId: id }),
 ]);
 
 /** Parse + validate a raw inbound frame. Returns null for malformed messages. */

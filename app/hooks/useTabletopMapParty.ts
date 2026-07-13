@@ -3,6 +3,7 @@ import usePartySocket from 'partysocket/react';
 import type { MapTokenData } from '~/types/mapToken';
 import type { MapTextData } from '~/types/mapText';
 import type { MapDrawingData } from '~/types/mapDrawing';
+import type { MapAoEData } from '~/types/mapAoe';
 import { parseTabletopMapMessage } from '~/types/schemas/tabletopMessage';
 
 const REALTIME_HOST = import.meta.env.VITE_PUBLIC_PARTYKIT_HOST ?? 'localhost:1999';
@@ -54,7 +55,12 @@ export type TabletopMapMessage =
       height: number;
     }
   | { type: 'drawing:removed'; mapId: string; drawingId: string }
-  | { type: 'drawing:cleared'; mapId: string };
+  | { type: 'drawing:cleared'; mapId: string }
+  // AoE templates are shared (visible to all viewers), unlike drawings which
+  // are GM-only — see useTabletopMapSync's inbound reducer.
+  | { type: 'aoe:added'; mapId: string; aoe: MapAoEData }
+  | { type: 'aoe:removed'; mapId: string; aoeId: string }
+  | { type: 'aoe:cleared'; mapId: string };
 
 /**
  * useTabletopMapParty — subscribes to the campaign's map party channel

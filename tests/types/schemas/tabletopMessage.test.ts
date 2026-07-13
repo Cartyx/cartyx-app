@@ -56,6 +56,20 @@ describe('parseTabletopMapMessage', () => {
     createdAt: '2026-06-15T00:00:00Z',
     updatedAt: '2026-06-15T00:00:00Z',
   };
+  const fullAoe = {
+    id: 'a1',
+    mapId: 'm1',
+    campaignId: 'c1',
+    shape: 'cone',
+    originX: 5,
+    originY: 5,
+    sizePx: 100,
+    rotation: 0,
+    color: '#f00',
+    createdBy: 'u1',
+    createdAt: '2026-06-15T00:00:00Z',
+    updatedAt: '2026-06-15T00:00:00Z',
+  };
 
   it('accepts entity-bearing frames carrying a fully-shaped payload', () => {
     expect(
@@ -80,6 +94,36 @@ describe('parseTabletopMapMessage', () => {
     expect(
       parseTabletopMapMessage({ type: 'drawing:added', mapId: 'm1', drawing: { id: 'd1' } })
     ).toBeNull();
+  });
+
+  it('accepts a well-formed aoe:added frame (shared, not GM-gated)', () => {
+    // AoE templates are broadcast to all viewers (like map text), unlike
+    // drawings which are dropped for non-GM receivers — see
+    // useTabletopMapSync's inbound reducer.
+    const msg = parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: fullAoe });
+    expect(msg).toMatchObject({ type: 'aoe:added', mapId: 'm1', aoe: fullAoe });
+  });
+
+  it('accepts aoe:removed and aoe:cleared frames', () => {
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:removed', mapId: 'm1', aoeId: 'a1' })
+    ).not.toBeNull();
+    expect(parseTabletopMapMessage({ type: 'aoe:cleared', mapId: 'm1' })).not.toBeNull();
+  });
+
+  it('rejects a malformed aoe:added frame', () => {
+    // Missing required fields (shape, sizePx, rotation, etc).
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: { id: 'a1' } })
+    ).toBeNull();
+    // Invalid shape enum value.
+    const badShape = { ...fullAoe, shape: 'triangle' };
+    expect(parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: badShape })).toBeNull();
+    // Non-finite originX.
+    const badOrigin = { ...fullAoe, originX: Infinity };
+    expect(parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: badOrigin })).toBeNull();
+    // Missing aoeId on aoe:removed.
+    expect(parseTabletopMapMessage({ type: 'aoe:removed', mapId: 'm1' })).toBeNull();
   });
 
   it('accepts map:active-changed with null mapId', () => {
