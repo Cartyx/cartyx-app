@@ -12,6 +12,7 @@ import {
   useUpdateCharacterRelationship,
   useRemoveCharacterRelationship,
 } from '~/hooks/useCharacters';
+import { MemberOrganizationsTab } from '~/components/shared/MemberOrganizationsTab';
 
 function getCropStyle(crop: PictureCrop): React.CSSProperties {
   const centerX = (crop.x + crop.width / 2) * 100;
@@ -91,6 +92,7 @@ export function CharacterWindow({ character, onEdit }: CharacterWindowProps) {
     { id: 'general', label: 'General' },
     { id: 'gmnotes', label: 'GM Notes', hidden: !character.canEdit },
     { id: 'relationships', label: 'Relationships' },
+    { id: 'organizations', label: 'Organizations' },
   ];
 
   return (
@@ -263,6 +265,16 @@ export function CharacterWindow({ character, onEdit }: CharacterWindowProps) {
               />
             )}
           </>
+        )}
+
+        {activeTab === 'organizations' && (
+          <MemberOrganizationsTab
+            campaignId={character.campaignId}
+            memberKind="character"
+            memberId={character.id}
+            isGM={character.canEdit}
+            canManage={character.canEdit}
+          />
         )}
       </div>
     </div>
