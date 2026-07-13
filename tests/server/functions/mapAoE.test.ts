@@ -164,7 +164,9 @@ describe('createMapAoE', () => {
 describe('listMapAoE', () => {
   function mockFind(docs: unknown[] = []) {
     vi.mocked(MapAoE.find).mockReturnValue({
-      sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(docs) }),
+      sort: vi.fn().mockReturnValue({
+        limit: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(docs) }),
+      }),
     } as never);
   }
 

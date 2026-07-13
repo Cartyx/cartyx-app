@@ -61,6 +61,8 @@ export const listMapAoE = async ({ data }: { data: z.infer<typeof listMapAoESche
 
     const docs = await MapAoE.find({ mapId: data.mapId, campaignId: data.campaignId })
       .sort({ createdAt: 1 })
+      // Bound the result set.
+      .limit(2000)
       .lean();
     return { aoes: docs.map((d) => serializeAoE(d as AoEDoc)) };
   } catch (e) {
