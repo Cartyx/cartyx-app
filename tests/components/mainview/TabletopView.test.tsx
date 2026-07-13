@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { TabletopScreenData, TabletopScreenDetailData } from '~/types/tabletop';
@@ -41,6 +41,11 @@ const noopMutation = {
   error: null as Error | null,
 };
 
+// Dedicated mocks so createScreen and updateState can be asserted independently
+// (the shared noopMutation reuses the same vi.fn across mutations).
+const mockCreateScreenAsync = vi.fn().mockResolvedValue({});
+const mockUpdateStateMutate = vi.fn();
+
 let listResult: { screens: TabletopScreenData[]; isLoading: boolean; error: string | null } = {
   screens: mockScreens,
   isLoading: false,
@@ -57,7 +62,7 @@ vi.mock('~/hooks/useTabletopScreens', () => ({
   useTabletopScreenList: () => listResult,
   useTabletopScreenDetail: () => detailResult,
   useTabletopMutations: () => ({
-    createScreen: { ...noopMutation },
+    createScreen: { ...noopMutation, mutateAsync: mockCreateScreenAsync },
     renameScreen: { ...noopMutation },
     deleteScreen: { ...noopMutation },
     updateSettings: { ...noopMutation },
@@ -72,7 +77,7 @@ vi.mock('~/hooks/useTabletopPlayerState', () => ({
   useTabletopPlayerState: () => ({
     playerState: null,
     isLoading: false,
-    updateState: { ...noopMutation },
+    updateState: { ...noopMutation, mutate: mockUpdateStateMutate },
   }),
 }));
 
@@ -119,6 +124,37 @@ describe('TabletopView', () => {
     vi.clearAllMocks();
     listResult = { screens: mockScreens, isLoading: false, error: null };
     detailResult = { screen: mockDetail, isLoading: false, error: null };
+    mockCreateScreenAsync.mockResolvedValue({});
+  });
+
+  it('persists the newly auto-created default tab as the active screen', async () => {
+    // Fresh GM with no tabs: the auto-create effect creates a "Default" tab.
+    // The new tab must be persisted to player-state (activeScreenId), not just
+    // held in local state — otherwise the Maps panel targets the wrong/no tab
+    // and activating a map appears to do nothing until the tab is clicked.
+    listResult = { screens: [], isLoading: false, error: null };
+    detailResult = { screen: null, isLoading: false, error: null };
+    mockCreateScreenAsync.mockResolvedValue({
+      success: true,
+      screen: { ...mockScreens[0]!, id: 'ts-new' },
+    });
+
+    render(
+      <TabletopView
+        campaignId="c1"
+        isGM={true}
+        currentUserId={null}
+        getToken={mockGetToken}
+        sessionId={null}
+        openToolWindows={[]}
+        onCloseToolWindow={vi.fn()}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    await waitFor(() =>
+      expect(mockUpdateStateMutate).toHaveBeenCalledWith({ activeScreenId: 'ts-new' })
+    );
   });
 
   it('renders the tabletop view with correct test id', () => {
