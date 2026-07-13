@@ -58,6 +58,7 @@ const modifierSchema = z.object({
   id: z.string().min(1),
   type: z.enum(MODIFIER_TYPES),
   dice: diceSchema.optional(),
+  scaling: z.object({ perStep: diceSchema }).optional(),
   fixedValue: z.number().int().optional(),
   damageType: z.string().optional(),
   atHigherLevels: z.string().optional(),

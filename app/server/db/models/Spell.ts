@@ -8,6 +8,9 @@ const modifierSchema = new mongoose.Schema(
     id: { type: String, required: true },
     type: { type: String, required: true },
     dice: { type: diceSchema, default: undefined },
+    scaling: {
+      perStep: { type: diceSchema, default: undefined },
+    },
     fixedValue: Number,
     damageType: String,
     atHigherLevels: String,
