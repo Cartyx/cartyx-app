@@ -84,6 +84,19 @@ _Small or Medium Construct_
 **AC** 15
 
 An embedded summoned-creature stat block that is not a spell.
+
+#### Cure Wounds
+
+_Level 1 Abjuration (Bard, Cleric, Druid, Paladin, Ranger)_
+
+**Casting Time:** Action
+**Range:** Touch
+**Components:** V, S
+**Duration:** Instantaneous
+
+A creature you touch regains a number of Hit Points equal to 2d8 plus your spellcasting ability modifier.
+
+_Using a Higher-Level Spell Slot._ The healing increases by 2d8 for each spell slot level above 1.
 `;
 
 describe('parseSpellMarkdown', () => {
@@ -97,6 +110,7 @@ describe('parseSpellMarkdown', () => {
       'Detect Magic',
       'Lightning Bolt',
       'Confusion',
+      'Cure Wounds',
     ]);
     // "Animated Object" has no "Cantrip"/"Level N" header line — it's a summoned
     // creature stat block, not a spell, and must be skipped.
@@ -153,5 +167,22 @@ describe('parseSpellMarkdown', () => {
     const lb = byName('Lightning Bolt');
     expect(lb.areaOfEffect).toEqual({ shape: 'line', size: 100, width: 5 });
     expect(lb.modifiers[0].damageType).toBe('lightning');
+  });
+
+  it('captures healing dice and slot scaling', () => {
+    const cure = byName('Cure Wounds');
+    const heal = cure.modifiers.find((m) => m.type === 'healing')!;
+    expect(heal.dice).toEqual({ count: 2, sides: 8 });
+    expect(heal.scaling).toEqual({ perStep: { count: 2, sides: 8 } });
+  });
+
+  it('attaches cantrip scaling to Fire Bolt damage', () => {
+    const bolt = byName('Fire Bolt');
+    expect(bolt.modifiers[0].scaling).toEqual({ perStep: { count: 1, sides: 10 } });
+  });
+
+  it('attaches slot scaling to Fireball damage', () => {
+    const ball = byName('Fireball');
+    expect(ball.modifiers[0].scaling).toEqual({ perStep: { count: 1, sides: 6 } });
   });
 });
