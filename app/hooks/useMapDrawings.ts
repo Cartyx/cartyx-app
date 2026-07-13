@@ -1,6 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { captureException } from '~/providers/TelemetryProvider';
+import { showToast } from '~/components/Toast';
 import { queryKeys } from '~/utils/queryKeys';
 import type { MapDrawingData, MapDrawingKind } from '~/types/mapDrawing';
 import {
@@ -100,8 +101,9 @@ export function useMapDrawingMutations(campaignId: string, mapId: string) {
   // mid-drag and race the optimistic geometry writes.
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: queryKeys.mapDrawings.list(campaignId, mapId) });
-  const onError = (action: string) => (e: unknown) => {
+  const onError = (action: string, userMessage: string) => (e: unknown) => {
     captureException(e, { action });
+    showToast(userMessage, 'error');
     invalidate();
   };
 
@@ -109,28 +111,40 @@ export function useMapDrawingMutations(campaignId: string, mapId: string) {
     mutationFn: async (input: CreateDrawingInput) => {
       return await createMapDrawingFn({ data: { campaignId, mapId, ...input } });
     },
-    onError: onError('useMapDrawingMutations.create'),
+    onError: onError(
+      'useMapDrawingMutations.create',
+      'Couldn’t save the drawing. Please try again.'
+    ),
   });
 
   const update = useMutation({
     mutationFn: async (input: UpdateDrawingInput) => {
       return await updateMapDrawingFn({ data: { campaignId, mapId, ...input } });
     },
-    onError: onError('useMapDrawingMutations.update'),
+    onError: onError(
+      'useMapDrawingMutations.update',
+      'Couldn’t update the drawing. Please try again.'
+    ),
   });
 
   const remove = useMutation({
     mutationFn: async (drawingId: string) => {
       return await deleteMapDrawingFn({ data: { campaignId, mapId, drawingId } });
     },
-    onError: onError('useMapDrawingMutations.remove'),
+    onError: onError(
+      'useMapDrawingMutations.remove',
+      'Couldn’t delete the drawing. Please try again.'
+    ),
   });
 
   const clear = useMutation({
     mutationFn: async () => {
       return await clearMapDrawingsFn({ data: { campaignId, mapId } });
     },
-    onError: onError('useMapDrawingMutations.clear'),
+    onError: onError(
+      'useMapDrawingMutations.clear',
+      'Couldn’t clear the drawings. Please try again.'
+    ),
   });
 
   return { create, update, remove, clear };

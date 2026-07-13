@@ -611,6 +611,7 @@ export function TabletopView({
             currentUserId={currentUserId}
             onBroadcast={sendMapMessage}
             rulerActive={activeTool === 'ruler'}
+            aoeActive={activeTool === 'aoe'}
             textActive={activeTool === 'text'}
             drawingActive={activeTool === 'drawing'}
             pointerActive={activeTool === 'pointer'}

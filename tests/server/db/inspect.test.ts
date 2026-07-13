@@ -10,6 +10,9 @@ const {
   raceMock,
   mapMock,
   mapTokenMock,
+  mapTextMock,
+  mapDrawingMock,
+  mapAoeMock,
   monsterMock,
 } = vi.hoisted(() => {
   function make(
@@ -67,6 +70,9 @@ const {
       [{ mapId: 1 }, {}],
       [{ mapId: 1, sourceCollection: 1, sourceDocumentId: 1, instanceNumber: 1 }, { unique: true }],
     ]),
+    mapTextMock: make('MapText', 'mapText', [[{ mapId: 1, campaignId: 1 }, {}]]),
+    mapDrawingMock: make('MapDrawing', 'mapDrawing', [[{ mapId: 1, campaignId: 1 }, {}]]),
+    mapAoeMock: make('MapAoE', 'mapAoE', [[{ campaignId: 1, mapId: 1 }, {}]]),
     monsterMock: make('Monster', 'monsters', [
       [{ campaignId: 1, updatedAt: -1 }, {}],
       [{ campaignId: 1, name: 1 }, {}],
@@ -87,6 +93,9 @@ vi.mock('~/server/db/models/Note', () => ({ Note: noteMock }));
 vi.mock('~/server/db/models/Race', () => ({ Race: raceMock }));
 vi.mock('~/server/db/models/Map', () => ({ Map: mapMock }));
 vi.mock('~/server/db/models/MapToken', () => ({ MapToken: mapTokenMock }));
+vi.mock('~/server/db/models/MapText', () => ({ MapText: mapTextMock }));
+vi.mock('~/server/db/models/MapDrawing', () => ({ MapDrawing: mapDrawingMock }));
+vi.mock('~/server/db/models/MapAoE', () => ({ MapAoE: mapAoeMock }));
 vi.mock('~/server/db/models/Monster', () => ({ Monster: monsterMock }));
 
 import {
@@ -106,12 +115,20 @@ const allMocks = [
   raceMock,
   mapMock,
   mapTokenMock,
+  mapTextMock,
+  mapDrawingMock,
+  mapAoeMock,
   monsterMock,
 ];
 
 describe('ALL_MODELS', () => {
-  it('contains all ten models', () => {
-    expect(ALL_MODELS).toHaveLength(10);
+  it('contains all thirteen models', () => {
+    expect(ALL_MODELS).toHaveLength(13);
+  });
+
+  it('includes the shared map-object models for index governance', () => {
+    const names = ALL_MODELS.map((m) => m.modelName);
+    expect(names).toEqual(expect.arrayContaining(['MapText', 'MapDrawing', 'MapAoE']));
   });
 
   // Regression: Session and GMScreen are included in bootstrap (#302)
@@ -198,6 +215,18 @@ describe('inspectIndexes', () => {
       { key: { campaignId: 1, sessionId: 1 } },
       { key: { campaignId: 1, 'cr.value': 1 } },
       { key: { _fts: 'text', _ftsx: 1 } },
+    ]);
+    mapTextMock.listIndexes.mockResolvedValue([
+      { key: { _id: 1 } },
+      { key: { mapId: 1, campaignId: 1 } },
+    ]);
+    mapDrawingMock.listIndexes.mockResolvedValue([
+      { key: { _id: 1 } },
+      { key: { mapId: 1, campaignId: 1 } },
+    ]);
+    mapAoeMock.listIndexes.mockResolvedValue([
+      { key: { _id: 1 } },
+      { key: { campaignId: 1, mapId: 1 } },
     ]);
 
     const result = await inspectIndexes();

@@ -2,6 +2,7 @@ import { createServerFn } from '@tanstack/react-start';
 import type { TabletopScreenData, TabletopScreenDetailData } from '~/types/tabletop';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { captureException } from '~/providers/TelemetryProvider';
+import { showToast } from '~/components/Toast';
 import { queryKeys } from '~/utils/queryKeys';
 import {
   listTabletopScreensSchema,
@@ -137,6 +138,7 @@ export function useTabletopMutations(campaignId: string) {
     // List invalidation is deferred to the caller so it can set selection first
     onError: (e) => {
       captureException(e, { action: 'createTabletopScreen' });
+      showToast('Couldn’t create the tab. Please try again.', 'error');
     },
   });
 
@@ -148,6 +150,7 @@ export function useTabletopMutations(campaignId: string) {
     },
     onError: (e) => {
       captureException(e, { action: 'renameTabletopScreen' });
+      showToast('Couldn’t rename the tab. Please try again.', 'error');
     },
   });
 
@@ -156,6 +159,7 @@ export function useTabletopMutations(campaignId: string) {
     // List invalidation is deferred to the caller so it can set selection first
     onError: (e) => {
       captureException(e, { action: 'deleteTabletopScreen' });
+      showToast('Couldn’t delete the tab. Please try again.', 'error');
     },
   });
 
@@ -178,6 +182,7 @@ export function useTabletopMutations(campaignId: string) {
     },
     onError: (e) => {
       captureException(e, { action: 'updateTabletopScreenSettings' });
+      showToast('Couldn’t save the tabletop settings. Please try again.', 'error');
     },
   });
 

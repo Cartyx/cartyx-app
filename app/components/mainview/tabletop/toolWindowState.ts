@@ -1,15 +1,16 @@
 import type { ToolType } from '~/components/mainview/ToolBar';
 
-/** Toolbar tools that open a window. drawing/text/ruler are also map modes. */
-export type ToolWindowId = 'drawing' | 'text' | 'ruler' | 'dice' | 'layer';
+/** Toolbar tools that open a window. drawing/text/ruler/aoe are also map modes. */
+export type ToolWindowId = 'drawing' | 'text' | 'ruler' | 'aoe' | 'dice' | 'layer';
 
-const MODAL_TOOLS: ReadonlySet<ToolType> = new Set(['drawing', 'text', 'ruler']);
+const MODAL_TOOLS: ReadonlySet<ToolType> = new Set(['drawing', 'text', 'ruler', 'aoe']);
 const WINDOW_ONLY_TOOLS: ReadonlySet<ToolType> = new Set(['dice', 'layer']);
 
 export const TOOL_WINDOW_META: Record<ToolWindowId, { title: string }> = {
   drawing: { title: 'Draw' },
   text: { title: 'Text' },
   ruler: { title: 'Measurement' },
+  aoe: { title: 'Spell AoE' },
   dice: { title: 'Dice Roller' },
   layer: { title: 'Layers' },
 };

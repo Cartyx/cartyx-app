@@ -17,6 +17,8 @@ import {
   Pencil,
   Ruler as RulerIcon,
   Layers as LayersIcon,
+  Circle as CircleIcon,
+  Sparkles,
   Trash2,
 } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
@@ -42,10 +44,22 @@ import {
   applyDrawingRemoveFromCache,
   applyDrawingsClearToCache,
 } from '~/hooks/useMapDrawings';
+import {
+  useMapAoE,
+  useMapAoEMutations,
+  applyAoeAddToCache,
+  applyAoeRemoveFromCache,
+  applyAoeClearToCache,
+  applyAoeMoveToCache,
+} from '~/hooks/useMapAoE';
 import { MapToken } from './MapToken';
 import { LayersPanel } from './LayersPanel';
 import { RulerSettingsPanel } from './RulerSettingsPanel';
 import { useRulerTool } from './useRulerTool';
+import { useAoeTool } from './useAoeTool';
+import { MapAoELayer } from './MapAoELayer';
+import { AoeSettingsPanel } from './AoeSettingsPanel';
+import type { AoeInput } from './aoeGeometry';
 import { RulerOverlay } from './RulerOverlay';
 import { ToolWindow } from './ToolWindow';
 import { TOOL_WINDOW_META, type ToolWindowId } from './toolWindowState';
@@ -69,6 +83,7 @@ import {
   movedGeometry,
 } from './ActiveMapStage.geometry';
 import type { MapLayerId } from '~/types/mapLayer';
+import type { AoeShape, MapAoEData } from '~/types/mapAoe';
 import type { TabletopMapMessage } from '~/hooks/useTabletopMapParty';
 
 interface ActiveMapStageProps {
@@ -85,6 +100,8 @@ interface ActiveMapStageProps {
   windowManager: ToolWindowManager;
   /** Whether the measurement (ruler) tool is active. */
   rulerActive?: boolean;
+  /** Whether the Spell AoE tool is active (click to place a template). */
+  aoeActive?: boolean;
   /** Whether the text tool is active (click to write, click text to select). */
   textActive?: boolean;
   /** Whether the drawing tool is active (draw shapes / erase on the map). */
@@ -125,6 +142,7 @@ export function ActiveMapStage({
   openToolWindows,
   windowManager,
   rulerActive = false,
+  aoeActive = false,
   textActive = false,
   drawingActive = false,
   pointerActive = false,
@@ -204,6 +222,21 @@ export function ActiveMapStage({
     width: number;
     height: number;
   } | null>(null);
+
+  // Spell AoE templates — shared, persisted, multiplayer. Any member can place a
+  // template; deletion is gated to the author or a GM (server-enforced). The tool
+  // settings (shape/size/width/color) are the local "brush" for this client.
+  const { data: aoes = [] } = useMapAoE(campaignId, map.id);
+  const aoeMutations = useMapAoEMutations(campaignId, map.id);
+  const [aoeShape, setAoeShape] = useState<AoeShape>('sphere');
+  const [aoeSizeFt, setAoeSizeFt] = useState(20);
+  const [aoeWidthFt, setAoeWidthFt] = useState(5);
+  const [aoeColor, setAoeColor] = useState('#3b82f6');
+  const [aoeLabel, setAoeLabel] = useState('');
+  const [selectedAoeId, setSelectedAoeId] = useState<string | null>(null);
+  // Per-viewer show/hide for spell AoE visuals — everyone gets this toggle
+  // (local only, not broadcast); hides the AoE layer for this client alone.
+  const [showSpellEffects, setShowSpellEffects] = useState(true);
 
   // Layers — GM-local working layer + per-layer visibility (GM's own view;
   // players never gain this panel so it stays empty for them).
@@ -310,6 +343,20 @@ export function ActiveMapStage({
   // drawing mutation is GM-only. So only a GM may modify any drawing. Kept as a
   // per-drawing predicate to match the MapDrawingLayer `canModify` prop shape.
   const canModifyDrawing = useCallback((_d: MapDrawingData) => isGM, [isGM]);
+
+  // A player may delete only their own AoE template; a GM may delete anyone's.
+  // The server enforces this; the client mirrors it for affordances.
+  const canModifyAoe = useCallback(
+    (a: MapAoEData) => isGM || (currentUserId != null && a.createdBy === currentUserId),
+    [isGM, currentUserId]
+  );
+
+  // AoE templates are selectable/movable under the pointer tool (like map text)
+  // and under the AoE tool. Clear the selection when leaving both, so a stray
+  // Delete/Backspace in an unrelated tool (ruler, hand) can't remove a template.
+  useEffect(() => {
+    if (!aoeActive && !pointerActive) setSelectedAoeId(null);
+  }, [aoeActive, pointerActive]);
 
   // Clear the drawing preview + selection when the drawing tool is deselected.
   useEffect(() => {
@@ -539,6 +586,89 @@ export function ActiveMapStage({
     imageHeight: map.imageHeight,
   });
 
+  // Spell AoE tool — a ruler-style placement state machine. Committing a
+  // template persists it (optimistically added to the cache) and broadcasts to
+  // peers. Like the ruler, it short-circuits the stage pointer handlers below.
+  const commitAoe = useCallback(
+    (committed: AoeInput & { color: string }) => {
+      const label = aoeLabel.trim();
+      aoeMutations.create.mutate(
+        { ...committed, label: label || undefined },
+        {
+          onSuccess: (res) => {
+            applyAoeAddToCache(qc, campaignId, map.id, res.aoe);
+            onBroadcast({ type: 'aoe:added', mapId: map.id, aoe: res.aoe });
+          },
+        }
+      );
+    },
+    [aoeMutations.create, qc, campaignId, map.id, onBroadcast, aoeLabel]
+  );
+
+  const aoe = useAoeTool({
+    aoeActive,
+    shape: aoeShape,
+    sizeFt: aoeSizeFt,
+    widthFt: aoeWidthFt,
+    color: aoeColor,
+    domToImage,
+    pixelsPerSquare: map.scale.pixelsPerSquare,
+    feetPerSquare: map.scale.feetPerSquare,
+    imageWidth: map.imageWidth,
+    imageHeight: map.imageHeight,
+    onCommit: commitAoe,
+  });
+
+  const removeAoe = useCallback(
+    (aoeId: string) => {
+      applyAoeRemoveFromCache(qc, campaignId, map.id, aoeId);
+      aoeMutations.remove.mutate(aoeId, {
+        onSuccess: () => onBroadcast({ type: 'aoe:removed', mapId: map.id, aoeId }),
+      });
+      setSelectedAoeId((cur) => (cur === aoeId ? null : cur));
+    },
+    [qc, campaignId, map.id, aoeMutations.remove, onBroadcast]
+  );
+
+  const clearAllAoe = useCallback(() => {
+    if (!isGM) return;
+    applyAoeClearToCache(qc, campaignId, map.id);
+    setSelectedAoeId(null);
+    aoeMutations.clear.mutate(undefined, {
+      onSuccess: () => onBroadcast({ type: 'aoe:cleared', mapId: map.id }),
+    });
+  }, [isGM, qc, campaignId, map.id, aoeMutations.clear, onBroadcast]);
+
+  // Keyboard: Delete/Backspace removes the selected AoE (permission-gated); Esc
+  // clears the selection. Not GM-gated — players can delete their own template.
+  // A template can only be selected under the pointer/AoE tools, and the
+  // selection auto-clears when leaving both, so this can't fire from another tool.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tgt = e.target as HTMLElement | null;
+      if (tgt) {
+        const tag = tgt.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || tgt.isContentEditable)
+          return;
+      }
+      if (e.key === 'Escape') {
+        if (selectedAoeId) {
+          e.preventDefault();
+          setSelectedAoeId(null);
+        }
+        return;
+      }
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (!selectedAoeId) return;
+      const a = aoes.find((x) => x.id === selectedAoeId);
+      if (!a || !canModifyAoe(a)) return;
+      e.preventDefault();
+      removeAoe(a.id);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedAoeId, aoes, canModifyAoe, removeAoe]);
+
   // -------------------------------------------------------------------------
   // Pointer drag — either pans the viewport (drag on background) or moves a
   // token (drag started on a token). The MapToken component reports drag
@@ -568,6 +698,16 @@ export function ActiveMapStage({
         startClientY: number;
         startX: number;
         startY: number;
+        lastBroadcastAt: number;
+        moved: boolean;
+      }
+    | {
+        mode: 'aoe';
+        aoeId: string;
+        startClientX: number;
+        startClientY: number;
+        startOriginX: number;
+        startOriginY: number;
         lastBroadcastAt: number;
         moved: boolean;
       }
@@ -622,7 +762,7 @@ export function ActiveMapStage({
       };
   const dragRef = useRef<DragState>({ mode: 'idle' });
   const [dragMode, setDragMode] = useState<
-    'idle' | 'pan' | 'token' | 'text' | 'draw' | 'erase' | 'resize' | 'move'
+    'idle' | 'pan' | 'token' | 'text' | 'aoe' | 'draw' | 'erase' | 'resize' | 'move'
   >('idle');
 
   const onPanPointerDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -635,6 +775,12 @@ export function ActiveMapStage({
     const panOverride = middlePan || spaceHeld;
 
     if (!panOverride) {
+      // Spell AoE tool: a click places/aims a template. Fully owns the pointer
+      // while active (no pan/select), like the ruler.
+      if (aoeActive) {
+        aoe.onPointerDown(e);
+        return;
+      }
       // Ruler tool: a background click drops/relocates the measurement anchor
       // (clicks on tokens are handled by MapToken). No pan/select while measuring.
       if (rulerActive) {
@@ -794,6 +940,31 @@ export function ActiveMapStage({
       setDragMode('text');
     },
     [cancelTextDraft, clearSelection]
+  );
+
+  // Pointer-down on an existing AoE template (pointer/AoE tool, own/GM only):
+  // select it, and a drag past a small threshold relocates it — mirrors text.
+  const beginAoeDrag = useCallback(
+    (a: MapAoEData, e: ReactPointerEvent<SVGElement>) => {
+      if (e.button !== 0) return;
+      if (!canModifyAoe(a)) return;
+      e.stopPropagation();
+      clearSelection();
+      setSelectedAoeId(a.id);
+      (e.target as Element).setPointerCapture?.(e.pointerId);
+      dragRef.current = {
+        mode: 'aoe',
+        aoeId: a.id,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        startOriginX: a.originX,
+        startOriginY: a.originY,
+        lastBroadcastAt: 0,
+        moved: false,
+      };
+      setDragMode('aoe');
+    },
+    [canModifyAoe, clearSelection]
   );
 
   // Begin resizing the selected drawing from its corner handle (own/GM only).
@@ -972,6 +1143,13 @@ export function ActiveMapStage({
       ruler.onPointerMove(e);
       return;
     }
+    // Spell AoE tool: aim a directional template's second point as the cursor
+    // moves — but not while dragging an existing template (mode 'aoe') or a pan
+    // override, so an in-progress move falls through to the drag branch below.
+    if (aoeActive && d.mode !== 'pan' && d.mode !== 'aoe') {
+      aoe.onPointerMove(e);
+      return;
+    }
     if (d.mode === 'idle') return;
     if (d.mode === 'pan') {
       setViewport({
@@ -1010,6 +1188,18 @@ export function ActiveMapStage({
       if (now - d.lastBroadcastAt >= MOVE_BROADCAST_INTERVAL_MS) {
         d.lastBroadcastAt = now;
         onBroadcast({ type: 'text:moved', mapId: map.id, textId: d.textId, x: nx, y: ny });
+      }
+    } else if (d.mode === 'aoe') {
+      const dxImage = (e.clientX - d.startClientX) / effectiveScale;
+      const dyImage = (e.clientY - d.startClientY) / effectiveScale;
+      const nx = clamp(d.startOriginX + dxImage, 0, map.imageWidth);
+      const ny = clamp(d.startOriginY + dyImage, 0, map.imageHeight);
+      if (Math.abs(dxImage) > 1 || Math.abs(dyImage) > 1) d.moved = true;
+      applyAoeMoveToCache(qc, campaignId, map.id, d.aoeId, nx, ny);
+      const now = Date.now();
+      if (now - d.lastBroadcastAt >= MOVE_BROADCAST_INTERVAL_MS) {
+        d.lastBroadcastAt = now;
+        onBroadcast({ type: 'aoe:moved', mapId: map.id, aoeId: d.aoeId, originX: nx, originY: ny });
       }
     } else if (d.mode === 'draw' && d.kind === 'pencil') {
       const img = domToImage(e.clientX, e.clientY);
@@ -1158,6 +1348,55 @@ export function ActiveMapStage({
                 y: ny,
                 final: true,
               }),
+            onError: () => {
+              // Persist failed: revert peers (and the local cache) to the
+              // pre-drag position so no one is left with a ghost.
+              applyTextMoveToCache(qc, campaignId, map.id, d.textId, d.startX, d.startY);
+              onBroadcast({
+                type: 'text:moved',
+                mapId: map.id,
+                textId: d.textId,
+                x: d.startX,
+                y: d.startY,
+                final: true,
+              });
+            },
+          }
+        );
+      }
+    } else if (d.mode === 'aoe') {
+      if (d.moved) {
+        const dxImage = (e.clientX - d.startClientX) / effectiveScale;
+        const dyImage = (e.clientY - d.startClientY) / effectiveScale;
+        const nx = clamp(d.startOriginX + dxImage, 0, map.imageWidth);
+        const ny = clamp(d.startOriginY + dyImage, 0, map.imageHeight);
+        applyAoeMoveToCache(qc, campaignId, map.id, d.aoeId, nx, ny);
+        aoeMutations.move.mutate(
+          { aoeId: d.aoeId, originX: nx, originY: ny },
+          {
+            onSuccess: () =>
+              onBroadcast({
+                type: 'aoe:moved',
+                mapId: map.id,
+                aoeId: d.aoeId,
+                originX: nx,
+                originY: ny,
+                final: true,
+              }),
+            onError: () => {
+              // Persist failed: peers got interim positions during the drag —
+              // revert them (and the local cache) to the pre-drag origin rather
+              // than leaving a ghost. The hook's onError also toasts + refetches.
+              applyAoeMoveToCache(qc, campaignId, map.id, d.aoeId, d.startOriginX, d.startOriginY);
+              onBroadcast({
+                type: 'aoe:moved',
+                mapId: map.id,
+                aoeId: d.aoeId,
+                originX: d.startOriginX,
+                originY: d.startOriginY,
+                final: true,
+              });
+            },
           }
         );
       }
@@ -1280,7 +1519,7 @@ export function ActiveMapStage({
       ? 'cursor-grabbing'
       : handActive || spaceHeld
         ? 'cursor-grab'
-        : rulerActive || drawingActive
+        : rulerActive || drawingActive || aoeActive
           ? 'cursor-crosshair'
           : textActive
             ? 'cursor-text'
@@ -1305,6 +1544,13 @@ export function ActiveMapStage({
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
       onDoubleClick={(e) => {
+        // Spell AoE tool: a double-click cancels an in-progress directional
+        // placement (mirrors the ruler's reset).
+        if (aoeActive) {
+          e.preventDefault();
+          aoe.reset();
+          return;
+        }
         // Ruler tool: a double-click resets the measurement — the tool stops
         // drawing until the next click (also clears a multi-point polyline).
         if (!rulerActive) return;
@@ -1356,6 +1602,21 @@ export function ActiveMapStage({
           data-testid="map-grid-overlay"
         />
       )}
+
+      {/* Spell AoE templates (shared) — one SVG overlay above the map/grid but
+          BENEATH drawings/tokens, so the tint reads as a floor effect. */}
+      <MapAoELayer
+        visible={!spellFxHidden && showSpellEffects}
+        aoes={aoes}
+        preview={aoe.preview}
+        effectiveScale={effectiveScale}
+        imageOffsetX={imageOffsetX}
+        imageOffsetY={imageOffsetY}
+        selectedId={selectedAoeId}
+        onBeginDrag={beginAoeDrag}
+        interactive={aoeActive || pointerActive}
+        canModify={canModifyAoe}
+      />
 
       {/* Drawing layer (shared) — one SVG overlay above the map/grid, plus the
           selected drawing's bounding box + corner resize handle. */}
@@ -1542,6 +1803,29 @@ export function ActiveMapStage({
         </ToolWindow>
       )}
 
+      {openToolWindows.includes('aoe') && (
+        <ToolWindow
+          title={TOOL_WINDOW_META.aoe.title}
+          icon={CircleIcon}
+          {...windowManager.getWindowProps('aoe')}
+        >
+          <AoeSettingsPanel
+            shape={aoeShape}
+            onShape={setAoeShape}
+            sizeFt={aoeSizeFt}
+            onSizeFt={setAoeSizeFt}
+            widthFt={aoeWidthFt}
+            onWidthFt={setAoeWidthFt}
+            color={aoeColor}
+            onColor={setAoeColor}
+            label={aoeLabel}
+            onLabel={setAoeLabel}
+            onClearAll={clearAllAoe}
+            canClearAll={isGM}
+          />
+        </ToolWindow>
+      )}
+
       {isGM && openToolWindows.includes('drawing') && (
         <ToolWindow
           title={TOOL_WINDOW_META.drawing.title}
@@ -1591,6 +1875,22 @@ export function ActiveMapStage({
           data-testid="map-text-toggle"
         >
           <Type className="h-3.5 w-3.5" />
+        </button>
+        {/* Spell AoE visuals — per-viewer show/hide, available to everyone. */}
+        <button
+          type="button"
+          aria-label={showSpellEffects ? 'Hide spell effects' : 'Show spell effects'}
+          aria-pressed={showSpellEffects}
+          title={showSpellEffects ? 'Hide spell effects' : 'Show spell effects'}
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={() => setShowSpellEffects((v) => !v)}
+          className={[
+            'flex h-7 w-7 items-center justify-center rounded transition-colors',
+            showSpellEffects ? 'bg-white/15 text-[#60A5FA]' : 'text-slate-200 hover:bg-white/10',
+          ].join(' ')}
+          data-testid="map-spell-effects-toggle"
+        >
+          <Sparkles className="h-3.5 w-3.5" />
         </button>
         {/* Drawings are GM-only — players never see the drawing controls. */}
         {isGM && (

@@ -99,6 +99,11 @@ export const INDEX_GOVERNANCE: Record<string, GovernanceEntry[]> = {
       severity: 'critical',
     },
   ],
+  // Shared map-object collections — the compound index serves the per-map
+  // list query (`find({ mapId, campaignId })`). Performance, not correctness.
+  MapText: [{ key: { mapId: 1, campaignId: 1 }, severity: 'optional' }],
+  MapDrawing: [{ key: { mapId: 1, campaignId: 1 }, severity: 'optional' }],
+  MapAoE: [{ key: { campaignId: 1, mapId: 1 }, severity: 'optional' }],
   Monster: [
     { key: { campaignId: 1, updatedAt: -1 }, severity: 'optional' },
     { key: { campaignId: 1, name: 1 }, severity: 'optional' },

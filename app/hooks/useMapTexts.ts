@@ -1,6 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { captureException } from '~/providers/TelemetryProvider';
+import { showToast } from '~/components/Toast';
 import { queryKeys } from '~/utils/queryKeys';
 import type { MapTextData } from '~/types/mapText';
 import {
@@ -64,6 +65,13 @@ export function useMapTextMutations(campaignId: string, mapId: string) {
   const qc = useQueryClient();
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: queryKeys.mapTexts.list(campaignId, mapId) });
+  // On failure: tell the user, log it, and reconcile the optimistic cache with
+  // server truth instead of leaving a lie.
+  const onError = (action: string, userMessage: string) => (e: unknown) => {
+    captureException(e, { action });
+    showToast(userMessage, 'error');
+    invalidate();
+  };
 
   const create = useMutation({
     mutationFn: async (input: {
@@ -76,7 +84,7 @@ export function useMapTextMutations(campaignId: string, mapId: string) {
       return await createMapTextFn({ data: { campaignId, mapId, ...input } });
     },
     onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapTextMutations.create' }),
+    onError: onError('useMapTextMutations.create', 'Couldn’t add the text. Please try again.'),
   });
 
   const update = useMutation({
@@ -91,7 +99,7 @@ export function useMapTextMutations(campaignId: string, mapId: string) {
       return await updateMapTextFn({ data: { campaignId, mapId, ...input } });
     },
     onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapTextMutations.update' }),
+    onError: onError('useMapTextMutations.update', 'Couldn’t update the text. Please try again.'),
   });
 
   const remove = useMutation({
@@ -99,7 +107,7 @@ export function useMapTextMutations(campaignId: string, mapId: string) {
       return await deleteMapTextFn({ data: { campaignId, mapId, textId } });
     },
     onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapTextMutations.remove' }),
+    onError: onError('useMapTextMutations.remove', 'Couldn’t delete the text. Please try again.'),
   });
 
   return { create, update, remove };

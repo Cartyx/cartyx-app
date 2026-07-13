@@ -11,6 +11,7 @@ const allTools: ToolType[] = [
   'drawing',
   'text',
   'ruler',
+  'aoe',
   'dice',
   'stamp',
   'layer',
@@ -29,7 +30,7 @@ function renderToolBar(props: Partial<React.ComponentProps<typeof ToolBar>> = {}
 }
 
 describe('ToolBar', () => {
-  it('renders all 8 tool buttons when expanded (GM)', () => {
+  it('renders all 9 tool buttons when expanded (GM)', () => {
     renderToolBar();
     for (const tool of allTools) {
       expect(screen.getByTestId(`tool-${tool}`)).toBeInTheDocument();
