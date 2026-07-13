@@ -30,6 +30,7 @@ export interface GeneratedSpell {
     type: string;
     dice?: { count: number; sides: number };
     damageType?: string;
+    scaling?: { perStep: { count: number; sides: number } };
   }>;
   conditions: Array<{ id: string; action: string; condition: string }>;
   higherLevels: Array<{ id: string; level: number; description: string }>;

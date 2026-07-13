@@ -118,10 +118,13 @@ export function rollDice(input: {
  * changes. `character` is intentionally blank — the broadcast consumer
  * (InspectorSidebar) fills in the authenticated user's name.
  */
-export function toParsedDiceRoll(result: DiceRollResult): ParsedDiceRoll {
+export function toParsedDiceRoll(
+  result: DiceRollResult,
+  opts?: { title?: string }
+): ParsedDiceRoll {
   return {
     character: '',
-    title: result.formula,
+    title: opts?.title ?? result.formula,
     rollType: 'custom',
     attackRolls: result.sets.map((set) => ({
       roll: set.total,

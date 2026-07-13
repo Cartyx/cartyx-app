@@ -238,17 +238,29 @@ export function SpellModal({ isOpen, onClose, campaignId, spellId }: SpellModalP
             </div>
           )}
           <div className="flex items-center gap-3 ml-auto">
-            <PixelButton type="button" variant="ghost" onClick={onClose} disabled={isDisabled}>
-              Cancel
-            </PixelButton>
             {isReadOnly ? (
-              <PixelButton type="button" onClick={handleDuplicate} disabled={isDisabled}>
-                {isDuplicating ? 'Duplicating...' : 'Duplicate to Homebrew'}
-              </PixelButton>
+              <>
+                <PixelButton
+                  type="button"
+                  variant="ghost"
+                  onClick={handleDuplicate}
+                  disabled={isDisabled}
+                >
+                  {isDuplicating ? 'Duplicating...' : 'Duplicate to Homebrew'}
+                </PixelButton>
+                <PixelButton type="button" onClick={onClose} disabled={isDisabled}>
+                  Close
+                </PixelButton>
+              </>
             ) : (
-              <PixelButton type="submit" disabled={isDisabled}>
-                {isSaving ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Spell'}
-              </PixelButton>
+              <>
+                <PixelButton type="button" variant="ghost" onClick={onClose} disabled={isDisabled}>
+                  Cancel
+                </PixelButton>
+                <PixelButton type="submit" disabled={isDisabled}>
+                  {isSaving ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Spell'}
+                </PixelButton>
+              </>
             )}
           </div>
         </footer>

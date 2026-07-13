@@ -60,6 +60,7 @@ export interface SpellModifier {
   id: string;
   type: ModifierType;
   dice?: SpellDice;
+  scaling?: { perStep: SpellDice };
   fixedValue?: number;
   damageType?: string;
   atHigherLevels?: string;

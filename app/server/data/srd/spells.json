@@ -40,7 +40,13 @@
           "count": 4,
           "sides": 4
         },
-        "damageType": "acid"
+        "damageType": "acid",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 4
+          }
+        }
       },
       {
         "id": "m1",
@@ -90,7 +96,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Sorcerer", "Wizard"],
     "attackSave": {
@@ -105,7 +111,13 @@
           "count": 1,
           "sides": 6
         },
-        "damageType": "acid"
+        "damageType": "acid",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       }
     ],
     "conditions": [],
@@ -694,7 +706,13 @@
           "count": 5,
           "sides": 8
         },
-        "damageType": "force"
+        "damageType": "force",
+        "scaling": {
+          "perStep": {
+            "count": 2,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -1472,7 +1490,13 @@
           "count": 8,
           "sides": 8
         },
-        "damageType": "necrotic"
+        "damageType": "necrotic",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -1655,7 +1679,13 @@
           "count": 3,
           "sides": 6
         },
-        "damageType": "fire"
+        "damageType": "fire",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       }
     ],
     "conditions": [],
@@ -1714,7 +1744,13 @@
           "count": 3,
           "sides": 10
         },
-        "damageType": "lightning"
+        "damageType": "lightning",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 10
+          }
+        }
       }
     ],
     "conditions": [],
@@ -1950,7 +1986,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Sorcerer", "Warlock", "Wizard"],
     "attackSave": {
@@ -1965,7 +2001,13 @@
           "count": 1,
           "sides": 10
         },
-        "damageType": "necrotic"
+        "damageType": "necrotic",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 10
+          }
+        }
       }
     ],
     "conditions": [],
@@ -2069,7 +2111,13 @@
           "count": 8,
           "sides": 8
         },
-        "damageType": "necrotic"
+        "damageType": "necrotic",
+        "scaling": {
+          "perStep": {
+            "count": 2,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -2209,7 +2257,13 @@
           "count": 5,
           "sides": 8
         },
-        "damageType": "poison"
+        "damageType": "poison",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -2515,7 +2569,13 @@
           "count": 8,
           "sides": 8
         },
-        "damageType": "cold"
+        "damageType": "cold",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -2624,7 +2684,13 @@
           "count": 3,
           "sides": 10
         },
-        "damageType": "slashing"
+        "damageType": "slashing",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 10
+          }
+        }
       }
     ],
     "conditions": [],
@@ -2683,6 +2749,14 @@
           "sides": 12
         },
         "damageType": "radiant"
+      },
+      {
+        "id": "h0",
+        "type": "healing",
+        "dice": {
+          "count": 4,
+          "sides": 12
+        }
       }
     ],
     "conditions": [],
@@ -2881,7 +2955,13 @@
           "count": 5,
           "sides": 8
         },
-        "damageType": "force"
+        "damageType": "force",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -3423,7 +3503,22 @@
     "attackSave": {
       "kind": "none"
     },
-    "modifiers": [],
+    "modifiers": [
+      {
+        "id": "h0",
+        "type": "healing",
+        "dice": {
+          "count": 2,
+          "sides": 8
+        },
+        "scaling": {
+          "perStep": {
+            "count": 2,
+            "sides": 8
+          }
+        }
+      }
+    ],
     "conditions": [],
     "higherLevels": [
       {
@@ -3465,7 +3560,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Sorcerer", "Wizard"],
     "attackSave": {
@@ -4162,7 +4257,13 @@
           "count": 3,
           "sides": 6
         },
-        "damageType": "psychic"
+        "damageType": "psychic",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       }
     ],
     "conditions": [],
@@ -4305,7 +4406,13 @@
           "count": 2,
           "sides": 8
         },
-        "damageType": "radiant"
+        "damageType": "radiant",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -4631,7 +4738,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Druid"],
     "attackSave": {
@@ -4724,7 +4831,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Warlock"],
     "attackSave": {
@@ -4780,7 +4887,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Druid", "Sorcerer", "Wizard"],
     "attackSave": {
@@ -4936,7 +5043,13 @@
           "count": 1,
           "sides": 6
         },
-        "damageType": "piercing"
+        "damageType": "piercing",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       }
     ],
     "conditions": [],
@@ -5676,7 +5789,13 @@
           "count": 8,
           "sides": 6
         },
-        "damageType": "fire"
+        "damageType": "fire",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       }
     ],
     "conditions": [],
@@ -5718,7 +5837,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Sorcerer", "Wizard"],
     "attackSave": {
@@ -5733,7 +5852,13 @@
           "count": 1,
           "sides": 10
         },
-        "damageType": "fire"
+        "damageType": "fire",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 10
+          }
+        }
       }
     ],
     "conditions": [],
@@ -6017,7 +6142,13 @@
           "count": 2,
           "sides": 6
         },
-        "damageType": "fire"
+        "damageType": "fire",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       }
     ],
     "conditions": [],
@@ -6426,7 +6557,13 @@
           "count": 10,
           "sides": 6
         },
-        "damageType": "cold"
+        "damageType": "cold",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       }
     ],
     "conditions": [],
@@ -7085,7 +7222,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Cleric", "Druid"],
     "attackSave": {
@@ -7141,7 +7278,13 @@
           "count": 4,
           "sides": 6
         },
-        "damageType": "radiant"
+        "damageType": "radiant",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       }
     ],
     "conditions": [],
@@ -7450,7 +7593,22 @@
     "attackSave": {
       "kind": "none"
     },
-    "modifiers": [],
+    "modifiers": [
+      {
+        "id": "h0",
+        "type": "healing",
+        "dice": {
+          "count": 2,
+          "sides": 4
+        },
+        "scaling": {
+          "perStep": {
+            "count": 2,
+            "sides": 4
+          }
+        }
+      }
+    ],
     "conditions": [],
     "higherLevels": [
       {
@@ -7507,7 +7665,13 @@
           "count": 2,
           "sides": 8
         },
-        "damageType": "fire"
+        "damageType": "fire",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -7564,7 +7728,13 @@
           "count": 2,
           "sides": 10
         },
-        "damageType": "fire"
+        "damageType": "fire",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 10
+          }
+        }
       }
     ],
     "conditions": [],
@@ -8055,7 +8225,13 @@
           "count": 1,
           "sides": 10
         },
-        "damageType": "piercing"
+        "damageType": "piercing",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       },
       {
         "id": "m1",
@@ -8121,7 +8297,13 @@
           "count": 2,
           "sides": 10
         },
-        "damageType": "bludgeoning"
+        "damageType": "bludgeoning",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 10
+          }
+        }
       },
       {
         "id": "m1",
@@ -8359,7 +8541,13 @@
           "count": 2,
           "sides": 10
         },
-        "damageType": "necrotic"
+        "damageType": "necrotic",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 10
+          }
+        }
       }
     ],
     "conditions": [],
@@ -8418,7 +8606,13 @@
           "count": 4,
           "sides": 10
         },
-        "damageType": "piercing"
+        "damageType": "piercing",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 10
+          }
+        }
       }
     ],
     "conditions": [],
@@ -8795,7 +8989,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Cleric", "Sorcerer", "Wizard"],
     "attackSave": {
@@ -8849,7 +9043,13 @@
           "count": 8,
           "sides": 6
         },
-        "damageType": "lightning"
+        "damageType": "lightning",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       }
     ],
     "conditions": [],
@@ -9103,7 +9303,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Sorcerer", "Warlock", "Wizard"],
     "attackSave": {
@@ -9460,7 +9660,22 @@
     "attackSave": {
       "kind": "none"
     },
-    "modifiers": [],
+    "modifiers": [
+      {
+        "id": "h0",
+        "type": "healing",
+        "dice": {
+          "count": 5,
+          "sides": 8
+        },
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
+      }
+    ],
     "conditions": [],
     "higherLevels": [
       {
@@ -9545,7 +9760,22 @@
     "attackSave": {
       "kind": "none"
     },
-    "modifiers": [],
+    "modifiers": [
+      {
+        "id": "h0",
+        "type": "healing",
+        "dice": {
+          "count": 2,
+          "sides": 4
+        },
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 4
+          }
+        }
+      }
+    ],
     "conditions": [],
     "higherLevels": [
       {
@@ -9724,7 +9954,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Cleric", "Druid", "Sorcerer", "Wizard"],
     "attackSave": {
@@ -9766,7 +9996,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Druid", "Sorcerer", "Wizard"],
     "attackSave": {
@@ -9922,7 +10152,13 @@
           "count": 3,
           "sides": 8
         },
-        "damageType": "psychic"
+        "damageType": "psychic",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -9966,7 +10202,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Sorcerer", "Warlock", "Wizard"],
     "attackSave": {
@@ -10230,7 +10466,13 @@
           "count": 2,
           "sides": 10
         },
-        "damageType": "radiant"
+        "damageType": "radiant",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 10
+          }
+        }
       }
     ],
     "conditions": [],
@@ -10508,7 +10750,13 @@
           "count": 4,
           "sides": 10
         },
-        "damageType": "psychic"
+        "damageType": "psychic",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 10
+          }
+        }
       }
     ],
     "conditions": [],
@@ -10757,7 +11005,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Druid", "Sorcerer", "Warlock", "Wizard"],
     "attackSave": {
@@ -10772,7 +11020,13 @@
           "count": 1,
           "sides": 12
         },
-        "damageType": "poison"
+        "damageType": "poison",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 12
+          }
+        }
       }
     ],
     "conditions": [],
@@ -10990,7 +11244,22 @@
     "attackSave": {
       "kind": "none"
     },
-    "modifiers": [],
+    "modifiers": [
+      {
+        "id": "h0",
+        "type": "healing",
+        "dice": {
+          "count": 2,
+          "sides": 8
+        },
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
+      }
+    ],
     "conditions": [],
     "higherLevels": [
       {
@@ -11031,7 +11300,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Sorcerer", "Warlock", "Wizard"],
     "attackSave": {
@@ -11293,7 +11562,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Druid"],
     "attackSave": {
@@ -11308,7 +11577,13 @@
           "count": 1,
           "sides": 8
         },
-        "damageType": "fire"
+        "damageType": "fire",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -11674,7 +11949,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Sorcerer", "Wizard"],
     "attackSave": {
@@ -11689,7 +11964,13 @@
           "count": 1,
           "sides": 8
         },
-        "damageType": "cold"
+        "damageType": "cold",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -11738,7 +12019,16 @@
     "attackSave": {
       "kind": "none"
     },
-    "modifiers": [],
+    "modifiers": [
+      {
+        "id": "h0",
+        "type": "healing",
+        "dice": {
+          "count": 4,
+          "sides": 8
+        }
+      }
+    ],
     "conditions": [],
     "higherLevels": [],
     "areaOfEffect": {
@@ -11786,7 +12076,13 @@
           "count": 2,
           "sides": 8
         },
-        "damageType": "poison"
+        "damageType": "poison",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -11948,7 +12244,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Cleric", "Druid"],
     "attackSave": {
@@ -12149,7 +12445,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Cleric"],
     "attackSave": {
@@ -12164,7 +12460,13 @@
           "count": 1,
           "sides": 8
         },
-        "damageType": "radiant"
+        "damageType": "radiant",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -12362,7 +12664,13 @@
           "count": 1,
           "sides": 6
         },
-        "damageType": "fire"
+        "damageType": "fire",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       }
     ],
     "conditions": [],
@@ -12660,7 +12968,13 @@
           "count": 3,
           "sides": 8
         },
-        "damageType": "thunder"
+        "damageType": "thunder",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -12787,7 +13101,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Druid"],
     "attackSave": {
@@ -12847,7 +13161,13 @@
           "count": 2,
           "sides": 6
         },
-        "damageType": "radiant"
+        "damageType": "radiant",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       }
     ],
     "conditions": [],
@@ -12887,7 +13207,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Sorcerer", "Wizard"],
     "attackSave": {
@@ -12902,7 +13222,13 @@
           "count": 1,
           "sides": 8
         },
-        "damageType": "lightning"
+        "damageType": "lightning",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -13199,7 +13525,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Sorcerer"],
     "attackSave": {
@@ -13245,7 +13571,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Cleric", "Druid"],
     "attackSave": {
@@ -13529,7 +13855,13 @@
           "count": 3,
           "sides": 8
         },
-        "damageType": "radiant"
+        "damageType": "radiant",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       },
       {
         "id": "m1",
@@ -13627,7 +13959,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Druid"],
     "attackSave": {
@@ -13642,7 +13974,13 @@
           "count": 1,
           "sides": 8
         },
-        "damageType": "radiant"
+        "damageType": "radiant",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -14318,7 +14656,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Cleric"],
     "attackSave": {
@@ -14371,7 +14709,13 @@
           "count": 2,
           "sides": 8
         },
-        "damageType": "thunder"
+        "damageType": "thunder",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -14737,7 +15081,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Sorcerer", "Warlock", "Wizard"],
     "attackSave": {
@@ -14901,7 +15245,13 @@
           "count": 3,
           "sides": 6
         },
-        "damageType": "necrotic"
+        "damageType": "necrotic",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       }
     ],
     "conditions": [],
@@ -14942,7 +15292,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard"],
     "attackSave": {
@@ -14957,7 +15307,13 @@
           "count": 1,
           "sides": 6
         },
-        "damageType": "psychic"
+        "damageType": "psychic",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 6
+          }
+        }
       }
     ],
     "conditions": [],
@@ -15014,7 +15370,13 @@
           "count": 10,
           "sides": 4
         },
-        "damageType": "acid"
+        "damageType": "acid",
+        "scaling": {
+          "perStep": {
+            "count": 2,
+            "sides": 4
+          }
+        }
       },
       {
         "id": "m1",
@@ -15083,7 +15445,13 @@
           "count": 5,
           "sides": 8
         },
-        "damageType": "fire"
+        "damageType": "fire",
+        "scaling": {
+          "perStep": {
+            "count": 1,
+            "sides": 8
+          }
+        }
       }
     ],
     "conditions": [],
@@ -15184,7 +15552,13 @@
           "count": 10,
           "sides": 6
         },
-        "damageType": "cold"
+        "damageType": "cold",
+        "scaling": {
+          "perStep": {
+            "count": 2,
+            "sides": 6
+          }
+        }
       },
       {
         "id": "m1",

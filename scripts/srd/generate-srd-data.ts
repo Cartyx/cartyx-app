@@ -46,6 +46,7 @@ export interface GeneratedSpell {
     type: string;
     dice?: { count: number; sides: number };
     damageType?: string;
+    scaling?: { perStep: { count: number; sides: number } };
   }>;
   conditions: Array<{ id: string; action: string; condition: string }>;
   higherLevels: Array<{ id: string; level: number; description: string }>;
@@ -143,6 +144,23 @@ function parseDamage(desc: string): GeneratedSpell['modifiers'] {
     });
   }
   return modifiers;
+}
+
+function parseHealing(desc: string): GeneratedSpell['modifiers'] {
+  // e.g. "regains a number of Hit Points equal to 2d8 …", "regains Hit Points equal to 2d4"
+  const m = desc.match(/(?:regains?|restores?)[^.]*?(\d+)d(\d+)/i);
+  if (!m) return [];
+  return [
+    { id: 'h0', type: 'healing', dice: { count: parseInt(m[1], 10), sides: parseInt(m[2], 10) } },
+  ];
+}
+
+// Per-step scaling dice, from the higher-level/cantrip-upgrade sentence. Both
+// "increases by 1d6 for each spell slot level above 3" and "increases by 1d10
+// when you reach levels 5, 11, and 17" start with "increases by NdM".
+function parseScalingPerStep(text: string): { count: number; sides: number } | null {
+  const m = text.match(/increases by (\d+)d(\d+)/i);
+  return m ? { count: parseInt(m[1], 10), sides: parseInt(m[2], 10) } : null;
 }
 
 function parseAttackSave(desc: string): GeneratedSpell['attackSave'] {
@@ -272,6 +290,12 @@ export function parseSpellMarkdown(md: string): GeneratedSpell[] {
       .replace(/\n{3,}/g, '\n\n')
       .trim();
 
+    const modifiers = [...parseDamage(description), ...parseHealing(description)];
+    const perStep = higherLevels.length ? parseScalingPerStep(higherLevels[0].description) : null;
+    if (perStep && modifiers.length) {
+      modifiers[0] = { ...modifiers[0], scaling: { perStep } };
+    }
+
     spells.push({
       name,
       description: description || name,
@@ -282,10 +306,15 @@ export function parseSpellMarkdown(md: string): GeneratedSpell[] {
       range: parseRange(label('Range')),
       duration: parseDuration(label('Duration')),
       ritual,
-      higherLevelScaling: { enabled: higherLevels.length > 0, type: 'spell-scale' },
+      higherLevelScaling: {
+        enabled: higherLevels.length > 0,
+        // Cantrips scale by character level (breakpoints 5/11/17); leveled
+        // spells scale by the spell slot used.
+        type: level === 0 ? 'character-level' : 'spell-scale',
+      },
       classes,
       attackSave: parseAttackSave(description),
-      modifiers: parseDamage(description),
+      modifiers,
       conditions: [],
       higherLevels,
       areaOfEffect: parseAoe(description),

@@ -170,4 +170,10 @@ describe('toParsedDiceRoll', () => {
     // channel is part of both shapes; schema must parse cleanly
     expect(() => saveDiceRollSchema.parse(candidate)).not.toThrow();
   });
+
+  it('uses the provided title, falling back to the formula', () => {
+    const result = rollDice({ pool: [{ sides: 6, count: 8 }], mode: 'normal', modifier: 0 });
+    expect(toParsedDiceRoll(result).title).toBe(result.formula);
+    expect(toParsedDiceRoll(result, { title: 'Fireball · Fire' }).title).toBe('Fireball · Fire');
+  });
 });

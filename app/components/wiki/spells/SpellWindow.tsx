@@ -1,4 +1,5 @@
-import { Pencil } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Pencil, Send } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { SpellData } from '~/types/spell';
@@ -12,6 +13,28 @@ import {
   formatAttackSave,
   formatDamageEffect,
 } from './spellFormat';
+import { scaledDice, rollSpellModifier, type SpellRollOutcome } from './spellDice';
+import { requestChatBroadcast, onChatDelivery } from '~/utils/chatBridge';
+
+/** Plain-text spell summary for chat (chat renders plain text, not markdown). */
+function spellToChatText(spell: SpellData): string {
+  const header = `🔮 ${spell.name} — ${formatSpellLevel(spell.level)} ${formatSchool(spell.school)}${
+    spell.ritual ? ' (ritual)' : ''
+  }`;
+  const stats = `Casting: ${formatCastingTime(spell.castingTime)} · Range: ${formatRange(
+    spell.range
+  )} · Components: ${formatComponents(spell.components)} · Duration: ${formatDuration(
+    spell.duration
+  )}`;
+  let desc = spell.description
+    .replace(/\*\*/g, '')
+    .replace(/(^|[\s(])_([^_]+)_/g, '$1$2')
+    .replace(/^#+\s*/gm, '')
+    .trim();
+  const MAX_DESC = 1200;
+  if (desc.length > MAX_DESC) desc = desc.slice(0, MAX_DESC).trimEnd() + '…';
+  return `${header}\n${stats}\n\n${desc}`;
+}
 
 function Cell({ label, value }: { label: string; value: string }) {
   return (
@@ -30,6 +53,40 @@ interface SpellWindowProps {
 }
 
 export function SpellWindow({ spell, onEdit }: SpellWindowProps) {
+  const rollable = spell.modifiers.filter((m) => m.dice);
+  const scaling = spell.higherLevelScaling;
+  const [castLevel, setCastLevel] = useState(scaling.type === 'character-level' ? 1 : spell.level);
+  const [crit, setCrit] = useState(false);
+  const [lastRoll, setLastRoll] = useState<SpellRollOutcome | null>(null);
+  const [shareStatus, setShareStatus] = useState<'idle' | 'shared' | 'no-session'>('idle');
+  const pendingShareId = useRef<string | null>(null);
+  const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const off = onChatDelivery(({ requestId, delivered }) => {
+      if (requestId !== pendingShareId.current) return;
+      pendingShareId.current = null;
+      setShareStatus(delivered ? 'shared' : 'no-session');
+      if (statusTimer.current) clearTimeout(statusTimer.current);
+      statusTimer.current = setTimeout(() => setShareStatus('idle'), 3000);
+    });
+    return () => {
+      off();
+      if (statusTimer.current) clearTimeout(statusTimer.current);
+    };
+  }, []);
+
+  const handleShare = () => {
+    const requestId = crypto.randomUUID();
+    pendingShareId.current = requestId;
+    requestChatBroadcast({ requestId, text: spellToChatText(spell), channel: 'general' });
+  };
+
+  const levelOptions =
+    scaling.type === 'character-level'
+      ? Array.from({ length: 20 }, (_, i) => i + 1)
+      : Array.from({ length: 10 - spell.level }, (_, i) => spell.level + i);
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-start justify-between gap-2 px-4 pt-3 shrink-0">
@@ -40,16 +97,35 @@ export function SpellWindow({ spell, onEdit }: SpellWindowProps) {
             {spell.ritual ? ' (ritual)' : ''}
           </p>
         </div>
-        {spell.canEdit && onEdit && (
+        <div className="flex items-center gap-2 shrink-0">
+          {shareStatus !== 'idle' && (
+            <span
+              className={`text-[10px] font-semibold ${
+                shareStatus === 'shared' ? 'text-emerald-400' : 'text-amber-400'
+              }`}
+            >
+              {shareStatus === 'shared' ? 'Shared to chat' : 'No active session'}
+            </span>
+          )}
           <button
             type="button"
-            onClick={onEdit}
-            className="shrink-0 p-1 rounded bg-white/[0.05] hover:bg-white/[0.1] text-slate-400 hover:text-white transition-colors"
-            aria-label="Edit spell"
+            onClick={handleShare}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors text-xs font-bold shadow-sm shadow-blue-500/30"
+            aria-label="Share spell in chat"
           >
-            <Pencil className="h-3.5 w-3.5" />
+            <Send className="h-4 w-4" /> Share in Chat
           </button>
-        )}
+          {spell.canEdit && onEdit && (
+            <button
+              type="button"
+              onClick={onEdit}
+              className="p-1 rounded bg-white/[0.05] hover:bg-white/[0.1] text-slate-400 hover:text-white transition-colors"
+              aria-label="Edit spell"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-4 gap-3 px-4 py-3 mt-2 border-y border-white/[0.05] shrink-0">
@@ -62,6 +138,73 @@ export function SpellWindow({ spell, onEdit }: SpellWindowProps) {
         <Cell label="Attack/Save" value={formatAttackSave(spell.attackSave)} />
         <Cell label="Damage/Effect" value={formatDamageEffect(spell)} />
       </div>
+
+      {rollable.length > 0 && (
+        <div className="px-4 py-3 border-b border-white/[0.05] shrink-0 space-y-2">
+          <div className="flex items-center gap-3 flex-wrap">
+            {scaling.enabled && (
+              <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-400">
+                {scaling.type === 'character-level' ? 'Character level' : 'Slot level'}
+                <select
+                  value={castLevel}
+                  onChange={(e) => setCastLevel(Number(e.target.value))}
+                  className="bg-[#080A12] border border-white/[0.07] rounded px-2 py-1 text-xs text-white"
+                >
+                  {levelOptions.map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            <label className="flex items-center gap-1.5 text-[10px] font-semibold text-slate-400">
+              <input
+                type="checkbox"
+                checked={crit}
+                onChange={(e) => setCrit(e.target.checked)}
+                className="h-3.5 w-3.5 accent-blue-600"
+              />
+              Crit
+            </label>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {rollable.map((m) => {
+              const dice = scaledDice(m, spell, castLevel);
+              if (!dice) return null;
+              const label = `${crit ? dice.count * 2 : dice.count}d${dice.sides}${
+                m.damageType ? ` ${m.damageType}` : m.type === 'healing' ? ' healing' : ''
+              }`;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => {
+                    const outcome = rollSpellModifier({ spell, modifier: m, castLevel, crit });
+                    if (outcome) setLastRoll(outcome);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-300 text-xs font-semibold hover:bg-blue-500/20 transition-colors"
+                  data-testid={`roll-${m.id}`}
+                >
+                  <span aria-hidden>⚄</span> {label}
+                </button>
+              );
+            })}
+          </div>
+          {lastRoll && (
+            <div
+              data-testid="spell-roll-result"
+              className="flex items-baseline gap-2 rounded-lg bg-white/[0.04] border border-white/[0.07] px-3 py-2"
+            >
+              <span className="text-[11px] font-semibold text-slate-400">{lastRoll.title}</span>
+              <span className="text-[11px] text-slate-500">{lastRoll.formula}</span>
+              <span className="ml-auto text-lg font-bold text-blue-300 tabular-nums">
+                {lastRoll.total}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="flex-1 overflow-y-auto p-4 min-h-0">
         {spell.components.material && spell.components.materialDescription && (

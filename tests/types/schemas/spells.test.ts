@@ -52,3 +52,20 @@ describe('listSpellsSchema', () => {
     expect(parsed.level).toBe(3);
   });
 });
+
+describe('modifiers with scaling', () => {
+  it('accepts a damage modifier with scaling', () => {
+    const parsed = createSpellSchema.parse({
+      ...validSpell,
+      modifiers: [
+        {
+          id: 'm0',
+          type: 'damage',
+          dice: { count: 8, sides: 6 },
+          scaling: { perStep: { count: 1, sides: 6 } },
+        },
+      ],
+    });
+    expect(parsed.modifiers[0].scaling).toEqual({ perStep: { count: 1, sides: 6 } });
+  });
+});
