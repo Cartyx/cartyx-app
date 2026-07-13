@@ -12,6 +12,7 @@ import {
   CalendarDays,
   CalendarClock,
   Sparkles,
+  Building2,
 } from 'lucide-react';
 import { CharactersPanel } from './characters/CharactersPanel';
 import { RacesPanel } from './races/RacesPanel';
@@ -22,6 +23,7 @@ import { LocationsPanel } from './locations/LocationsPanel';
 import { MapsPanel } from './maps/MapsPanel';
 import { MonstersPanel } from './monsters/MonstersPanel';
 import { LorePanel } from './lore/LorePanel';
+import { OrganizationsPanel } from './organizations/OrganizationsPanel';
 import { CalendarPanel } from './calendar/CalendarPanel';
 import { EventsPanel } from './calendar/EventsPanel';
 import { useCampaign } from '~/hooks/useCampaigns';
@@ -34,6 +36,7 @@ type WikiCategoryId =
   | 'spells'
   | 'locations'
   | 'lore'
+  | 'organizations'
   | 'maps'
   | 'monsters'
   | 'calendar'
@@ -55,6 +58,7 @@ const WIKI_CATEGORIES: WikiCategory[] = [
   { id: 'spells', label: 'Spells', icon: Sparkles },
   { id: 'locations', label: 'Locations', icon: MapPin },
   { id: 'lore', label: 'Lore', icon: BookOpen },
+  { id: 'organizations', label: 'Organizations', icon: Building2 },
   { id: 'maps', label: 'Maps', icon: MapIcon, gmOnly: true },
   { id: 'monsters', label: 'Monsters', icon: Skull, gmOnly: true },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
@@ -107,6 +111,8 @@ export function WikiPanel() {
         <LocationsPanel onBack={() => setSelectedCategory(null)} />
       ) : selectedCategory === 'lore' ? (
         <LorePanel onBack={() => setSelectedCategory(null)} />
+      ) : selectedCategory === 'organizations' ? (
+        <OrganizationsPanel onBack={() => setSelectedCategory(null)} />
       ) : selectedCategory === 'maps' && isGM ? (
         <MapsPanel onBack={() => setSelectedCategory(null)} />
       ) : selectedCategory === 'monsters' && isGM ? (
