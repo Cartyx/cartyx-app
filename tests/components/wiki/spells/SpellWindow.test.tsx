@@ -4,12 +4,18 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 vi.mock('~/utils/diceRollerBridge', () => ({ requestDiceBroadcast: vi.fn() }));
+vi.mock('~/utils/chatBridge', () => ({
+  requestChatBroadcast: vi.fn(),
+  onChatDelivery: vi.fn(() => () => {}),
+}));
 
 import { requestDiceBroadcast } from '~/utils/diceRollerBridge';
+import { requestChatBroadcast } from '~/utils/chatBridge';
 import { SpellWindow } from '~/components/wiki/spells/SpellWindow';
 import type { SpellData } from '~/types/spell';
 
 const mockRequestDiceBroadcast = vi.mocked(requestDiceBroadcast);
+const mockRequestChatBroadcast = vi.mocked(requestChatBroadcast);
 
 function fireball(): SpellData {
   return {
@@ -78,5 +84,16 @@ describe('SpellWindow roll chips', () => {
     render(<SpellWindow spell={fireball()} />);
     await user.selectOptions(screen.getByRole('combobox'), '5');
     expect(screen.getByTestId('roll-m0')).toHaveTextContent('10d6 fire');
+  });
+
+  it('shares the spell to chat', async () => {
+    const user = userEvent.setup();
+    render(<SpellWindow spell={fireball()} />);
+    await user.click(screen.getByRole('button', { name: /share spell in chat/i }));
+    expect(mockRequestChatBroadcast).toHaveBeenCalledTimes(1);
+    const arg = mockRequestChatBroadcast.mock.calls[0][0];
+    expect(arg.channel).toBe('general');
+    expect(arg.text).toContain('Fireball');
+    expect(typeof arg.requestId).toBe('string');
   });
 });

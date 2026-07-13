@@ -14,6 +14,7 @@ import { useChatMessages } from '~/hooks/useChatMessages';
 import { useDiceRolls } from '~/hooks/useDiceRolls';
 import { useAuth } from '~/hooks/useAuth';
 import { onDiceBroadcastRequest, reportDiceDelivery } from '~/utils/diceRollerBridge';
+import { onChatBroadcastRequest, reportChatDelivery } from '~/utils/chatBridge';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
 
@@ -126,6 +127,19 @@ export function InspectorSidebar({
       reportDiceDelivery({ requestId, delivered: canSend });
     });
   }, [socket, sendDiceRoll, isViewingActive, activeSessionId, user?.name]);
+
+  // Relay "share in chat" requests (e.g. the spell view → window event) to the
+  // session socket as a chat message, same gating as dice rolls.
+  useEffect(() => {
+    return onChatBroadcastRequest(({ requestId, text, channel }) => {
+      const canSend =
+        isViewingActive && !!activeSessionId && !!socket && socket.readyState === WebSocket.OPEN;
+      if (canSend) {
+        sendMessage(text, channel, user?.id ?? '', user?.name || 'Player', socket);
+      }
+      reportChatDelivery({ requestId, delivered: canSend });
+    });
+  }, [socket, sendMessage, isViewingActive, activeSessionId, user?.id, user?.name]);
 
   const sessionList = (sessions ?? []).map((s) => ({
     id: s.id,

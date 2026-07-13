@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Pencil } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Pencil, Send } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { SpellData } from '~/types/spell';
@@ -14,6 +14,25 @@ import {
   formatDamageEffect,
 } from './spellFormat';
 import { scaledDice, rollSpellModifier, type SpellRollOutcome } from './spellDice';
+import { requestChatBroadcast, onChatDelivery } from '~/utils/chatBridge';
+
+/** Plain-text spell summary for chat (chat renders plain text, not markdown). */
+function spellToChatText(spell: SpellData): string {
+  const header = `🔮 ${spell.name} — ${formatSpellLevel(spell.level)} ${formatSchool(spell.school)}${
+    spell.ritual ? ' (ritual)' : ''
+  }`;
+  const stats = `Casting: ${formatCastingTime(spell.castingTime)} · Range: ${formatRange(
+    spell.range
+  )} · Components: ${formatComponents(spell.components)} · Duration: ${formatDuration(
+    spell.duration
+  )}`;
+  const desc = spell.description
+    .replace(/\*\*/g, '')
+    .replace(/(^|[\s(])_([^_]+)_/g, '$1$2')
+    .replace(/^#+\s*/gm, '')
+    .trim();
+  return `${header}\n${stats}\n\n${desc}`;
+}
 
 function Cell({ label, value }: { label: string; value: string }) {
   return (
@@ -37,6 +56,23 @@ export function SpellWindow({ spell, onEdit }: SpellWindowProps) {
   const [castLevel, setCastLevel] = useState(scaling.type === 'character-level' ? 1 : spell.level);
   const [crit, setCrit] = useState(false);
   const [lastRoll, setLastRoll] = useState<SpellRollOutcome | null>(null);
+  const [shareStatus, setShareStatus] = useState<'idle' | 'shared' | 'no-session'>('idle');
+  const pendingShareId = useRef<string | null>(null);
+
+  useEffect(() => {
+    return onChatDelivery(({ requestId, delivered }) => {
+      if (requestId !== pendingShareId.current) return;
+      pendingShareId.current = null;
+      setShareStatus(delivered ? 'shared' : 'no-session');
+      setTimeout(() => setShareStatus('idle'), 3000);
+    });
+  }, []);
+
+  const handleShare = () => {
+    const requestId = crypto.randomUUID();
+    pendingShareId.current = requestId;
+    requestChatBroadcast({ requestId, text: spellToChatText(spell), channel: 'general' });
+  };
 
   const levelOptions =
     scaling.type === 'character-level'
@@ -53,16 +89,35 @@ export function SpellWindow({ spell, onEdit }: SpellWindowProps) {
             {spell.ritual ? ' (ritual)' : ''}
           </p>
         </div>
-        {spell.canEdit && onEdit && (
+        <div className="flex items-center gap-2 shrink-0">
+          {shareStatus !== 'idle' && (
+            <span
+              className={`text-[10px] font-semibold ${
+                shareStatus === 'shared' ? 'text-emerald-400' : 'text-amber-400'
+              }`}
+            >
+              {shareStatus === 'shared' ? 'Shared to chat' : 'No active session'}
+            </span>
+          )}
           <button
             type="button"
-            onClick={onEdit}
-            className="shrink-0 p-1 rounded bg-white/[0.05] hover:bg-white/[0.1] text-slate-400 hover:text-white transition-colors"
-            aria-label="Edit spell"
+            onClick={handleShare}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white/[0.05] hover:bg-white/[0.1] text-slate-400 hover:text-white transition-colors text-[10px] font-semibold"
+            aria-label="Share spell in chat"
           >
-            <Pencil className="h-3.5 w-3.5" />
+            <Send className="h-3 w-3" /> Chat
           </button>
-        )}
+          {spell.canEdit && onEdit && (
+            <button
+              type="button"
+              onClick={onEdit}
+              className="p-1 rounded bg-white/[0.05] hover:bg-white/[0.1] text-slate-400 hover:text-white transition-colors"
+              aria-label="Edit spell"
+            >
+              <Pencil className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-4 gap-3 px-4 py-3 mt-2 border-y border-white/[0.05] shrink-0">
