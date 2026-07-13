@@ -83,7 +83,10 @@ const aoeData = z.object({
   widthPx: num.max(MAX_AOE_PX).optional(),
   rotation: num,
   color: z.string(),
+  label: z.string().optional(),
   createdBy: z.string(),
+  // `.default('')` tolerates older senders that predate this field.
+  createdByName: z.string().default(''),
   createdAt: isoDate,
   updatedAt: isoDate,
 });

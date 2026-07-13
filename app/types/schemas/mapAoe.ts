@@ -15,6 +15,7 @@ export const createMapAoESchema = z.object({
   widthPx: z.number().finite().positive().max(MAX_AOE_PX).optional(),
   rotation: z.number().finite(),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  label: z.string().trim().max(60).optional(),
 });
 
 export const listMapAoESchema = z.object({

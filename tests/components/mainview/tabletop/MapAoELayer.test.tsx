@@ -16,6 +16,7 @@ function aoe(over: Partial<MapAoEData>): MapAoEData {
     rotation: 0,
     color: '#ff0000',
     createdBy: 'u',
+    createdByName: '',
     createdAt: '',
     updatedAt: '',
     ...over,

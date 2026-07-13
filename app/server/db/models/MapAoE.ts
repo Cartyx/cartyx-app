@@ -29,6 +29,8 @@ const mapAoESchema = new mongoose.Schema(
     rotation: { type: Number, required: true },
     // 6-digit hex color.
     color: { type: String, required: true },
+    // Optional user label, e.g. the spell name.
+    label: { type: String },
     // The author. Used to gate deletion: a player may delete only their own
     // AoE; a GM may delete anyone's.
     createdBy: {
@@ -36,6 +38,9 @@ const mapAoESchema = new mongoose.Schema(
       ref: 'User',
       required: true,
     },
+    // Placer's display name, denormalised at create time so viewers can
+    // render it without a per-viewer user lookup.
+    createdByName: { type: String, default: '' },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
   },

@@ -66,7 +66,9 @@ describe('parseTabletopMapMessage', () => {
     sizePx: 100,
     rotation: 0,
     color: '#f00',
+    label: 'Fireball',
     createdBy: 'u1',
+    createdByName: 'Ada Lovelace',
     createdAt: '2026-06-15T00:00:00Z',
     updatedAt: '2026-06-15T00:00:00Z',
   };
@@ -102,6 +104,23 @@ describe('parseTabletopMapMessage', () => {
     // useTabletopMapSync's inbound reducer.
     const msg = parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: fullAoe });
     expect(msg).toMatchObject({ type: 'aoe:added', mapId: 'm1', aoe: fullAoe });
+  });
+
+  it('accepts an aoe:added frame missing createdByName (older sender), defaulting to empty string', () => {
+    // Robustness against senders on an older build that predates createdByName.
+    const noCreatedByName: Record<string, unknown> = { ...fullAoe };
+    delete noCreatedByName.createdByName;
+    const msg = parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: noCreatedByName });
+    expect(msg).not.toBeNull();
+    expect((msg as { aoe: { createdByName: string } }).aoe.createdByName).toBe('');
+  });
+
+  it('accepts an aoe:added frame without the optional label', () => {
+    const noLabel: Record<string, unknown> = { ...fullAoe };
+    delete noLabel.label;
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: noLabel })
+    ).not.toBeNull();
   });
 
   it('accepts aoe:removed and aoe:cleared frames', () => {

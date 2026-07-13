@@ -6,7 +6,7 @@ vi.mock('~/server/db/connection', () => ({
   isDBConnected: vi.fn(() => true),
 }));
 vi.mock('~/server/db/models/User', () => ({
-  User: { findOne: vi.fn() },
+  User: { findOne: vi.fn(), findById: vi.fn() },
 }));
 vi.mock('~/server/db/models/Campaign', () => ({
   Campaign: { findById: vi.fn() },
@@ -107,11 +107,18 @@ const _moveMapAoE = moveMapAoE as unknown as (args: {
   data: Record<string, unknown>;
 }) => Promise<{ aoe: Record<string, unknown> }>;
 
+function mockUserFindById(user: Record<string, unknown> | null) {
+  vi.mocked(User.findById).mockReturnValue({
+    select: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(user) }),
+  } as never);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getSession).mockResolvedValue(mockSession);
   vi.mocked(User.findOne).mockResolvedValue(mockDbUser);
   vi.mocked(Campaign.findById).mockResolvedValue(mockGMCampaign);
+  mockUserFindById({ firstName: 'Ada', lastName: 'Lovelace' });
 });
 
 // ---------------------------------------------------------------------------
@@ -119,9 +126,10 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('createMapAoE', () => {
-  it('sets createdBy to the member and returns the doc', async () => {
+  it('sets createdBy and createdByName (resolved from the placer) and returns the doc', async () => {
     vi.mocked(Campaign.findById).mockResolvedValue(mockPlayerCampaign);
-    const created = makeAoE();
+    mockUserFindById({ firstName: 'Ada', lastName: 'Lovelace' });
+    const created = makeAoE({ createdByName: 'Ada Lovelace' });
     vi.mocked(MapAoE.create).mockResolvedValue({
       ...created,
       toObject: () => created,
@@ -141,11 +149,67 @@ describe('createMapAoE', () => {
     });
 
     expect(result.aoe.id).toBe('aoe-1');
+    expect(result.aoe.createdByName).toBe('Ada Lovelace');
     expect(vi.mocked(MapAoE.create).mock.calls[0][0]).toMatchObject({
       createdBy: 'dbuser-1',
+      createdByName: 'Ada Lovelace',
       campaignId: 'camp-1',
       mapId: 'map-1',
     });
+  });
+
+  it('persists an optional label when provided', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(mockPlayerCampaign);
+    mockUserFindById({ firstName: 'Ada', lastName: 'Lovelace' });
+    const created = makeAoE({ createdByName: 'Ada Lovelace', label: 'Fireball' });
+    vi.mocked(MapAoE.create).mockResolvedValue({
+      ...created,
+      toObject: () => created,
+    } as never);
+
+    const result = await _createMapAoE({
+      data: {
+        campaignId: 'camp-1',
+        mapId: 'map-1',
+        shape: 'sphere',
+        originX: 100,
+        originY: 200,
+        sizePx: 50,
+        rotation: 0,
+        color: '#ff0000',
+        label: 'Fireball',
+      },
+    });
+
+    expect(result.aoe.label).toBe('Fireball');
+    expect(vi.mocked(MapAoE.create).mock.calls[0][0]).toMatchObject({
+      label: 'Fireball',
+    });
+  });
+
+  it('falls back to email, then Unknown, when the placer has no name', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(mockPlayerCampaign);
+    mockUserFindById({ email: 'ada@example.com' });
+    const created = makeAoE({ createdByName: 'ada@example.com' });
+    vi.mocked(MapAoE.create).mockResolvedValue({
+      ...created,
+      toObject: () => created,
+    } as never);
+
+    const result = await _createMapAoE({
+      data: {
+        campaignId: 'camp-1',
+        mapId: 'map-1',
+        shape: 'sphere',
+        originX: 100,
+        originY: 200,
+        sizePx: 50,
+        rotation: 0,
+        color: '#ff0000',
+      },
+    });
+
+    expect(result.aoe.createdByName).toBe('ada@example.com');
   });
 
   it('rejects a non-member (via requireCampaignMember)', async () => {

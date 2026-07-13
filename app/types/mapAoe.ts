@@ -5,6 +5,8 @@ export interface MapAoEData {
   id: string;
   mapId: string;
   campaignId: string;
+  /** Optional user label, e.g. the spell name. */
+  label?: string;
   shape: AoeShape;
   /** Origin in map-local pixels — center (sphere/cube/cylinder) or apex (cone/line). */
   originX: number;
@@ -19,6 +21,8 @@ export interface MapAoEData {
   color: string;
   /** Author user id — a player may delete only their own; a GM may delete any. */
   createdBy: string;
+  /** Placer's display name, denormalized at create time so viewers don't need a user lookup. */
+  createdByName: string;
   createdAt: string;
   updatedAt: string;
 }

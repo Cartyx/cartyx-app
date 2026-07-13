@@ -79,6 +79,7 @@ export function useMapAoEMutations(campaignId: string, mapId: string) {
       widthPx?: number;
       rotation: number;
       color: string;
+      label?: string;
     }) => {
       return await createMapAoEFn({ data: { campaignId, mapId, ...input } });
     },

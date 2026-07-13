@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { MapAoE } from '../db/models/MapAoE';
+import { User } from '../db/models/User';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import type { MapAoEData, AoeShape } from '~/types/mapAoe';
 import {
@@ -26,7 +27,9 @@ type AoEDoc = {
   widthPx?: number;
   rotation?: number;
   color?: string;
+  label?: string;
   createdBy?: unknown;
+  createdByName?: string;
   createdAt?: Date;
   updatedAt?: Date;
 };
@@ -43,7 +46,9 @@ function serializeAoE(a: AoEDoc): MapAoEData {
     widthPx: typeof a.widthPx === 'number' ? a.widthPx : undefined,
     rotation: a.rotation ?? 0,
     color: a.color ?? '#fbbf24',
+    label: a.label ?? undefined,
     createdBy: a.createdBy ? String(a.createdBy) : '',
+    createdByName: a.createdByName ?? '',
     createdAt: a.createdAt instanceof Date ? a.createdAt.toISOString() : '',
     updatedAt: a.updatedAt instanceof Date ? a.updatedAt.toISOString() : '',
   };
@@ -83,6 +88,11 @@ export const createMapAoE = async ({ data }: { data: z.infer<typeof createMapAoE
     const member = await requireCampaignMember(data.campaignId);
     sessionUserId = member.sessionUserId;
 
+    const u = await User.findById(member.userId).select('firstName lastName email').lean();
+    const uDoc = u as { firstName?: string; lastName?: string; email?: string } | null;
+    const createdByName =
+      [uDoc?.firstName, uDoc?.lastName].filter(Boolean).join(' ') || uDoc?.email || 'Unknown';
+
     const doc = await MapAoE.create({
       mapId: data.mapId,
       campaignId: data.campaignId,
@@ -93,7 +103,9 @@ export const createMapAoE = async ({ data }: { data: z.infer<typeof createMapAoE
       widthPx: data.widthPx,
       rotation: data.rotation,
       color: data.color,
+      label: data.label,
       createdBy: member.userId,
+      createdByName,
     });
 
     serverCaptureEvent(sessionUserId, 'map_aoe_created', {
