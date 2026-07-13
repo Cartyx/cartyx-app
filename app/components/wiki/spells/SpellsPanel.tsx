@@ -39,7 +39,10 @@ export function SpellsPanel({ onBack }: SpellsPanelProps) {
     setIsModalOpen(true);
   };
   const handleSpellClick = (spell: SpellListItem) => {
-    if (spell.canEdit) {
+    // GMs always open the editor modal: homebrew spells are editable, and SRD
+    // spells render read-only there with a "Duplicate to Homebrew" action.
+    // Everyone else gets the read-only view modal.
+    if (isGM) {
       setSelectedSpellId(spell.id);
       setIsModalOpen(true);
     } else {
