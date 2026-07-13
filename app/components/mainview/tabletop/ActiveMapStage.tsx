@@ -1139,8 +1139,9 @@ export function ActiveMapStage({
       return;
     }
     // Spell AoE tool: aim a directional template's second point as the cursor
-    // moves (unless a pan override is in progress).
-    if (aoeActive && d.mode !== 'pan') {
+    // moves — but not while dragging an existing template (mode 'aoe') or a pan
+    // override, so an in-progress move falls through to the drag branch below.
+    if (aoeActive && d.mode !== 'pan' && d.mode !== 'aoe') {
       aoe.onPointerMove(e);
       return;
     }
