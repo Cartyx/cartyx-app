@@ -176,6 +176,10 @@ export const queryKeys = {
     list: (campaignId: string, mapId: string) =>
       ['mapDrawings', 'list', campaignId, mapId] as const,
   },
+  mapAoe: {
+    all: ['mapAoe'] as const,
+    list: (campaignId: string, mapId: string) => ['mapAoe', 'list', campaignId, mapId] as const,
+  },
   lore: {
     all: ['lore'] as const,
     list: (campaignId: string, filters?: string) =>
