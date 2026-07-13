@@ -11,7 +11,13 @@ vi.mock('~/server/db/connection', () => ({ connectDB: vi.fn(), isDBConnected: vi
 vi.mock('~/server/db/models/User', () => ({ User: { findOne: vi.fn() } }));
 vi.mock('~/server/db/models/Campaign', () => ({ Campaign: { findById: vi.fn() } }));
 vi.mock('~/server/db/models/Organization', () => ({
-  Organization: { find: vi.fn(), findOne: vi.fn(), findById: vi.fn(), deleteOne: vi.fn() },
+  Organization: {
+    find: vi.fn(),
+    findOne: vi.fn(),
+    findById: vi.fn(),
+    findOneAndUpdate: vi.fn(),
+    deleteOne: vi.fn(),
+  },
 }));
 vi.mock('~/server/db/models/OrganizationMembership', () => ({
   OrganizationMembership: {
@@ -33,10 +39,13 @@ import { User } from '~/server/db/models/User';
 import { Campaign } from '~/server/db/models/Campaign';
 import { Organization } from '~/server/db/models/Organization';
 import { OrganizationMembership } from '~/server/db/models/OrganizationMembership';
+import { Character } from '~/server/db/models/Character';
 import {
   listOrganizations,
   getOrganization,
+  updateOrganization,
   deleteOrganization,
+  addMembership,
   listMembershipsForMember,
 } from '~/server/functions/organizations';
 
@@ -66,11 +75,9 @@ describe('listOrganizations', () => {
   it('restricts non-GM to public or own orgs', async () => {
     vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign as never);
     vi.mocked(Organization.find).mockReturnValue({
-      select: vi
-        .fn()
-        .mockReturnValue({
-          sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
-        }),
+      select: vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+      }),
     } as never);
     await call(listOrganizations)({ data: { campaignId: 'camp-1' } });
     const filter = vi.mocked(Organization.find).mock.calls[0][0] as unknown as Record<
@@ -82,11 +89,9 @@ describe('listOrganizations', () => {
 
   it('filters by locationIds via locations.locationId $in', async () => {
     vi.mocked(Organization.find).mockReturnValue({
-      select: vi
-        .fn()
-        .mockReturnValue({
-          sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
-        }),
+      select: vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue([]) }),
+      }),
     } as never);
     await call(listOrganizations)({ data: { campaignId: 'camp-1', locationIds: ['loc-1'] } });
     const filter = vi.mocked(Organization.find).mock.calls[0][0] as unknown as Record<
@@ -185,5 +190,192 @@ describe('listMembershipsForMember', () => {
     expect(result).toHaveLength(1);
     expect(result[0].organizationId).toBe('pub');
     expect(result[0].privateNotes).toBe(''); // stripped for non-GM
+  });
+});
+
+describe('updateOrganization', () => {
+  it('preserves GM private data on a non-GM (creator) update', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign as never);
+    vi.mocked(Organization.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'o1',
+        campaignId: 'camp-1',
+        createdBy: 'user-1',
+        name: 'Guild',
+        publicInfo: 'p',
+        privateInfo: 'GM secret',
+        isPublic: false,
+        tags: [],
+        locations: [{ locationId: 'loc-1', publicInfo: 'p', privateInfo: 'loc secret' }],
+      }),
+    } as never);
+    vi.mocked(Organization.findOneAndUpdate).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'o1',
+        campaignId: 'camp-1',
+        createdBy: 'user-1',
+        name: 'Guild',
+        publicInfo: 'p2',
+        isPublic: false,
+        tags: [],
+        locations: [{ locationId: 'loc-1', publicInfo: 'p2', privateInfo: 'loc secret' }],
+      }),
+    } as never);
+
+    await call(updateOrganization)({
+      data: {
+        id: 'o1',
+        campaignId: 'camp-1',
+        name: 'Guild',
+        publicInfo: 'p2',
+        privateInfo: '',
+        isPublic: false,
+        tags: [],
+        locations: [{ locationId: 'loc-1', publicInfo: 'p2', privateInfo: '' }],
+      },
+    });
+
+    const set = vi.mocked(Organization.findOneAndUpdate).mock.calls[0][1] as {
+      $set: Record<string, unknown>;
+    };
+    expect(set.$set).not.toHaveProperty('privateInfo');
+    const locations = set.$set.locations as Array<Record<string, unknown>>;
+    expect(locations[0].privateInfo).toBe('loc secret');
+  });
+
+  it('writes privateInfo when the caller is a GM', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(gmCampaign as never);
+    vi.mocked(Organization.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'o1',
+        campaignId: 'camp-1',
+        createdBy: 'user-1',
+        name: 'Guild',
+        publicInfo: 'p',
+        privateInfo: 'old secret',
+        isPublic: false,
+        tags: [],
+        locations: [],
+      }),
+    } as never);
+    vi.mocked(Organization.findOneAndUpdate).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'o1',
+        campaignId: 'camp-1',
+        createdBy: 'user-1',
+        name: 'Guild',
+        publicInfo: 'p',
+        privateInfo: 'new secret',
+        isPublic: false,
+        tags: [],
+        locations: [],
+      }),
+    } as never);
+
+    await call(updateOrganization)({
+      data: {
+        id: 'o1',
+        campaignId: 'camp-1',
+        name: 'Guild',
+        publicInfo: 'p',
+        privateInfo: 'new secret',
+        isPublic: false,
+        tags: [],
+        locations: [],
+      },
+    });
+
+    const set = vi.mocked(Organization.findOneAndUpdate).mock.calls[0][1] as {
+      $set: Record<string, unknown>;
+    };
+    expect(set.$set.privateInfo).toBe('new secret');
+  });
+});
+
+describe('addMembership', () => {
+  it('stores privateNotes for a GM', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(gmCampaign as never);
+    vi.mocked(Organization.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'o1',
+        createdBy: 'someone-else',
+        name: 'Guild',
+        isPublic: true,
+      }),
+    } as never);
+    vi.mocked(OrganizationMembership.create).mockResolvedValue({
+      _id: 'm1',
+      campaignId: 'camp-1',
+      organizationId: 'o1',
+      memberKind: 'character',
+      memberId: 'c1',
+      title: '',
+      publicNotes: '',
+      privateNotes: 'secret',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never);
+    vi.mocked(Character.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(null),
+    } as never);
+
+    await call(addMembership)({
+      data: {
+        campaignId: 'camp-1',
+        organizationId: 'o1',
+        memberKind: 'character',
+        memberId: 'c1',
+        title: '',
+        publicNotes: '',
+        privateNotes: 'secret',
+      },
+    });
+
+    expect(OrganizationMembership.create).toHaveBeenCalledWith(
+      expect.objectContaining({ privateNotes: 'secret' })
+    );
+  });
+
+  it('stores empty privateNotes for a non-GM creator', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign as never);
+    vi.mocked(Organization.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'o1',
+        createdBy: 'user-1',
+        name: 'Guild',
+        isPublic: true,
+      }),
+    } as never);
+    vi.mocked(OrganizationMembership.create).mockResolvedValue({
+      _id: 'm2',
+      campaignId: 'camp-1',
+      organizationId: 'o1',
+      memberKind: 'character',
+      memberId: 'c1',
+      title: '',
+      publicNotes: '',
+      privateNotes: '',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as never);
+    vi.mocked(Character.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(null),
+    } as never);
+
+    await call(addMembership)({
+      data: {
+        campaignId: 'camp-1',
+        organizationId: 'o1',
+        memberKind: 'character',
+        memberId: 'c1',
+        title: '',
+        publicNotes: '',
+        privateNotes: 'attempted secret',
+      },
+    });
+
+    expect(OrganizationMembership.create).toHaveBeenCalledWith(
+      expect.objectContaining({ privateNotes: '' })
+    );
   });
 });

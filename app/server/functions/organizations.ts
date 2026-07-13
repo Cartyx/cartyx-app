@@ -493,7 +493,7 @@ export const removeMembership = async ({
     if (!existing) throw new Error('Membership not found');
 
     const org = await loadOrgForMembership(String(existing.organizationId), data.campaignId);
-    if (org && !member.isGM && String(org.createdBy) !== member.userId)
+    if (!member.isGM && (!org || String(org.createdBy) !== member.userId))
       throw new Error('Forbidden');
 
     await OrganizationMembership.deleteOne({ _id: data.id, campaignId: data.campaignId });
@@ -516,7 +516,9 @@ export const listMembershipsForOrg = async ({
 
     const org = await loadOrgForMembership(data.organizationId, data.campaignId);
     if (!org) return [];
-    const canEdit = member.isGM || String(org.createdBy) === member.userId;
+    const isCreator = String(org.createdBy) === member.userId;
+    if (!member.isGM && !isCreator && !org.isPublic) return [];
+    const canEdit = member.isGM || isCreator;
 
     const docs = (await OrganizationMembership.find({
       organizationId: data.organizationId,
