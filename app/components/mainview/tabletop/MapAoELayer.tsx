@@ -1,3 +1,4 @@
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { MapAoEData } from '~/types/mapAoe';
 import { aoeShapeGeometry, type AoeInput } from './aoeGeometry';
 
@@ -47,7 +48,16 @@ export function MapAoELayer({
       strokeOpacity: 0.9,
       strokeWidth: Math.max(1, 2 * effectiveScale),
       style: { pointerEvents: (selectable ? 'all' : 'none') as 'all' | 'none', cursor: 'pointer' },
-      onPointerDown: selectable && opts.id ? () => onSelect?.(opts.id!) : undefined,
+      // Stop propagation so selecting an existing template does not also reach
+      // the stage's placement handler (which would commit a duplicate AoE) —
+      // mirrors beginDrawingMove / beginTextDrag in ActiveMapStage.
+      onPointerDown:
+        selectable && opts.id
+          ? (e: ReactPointerEvent<SVGElement>) => {
+              e.stopPropagation();
+              onSelect?.(opts.id!);
+            }
+          : undefined,
       'aria-hidden': true as const,
     };
     if (g.kind === 'circle') {
