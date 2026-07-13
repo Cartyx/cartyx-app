@@ -57,6 +57,7 @@ interface CreateCampaignInput {
   links?: Array<{ name: string; url: string }>;
   maxPlayers?: number;
   imageFile?: File | null;
+  loadSrdData?: boolean;
 }
 
 async function encodeImage(
@@ -151,6 +152,7 @@ export function useCreateCampaign() {
           schedTz: input.schedTz,
           links: input.links,
           maxPlayers: input.maxPlayers,
+          loadSrdData: input.loadSrdData,
           ...imagePayload,
         },
       });

@@ -88,6 +88,29 @@ def import_srd_rules(db, *, campaign_id, gm_id, now) -> int:
     return len(docs)
 
 
+def import_srd_spells(db, *, campaign_id, gm_id, now) -> int:
+    """Insert every spell from the generated spells.json as a Spell document."""
+    import json
+
+    spells_json = REPO_ROOT / "app" / "server" / "data" / "srd" / "spells.json"
+    if not spells_json.exists():
+        return 0
+    spells = json.loads(spells_json.read_text(encoding="utf-8"))
+    docs = []
+    for s in spells:
+        docs.append({
+            **s,
+            "source": "srd",
+            "campaignId": campaign_id,
+            "createdBy": gm_id,
+            "createdAt": now,
+            "updatedAt": now,
+        })
+    if docs:
+        db.spells.insert_many(docs)
+    return len(docs)
+
+
 def bulk_npc_specs(rng: random.Random, count: int) -> list[dict]:
     """Generate `count` NPC stat specs from name pools, for volume testing."""
     from seed_player_data import (
@@ -1480,8 +1503,10 @@ def main() -> None:
         if defn.get("bulk_test_campaign"):
             n_races = import_srd_races(db, campaign_id=campaign_id, gm_id=gm_id, now=now)
             n_rules = import_srd_rules(db, campaign_id=campaign_id, gm_id=gm_id, now=now)
+            n_spells = import_srd_spells(db, campaign_id=campaign_id, gm_id=gm_id, now=now)
             print(f"    SRD races  imported {n_races} from docs/srd/races")
             print(f"    SRD rules  imported {n_rules} from docs/srd/rules")
+            print(f"    SRD spells imported {n_spells} from spells.json")
             # Collect race ids for lore links (query back the titles we care about).
             for race_doc in db.races.find(
                 {"campaignId": campaign_id, "title": {"$in": ["Elf", "Dwarf", "Human"]}},

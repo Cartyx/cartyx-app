@@ -89,6 +89,21 @@ export const queryKeys = {
       ['races', 'list', campaignId, search ?? '', tags ?? []] as const,
     detail: (id: string, campaignId?: string) => ['races', 'detail', campaignId ?? '', id] as const,
   },
+  spells: {
+    all: ['spells'] as const,
+    list: (campaignId: string, search?: string, tags?: string[], level?: number, school?: string) =>
+      [
+        'spells',
+        'list',
+        campaignId,
+        search ?? '',
+        tags ?? [],
+        level ?? null,
+        school ?? '',
+      ] as const,
+    detail: (id: string, campaignId?: string) =>
+      ['spells', 'detail', campaignId ?? '', id] as const,
+  },
   chat: {
     all: ['chat'] as const,
     list: (sessionId: string) => ['chat', 'list', sessionId] as const,

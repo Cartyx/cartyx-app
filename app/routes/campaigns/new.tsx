@@ -45,6 +45,7 @@ export function NewCampaignPage() {
   const [schedTz, setSchedTz] = useState('America/Chicago');
   const [links, setLinks] = useState([{ name: '', url: '' }]);
   const [maxPlayers, setMaxPlayers] = useState(4);
+  const [loadSrdData, setLoadSrdData] = useState(true);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
@@ -105,6 +106,7 @@ export function NewCampaignPage() {
       links: links.filter((l) => l.name.trim() || l.url.trim()),
       maxPlayers,
       imageFile,
+      loadSrdData,
     });
     if (result) {
       captureEvent('campaign_wizard_completed', { campaign_name: name.trim() });
@@ -376,6 +378,26 @@ export function NewCampaignPage() {
                   <p className="text-xs text-slate-700 mt-3.5">
                     The GM does not occupy a player slot.
                   </p>
+
+                  <div className="mt-6">
+                    <label
+                      htmlFor="load-srd-data"
+                      className="flex items-center gap-3 cursor-pointer text-sm font-medium text-slate-300"
+                    >
+                      <input
+                        id="load-srd-data"
+                        type="checkbox"
+                        checked={loadSrdData}
+                        onChange={(e) => setLoadSrdData(e.target.checked)}
+                        className="h-4 w-4 accent-blue-600"
+                      />
+                      Load SRD content
+                    </label>
+                    <p className="text-xs text-slate-600 mt-1 ml-7">
+                      Adds the SRD 5.2.1 spells, races, and rules to this campaign. You can add,
+                      edit, or remove your own homebrew copies later.
+                    </p>
+                  </div>
                 </fieldset>
               </>
             )}
@@ -411,7 +433,13 @@ export function NewCampaignPage() {
                               .map((l) => [l.name || '(unnamed)', l.url || 'None'])
                           : [['Links', 'None']],
                     },
-                    { title: 'THE ROSTER', rows: [['Max Players', `${maxPlayers} players`]] },
+                    {
+                      title: 'THE ROSTER',
+                      rows: [
+                        ['Max Players', `${maxPlayers} players`],
+                        ['SRD Content', loadSrdData ? 'Loaded' : 'Not loaded'],
+                      ],
+                    },
                   ].map((section) => (
                     <div key={section.title}>
                       <SectionHeader color="muted" tracking="tracking-widest" className="mb-2">

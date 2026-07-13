@@ -11,10 +11,12 @@ import {
   BookOpen,
   CalendarDays,
   CalendarClock,
+  Sparkles,
 } from 'lucide-react';
 import { CharactersPanel } from './characters/CharactersPanel';
 import { RacesPanel } from './races/RacesPanel';
 import { RulesPanel } from './rules/RulesPanel';
+import { SpellsPanel } from './spells/SpellsPanel';
 import { PlayersPanel } from './players/PlayersPanel';
 import { LocationsPanel } from './locations/LocationsPanel';
 import { MapsPanel } from './maps/MapsPanel';
@@ -29,6 +31,7 @@ type WikiCategoryId =
   | 'players'
   | 'races'
   | 'rules'
+  | 'spells'
   | 'locations'
   | 'lore'
   | 'maps'
@@ -49,6 +52,7 @@ const WIKI_CATEGORIES: WikiCategory[] = [
   { id: 'players', label: 'Players', icon: UserCircle },
   { id: 'races', label: 'Races', icon: Dna },
   { id: 'rules', label: 'Rules', icon: ScrollText },
+  { id: 'spells', label: 'Spells', icon: Sparkles },
   { id: 'locations', label: 'Locations', icon: MapPin },
   { id: 'lore', label: 'Lore', icon: BookOpen },
   { id: 'maps', label: 'Maps', icon: MapIcon, gmOnly: true },
@@ -97,6 +101,8 @@ export function WikiPanel() {
         <RacesPanel onBack={() => setSelectedCategory(null)} />
       ) : selectedCategory === 'rules' ? (
         <RulesPanel onBack={() => setSelectedCategory(null)} />
+      ) : selectedCategory === 'spells' ? (
+        <SpellsPanel onBack={() => setSelectedCategory(null)} />
       ) : selectedCategory === 'locations' ? (
         <LocationsPanel onBack={() => setSelectedCategory(null)} />
       ) : selectedCategory === 'lore' ? (

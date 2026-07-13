@@ -10,12 +10,24 @@ vi.mock('@tanstack/react-router', () => ({
 
 vi.mock('~/hooks/useCampaigns');
 
-// Stub the modal so SettingsPanel tests don't depend on its internals; the
-// modal has its own dedicated test coverage.
+// Stub the modals so SettingsPanel tests don't depend on their internals;
+// each modal has its own dedicated test coverage.
 vi.mock('~/components/mainview/settings/GameSettingsModal', () => ({
   GameSettingsModal: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
     isOpen ? (
       <div data-testid="game-settings-modal">
+        <button type="button" onClick={onClose}>
+          close
+        </button>
+      </div>
+    ) : null,
+}));
+
+vi.mock('~/components/mainview/settings/SrdLicensingModal', () => ({
+  SrdLicensingModal: ({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) =>
+    isOpen ? (
+      <div data-testid="srd-licensing-modal">
+        System Reference Document 5.2.1
         <button type="button" onClick={onClose}>
           close
         </button>
@@ -47,7 +59,7 @@ describe('SettingsPanel', () => {
     mockUseCampaign.mockReturnValue({ campaign: { isGM: false } });
     render(<SettingsPanel />);
     expect(screen.queryByRole('button', { name: /Game Settings/ })).not.toBeInTheDocument();
-    expect(screen.getByText(/No settings available/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /SRD Licensing/ })).toBeInTheDocument();
   });
 
   it('opens the Game Settings modal when the entry is clicked', async () => {
@@ -57,5 +69,15 @@ describe('SettingsPanel', () => {
     expect(screen.queryByTestId('game-settings-modal')).not.toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: /Game Settings/ }));
     expect(screen.getByTestId('game-settings-modal')).toBeInTheDocument();
+  });
+
+  it('shows the SRD Licensing entry for a non-GM and opens the modal with attribution', async () => {
+    mockUseCampaign.mockReturnValue({ campaign: { isGM: false } });
+    const user = userEvent.setup();
+    render(<SettingsPanel />);
+    expect(screen.queryByTestId('srd-licensing-modal')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /SRD Licensing/ }));
+    expect(screen.getByTestId('srd-licensing-modal')).toBeInTheDocument();
+    expect(screen.getByText(/System Reference Document 5\.2\.1/)).toBeInTheDocument();
   });
 });

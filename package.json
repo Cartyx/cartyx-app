@@ -36,7 +36,8 @@
     "dev:gen-avatars": "node scripts/gen_seed_avatars.mjs",
     "fixture": "tsx scripts/dev-fixtures/cli.ts",
     "srd:lint": "tsx scripts/srd/lint.ts",
-    "srd:extract": "tsx scripts/srd/extract-rules.ts"
+    "srd:extract": "tsx scripts/srd/extract-rules.ts",
+    "srd:generate": "tsx scripts/srd/generate-srd-data.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1078.0",
