@@ -1,6 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { captureException } from '~/providers/TelemetryProvider';
+import { showToast } from '~/components/Toast';
 import { queryKeys } from '~/utils/queryKeys';
 import type { MapData, MapListItem } from '~/types/map';
 import {
@@ -121,6 +122,11 @@ export function useMapsMutations(campaignId: string) {
     qc.invalidateQueries({ queryKey: queryKeys.maps.list(campaignId) });
     qc.invalidateQueries({ queryKey: queryKeys.maps.activeAll(campaignId) });
   };
+  // On failure: tell the user and log it.
+  const onError = (action: string, userMessage: string) => (e: unknown) => {
+    captureException(e, { action });
+    showToast(userMessage, 'error');
+  };
 
   const createMap = useMutation({
     mutationFn: async (input: Omit<Parameters<typeof createMapFn>[0]['data'], 'campaignId'>) => {
@@ -128,7 +134,7 @@ export function useMapsMutations(campaignId: string) {
       return res.map;
     },
     onSuccess: invalidateLists,
-    onError: (e) => captureException(e, { action: 'useMapsMutations.createMap' }),
+    onError: onError('useMapsMutations.createMap', 'Couldn’t create the map. Please try again.'),
   });
 
   const updateMapScale = useMutation({
@@ -142,7 +148,10 @@ export function useMapsMutations(campaignId: string) {
       qc.invalidateQueries({ queryKey: queryKeys.maps.detail(campaignId, m.id) });
       invalidateLists();
     },
-    onError: (e) => captureException(e, { action: 'useMapsMutations.updateMapScale' }),
+    onError: onError(
+      'useMapsMutations.updateMapScale',
+      'Couldn’t update the map scale. Please try again.'
+    ),
   });
 
   const updateMap = useMutation({
@@ -154,7 +163,7 @@ export function useMapsMutations(campaignId: string) {
       qc.invalidateQueries({ queryKey: queryKeys.maps.detail(campaignId, m.id) });
       invalidateLists();
     },
-    onError: (e) => captureException(e, { action: 'useMapsMutations.updateMap' }),
+    onError: onError('useMapsMutations.updateMap', 'Couldn’t update the map. Please try again.'),
   });
 
   const deleteMap = useMutation({
@@ -162,7 +171,7 @@ export function useMapsMutations(campaignId: string) {
       return await deleteMapFn({ data: { id: mapId, campaignId } });
     },
     onSuccess: invalidateLists,
-    onError: (e) => captureException(e, { action: 'useMapsMutations.deleteMap' }),
+    onError: onError('useMapsMutations.deleteMap', 'Couldn’t delete the map. Please try again.'),
   });
 
   const setActiveMap = useMutation({
@@ -172,7 +181,10 @@ export function useMapsMutations(campaignId: string) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.maps.activeAll(campaignId) });
     },
-    onError: (e) => captureException(e, { action: 'useMapsMutations.setActiveMap' }),
+    onError: onError(
+      'useMapsMutations.setActiveMap',
+      'Couldn’t switch the active map. Please try again.'
+    ),
   });
 
   return { createMap, updateMapScale, updateMap, deleteMap, setActiveMap };
