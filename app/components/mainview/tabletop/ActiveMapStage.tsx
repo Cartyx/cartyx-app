@@ -1348,6 +1348,19 @@ export function ActiveMapStage({
                 y: ny,
                 final: true,
               }),
+            onError: () => {
+              // Persist failed: revert peers (and the local cache) to the
+              // pre-drag position so no one is left with a ghost.
+              applyTextMoveToCache(qc, campaignId, map.id, d.textId, d.startX, d.startY);
+              onBroadcast({
+                type: 'text:moved',
+                mapId: map.id,
+                textId: d.textId,
+                x: d.startX,
+                y: d.startY,
+                final: true,
+              });
+            },
           }
         );
       }
@@ -1370,6 +1383,20 @@ export function ActiveMapStage({
                 originY: ny,
                 final: true,
               }),
+            onError: () => {
+              // Persist failed: peers got interim positions during the drag —
+              // revert them (and the local cache) to the pre-drag origin rather
+              // than leaving a ghost. The hook's onError also toasts + refetches.
+              applyAoeMoveToCache(qc, campaignId, map.id, d.aoeId, d.startOriginX, d.startOriginY);
+              onBroadcast({
+                type: 'aoe:moved',
+                mapId: map.id,
+                aoeId: d.aoeId,
+                originX: d.startOriginX,
+                originY: d.startOriginY,
+                final: true,
+              });
+            },
           }
         );
       }
