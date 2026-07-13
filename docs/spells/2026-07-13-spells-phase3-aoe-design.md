@@ -63,9 +63,12 @@ drawings store geometry, so it survives pan/zoom and different clients.
   model: campaignId/mapId/createdBy + fields + indexes on `{campaignId, mapId}`).
 - **Zod:** `app/types/schemas/mapAoe.ts` (create/list/remove/clear).
 - **Server functions:** `app/server/functions/mapAoE.ts` — `createMapAoE`,
-  `listMapAoE`, `removeMapAoE`, `clearMapAoE`. Auth via `requireCampaignMember`;
-  **any member may create/remove** (mirror map-text auth, NOT the GM-only drawing
-  auth), and `listMapAoE` **returns AoE to all members** (players included).
+  `listMapAoE`, `removeMapAoE`, `clearMapAoE`. Auth via `requireCampaignMember`:
+  **any member may create**; `listMapAoE` **returns AoE to all members**
+  (players included); **`removeMapAoE` requires the caller to be the template's
+  `createdBy` OR the GM** (a player deletes only their own); **`clearMapAoE` is
+  GM-only** (wipes everyone's). The server is the source of truth for these
+  checks — the UI gating below is only affordance.
 - **Hook:** `app/hooks/useMapAoE.ts` — `useMapAoE(campaignId, mapId)` query +
   `useMapAoEMutations` (create/remove/clear) + `applyAoeAddToCache` /
   `applyAoeRemoveFromCache` / `applyAoeClearToCache` cache helpers (used for both
@@ -149,9 +152,11 @@ just above the grid, below `MapDrawingLayer`/tokens).
 
 - Clicking an existing template selects it; **Delete** removes it (broadcast
   `aoe:removed`). Reuse the drawing selection-lite pattern (a hit target per
-  template), but **no resize handles** in this phase.
-- **"Clear all AoE"** in the tool removes every template on the map (broadcast
-  `aoe:cleared`) — mirrors drawings' clear.
+  template), but **no resize handles** in this phase. A player may delete **only
+  templates they placed** (`createdBy === user`); the **GM may delete any**. The
+  delete affordance is shown accordingly, and the server enforces it.
+- **"Clear all AoE"** removes every template on the map (broadcast
+  `aoe:cleared`) — **GM-only** (shown only to the GM; server rejects non-GM).
 - Templates persist on the map until removed (they don't auto-expire).
 
 ## 7. Out of scope (this phase)
