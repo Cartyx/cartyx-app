@@ -41,6 +41,13 @@ export function useAoeTool(o: Options) {
     if (!o.aoeActive) reset();
   }, [o.aoeActive, reset]);
 
+  // Switching shape mid-placement abandons the in-progress origin — otherwise a
+  // directional placement started as one shape could commit at that stale origin
+  // with a different shape's size (mismatched template).
+  useEffect(() => {
+    reset();
+  }, [o.shape, reset]);
+
   // Esc cancels an in-progress directional placement.
   useEffect(() => {
     if (!o.aoeActive) return;
