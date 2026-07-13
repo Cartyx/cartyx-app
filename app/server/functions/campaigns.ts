@@ -457,6 +457,17 @@ This is the **Catch Up** section. Your players will see this on their Dashboard 
           ),
         ]);
 
+        // Optionally seed SRD 5.2.1 content (spells + races + rules) into the
+        // new campaign, inside the same transaction so it commits atomically.
+        if (data.loadSrdData) {
+          const { importSrdContent } = await import('./srdImport');
+          await importSrdContent({
+            campaignId: String(campaign._id),
+            gmId: String(dbUser._id),
+            session: mongoSession,
+          });
+        }
+
         // Sync User.campaigns array
         await User.updateOne(
           { _id: dbUser._id },

@@ -112,6 +112,10 @@ vi.mock('~/server/db/models/GMScreen', () => ({
   },
 }));
 
+vi.mock('~/server/functions/srdImport', () => ({
+  importSrdContent: vi.fn().mockResolvedValue({ spells: 340, races: 9, rules: 104 }),
+}));
+
 const mockMongoSession = {
   withTransaction: vi.fn(async (fn: () => Promise<void>) => fn()),
   endSession: vi.fn(),
@@ -126,6 +130,7 @@ import { Campaign } from '~/server/db/models/Campaign';
 import { Player } from '~/server/db/models/Player';
 import { Session } from '~/server/db/models/Session';
 import { GMScreen } from '~/server/db/models/GMScreen';
+import { importSrdContent } from '~/server/functions/srdImport';
 import {
   listCampaigns,
   getCampaign,
@@ -553,6 +558,30 @@ describe('createCampaign', () => {
       links: Array<{ name: string; url: string }>;
     }>;
     expect(createCall[0]!.links).toEqual([{ name: 'Discord', url: 'https://discord.gg/test' }]);
+  });
+
+  it('imports SRD content into the new campaign when loadSrdData is true', async () => {
+    const created = makeCampaign();
+    vi.mocked(Campaign.create).mockResolvedValue([created] as never);
+
+    await _createCampaign({ data: { name: 'My Campaign', description: '', loadSrdData: true } });
+
+    expect(importSrdContent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        campaignId: String(created._id),
+        gmId: 'dbuser-1',
+        session: expect.anything(),
+      })
+    );
+  });
+
+  it('does not import SRD content when loadSrdData is false or omitted', async () => {
+    vi.mocked(Campaign.create).mockResolvedValue([makeCampaign()] as never);
+
+    await _createCampaign({ data: { name: 'My Campaign', description: '', loadSrdData: false } });
+    await _createCampaign({ data: { name: 'My Campaign', description: '' } });
+
+    expect(importSrdContent).not.toHaveBeenCalled();
   });
 
   it('syncs User.campaigns after creation', async () => {
