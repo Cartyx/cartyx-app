@@ -248,6 +248,36 @@ test('the Layers panel eye toggle hides and shows the AoE layer', async ({ page 
   await expect(page.getByTestId('map-aoe')).toHaveCount(1);
 });
 
+test('a placed template shows the placer name and an optional label', async ({ page }) => {
+  await gotoTabletop(page);
+  await selectAoeTool(page);
+
+  // Provide an optional label (e.g. the spell name) before placing.
+  await page.getByTestId('aoe-label-input').fill('Fireball');
+
+  const box = await stageBox(page);
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await expect(page.getByTestId('map-aoe')).toHaveCount(1);
+
+  // The label overlay renders the user label + the placer's name (denormalised
+  // onto the doc at create time).
+  const labelLayer = page.getByTestId('map-aoe-label-layer');
+  await expect(labelLayer).toBeVisible();
+  await expect(labelLayer.getByText('Fireball')).toBeVisible();
+
+  // The persisted doc carries both the label and a non-empty placer name.
+  await expect
+    .poll(async () => {
+      const doc = await aoes().findOne({ mapId: new ObjectId(provisioned.mapId) });
+      return (doc as { label?: string } | null)?.label ?? null;
+    })
+    .toBe('Fireball');
+  const doc = await aoes().findOne({ mapId: new ObjectId(provisioned.mapId) });
+  expect(((doc as { createdByName?: string } | null)?.createdByName ?? '').length).toBeGreaterThan(
+    0
+  );
+});
+
 test('the per-viewer Show spell effects toggle hides and shows the AoE layer for everyone', async ({
   page,
 }) => {

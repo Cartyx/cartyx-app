@@ -17,6 +17,8 @@ function renderPanel(props: Partial<React.ComponentProps<typeof AoeSettingsPanel
     onWidthFt: vi.fn(),
     color: '#e74c3c',
     onColor: vi.fn(),
+    label: '',
+    onLabel: vi.fn(),
     onClearAll: vi.fn(),
     canClearAll: false,
   };
@@ -82,5 +84,15 @@ describe('AoeSettingsPanel', () => {
     expect(button).toBeInTheDocument();
     await user.click(button);
     expect(onClearAll).toHaveBeenCalledTimes(1);
+  });
+
+  it('binds the optional Label input to label/onLabel', async () => {
+    const user = userEvent.setup();
+    const onLabel = vi.fn();
+    renderPanel({ label: '', onLabel });
+    const input = screen.getByTestId('aoe-label-input') as HTMLInputElement;
+    expect(input).toBeInTheDocument();
+    await user.type(input, 'F');
+    expect(onLabel).toHaveBeenCalledWith('F');
   });
 });

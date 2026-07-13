@@ -232,6 +232,7 @@ export function ActiveMapStage({
   const [aoeSizeFt, setAoeSizeFt] = useState(20);
   const [aoeWidthFt, setAoeWidthFt] = useState(5);
   const [aoeColor, setAoeColor] = useState('#3b82f6');
+  const [aoeLabel, setAoeLabel] = useState('');
   const [selectedAoeId, setSelectedAoeId] = useState<string | null>(null);
   // Per-viewer show/hide for spell AoE visuals — everyone gets this toggle
   // (local only, not broadcast); hides the AoE layer for this client alone.
@@ -590,14 +591,18 @@ export function ActiveMapStage({
   // peers. Like the ruler, it short-circuits the stage pointer handlers below.
   const commitAoe = useCallback(
     (committed: AoeInput & { color: string }) => {
-      aoeMutations.create.mutate(committed, {
-        onSuccess: (res) => {
-          applyAoeAddToCache(qc, campaignId, map.id, res.aoe);
-          onBroadcast({ type: 'aoe:added', mapId: map.id, aoe: res.aoe });
-        },
-      });
+      const label = aoeLabel.trim();
+      aoeMutations.create.mutate(
+        { ...committed, label: label || undefined },
+        {
+          onSuccess: (res) => {
+            applyAoeAddToCache(qc, campaignId, map.id, res.aoe);
+            onBroadcast({ type: 'aoe:added', mapId: map.id, aoe: res.aoe });
+          },
+        }
+      );
     },
-    [aoeMutations.create, qc, campaignId, map.id, onBroadcast]
+    [aoeMutations.create, qc, campaignId, map.id, onBroadcast, aoeLabel]
   );
 
   const aoe = useAoeTool({
@@ -1786,6 +1791,8 @@ export function ActiveMapStage({
             onWidthFt={setAoeWidthFt}
             color={aoeColor}
             onColor={setAoeColor}
+            label={aoeLabel}
+            onLabel={setAoeLabel}
             onClearAll={clearAllAoe}
             canClearAll={isGM}
           />

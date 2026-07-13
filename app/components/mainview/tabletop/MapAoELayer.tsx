@@ -92,21 +92,86 @@ export function MapAoELayer({
     return <polygon key={opts.id ?? 'preview'} {...common} points={points} />;
   };
 
+  // Small, semi-transparent labels centered on the template's origin: the
+  // optional user label (e.g. spell name) plus the placer's name below it. A
+  // thin dark outline keeps them legible on any map; the fill stays translucent
+  // so tokens/terrain underneath remain visible. Non-interactive.
+  const renderLabel = (a: MapAoEData) => {
+    const userLabel = a.label?.trim();
+    const name = a.createdByName?.trim();
+    if (!userLabel && !name) return null;
+    const x = toDomX(a.originX);
+    const y = toDomY(a.originY);
+    const outline = { paintOrder: 'stroke' as const, pointerEvents: 'none' as const };
+    return (
+      <g key={`label-${a.id}`} aria-hidden="true">
+        {userLabel && (
+          <text
+            x={x}
+            y={name ? y - 4 : y}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize={12}
+            fontWeight={600}
+            fill="#ffffff"
+            fillOpacity={0.85}
+            stroke="rgba(0,0,0,0.55)"
+            strokeWidth={2.5}
+            style={outline}
+          >
+            {userLabel}
+          </text>
+        )}
+        {name && (
+          <text
+            x={x}
+            y={userLabel ? y + 11 : y}
+            textAnchor="middle"
+            dominantBaseline="middle"
+            fontSize={9.5}
+            fill="#ffffff"
+            fillOpacity={0.7}
+            stroke="rgba(0,0,0,0.5)"
+            strokeWidth={2}
+            style={outline}
+          >
+            {name}
+          </text>
+        )}
+      </g>
+    );
+  };
+
+  const labels = aoes.map(renderLabel).filter(Boolean);
+
   return (
-    <svg
-      className="pointer-events-none absolute inset-0 z-10 h-full w-full"
-      data-testid="map-aoe-layer"
-      role="group"
-      aria-label="Spell area-of-effect templates"
-    >
-      {aoes.map((a) =>
-        renderShape(a, a.color, {
-          id: a.id,
-          interactive: interactive && !!canModify && canModify(a),
-          aoe: a,
-        })
+    <>
+      <svg
+        className="pointer-events-none absolute inset-0 z-10 h-full w-full"
+        data-testid="map-aoe-layer"
+        role="group"
+        aria-label="Spell area-of-effect templates"
+      >
+        {aoes.map((a) =>
+          renderShape(a, a.color, {
+            id: a.id,
+            interactive: interactive && !!canModify && canModify(a),
+            aoe: a,
+          })
+        )}
+        {preview && renderShape(preview, preview.color, { interactive: false })}
+      </svg>
+      {/* Labels sit above tokens (z-40) but semi-transparent, so the caster's
+          name / spell name reads while tokens and terrain stay visible. */}
+      {labels.length > 0 && (
+        <svg
+          className="pointer-events-none absolute inset-0 z-40 h-full w-full"
+          data-testid="map-aoe-label-layer"
+          aria-hidden="true"
+        >
+          {labels}
+        </svg>
       )}
-      {preview && renderShape(preview, preview.color, { interactive: false })}
-    </svg>
+    </>
   );
 }

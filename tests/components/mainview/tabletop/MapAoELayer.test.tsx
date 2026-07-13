@@ -52,4 +52,37 @@ describe('MapAoELayer', () => {
     );
     expect(queryByTestId('map-aoe-layer')).toBeNull();
   });
+  it('draws the placer name and optional label as semi-transparent text', () => {
+    const { getByTestId, getByText } = render(
+      <MapAoELayer
+        visible
+        aoes={[aoe({ id: 'x', createdByName: 'Ada Lovelace', label: 'Fireball' })]}
+        preview={null}
+        effectiveScale={1}
+        imageOffsetX={0}
+        imageOffsetY={0}
+      />
+    );
+    const labelLayer = getByTestId('map-aoe-label-layer');
+    expect(labelLayer).toBeTruthy();
+    const name = getByText('Ada Lovelace');
+    const spell = getByText('Fireball');
+    expect(name.tagName.toLowerCase()).toBe('text');
+    // Semi-transparent so tokens/terrain underneath stay visible.
+    expect(Number(name.getAttribute('fill-opacity'))).toBeLessThan(1);
+    expect(Number(spell.getAttribute('fill-opacity'))).toBeLessThan(1);
+  });
+  it('omits the label layer when a template has no name or label', () => {
+    const { queryByTestId } = render(
+      <MapAoELayer
+        visible
+        aoes={[aoe({ id: 'x', createdByName: '', label: undefined })]}
+        preview={null}
+        effectiveScale={1}
+        imageOffsetX={0}
+        imageOffsetY={0}
+      />
+    );
+    expect(queryByTestId('map-aoe-label-layer')).toBeNull();
+  });
 });

@@ -22,6 +22,9 @@ interface AoeSettingsPanelProps {
   onWidthFt: (n: number) => void;
   color: string;
   onColor: (c: string) => void;
+  /** Optional label drawn on the template (e.g. the spell name). */
+  label: string;
+  onLabel: (s: string) => void;
   onClearAll: () => void;
   /** GM only — the button is hidden entirely when false. */
   canClearAll: boolean;
@@ -43,6 +46,8 @@ export function AoeSettingsPanel({
   onWidthFt,
   color,
   onColor,
+  label,
+  onLabel,
   onClearAll,
   canClearAll,
 }: AoeSettingsPanelProps) {
@@ -142,6 +147,24 @@ export function AoeSettingsPanel({
 
         {/* Color */}
         <ColorPicker label="Color" value={color} onChange={onColor} />
+
+        {/* Optional label (e.g. spell name) — drawn on the template. */}
+        <span
+          id="aoe-label-label"
+          className="mb-2 mt-3 block font-sans text-[10px] font-semibold tracking-wide text-slate-500"
+        >
+          Label (optional)
+        </span>
+        <input
+          type="text"
+          value={label}
+          maxLength={60}
+          placeholder="e.g. Fireball"
+          onChange={(e) => onLabel(e.target.value)}
+          aria-labelledby="aoe-label-label"
+          data-testid="aoe-label-input"
+          className="w-full rounded-lg border border-white/[0.1] bg-white/[0.04] px-2 py-1.5 font-sans text-xs text-slate-300 placeholder:text-slate-600 focus:border-blue-500/40 focus:outline-none"
+        />
 
         {/* Clear all (GM only) */}
         {canClearAll && (
