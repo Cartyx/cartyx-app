@@ -163,6 +163,44 @@ function parseAoe(desc: string): GeneratedSpell['areaOfEffect'] {
   return { shape: 'none' };
 }
 
+/**
+ * The SRD source embeds some tables as raw HTML (`<table>…`). ReactMarkdown does
+ * not render raw HTML, so convert each HTML table to a GitHub-flavored markdown
+ * table and strip any residual table tags. The SRD only uses table markup here
+ * (no inline HTML, no entities — verified against the source).
+ */
+function htmlTablesToMarkdown(text: string): string {
+  const converted = text.replace(/<table[\s\S]*?<\/table>/gi, (table) => {
+    const rows = [...table.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)].map((tr) =>
+      [...tr[1].matchAll(/<t[hd][^>]*>([\s\S]*?)<\/t[hd]>/gi)].map((cell) =>
+        cell[1]
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .replace(/\|/g, '\\|')
+          .trim()
+      )
+    );
+    if (rows.length === 0) return '';
+    const width = Math.max(...rows.map((r) => r.length));
+    const pad = (r: string[]) => {
+      const copy = [...r];
+      while (copy.length < width) copy.push('');
+      return copy;
+    };
+    const header = pad(rows[0]);
+    const lines = [
+      `| ${header.join(' | ')} |`,
+      `| ${header.map(() => '---').join(' | ')} |`,
+      ...rows.slice(1).map((r) => `| ${pad(r).join(' | ')} |`),
+    ];
+    return `\n\n${lines.join('\n')}\n\n`;
+  });
+  // Defensive: drop any stray table tags that were not inside a matched table.
+  return converted
+    .replace(/<\/?(?:table|thead|tbody|tr|th|td)[^>]*>/gi, '')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
 export function parseSpellMarkdown(md: string): GeneratedSpell[] {
   // Individual spell entries are `#### Name` blocks under "## Spell Descriptions".
   const descIdx = md.indexOf('## Spell Descriptions');
@@ -198,6 +236,11 @@ export function parseSpellMarkdown(md: string): GeneratedSpell[] {
     let school = 'evocation';
     for (const s of SCHOOLS) if (levelHead.includes(s)) school = s;
 
+    // Skip non-spell blocks (e.g. summoned-creature stat blocks the SRD embeds
+    // under `#### Name`): a real spell's header line is always "… Cantrip" or
+    // "Level N …". Anything else isn't a spell.
+    if (!/\bcantrip\b/.test(levelHead) && !/\blevel\s+\d/.test(levelHead)) continue;
+
     const label = (labelName: string) => {
       const re = new RegExp(`\\*\\*${labelName}:\\*\\*\\s*(.+)`, 'i');
       const m = block.match(re);
@@ -215,7 +258,7 @@ export function parseSpellMarkdown(md: string): GeneratedSpell[] {
       higherLevels.push({ id: 'h0', level: level + 1, description: hlMatch[1].trim() });
     }
 
-    const description = lines
+    const rawDescription = lines
       .filter((l) => {
         const t = l.trim();
         if (t === name) return false;
@@ -224,7 +267,8 @@ export function parseSpellMarkdown(md: string): GeneratedSpell[] {
         if (/^_(?:Using a Higher-Level Spell Slot|Cantrip Upgrade)\._/i.test(t)) return false;
         return true;
       })
-      .join('\n')
+      .join('\n');
+    const description = htmlTablesToMarkdown(rawDescription)
       .replace(/\n{3,}/g, '\n\n')
       .trim();
 

@@ -113,7 +113,7 @@ vi.mock('~/server/db/models/GMScreen', () => ({
 }));
 
 vi.mock('~/server/functions/srdImport', () => ({
-  importSrdContent: vi.fn().mockResolvedValue({ spells: 340, races: 9, rules: 104 }),
+  importSrdContent: vi.fn().mockResolvedValue({ spells: 339, races: 9, rules: 104 }),
 }));
 
 const mockMongoSession = {

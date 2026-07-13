@@ -55,19 +55,60 @@ _Level 3 Evocation (Sorcerer, Wizard)_
 **Duration:** Instantaneous
 
 A 100-foot-long, 5-foot-wide Line blasts out from you. Each creature in the Line makes a Dexterity saving throw, taking 8d6 Lightning damage.
+
+#### Confusion
+
+_Level 4 Enchantment (Bard, Druid, Sorcerer, Wizard)_
+
+**Casting Time:** Action
+**Range:** 90 feet
+**Components:** V, S, M (three nutshells)
+**Duration:** Concentration, up to 1 minute
+
+Each creature must roll on the table below.
+
+<table>
+  <thead>
+    <tr><th>1d10</th><th>Behavior</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>1</td><td>Moves in a random direction.</td></tr>
+    <tr><td>2–6</td><td>Doesn't move or take actions.</td></tr>
+  </tbody>
+</table>
+
+#### Animated Object
+
+_Small or Medium Construct_
+
+**AC** 15
+
+An embedded summoned-creature stat block that is not a spell.
 `;
 
 describe('parseSpellMarkdown', () => {
   const spells = parseSpellMarkdown(SAMPLE);
   const byName = (n: string) => spells.find((s) => s.name === n)!;
 
-  it('parses all four spell entries', () => {
+  it('parses only real spell entries and excludes embedded stat blocks', () => {
     expect(spells.map((s) => s.name)).toEqual([
       'Fire Bolt',
       'Fireball',
       'Detect Magic',
       'Lightning Bolt',
+      'Confusion',
     ]);
+    // "Animated Object" has no "Cantrip"/"Level N" header line — it's a summoned
+    // creature stat block, not a spell, and must be skipped.
+    expect(spells.find((s) => s.name === 'Animated Object')).toBeUndefined();
+  });
+
+  it('converts embedded HTML tables to GitHub-flavored markdown', () => {
+    const confusion = byName('Confusion');
+    expect(confusion.description).not.toMatch(/<\/?(?:table|tr|td|th|thead|tbody)/i);
+    expect(confusion.description).toContain('| 1d10 | Behavior |');
+    expect(confusion.description).toContain('| --- | --- |');
+    expect(confusion.description).toContain("| 2–6 | Doesn't move or take actions. |");
   });
 
   it('parses a cantrip with attack, damage dice, classes, and scaling', () => {
