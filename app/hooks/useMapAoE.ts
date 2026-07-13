@@ -8,6 +8,7 @@ import {
   createMapAoESchema,
   removeMapAoESchema,
   clearMapAoESchema,
+  updateMapAoESchema,
 } from '~/types/schemas/mapAoe';
 
 // ---------------------------------------------------------------------------
@@ -40,6 +41,13 @@ const clearMapAoEFn = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const { clearMapAoE } = await import('~/server/functions/mapAoE');
     return clearMapAoE({ data });
+  });
+
+const moveMapAoEFn = createServerFn({ method: 'POST' })
+  .inputValidator(updateMapAoESchema)
+  .handler(async ({ data }) => {
+    const { moveMapAoE } = await import('~/server/functions/mapAoE');
+    return moveMapAoE({ data });
   });
 
 // ---------------------------------------------------------------------------
@@ -94,7 +102,23 @@ export function useMapAoEMutations(campaignId: string, mapId: string) {
     onError: (e) => captureException(e, { action: 'useMapAoEMutations.clear' }),
   });
 
-  return { create, remove, clear };
+  const move = useMutation({
+    mutationFn: async (input: { aoeId: string; originX: number; originY: number }) => {
+      return await moveMapAoEFn({
+        data: {
+          campaignId,
+          mapId,
+          id: input.aoeId,
+          originX: input.originX,
+          originY: input.originY,
+        },
+      });
+    },
+    onSuccess: invalidate,
+    onError: (e) => captureException(e, { action: 'useMapAoEMutations.move' }),
+  });
+
+  return { create, remove, clear, move };
 }
 
 // ---------------------------------------------------------------------------
@@ -132,4 +156,18 @@ export function applyAoeClearToCache(
   mapId: string
 ) {
   qc.setQueryData<MapAoEData[]>(queryKeys.mapAoe.list(campaignId, mapId), () => []);
+}
+
+export function applyAoeMoveToCache(
+  qc: ReturnType<typeof useQueryClient>,
+  campaignId: string,
+  mapId: string,
+  aoeId: string,
+  originX: number,
+  originY: number
+) {
+  qc.setQueryData<MapAoEData[]>(queryKeys.mapAoe.list(campaignId, mapId), (prev) => {
+    if (!prev) return prev;
+    return prev.map((a) => (a.id === aoeId ? { ...a, originX, originY } : a));
+  });
 }

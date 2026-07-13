@@ -28,7 +28,13 @@ import { getSession } from '~/server/session';
 import { User } from '~/server/db/models/User';
 import { Campaign } from '~/server/db/models/Campaign';
 import { MapAoE } from '~/server/db/models/MapAoE';
-import { createMapAoE, listMapAoE, removeMapAoE, clearMapAoE } from '~/server/functions/mapAoE';
+import {
+  createMapAoE,
+  listMapAoE,
+  removeMapAoE,
+  clearMapAoE,
+  moveMapAoE,
+} from '~/server/functions/mapAoE';
 
 const mockSession = {
   id: 'session-user-1',
@@ -77,6 +83,10 @@ function makeAoE(overrides: Record<string, unknown> = {}) {
     createdAt: new Date('2026-03-01'),
     updatedAt: new Date('2026-03-01'),
     deleteOne: vi.fn(),
+    save: vi.fn(),
+    toObject: function (this: Record<string, unknown>) {
+      return this;
+    },
     ...overrides,
   };
 }
@@ -93,6 +103,9 @@ const _removeMapAoE = removeMapAoE as unknown as (args: {
 const _clearMapAoE = clearMapAoE as unknown as (args: {
   data: Record<string, unknown>;
 }) => Promise<{ success: boolean }>;
+const _moveMapAoE = moveMapAoE as unknown as (args: {
+  data: Record<string, unknown>;
+}) => Promise<{ aoe: Record<string, unknown> }>;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -239,6 +252,66 @@ describe('removeMapAoE', () => {
 
     await expect(
       _removeMapAoE({ data: { campaignId: 'camp-1', mapId: 'map-1', id: 'nonexistent' } })
+    ).rejects.toThrow('AoE not found');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// moveMapAoE
+// ---------------------------------------------------------------------------
+
+describe('moveMapAoE', () => {
+  it('allows a player to move their own AoE', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(mockPlayerCampaign);
+    const doc = makeAoE({ createdBy: 'dbuser-1' });
+    vi.mocked(MapAoE.findOne).mockResolvedValue(doc as never);
+
+    const result = await _moveMapAoE({
+      data: { campaignId: 'camp-1', mapId: 'map-1', id: 'aoe-1', originX: 300, originY: 400 },
+    });
+
+    expect(doc.originX).toBe(300);
+    expect(doc.originY).toBe(400);
+    expect(doc.save).toHaveBeenCalled();
+    expect(result.aoe.originX).toBe(300);
+    expect(result.aoe.originY).toBe(400);
+  });
+
+  it("throws Forbidden when a player moves another member's AoE, and does not save", async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(mockPlayerCampaign);
+    const doc = makeAoE({ createdBy: 'other' });
+    vi.mocked(MapAoE.findOne).mockResolvedValue(doc as never);
+
+    await expect(
+      _moveMapAoE({
+        data: { campaignId: 'camp-1', mapId: 'map-1', id: 'aoe-1', originX: 1, originY: 1 },
+      })
+    ).rejects.toThrow('Forbidden');
+
+    expect(doc.save).not.toHaveBeenCalled();
+  });
+
+  it("allows a GM to move anyone's AoE", async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(mockGMCampaign);
+    const doc = makeAoE({ createdBy: 'other' });
+    vi.mocked(MapAoE.findOne).mockResolvedValue(doc as never);
+
+    const result = await _moveMapAoE({
+      data: { campaignId: 'camp-1', mapId: 'map-1', id: 'aoe-1', originX: 50, originY: 60 },
+    });
+
+    expect(doc.save).toHaveBeenCalled();
+    expect(result.aoe.originX).toBe(50);
+    expect(result.aoe.originY).toBe(60);
+  });
+
+  it('throws when the AoE is not found', async () => {
+    vi.mocked(MapAoE.findOne).mockResolvedValue(null);
+
+    await expect(
+      _moveMapAoE({
+        data: { campaignId: 'camp-1', mapId: 'map-1', id: 'nonexistent', originX: 1, originY: 1 },
+      })
     ).rejects.toThrow('AoE not found');
   });
 });

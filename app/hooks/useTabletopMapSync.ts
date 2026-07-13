@@ -20,7 +20,12 @@ import {
   applyDrawingRemoveFromCache,
   applyDrawingsClearToCache,
 } from './useMapDrawings';
-import { applyAoeAddToCache, applyAoeRemoveFromCache, applyAoeClearToCache } from './useMapAoE';
+import {
+  applyAoeAddToCache,
+  applyAoeRemoveFromCache,
+  applyAoeClearToCache,
+  applyAoeMoveToCache,
+} from './useMapAoE';
 
 /**
  * Subscribes to the campaign's tabletop-map party and applies inbound
@@ -89,6 +94,8 @@ export function useTabletopMapSync(
       // AoE templates are shared (like map text), not GM-gated like drawings —
       // this branch runs for all viewers, including non-GM.
       applyAoeAddToCache(queryClient, campaignId, msg.mapId, msg.aoe);
+    } else if (msg.type === 'aoe:moved') {
+      applyAoeMoveToCache(queryClient, campaignId, msg.mapId, msg.aoeId, msg.originX, msg.originY);
     } else if (msg.type === 'aoe:removed') {
       applyAoeRemoveFromCache(queryClient, campaignId, msg.mapId, msg.aoeId);
     } else if (msg.type === 'aoe:cleared') {

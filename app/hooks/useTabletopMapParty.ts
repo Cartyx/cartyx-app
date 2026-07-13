@@ -59,6 +59,15 @@ export type TabletopMapMessage =
   // AoE templates are shared (visible to all viewers), unlike drawings which
   // are GM-only — see useTabletopMapSync's inbound reducer.
   | { type: 'aoe:added'; mapId: string; aoe: MapAoEData }
+  | {
+      type: 'aoe:moved';
+      mapId: string;
+      aoeId: string;
+      originX: number;
+      originY: number;
+      /** True for the final, persisted broadcast after drag-end; false during drag. */
+      final?: boolean;
+    }
   | { type: 'aoe:removed'; mapId: string; aoeId: string }
   | { type: 'aoe:cleared'; mapId: string };
 

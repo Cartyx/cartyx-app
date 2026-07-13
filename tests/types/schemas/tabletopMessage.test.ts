@@ -111,6 +111,46 @@ describe('parseTabletopMapMessage', () => {
     expect(parseTabletopMapMessage({ type: 'aoe:cleared', mapId: 'm1' })).not.toBeNull();
   });
 
+  it('accepts a well-formed aoe:moved frame', () => {
+    const msg = parseTabletopMapMessage({
+      type: 'aoe:moved',
+      mapId: 'm1',
+      aoeId: 'a1',
+      originX: 10,
+      originY: 20,
+      final: true,
+    });
+    expect(msg).toMatchObject({
+      type: 'aoe:moved',
+      mapId: 'm1',
+      aoeId: 'a1',
+      originX: 10,
+      originY: 20,
+      final: true,
+    });
+  });
+
+  it('rejects a malformed aoe:moved frame', () => {
+    // Missing originX.
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:moved', mapId: 'm1', aoeId: 'a1', originY: 20 })
+    ).toBeNull();
+    // Non-finite originX.
+    expect(
+      parseTabletopMapMessage({
+        type: 'aoe:moved',
+        mapId: 'm1',
+        aoeId: 'a1',
+        originX: Infinity,
+        originY: 20,
+      })
+    ).toBeNull();
+    // Missing aoeId.
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:moved', mapId: 'm1', originX: 1, originY: 2 })
+    ).toBeNull();
+  });
+
   it('rejects a malformed aoe:added frame', () => {
     // Missing required fields (shape, sizePx, rotation, etc).
     expect(

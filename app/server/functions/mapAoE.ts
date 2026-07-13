@@ -8,6 +8,7 @@ import {
   listMapAoESchema,
   removeMapAoESchema,
   clearMapAoESchema,
+  updateMapAoESchema,
 } from '~/types/schemas/mapAoe';
 
 // ---------------------------------------------------------------------------
@@ -143,6 +144,42 @@ export const removeMapAoE = async ({ data }: { data: z.infer<typeof removeMapAoE
   }
 };
 
+/**
+ * Move an AoE's origin. A player may move only their own AoE; a GM may move
+ * anyone's. This permission check is the authoritative one.
+ */
+export const moveMapAoE = async ({ data }: { data: z.infer<typeof updateMapAoESchema> }) => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+
+    const doc = await MapAoE.findOne({
+      _id: data.id,
+      mapId: data.mapId,
+      campaignId: data.campaignId,
+    });
+    if (!doc) throw new Error('AoE not found');
+
+    const canMove = String(doc.createdBy) === member.userId || member.isGM;
+    if (!canMove) throw new Error('Forbidden');
+
+    doc.originX = data.originX;
+    doc.originY = data.originY;
+    await doc.save();
+
+    return { aoe: serializeAoE(doc.toObject() as AoEDoc) };
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'moveMapAoE',
+      campaignId: data.campaignId,
+      mapId: data.mapId,
+      id: data.id,
+    });
+    throw e;
+  }
+};
+
 /** Clear every AoE on a map. GM-only. */
 export const clearMapAoE = async ({ data }: { data: z.infer<typeof clearMapAoESchema> }) => {
   let sessionUserId: string | undefined;
@@ -164,4 +201,10 @@ export const clearMapAoE = async ({ data }: { data: z.infer<typeof clearMapAoESc
   }
 };
 
-export { createMapAoESchema, listMapAoESchema, removeMapAoESchema, clearMapAoESchema };
+export {
+  createMapAoESchema,
+  listMapAoESchema,
+  removeMapAoESchema,
+  clearMapAoESchema,
+  updateMapAoESchema,
+};
