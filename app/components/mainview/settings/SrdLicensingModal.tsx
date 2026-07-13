@@ -1,16 +1,7 @@
 import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
-// ~/server/data/srd/attribution is plain string constants (no server-only
-// code, no secrets) safe to ship in the client bundle; it lives under
-// ~/server/data because it's also consumed by server-side SRD data tooling.
-// eslint-disable-next-line no-restricted-imports
-import {
-  SRD_ATTRIBUTION,
-  SRD_LICENSE_URL,
-  SRD_SOURCE_URL,
-  SRD_PDF_PATH,
-} from '~/server/data/srd/attribution';
+import { SRD_ATTRIBUTION, SRD_LICENSE_URL, SRD_SOURCE_URL } from '~/constants/srd';
 
 interface SrdLicensingModalProps {
   isOpen: boolean;
@@ -83,14 +74,6 @@ export function SrdLicensingModal({ isOpen, onClose }: SrdLicensingModalProps) {
               className="text-xs font-semibold text-blue-400 hover:text-blue-300"
             >
               CC-BY-4.0 License →
-            </a>
-            <a
-              href={SRD_PDF_PATH}
-              target="_blank"
-              rel="noreferrer noopener"
-              className="text-xs font-semibold text-blue-400 hover:text-blue-300"
-            >
-              View the SRD 5.2.1 PDF →
             </a>
           </div>
         </div>
