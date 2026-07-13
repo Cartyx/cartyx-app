@@ -5,6 +5,7 @@ import {
   Pencil,
   Type,
   Ruler,
+  Cone,
   Dices,
   Stamp,
   Layers,
@@ -13,7 +14,7 @@ import {
 import type { ToolWindowId } from './tabletop/toolWindowState';
 
 export type ToolType =
-  'pointer' | 'hand' | 'drawing' | 'text' | 'ruler' | 'dice' | 'stamp' | 'layer';
+  'pointer' | 'hand' | 'drawing' | 'text' | 'ruler' | 'aoe' | 'dice' | 'stamp' | 'layer';
 
 export interface ToolBarProps {
   activeTool: ToolType;
@@ -33,6 +34,7 @@ const tools: { id: ToolType; icon: React.ElementType; label: string; gmOnly?: bo
   { id: 'drawing', icon: Pencil, label: 'Drawing', gmOnly: true },
   { id: 'text', icon: Type, label: 'Text' },
   { id: 'ruler', icon: Ruler, label: 'Ruler' },
+  { id: 'aoe', icon: Cone, label: 'Spell AoE' },
   { id: 'dice', icon: Dices, label: 'Dice' },
   { id: 'stamp', icon: Stamp, label: 'Stamp' },
   // The Layers panel is GM-only (only rendered for the GM in ActiveMapStage), so
