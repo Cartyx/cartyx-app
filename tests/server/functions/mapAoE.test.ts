@@ -16,8 +16,12 @@ vi.mock('~/server/db/models/MapAoE', () => ({
     create: vi.fn(),
     find: vi.fn(),
     findOne: vi.fn(),
+    countDocuments: vi.fn(),
     deleteMany: vi.fn(),
   },
+}));
+vi.mock('~/server/db/models/Map', () => ({
+  Map: { findOne: vi.fn() },
 }));
 vi.mock('~/server/utils/telemetry', () => ({
   serverCaptureException: vi.fn(),
@@ -28,6 +32,7 @@ import { getSession } from '~/server/session';
 import { User } from '~/server/db/models/User';
 import { Campaign } from '~/server/db/models/Campaign';
 import { MapAoE } from '~/server/db/models/MapAoE';
+import { Map as MapModel } from '~/server/db/models/Map';
 import {
   createMapAoE,
   listMapAoE,
@@ -113,12 +118,20 @@ function mockUserFindById(user: Record<string, unknown> | null) {
   } as never);
 }
 
+function mockMapBounds(imageWidth = 1000, imageHeight = 1000) {
+  vi.mocked(MapModel.findOne).mockReturnValue({
+    lean: vi.fn().mockResolvedValue({ imageWidth, imageHeight }),
+  } as never);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getSession).mockResolvedValue(mockSession);
   vi.mocked(User.findOne).mockResolvedValue(mockDbUser);
   vi.mocked(Campaign.findById).mockResolvedValue(mockGMCampaign);
   mockUserFindById({ firstName: 'Ada', lastName: 'Lovelace' });
+  mockMapBounds();
+  vi.mocked(MapAoE.countDocuments).mockResolvedValue(0 as never);
 });
 
 // ---------------------------------------------------------------------------
@@ -156,6 +169,52 @@ describe('createMapAoE', () => {
       campaignId: 'camp-1',
       mapId: 'map-1',
     });
+  });
+
+  it('clamps an out-of-bounds origin into the map image bounds', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(mockPlayerCampaign);
+    mockMapBounds(1000, 800);
+    const created = makeAoE();
+    vi.mocked(MapAoE.create).mockResolvedValue({ ...created, toObject: () => created } as never);
+
+    await _createMapAoE({
+      data: {
+        campaignId: 'camp-1',
+        mapId: 'map-1',
+        shape: 'sphere',
+        originX: 5000, // beyond width 1000
+        originY: -50, // below 0
+        sizePx: 50,
+        rotation: 0,
+        color: '#ff0000',
+      },
+    });
+
+    expect(vi.mocked(MapAoE.create).mock.calls[0][0]).toMatchObject({
+      originX: 1000,
+      originY: 0,
+    });
+  });
+
+  it('rejects creation when the map is already at the template cap', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(mockPlayerCampaign);
+    vi.mocked(MapAoE.countDocuments).mockResolvedValue(200 as never);
+
+    await expect(
+      _createMapAoE({
+        data: {
+          campaignId: 'camp-1',
+          mapId: 'map-1',
+          shape: 'sphere',
+          originX: 100,
+          originY: 100,
+          sizePx: 50,
+          rotation: 0,
+          color: '#ff0000',
+        },
+      })
+    ).rejects.toThrow(/maximum/i);
+    expect(MapAoE.create).not.toHaveBeenCalled();
   });
 
   it('persists an optional label when provided', async () => {

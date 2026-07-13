@@ -1,8 +1,29 @@
 import { z } from 'zod';
 import { requireCampaignMember } from '../utils/requireCampaignMember';
 import { MapAoE } from '../db/models/MapAoE';
+import { Map as MapModel } from '../db/models/Map';
 import { User } from '../db/models/User';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
+
+/**
+ * Max AoE templates per map. Any member can create, only a GM can clear-all, so
+ * cap growth to protect Mongo and every client's SVG render from a runaway
+ * client. Well above any realistic encounter's needs.
+ */
+const MAX_AOE_PER_MAP = 200;
+
+/** Load a map's image bounds (for clamping an origin server-side). */
+async function mapBounds(campaignId: string, mapId: string): Promise<{ w: number; h: number }> {
+  const map = await MapModel.findOne({ _id: mapId, campaignId }, 'imageWidth imageHeight').lean();
+  if (!map) throw new Error('Map not found');
+  const m = map as { imageWidth?: number; imageHeight?: number };
+  return {
+    w: m.imageWidth ?? Number.POSITIVE_INFINITY,
+    h: m.imageHeight ?? Number.POSITIVE_INFINITY,
+  };
+}
+
+const clampTo = (v: number, max: number) => Math.max(0, Math.min(max, v));
 import type { MapAoEData, AoeShape } from '~/types/mapAoe';
 import {
   createMapAoESchema,
@@ -88,6 +109,19 @@ export const createMapAoE = async ({ data }: { data: z.infer<typeof createMapAoE
     const member = await requireCampaignMember(data.campaignId);
     sessionUserId = member.sessionUserId;
 
+    // Enforce a per-map cap (any member can create; only a GM clears all).
+    const count = await MapAoE.countDocuments({
+      campaignId: data.campaignId,
+      mapId: data.mapId,
+    });
+    if (count >= MAX_AOE_PER_MAP) {
+      throw new Error(`This map already has the maximum of ${MAX_AOE_PER_MAP} AoE templates`);
+    }
+
+    // Clamp the origin into the map's image bounds (the client clamps too, but
+    // the server is the source of truth for a direct RPC).
+    const { w, h } = await mapBounds(data.campaignId, data.mapId);
+
     const u = await User.findById(member.userId).select('firstName lastName email').lean();
     const uDoc = u as { firstName?: string; lastName?: string; email?: string } | null;
     const createdByName =
@@ -97,8 +131,8 @@ export const createMapAoE = async ({ data }: { data: z.infer<typeof createMapAoE
       mapId: data.mapId,
       campaignId: data.campaignId,
       shape: data.shape,
-      originX: data.originX,
-      originY: data.originY,
+      originX: clampTo(data.originX, w),
+      originY: clampTo(data.originY, h),
       sizePx: data.sizePx,
       widthPx: data.widthPx,
       rotation: data.rotation,
@@ -178,8 +212,10 @@ export const moveMapAoE = async ({ data }: { data: z.infer<typeof updateMapAoESc
     const canMove = String(doc.createdBy) === member.userId || member.isGM;
     if (!canMove) throw new Error('Forbidden');
 
-    doc.originX = data.originX;
-    doc.originY = data.originY;
+    // Clamp into the map's image bounds (server is source of truth).
+    const { w, h } = await mapBounds(data.campaignId, data.mapId);
+    doc.originX = clampTo(data.originX, w);
+    doc.originY = clampTo(data.originY, h);
     await doc.save();
 
     return { aoe: serializeAoE(doc.toObject() as AoEDoc) };

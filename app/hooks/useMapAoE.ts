@@ -69,6 +69,13 @@ export function useMapAoEMutations(campaignId: string, mapId: string) {
   const qc = useQueryClient();
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: queryKeys.mapAoe.list(campaignId, mapId) });
+  // On failure, reconcile the optimistic cache with server truth (a removed /
+  // moved / cleared template reappears / reverts) instead of leaving a lie —
+  // mirrors useMapDrawings.
+  const onError = (action: string) => (e: unknown) => {
+    captureException(e, { action });
+    invalidate();
+  };
 
   const create = useMutation({
     mutationFn: async (input: {
@@ -84,7 +91,7 @@ export function useMapAoEMutations(campaignId: string, mapId: string) {
       return await createMapAoEFn({ data: { campaignId, mapId, ...input } });
     },
     onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapAoEMutations.create' }),
+    onError: onError('useMapAoEMutations.create'),
   });
 
   const remove = useMutation({
@@ -92,7 +99,7 @@ export function useMapAoEMutations(campaignId: string, mapId: string) {
       return await removeMapAoEFn({ data: { campaignId, mapId, id: aoeId } });
     },
     onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapAoEMutations.remove' }),
+    onError: onError('useMapAoEMutations.remove'),
   });
 
   const clear = useMutation({
@@ -100,7 +107,7 @@ export function useMapAoEMutations(campaignId: string, mapId: string) {
       return await clearMapAoEFn({ data: { campaignId, mapId } });
     },
     onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapAoEMutations.clear' }),
+    onError: onError('useMapAoEMutations.clear'),
   });
 
   const move = useMutation({
@@ -116,7 +123,7 @@ export function useMapAoEMutations(campaignId: string, mapId: string) {
       });
     },
     onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapAoEMutations.move' }),
+    onError: onError('useMapAoEMutations.move'),
   });
 
   return { create, remove, clear, move };

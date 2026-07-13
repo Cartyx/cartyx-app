@@ -1,4 +1,4 @@
-import type { PointerEvent as ReactPointerEvent } from 'react';
+import { memo, type PointerEvent as ReactPointerEvent } from 'react';
 import type { MapAoEData } from '~/types/mapAoe';
 import { aoeShapeGeometry, type AoeInput } from './aoeGeometry';
 
@@ -22,7 +22,7 @@ interface MapAoELayerProps {
   canModify?: (a: MapAoEData) => boolean;
 }
 
-export function MapAoELayer({
+function MapAoELayerImpl({
   visible,
   aoes,
   preview,
@@ -191,3 +191,10 @@ export function MapAoELayer({
     </>
   );
 }
+
+/**
+ * Memoised: the stage re-renders on many unrelated state changes (token drags,
+ * hover, etc.); with stable props (query data + useCallback handlers) this skips
+ * the AoE re-render + geometry work unless the templates/preview/transform move.
+ */
+export const MapAoELayer = memo(MapAoELayerImpl);
