@@ -185,4 +185,11 @@ describe('parseSpellMarkdown', () => {
     const ball = byName('Fireball');
     expect(ball.modifiers[0].scaling).toEqual({ perStep: { count: 1, sides: 6 } });
   });
+
+  it('marks cantrips as character-level scaling and leveled spells as spell-scale', () => {
+    // Fire Bolt is a cantrip → scales by character level (breakpoints), NOT by
+    // spell slot; Fireball is leveled → scales by slot.
+    expect(byName('Fire Bolt').higherLevelScaling.type).toBe('character-level');
+    expect(byName('Fireball').higherLevelScaling.type).toBe('spell-scale');
+  });
 });

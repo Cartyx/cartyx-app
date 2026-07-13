@@ -5,7 +5,9 @@
 export interface ChatBroadcastRequest {
   requestId: string;
   text: string;
-  channel: 'general' | 'gm';
+  // Only the shared 'general' channel — this bridge intentionally cannot post
+  // to the GM-only channel (the relay does not check the caller's role).
+  channel: 'general';
 }
 
 export interface ChatDeliveryReport {

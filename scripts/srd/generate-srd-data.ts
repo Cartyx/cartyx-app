@@ -306,7 +306,12 @@ export function parseSpellMarkdown(md: string): GeneratedSpell[] {
       range: parseRange(label('Range')),
       duration: parseDuration(label('Duration')),
       ritual,
-      higherLevelScaling: { enabled: higherLevels.length > 0, type: 'spell-scale' },
+      higherLevelScaling: {
+        enabled: higherLevels.length > 0,
+        // Cantrips scale by character level (breakpoints 5/11/17); leveled
+        // spells scale by the spell slot used.
+        type: level === 0 ? 'character-level' : 'spell-scale',
+      },
       classes,
       attackSave: parseAttackSave(description),
       modifiers,

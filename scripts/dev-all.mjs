@@ -26,17 +26,26 @@ if (existsSync('.env')) {
 const children = [];
 let shuttingDown = false;
 
+function killTree(child, signal) {
+  try {
+    // Children are spawned detached (own process group), so a negative PID
+    // signals the whole group — reaping grandchildren (e.g. npm → tsx → node)
+    // so :1999 doesn't stay bound after exit.
+    process.kill(-child.pid, signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
 function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   for (const child of children) {
-    if (!child.killed) {
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        /* already gone */
-      }
-    }
+    if (!child.killed) killTree(child, 'SIGTERM');
   }
   // Give children a moment to exit, then force.
   setTimeout(() => process.exit(code), 500).unref();
@@ -46,6 +55,7 @@ function run(name, command, args, env) {
   const child = spawn(command, args, {
     env: { ...process.env, ...env },
     stdio: ['inherit', 'pipe', 'pipe'],
+    detached: true,
   });
   const tag = `[${name}] `;
   const pipe = (stream, out) => {

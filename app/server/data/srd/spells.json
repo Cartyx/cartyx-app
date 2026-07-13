@@ -96,7 +96,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Sorcerer", "Wizard"],
     "attackSave": {
@@ -1986,7 +1986,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Sorcerer", "Warlock", "Wizard"],
     "attackSave": {
@@ -3560,7 +3560,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Sorcerer", "Wizard"],
     "attackSave": {
@@ -4738,7 +4738,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Druid"],
     "attackSave": {
@@ -4831,7 +4831,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Warlock"],
     "attackSave": {
@@ -4887,7 +4887,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Druid", "Sorcerer", "Wizard"],
     "attackSave": {
@@ -5837,7 +5837,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Sorcerer", "Wizard"],
     "attackSave": {
@@ -7222,7 +7222,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Cleric", "Druid"],
     "attackSave": {
@@ -8989,7 +8989,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Cleric", "Sorcerer", "Wizard"],
     "attackSave": {
@@ -9303,7 +9303,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Sorcerer", "Warlock", "Wizard"],
     "attackSave": {
@@ -9954,7 +9954,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Cleric", "Druid", "Sorcerer", "Wizard"],
     "attackSave": {
@@ -9996,7 +9996,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Druid", "Sorcerer", "Wizard"],
     "attackSave": {
@@ -10202,7 +10202,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Sorcerer", "Warlock", "Wizard"],
     "attackSave": {
@@ -11005,7 +11005,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Druid", "Sorcerer", "Warlock", "Wizard"],
     "attackSave": {
@@ -11300,7 +11300,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Sorcerer", "Warlock", "Wizard"],
     "attackSave": {
@@ -11562,7 +11562,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Druid"],
     "attackSave": {
@@ -11949,7 +11949,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Sorcerer", "Wizard"],
     "attackSave": {
@@ -12244,7 +12244,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Cleric", "Druid"],
     "attackSave": {
@@ -12445,7 +12445,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Cleric"],
     "attackSave": {
@@ -13101,7 +13101,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Druid"],
     "attackSave": {
@@ -13207,7 +13207,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Sorcerer", "Wizard"],
     "attackSave": {
@@ -13525,7 +13525,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Sorcerer"],
     "attackSave": {
@@ -13571,7 +13571,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Cleric", "Druid"],
     "attackSave": {
@@ -13959,7 +13959,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Druid"],
     "attackSave": {
@@ -14656,7 +14656,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": false,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Cleric"],
     "attackSave": {
@@ -15081,7 +15081,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard", "Sorcerer", "Warlock", "Wizard"],
     "attackSave": {
@@ -15292,7 +15292,7 @@
     "ritual": false,
     "higherLevelScaling": {
       "enabled": true,
-      "type": "spell-scale"
+      "type": "character-level"
     },
     "classes": ["Bard"],
     "attackSave": {

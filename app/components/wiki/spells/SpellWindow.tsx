@@ -26,11 +26,13 @@ function spellToChatText(spell: SpellData): string {
   )} · Components: ${formatComponents(spell.components)} · Duration: ${formatDuration(
     spell.duration
   )}`;
-  const desc = spell.description
+  let desc = spell.description
     .replace(/\*\*/g, '')
     .replace(/(^|[\s(])_([^_]+)_/g, '$1$2')
     .replace(/^#+\s*/gm, '')
     .trim();
+  const MAX_DESC = 1200;
+  if (desc.length > MAX_DESC) desc = desc.slice(0, MAX_DESC).trimEnd() + '…';
   return `${header}\n${stats}\n\n${desc}`;
 }
 
@@ -58,14 +60,20 @@ export function SpellWindow({ spell, onEdit }: SpellWindowProps) {
   const [lastRoll, setLastRoll] = useState<SpellRollOutcome | null>(null);
   const [shareStatus, setShareStatus] = useState<'idle' | 'shared' | 'no-session'>('idle');
   const pendingShareId = useRef<string | null>(null);
+  const statusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    return onChatDelivery(({ requestId, delivered }) => {
+    const off = onChatDelivery(({ requestId, delivered }) => {
       if (requestId !== pendingShareId.current) return;
       pendingShareId.current = null;
       setShareStatus(delivered ? 'shared' : 'no-session');
-      setTimeout(() => setShareStatus('idle'), 3000);
+      if (statusTimer.current) clearTimeout(statusTimer.current);
+      statusTimer.current = setTimeout(() => setShareStatus('idle'), 3000);
     });
+    return () => {
+      off();
+      if (statusTimer.current) clearTimeout(statusTimer.current);
+    };
   }, []);
 
   const handleShare = () => {

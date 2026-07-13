@@ -1,5 +1,11 @@
 import type { SpellData, SpellModifier, SpellDice } from '~/types/spell';
-import { rollDice, toParsedDiceRoll, type DicePoolEntry, type DieSides } from '~/utils/dice';
+import {
+  rollDice,
+  toParsedDiceRoll,
+  DIE_SIDES_DESC,
+  type DicePoolEntry,
+  type DieSides,
+} from '~/utils/dice';
 import { requestDiceBroadcast } from '~/utils/diceRollerBridge';
 
 export const CANTRIP_BREAKPOINTS = [5, 11, 17] as const;
@@ -21,6 +27,10 @@ export function scaledDice(
   castLevel: number
 ): SpellDice | null {
   if (!modifier.dice) return null;
+  // The dice engine only rolls standard die faces. A homebrew modifier can
+  // carry an arbitrary `sides` (Zod allows any int ≥ 2); such a die is not
+  // rollable here, so treat it as no roll rather than throwing in rollDice.
+  if (!(DIE_SIDES_DESC as readonly number[]).includes(modifier.dice.sides)) return null;
   if (!modifier.scaling) return modifier.dice;
   const steps = stepsForCast(spell, castLevel);
   return {
