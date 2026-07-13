@@ -35,6 +35,13 @@ import { Spell } from '~/server/db/models/Spell';
 import { Race } from '~/server/db/models/Race';
 import { Rule } from '~/server/db/models/Rule';
 
+// insertMany's typed overloads make mock.calls a strict tuple; read the first
+// call's (docs[], options) loosely so assertions can inspect the inserted docs.
+type InsertManyFn = { mock: { calls: unknown[][] } };
+function firstCall(fn: InsertManyFn): [Array<Record<string, unknown>>, unknown] {
+  return fn.mock.calls[0] as [Array<Record<string, unknown>>, unknown];
+}
+
 beforeEach(() => vi.clearAllMocks());
 
 describe('importSrdContent', () => {
@@ -42,25 +49,27 @@ describe('importSrdContent', () => {
     const result = await importSrdContent({ campaignId: 'camp-1', gmId: 'gm-1' });
     expect(result).toEqual({ spells: 1, races: 1, rules: 1 });
 
-    const spellDoc = vi.mocked(Spell.insertMany).mock.calls[0][0][0];
-    expect(spellDoc).toMatchObject({
+    expect(firstCall(Spell.insertMany as unknown as InsertManyFn)[0][0]).toMatchObject({
       source: 'srd',
       campaignId: 'camp-1',
       createdBy: 'gm-1',
       name: 'Fire Bolt',
     });
-
-    const raceDoc = vi.mocked(Race.insertMany).mock.calls[0][0][0];
-    expect(raceDoc).toMatchObject({ title: 'Elf', campaignId: 'camp-1', createdBy: 'gm-1' });
-
-    const ruleDoc = vi.mocked(Rule.insertMany).mock.calls[0][0][0];
-    expect(ruleDoc).toMatchObject({ title: 'Cover', isPublic: true, campaignId: 'camp-1' });
+    expect(firstCall(Race.insertMany as unknown as InsertManyFn)[0][0]).toMatchObject({
+      title: 'Elf',
+      campaignId: 'camp-1',
+      createdBy: 'gm-1',
+    });
+    expect(firstCall(Rule.insertMany as unknown as InsertManyFn)[0][0]).toMatchObject({
+      title: 'Cover',
+      isPublic: true,
+      campaignId: 'camp-1',
+    });
   });
 
   it('threads the Mongo session into insertMany when provided', async () => {
     const session = { id: 'sess' } as never;
     await importSrdContent({ campaignId: 'camp-1', gmId: 'gm-1', session });
-    const secondArg = (vi.mocked(Spell.insertMany).mock.calls[0] as unknown[])[1];
-    expect(secondArg).toEqual({ session });
+    expect(firstCall(Spell.insertMany as unknown as InsertManyFn)[1]).toEqual({ session });
   });
 });
