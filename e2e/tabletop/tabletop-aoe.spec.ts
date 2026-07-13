@@ -247,3 +247,63 @@ test('the Layers panel eye toggle hides and shows the AoE layer', async ({ page 
   await expect(page.getByTestId('map-aoe-layer')).toHaveCount(1);
   await expect(page.getByTestId('map-aoe')).toHaveCount(1);
 });
+
+test('the per-viewer Show spell effects toggle hides and shows the AoE layer for everyone', async ({
+  page,
+}) => {
+  await gotoTabletop(page);
+  await selectAoeTool(page);
+
+  const box = await stageBox(page);
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await expect(page.getByTestId('map-aoe')).toHaveCount(1);
+
+  // The map-control toggle (available to every viewer, not GM-gated) hides the
+  // AoE layer for this client without deleting anything.
+  const toggle = page.getByTestId('map-spell-effects-toggle');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(page.getByTestId('map-aoe-layer')).toHaveCount(0);
+  await expect.poll(() => countAoes()).toBe(1);
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('map-aoe')).toHaveCount(1);
+});
+
+test('the pointer tool drags a placed template to a new position (persisted)', async ({ page }) => {
+  await gotoTabletop(page);
+  await selectAoeTool(page);
+
+  const box = await stageBox(page);
+  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
+  await expect(page.getByTestId('map-aoe')).toHaveCount(1);
+  await expect.poll(() => countAoes()).toBe(1);
+
+  const before = await aoes().findOne({ mapId: new ObjectId(provisioned.mapId), shape: 'sphere' });
+  const startOriginX = (before as { originX?: number } | null)?.originX ?? 0;
+
+  // Switch to the pointer tool, then drag the template to the right.
+  await page.getByTestId('tool-pointer').click();
+  const circle = page.getByTestId('map-aoe');
+  const cbox = (await circle.boundingBox())!;
+  const cx = cbox.x + cbox.width / 2;
+  const cy = cbox.y + cbox.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 140, cy, { steps: 10 });
+  await page.mouse.up();
+
+  // The move persists (owner/GM) — originX increased, still exactly one doc.
+  await expect
+    .poll(async () => {
+      const doc = await aoes().findOne({
+        mapId: new ObjectId(provisioned.mapId),
+        shape: 'sphere',
+      });
+      return (doc as { originX?: number } | null)?.originX ?? 0;
+    })
+    .toBeGreaterThan(startOriginX + 10);
+  await expect.poll(() => countAoes()).toBe(1);
+});
