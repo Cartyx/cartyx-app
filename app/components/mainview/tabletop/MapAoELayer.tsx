@@ -100,8 +100,24 @@ export function MapAoELayer({
     const userLabel = a.label?.trim();
     const name = a.createdByName?.trim();
     if (!userLabel && !name) return null;
-    const x = toDomX(a.originX);
-    const y = toDomY(a.originY);
+    // Anchor at the shape's CENTROID, not the origin: for cone/line the origin
+    // is the apex — right where the caster's token usually is — so a label there
+    // would hide the token. The centroid sits in the middle of the effect.
+    const g = aoeShapeGeometry(a);
+    let cx: number;
+    let cy: number;
+    if (g.kind === 'circle') {
+      cx = g.cx;
+      cy = g.cy;
+    } else if (g.kind === 'rect') {
+      cx = g.x + g.w / 2;
+      cy = g.y + g.h / 2;
+    } else {
+      cx = g.points.reduce((s, p) => s + p.x, 0) / g.points.length;
+      cy = g.points.reduce((s, p) => s + p.y, 0) / g.points.length;
+    }
+    const x = toDomX(cx);
+    const y = toDomY(cy);
     const outline = { paintOrder: 'stroke' as const, pointerEvents: 'none' as const };
     return (
       <g key={`label-${a.id}`} aria-hidden="true">

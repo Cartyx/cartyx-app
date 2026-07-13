@@ -72,6 +72,24 @@ describe('MapAoELayer', () => {
     expect(Number(name.getAttribute('fill-opacity'))).toBeLessThan(1);
     expect(Number(spell.getAttribute('fill-opacity'))).toBeLessThan(1);
   });
+  it('anchors a cone label at the centroid, not the apex/origin', () => {
+    // Cone: apex at origin (100,100), size 40, rotation 0 → centroid x = 100 +
+    // 2/3*40 ≈ 126.7 (away from the caster token at the apex).
+    const { getByText } = render(
+      <MapAoELayer
+        visible
+        aoes={[
+          aoe({ id: 'c', shape: 'cone', originX: 100, originY: 100, sizePx: 40, label: 'Cone' }),
+        ]}
+        preview={null}
+        effectiveScale={1}
+        imageOffsetX={0}
+        imageOffsetY={0}
+      />
+    );
+    const text = getByText('Cone');
+    expect(Number(text.getAttribute('x'))).toBeCloseTo(126.67, 1);
+  });
   it('omits the label layer when a template has no name or label', () => {
     const { queryByTestId } = render(
       <MapAoELayer

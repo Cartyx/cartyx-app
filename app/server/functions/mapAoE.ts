@@ -103,7 +103,9 @@ export const createMapAoE = async ({ data }: { data: z.infer<typeof createMapAoE
       widthPx: data.widthPx,
       rotation: data.rotation,
       color: data.color,
-      label: data.label,
+      // Never persist a blank/whitespace-only label (UI already omits it; this
+      // guards direct server-fn callers).
+      label: data.label?.trim() || undefined,
       createdBy: member.userId,
       createdByName,
     });
