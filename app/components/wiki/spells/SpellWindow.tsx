@@ -102,10 +102,10 @@ export function SpellWindow({ spell, onEdit }: SpellWindowProps) {
           <button
             type="button"
             onClick={handleShare}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-white/[0.05] hover:bg-white/[0.1] text-slate-400 hover:text-white transition-colors text-[10px] font-semibold"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors text-xs font-bold shadow-sm shadow-blue-500/30"
             aria-label="Share spell in chat"
           >
-            <Send className="h-3 w-3" /> Chat
+            <Send className="h-4 w-4" /> Share in Chat
           </button>
           {spell.canEdit && onEdit && (
             <button
