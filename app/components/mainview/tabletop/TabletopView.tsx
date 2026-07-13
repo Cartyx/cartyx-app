@@ -166,6 +166,9 @@ export function TabletopView({
       .then((result) => {
         if (result?.success) {
           setActiveScreenId(result.screen.id);
+          // Persist the selection so the Maps panel (which reads the saved
+          // player-state, not this local state) targets the new tab.
+          updateState.mutate({ activeScreenId: result.screen.id });
           mutations.invalidateList();
         }
       })
@@ -173,7 +176,7 @@ export function TabletopView({
         // Reset guard so user can retry
         autoCreatedRef.current = false;
       });
-  }, [isLoading, isGM, screens.length, mutations]);
+  }, [isLoading, isGM, screens.length, mutations, updateState]);
 
   // Fetch detail for active screen
   const { screen: activeScreen } = useTabletopScreenDetail(campaignId, activeScreenId);
@@ -250,6 +253,9 @@ export function TabletopView({
     if (result.success) {
       await mutations.invalidateList();
       setActiveScreenId(result.screen.id);
+      // Persist the selection so the Maps panel (which reads the saved
+      // player-state, not this local state) targets the new tab.
+      updateState.mutate({ activeScreenId: result.screen.id });
       send({ type: 'tab:create', screen: result.screen });
     }
     setDialog({ type: 'none' });
