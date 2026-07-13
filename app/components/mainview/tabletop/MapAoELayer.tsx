@@ -22,7 +22,8 @@ export function MapAoELayer({
   imageOffsetX,
   imageOffsetY,
   onSelect,
-  _selectedId,
+  // selectedId is accepted for API symmetry but unused this phase (no selected-highlight yet).
+  selectedId: _selectedId,
   canModify,
 }: MapAoELayerProps) {
   if (!visible) return null;
