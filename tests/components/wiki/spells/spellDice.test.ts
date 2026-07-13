@@ -104,4 +104,19 @@ describe('rollSpellModifier', () => {
     expect(arg.roll.title).toBe('Fireball · Fire');
     expect(typeof arg.requestId).toBe('string');
   });
+
+  it('returns the outcome for local display', () => {
+    const outcome = rollSpellModifier({
+      spell: spell(),
+      modifier: fireballMod,
+      castLevel: 5,
+      crit: false,
+    });
+    expect(outcome).not.toBeNull();
+    expect(outcome!.title).toBe('Fireball · Fire');
+    // Fireball at slot 5 = 10d6 → total between 10 and 60.
+    expect(outcome!.total).toBeGreaterThanOrEqual(10);
+    expect(outcome!.total).toBeLessThanOrEqual(60);
+    expect(outcome!.formula).toContain('10d6');
+  });
 });

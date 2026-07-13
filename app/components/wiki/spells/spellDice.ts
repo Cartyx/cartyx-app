@@ -43,16 +43,30 @@ function modifierLabel(spell: SpellData, modifier: SpellModifier): string {
   return `${spell.name} · ${kind}`;
 }
 
-/** Roll one modifier at the given cast level and broadcast it to the session. */
+export interface SpellRollOutcome {
+  title: string;
+  formula: string;
+  total: number;
+}
+
+/**
+ * Roll one modifier at the given cast level. Broadcasts to the session dice log
+ * (delivered only when in an active session) AND returns the outcome so the
+ * caller can always show a local result — mirroring how the dice roller shows a
+ * local roll independent of the broadcast. Returns null if the modifier has no
+ * dice.
+ */
 export function rollSpellModifier(args: {
   spell: SpellData;
   modifier: SpellModifier;
   castLevel: number;
   crit: boolean;
-}): void {
+}): SpellRollOutcome | null {
   const dice = scaledDice(args.modifier, args.spell, args.castLevel);
-  if (!dice) return;
+  if (!dice) return null;
   const result = rollDice({ pool: buildPool(dice, args.crit), mode: 'normal', modifier: 0 });
-  const roll = toParsedDiceRoll(result, { title: modifierLabel(args.spell, args.modifier) });
+  const title = modifierLabel(args.spell, args.modifier);
+  const roll = toParsedDiceRoll(result, { title });
   requestDiceBroadcast({ requestId: crypto.randomUUID(), roll });
+  return { title, formula: result.formula, total: result.total };
 }

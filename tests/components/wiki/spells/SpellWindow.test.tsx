@@ -60,6 +60,19 @@ describe('SpellWindow roll chips', () => {
     expect(mockRequestDiceBroadcast.mock.calls[0][0].roll.title).toBe('Fireball · Fire');
   });
 
+  it('shows the roll result locally (independent of the session broadcast)', async () => {
+    const user = userEvent.setup();
+    render(<SpellWindow spell={fireball()} />);
+    // No result before rolling.
+    expect(screen.queryByTestId('spell-roll-result')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('roll-m0'));
+    // A local result appears with the spell title and a numeric total, even
+    // though no active session/socket exists in this test.
+    const result = screen.getByTestId('spell-roll-result');
+    expect(result).toHaveTextContent('Fireball · Fire');
+    expect(result.textContent).toMatch(/\d+/);
+  });
+
   it('scales the chip when the slot level changes', async () => {
     const user = userEvent.setup();
     render(<SpellWindow spell={fireball()} />);

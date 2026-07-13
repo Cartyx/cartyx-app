@@ -13,7 +13,7 @@ import {
   formatAttackSave,
   formatDamageEffect,
 } from './spellFormat';
-import { scaledDice, rollSpellModifier } from './spellDice';
+import { scaledDice, rollSpellModifier, type SpellRollOutcome } from './spellDice';
 
 function Cell({ label, value }: { label: string; value: string }) {
   return (
@@ -36,6 +36,7 @@ export function SpellWindow({ spell, onEdit }: SpellWindowProps) {
   const scaling = spell.higherLevelScaling;
   const [castLevel, setCastLevel] = useState(scaling.type === 'character-level' ? 1 : spell.level);
   const [crit, setCrit] = useState(false);
+  const [lastRoll, setLastRoll] = useState<SpellRollOutcome | null>(null);
 
   const levelOptions =
     scaling.type === 'character-level'
@@ -115,7 +116,10 @@ export function SpellWindow({ spell, onEdit }: SpellWindowProps) {
                 <button
                   key={m.id}
                   type="button"
-                  onClick={() => rollSpellModifier({ spell, modifier: m, castLevel, crit })}
+                  onClick={() => {
+                    const outcome = rollSpellModifier({ spell, modifier: m, castLevel, crit });
+                    if (outcome) setLastRoll(outcome);
+                  }}
                   className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/30 text-blue-300 text-xs font-semibold hover:bg-blue-500/20 transition-colors"
                   data-testid={`roll-${m.id}`}
                 >
@@ -124,6 +128,18 @@ export function SpellWindow({ spell, onEdit }: SpellWindowProps) {
               );
             })}
           </div>
+          {lastRoll && (
+            <div
+              data-testid="spell-roll-result"
+              className="flex items-baseline gap-2 rounded-lg bg-white/[0.04] border border-white/[0.07] px-3 py-2"
+            >
+              <span className="text-[11px] font-semibold text-slate-400">{lastRoll.title}</span>
+              <span className="text-[11px] text-slate-500">{lastRoll.formula}</span>
+              <span className="ml-auto text-lg font-bold text-blue-300 tabular-nums">
+                {lastRoll.total}
+              </span>
+            </div>
+          )}
         </div>
       )}
 
