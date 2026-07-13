@@ -629,7 +629,10 @@ export function ActiveMapStage({
 
   // Keyboard: Delete/Backspace removes the selected AoE (permission-gated); Esc
   // clears the selection. Not GM-gated — players can delete their own template.
+  // Only while the AoE tool is armed, so Backspace in another tool can't delete
+  // a template (selection is likewise only possible while armed).
   useEffect(() => {
+    if (!aoeActive) return;
     const onKey = (e: KeyboardEvent) => {
       const tgt = e.target as HTMLElement | null;
       if (tgt) {
@@ -653,7 +656,7 @@ export function ActiveMapStage({
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selectedAoeId, aoes, canModifyAoe, removeAoe]);
+  }, [aoeActive, selectedAoeId, aoes, canModifyAoe, removeAoe]);
 
   // -------------------------------------------------------------------------
   // Pointer drag — either pans the viewport (drag on background) or moves a
@@ -1503,6 +1506,7 @@ export function ActiveMapStage({
         imageOffsetY={imageOffsetY}
         selectedId={selectedAoeId}
         onSelect={setSelectedAoeId}
+        interactive={aoeActive}
         canModify={canModifyAoe}
       />
 

@@ -11,6 +11,12 @@ interface MapAoELayerProps {
   imageOffsetY: number;
   onSelect?: (id: string) => void;
   selectedId?: string | null;
+  /**
+   * Whether templates are selectable right now. Only true while the AoE tool is
+   * armed — otherwise the shapes stay `pointer-events-none` so they never
+   * swallow pans/measurements or get selected+deleted from an unrelated tool.
+   */
+  interactive?: boolean;
   /** A template can be selected/deleted only by its author or the GM. */
   canModify?: (a: MapAoEData) => boolean;
 }
@@ -25,6 +31,7 @@ export function MapAoELayer({
   onSelect,
   // selectedId is accepted for API symmetry but unused this phase (no selected-highlight yet).
   selectedId: _selectedId,
+  interactive = false,
   canModify,
 }: MapAoELayerProps) {
   if (!visible) return null;
@@ -95,7 +102,10 @@ export function MapAoELayer({
       aria-label="Spell area-of-effect templates"
     >
       {aoes.map((a) =>
-        renderShape(a, a.color, { id: a.id, interactive: !!canModify && canModify(a) })
+        renderShape(a, a.color, {
+          id: a.id,
+          interactive: interactive && !!canModify && canModify(a),
+        })
       )}
       {preview && renderShape(preview, preview.color, { interactive: false })}
     </svg>
