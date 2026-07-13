@@ -188,6 +188,20 @@ export const queryKeys = {
     linked: (campaignId: string, kind: string, id: string) =>
       ['lore', 'linked', campaignId, kind, id] as const,
   },
+  organizations: {
+    all: ['organizations'] as const,
+    list: (campaignId: string, search?: string, tags?: string[], locationIds?: string[]) =>
+      ['organizations', 'list', campaignId, search ?? '', tags ?? [], locationIds ?? []] as const,
+    detail: (id: string, campaignId?: string) =>
+      ['organizations', 'detail', campaignId ?? '', id] as const,
+  },
+  memberships: {
+    all: ['memberships'] as const,
+    forOrg: (campaignId: string, organizationId: string) =>
+      ['memberships', 'forOrg', campaignId, organizationId] as const,
+    forMember: (campaignId: string, memberKind: string, memberId: string) =>
+      ['memberships', 'forMember', campaignId, memberKind, memberId] as const,
+  },
   calendar: {
     all: ['calendar'] as const,
     detail: (campaignId: string) => ['calendar', 'detail', campaignId] as const,
