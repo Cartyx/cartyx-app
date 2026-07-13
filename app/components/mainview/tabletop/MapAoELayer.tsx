@@ -9,15 +9,16 @@ interface MapAoELayerProps {
   effectiveScale: number;
   imageOffsetX: number;
   imageOffsetY: number;
-  onSelect?: (id: string) => void;
+  /** Pointer-down on a selectable template — begins a select/drag (like map text). */
+  onBeginDrag?: (a: MapAoEData, e: ReactPointerEvent<SVGElement>) => void;
   selectedId?: string | null;
   /**
-   * Whether templates are selectable right now. Only true while the AoE tool is
-   * armed — otherwise the shapes stay `pointer-events-none` so they never
-   * swallow pans/measurements or get selected+deleted from an unrelated tool.
+   * Whether templates are selectable/draggable right now. True while the AoE
+   * tool OR the pointer tool is active (parity with map text) — otherwise the
+   * shapes stay `pointer-events-none` so they never swallow pans/measurements.
    */
   interactive?: boolean;
-  /** A template can be selected/deleted only by its author or the GM. */
+  /** A template can be selected/moved/deleted only by its author or the GM. */
   canModify?: (a: MapAoEData) => boolean;
 }
 
@@ -28,7 +29,7 @@ export function MapAoELayer({
   effectiveScale,
   imageOffsetX,
   imageOffsetY,
-  onSelect,
+  onBeginDrag,
   // selectedId is accepted for API symmetry but unused this phase (no selected-highlight yet).
   selectedId: _selectedId,
   interactive = false,
@@ -41,10 +42,10 @@ export function MapAoELayer({
   const renderShape = (
     input: AoeInput,
     color: string,
-    opts: { id?: string; interactive: boolean }
+    opts: { id?: string; interactive: boolean; aoe?: MapAoEData }
   ) => {
     const g = aoeShapeGeometry(input);
-    const selectable = opts.interactive && !!opts.id;
+    const selectable = opts.interactive && !!opts.id && !!opts.aoe;
     const common = {
       'data-testid': opts.id ? 'map-aoe' : undefined,
       'data-aoe-id': opts.id,
@@ -55,15 +56,12 @@ export function MapAoELayer({
       strokeOpacity: 0.9,
       strokeWidth: Math.max(1, 2 * effectiveScale),
       style: { pointerEvents: (selectable ? 'all' : 'none') as 'all' | 'none', cursor: 'pointer' },
-      // Stop propagation so selecting an existing template does not also reach
-      // the stage's placement handler (which would commit a duplicate AoE) —
-      // mirrors beginDrawingMove / beginTextDrag in ActiveMapStage.
+      // onBeginDrag stops propagation itself so selecting/dragging an existing
+      // template doesn't also reach the stage's placement handler — mirrors
+      // beginTextDrag in ActiveMapStage.
       onPointerDown:
-        selectable && opts.id
-          ? (e: ReactPointerEvent<SVGElement>) => {
-              e.stopPropagation();
-              onSelect?.(opts.id!);
-            }
+        selectable && opts.aoe
+          ? (e: ReactPointerEvent<SVGElement>) => onBeginDrag?.(opts.aoe!, e)
           : undefined,
       'aria-hidden': true as const,
     };
@@ -105,6 +103,7 @@ export function MapAoELayer({
         renderShape(a, a.color, {
           id: a.id,
           interactive: interactive && !!canModify && canModify(a),
+          aoe: a,
         })
       )}
       {preview && renderShape(preview, preview.color, { interactive: false })}
