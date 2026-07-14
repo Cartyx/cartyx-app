@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { createFakeModel, createNotFoundModel } from './questTestDb';
 
 // Mirror the requireCampaignMember mock pattern from organizations.test.ts.
 const member = { sessionUserId: 'sess', userId: 'u-gm', isGM: true };
@@ -25,174 +26,19 @@ vi.mock('~/server/functions/gmscreens-helpers', () => ({
  *
  * The task brief's test body assumes real persistence (create → read,
  * create → delete → re-parent, prune-then-reload). To preserve that behavior
- * faithfully without inventing new test infrastructure, this file backs the
- * `Quest` and `Character` model mocks with tiny in-memory, array-backed fakes
- * that support exactly the Mongoose query shapes `app/server/functions/quests.ts`
- * uses (plain equality, dotted paths into embedded docs/arrays, $or/$and,
- * $elemMatch, $all, $in, $set, $pull). Player/Location/Organization/Event are
- * only ever read via a single `findOne`, so they get a simpler fake.
+ * faithfully without inventing new test infrastructure, `Quest` and
+ * `Character` are backed by the shared in-memory model fake in
+ * `./questTestDb` (see that file's header for why it exists and what
+ * Mongoose query shapes it supports). Player/Location/Organization/Event are
+ * only ever read via a single `findOne`, so they get a simpler not-found stub.
  */
 
-function get(obj: unknown, key: string): unknown {
-  return (obj as Record<string, unknown> | null | undefined)?.[key];
-}
-
-function matchDoc(doc: Record<string, unknown>, filter: Record<string, unknown>): boolean {
-  return Object.entries(filter).every(([key, val]) => {
-    if (key === '$or') return (val as Record<string, unknown>[]).some((f) => matchDoc(doc, f));
-    if (key === '$and') return (val as Record<string, unknown>[]).every((f) => matchDoc(doc, f));
-    if (key === '$text') return true;
-
-    if (key.includes('.')) {
-      const [head, ...rest] = key.split('.');
-      const restKey = rest.join('.');
-      const headVal = get(doc, head);
-      if (Array.isArray(headVal)) {
-        return headVal.some((el) => matchDoc(el as Record<string, unknown>, { [restKey]: val }));
-      }
-      return matchDoc((headVal as Record<string, unknown>) ?? {}, { [restKey]: val });
-    }
-
-    const actual = get(doc, key);
-    if (val && typeof val === 'object' && !Array.isArray(val)) {
-      const ops = val as Record<string, unknown>;
-      if ('$elemMatch' in ops) {
-        const arr = (actual as unknown[]) ?? [];
-        return arr.some((item) =>
-          matchDoc(item as Record<string, unknown>, ops.$elemMatch as Record<string, unknown>)
-        );
-      }
-      if ('$in' in ops) return (ops.$in as unknown[]).includes(actual);
-      if ('$all' in ops) {
-        const arr = (actual as unknown[]) ?? [];
-        return (ops.$all as unknown[]).every((v) => arr.includes(v));
-      }
-    }
-    return actual === val;
-  });
-}
-
-function chain<T>(result: T) {
-  const q: Record<string, unknown> = {};
-  q.select = () => q;
-  q.sort = () => q;
-  q.limit = () => q;
-  q.lean = async () => result;
-  return q;
-}
-
-function clone<T>(d: T): T {
-  return JSON.parse(JSON.stringify(d));
-}
-
-// --- Fake Quest collection (supports the exact query shapes quests.ts uses) ---
-const questHoisted = vi.hoisted(() => {
-  const docs: Record<string, unknown>[] = [];
-  let seq = 1;
-  return { docs, nextId: () => `q${seq++}` };
-});
-
-function FakeQuest(this: Record<string, unknown>, doc: Record<string, unknown>) {
-  Object.assign(this, { _id: questHoisted.nextId(), ...doc });
-  this.save = vi.fn(async () => {
-    questHoisted.docs.push(clone(this));
-    return this;
-  });
-  this.toObject = () => clone(this);
-}
-Object.assign(FakeQuest, {
-  deleteMany: async (filter: Record<string, unknown> = {}) => {
-    for (let i = questHoisted.docs.length - 1; i >= 0; i--) {
-      if (matchDoc(questHoisted.docs[i], filter)) questHoisted.docs.splice(i, 1);
-    }
-    return {};
-  },
-  find: (filter: Record<string, unknown> = {}) =>
-    chain(questHoisted.docs.filter((d) => matchDoc(d, filter)).map(clone)),
-  findOne: (filter: Record<string, unknown>) => {
-    const found = questHoisted.docs.find((d) => matchDoc(d, filter));
-    return chain(found ? clone(found) : null);
-  },
-  findById: (id: string) => {
-    const found = questHoisted.docs.find((d) => d._id === id);
-    return chain(found ? clone(found) : null);
-  },
-  findOneAndUpdate: (
-    filter: Record<string, unknown>,
-    update: { $set?: Record<string, unknown> }
-  ) => {
-    const idx = questHoisted.docs.findIndex((d) => matchDoc(d, filter));
-    if (idx === -1) return chain(null);
-    Object.assign(questHoisted.docs[idx], update.$set ?? {});
-    return chain(clone(questHoisted.docs[idx]));
-  },
-  deleteOne: async (filter: Record<string, unknown>) => {
-    const idx = questHoisted.docs.findIndex((d) => matchDoc(d, filter));
-    if (idx >= 0) questHoisted.docs.splice(idx, 1);
-    return { deletedCount: idx >= 0 ? 1 : 0 };
-  },
-  updateMany: async (
-    filter: Record<string, unknown>,
-    update: { $set?: Record<string, unknown>; $pull?: Record<string, unknown> }
-  ) => {
-    for (const d of questHoisted.docs) {
-      if (!matchDoc(d, filter)) continue;
-      if (update.$set) Object.assign(d, update.$set);
-      if (update.$pull) {
-        for (const [field, cond] of Object.entries(update.$pull)) {
-          const arr = (d[field] as unknown[]) ?? [];
-          d[field] = arr.filter(
-            (item) => !matchDoc(item as Record<string, unknown>, cond as Record<string, unknown>)
-          );
-        }
-      }
-    }
-    return {};
-  },
-});
-
-vi.mock('~/server/db/models/Quest', () => ({ Quest: FakeQuest }));
-
-// --- Fake Character collection (create/deleteMany used directly by the test; findOne used by quests.ts label resolution) ---
-const characterHoisted = vi.hoisted(() => {
-  const docs: Record<string, unknown>[] = [];
-  let seq = 1;
-  return { docs, nextId: () => `ch${seq++}` };
-});
-
-vi.mock('~/server/db/models/Character', () => ({
-  Character: {
-    create: async (doc: Record<string, unknown>) => {
-      const rec = { _id: characterHoisted.nextId(), ...doc };
-      characterHoisted.docs.push(rec);
-      return rec;
-    },
-    deleteMany: async () => {
-      characterHoisted.docs.length = 0;
-      return {};
-    },
-    findOne: (filter: Record<string, unknown>) => {
-      const found = characterHoisted.docs.find((d) => matchDoc(d, filter));
-      return chain(found ? clone(found) : null);
-    },
-  },
-}));
-
-// Player/Location/Organization/Event are only ever read via a single findOne
-// in quests.ts and are never referenced by id in this test suite, so a
-// not-found stub is sufficient.
-vi.mock('~/server/db/models/Player', () => ({
-  Player: { findOne: () => chain(null) },
-}));
-vi.mock('~/server/db/models/Location', () => ({
-  Location: { findOne: () => chain(null) },
-}));
-vi.mock('~/server/db/models/Organization', () => ({
-  Organization: { findOne: () => chain(null) },
-}));
-vi.mock('~/server/db/models/Event', () => ({
-  Event: { findOne: () => chain(null) },
-}));
+vi.mock('~/server/db/models/Quest', () => ({ Quest: createFakeModel('q') }));
+vi.mock('~/server/db/models/Character', () => ({ Character: createFakeModel('ch') }));
+vi.mock('~/server/db/models/Player', () => ({ Player: createNotFoundModel() }));
+vi.mock('~/server/db/models/Location', () => ({ Location: createNotFoundModel() }));
+vi.mock('~/server/db/models/Organization', () => ({ Organization: createNotFoundModel() }));
+vi.mock('~/server/db/models/Event', () => ({ Event: createNotFoundModel() }));
 
 import { Quest } from '~/server/db/models/Quest';
 import { Character } from '~/server/db/models/Character';
@@ -200,6 +46,7 @@ import {
   createQuest,
   getQuest,
   listQuests,
+  updateQuest,
   deleteQuest,
   listQuestsForEntity,
   pruneQuestRefs,
@@ -427,5 +274,174 @@ describe('quests server functions', () => {
     const reloaded = await getQuest({ data: { id: q.id, campaignId: CAMPAIGN } });
     expect(reloaded?.giver).toBeNull();
     expect(reloaded?.links).toHaveLength(0);
+  });
+
+  it('updateQuest (as GM) round-trips privateInfo on the quest, a link, and an event', async () => {
+    const ch = await Character.create({ firstName: 'A', lastName: 'B', campaignId: CAMPAIGN });
+    const q = await createQuest({
+      data: {
+        campaignId: CAMPAIGN,
+        name: 'Q',
+        type: '',
+        status: 'active',
+        publicInfo: '',
+        privateInfo: 'quest-secret-1',
+        isPublic: true,
+        giver: null,
+        parentQuestId: null,
+        links: [
+          {
+            kind: 'character',
+            id: String(ch._id),
+            role: 'r1',
+            publicInfo: 'pub1',
+            privateInfo: 'link-secret-1',
+          },
+        ],
+        events: [
+          { eventId: 'evt-1', role: 'er1', publicInfo: 'epub1', privateInfo: 'event-secret-1' },
+        ],
+        images: [],
+        tags: [],
+      },
+    });
+
+    const updated = await updateQuest({
+      data: {
+        id: q.id,
+        campaignId: CAMPAIGN,
+        name: 'Q',
+        type: '',
+        status: 'active',
+        publicInfo: '',
+        privateInfo: 'quest-secret-2',
+        isPublic: true,
+        giver: null,
+        parentQuestId: null,
+        links: [
+          {
+            kind: 'character',
+            id: String(ch._id),
+            role: 'r1',
+            publicInfo: 'pub1',
+            privateInfo: 'link-secret-2',
+          },
+        ],
+        events: [
+          { eventId: 'evt-1', role: 'er1', publicInfo: 'epub1', privateInfo: 'event-secret-2' },
+        ],
+        images: [],
+        tags: [],
+      },
+    });
+
+    expect(updated.privateInfo).toBe('quest-secret-2');
+    expect(updated.links[0].privateInfo).toBe('link-secret-2');
+    expect(updated.events[0].privateInfo).toBe('event-secret-2');
+  });
+
+  it('updateQuest (as non-GM) preserves existing GM-only privateInfo for matched links/events, blanks new ones, and leaves quest-level privateInfo untouched', async () => {
+    const ch = await Character.create({ firstName: 'A', lastName: 'B', campaignId: CAMPAIGN });
+    const q = await createQuest({
+      data: {
+        campaignId: CAMPAIGN,
+        name: 'Q',
+        type: '',
+        status: 'active',
+        publicInfo: '',
+        privateInfo: 'quest-secret',
+        isPublic: true,
+        giver: null,
+        parentQuestId: null,
+        links: [
+          {
+            kind: 'character',
+            id: String(ch._id),
+            role: 'r1',
+            publicInfo: 'pub1',
+            privateInfo: 'link-secret',
+          },
+        ],
+        events: [
+          { eventId: 'evt-1', role: 'er1', publicInfo: 'epub1', privateInfo: 'event-secret' },
+        ],
+        images: [],
+        tags: [],
+      },
+    });
+
+    // Non-GM creator updates the quest: submits an attempted privateInfo change
+    // on the existing (matched) link/event, plus a brand-new link/event.
+    member.isGM = false;
+    member.userId = 'u-gm'; // still the creator, so the update is allowed (not Forbidden)
+
+    await updateQuest({
+      data: {
+        id: q.id,
+        campaignId: CAMPAIGN,
+        name: 'Q renamed',
+        type: '',
+        status: 'active',
+        publicInfo: 'pub-updated',
+        privateInfo: 'attempted-wipe',
+        isPublic: true,
+        giver: null,
+        parentQuestId: null,
+        links: [
+          {
+            kind: 'character',
+            id: String(ch._id),
+            role: 'r1-updated',
+            publicInfo: 'pub1-updated',
+            privateInfo: 'non-gm-attempt-existing',
+          },
+          {
+            kind: 'character',
+            id: 'brand-new-id',
+            role: 'r2',
+            publicInfo: 'pub2',
+            privateInfo: 'non-gm-attempt-new',
+          },
+        ],
+        events: [
+          {
+            eventId: 'evt-1',
+            role: 'er1-updated',
+            publicInfo: 'epub1-updated',
+            privateInfo: 'non-gm-attempt-existing-event',
+          },
+          {
+            eventId: 'evt-2',
+            role: 'er2',
+            publicInfo: 'epub2',
+            privateInfo: 'non-gm-attempt-new-event',
+          },
+        ],
+        images: [],
+        tags: [],
+      },
+    });
+
+    // Read back as GM to see the true stored privateInfo values.
+    member.isGM = true;
+    member.userId = 'u-gm';
+    const reloaded = await getQuest({ data: { id: q.id, campaignId: CAMPAIGN } });
+    expect(reloaded?.name).toBe('Q renamed');
+    expect(reloaded?.publicInfo).toBe('pub-updated');
+    // Quest-level privateInfo is a non-GM writer's blind spot: left untouched, not wiped.
+    expect(reloaded?.privateInfo).toBe('quest-secret');
+
+    const existingLink = reloaded?.links.find((l) => l.id === String(ch._id));
+    expect(existingLink?.privateInfo).toBe('link-secret');
+    expect(existingLink?.role).toBe('r1-updated'); // non-private fields still apply
+
+    const newLink = reloaded?.links.find((l) => l.id === 'brand-new-id');
+    expect(newLink?.privateInfo).toBe('');
+
+    const existingEvent = reloaded?.events.find((e) => e.eventId === 'evt-1');
+    expect(existingEvent?.privateInfo).toBe('event-secret');
+
+    const newEvent = reloaded?.events.find((e) => e.eventId === 'evt-2');
+    expect(newEvent?.privateInfo).toBe('');
   });
 });
