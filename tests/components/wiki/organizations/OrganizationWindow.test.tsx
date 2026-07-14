@@ -7,6 +7,10 @@ vi.mock('~/hooks/useOrganizations', () => ({
   useMembershipsForOrg: () => ({ memberships: [], isLoading: false }),
 }));
 
+vi.mock('~/hooks/useQuests', () => ({
+  useQuestsForEntity: () => ({ quests: [], isLoading: false }),
+}));
+
 const org: OrganizationData = {
   id: 'o1',
   campaignId: 'c1',

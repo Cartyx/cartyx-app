@@ -16,6 +16,7 @@ import {
 } from '~/hooks/useOrganizations';
 import { OrganizationLocationsEditor } from './OrganizationLocationsEditor';
 import { OrganizationMembersEditor } from './OrganizationMembersEditor';
+import { EntityQuestsTab } from '~/components/shared/EntityQuestsTab';
 import { uploadToR2 } from '~/utils/uploadToR2';
 import { compressImage } from '~/utils/compressImage';
 import type { OrganizationLocationLinkInput, OrganizationImage } from '~/types/organization';
@@ -374,6 +375,19 @@ export function OrganizationModal({
                 <p className="text-xs text-slate-500">
                   Save the organization first to add members.
                 </p>
+              )}
+
+              {isEdit && organizationId && (
+                <div>
+                  <span className="block text-xs font-semibold text-slate-400 mb-2 tracking-wide">
+                    Linked Quests
+                  </span>
+                  <EntityQuestsTab
+                    campaignId={campaignId}
+                    kind="organization"
+                    id={organizationId}
+                  />
+                </div>
               )}
             </>
           )}
