@@ -35,6 +35,9 @@ vi.mock('~/server/utils/pruneLoreLinks', () => ({
 vi.mock('~/server/utils/requireCampaignMember', () => ({
   requireCampaignMember: vi.fn(),
 }));
+vi.mock('~/server/functions/organizations', () => ({
+  pruneMembershipsForMember: vi.fn(),
+}));
 
 import { getSession } from '~/server/session';
 import { User } from '~/server/db/models/User';

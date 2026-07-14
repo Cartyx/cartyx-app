@@ -14,6 +14,8 @@ import {
   useRemovePlayerRelationship,
 } from '~/hooks/usePlayers';
 import { PlayerLoreTab } from '~/components/wiki/players/PlayerLoreTab';
+import { MemberOrganizationsTab } from '~/components/shared/MemberOrganizationsTab';
+import { useCampaign } from '~/hooks/useCampaigns';
 
 function getCropStyle(crop: PictureCrop): React.CSSProperties {
   const centerX = (crop.x + crop.width / 2) * 100;
@@ -83,6 +85,8 @@ export function PlayerWindow({ player, onEdit }: PlayerWindowProps) {
   const { addRelationship } = useAddPlayerRelationship();
   const { updateRelationship } = useUpdatePlayerRelationship();
   const { removeRelationship } = useRemovePlayerRelationship();
+  const { campaign } = useCampaign(player.campaignId);
+  const isGM = campaign?.isGM ?? false;
 
   const fullName = `${player.firstName} ${player.lastName}`.trim();
   const initials = getInitials(player.firstName, player.lastName);
@@ -101,6 +105,7 @@ export function PlayerWindow({ player, onEdit }: PlayerWindowProps) {
     { id: 'gmnotes', label: 'GM Notes', hidden: player.gmNotes === '' },
     { id: 'relationships', label: 'Relationships' },
     { id: 'lore', label: 'Lore' },
+    { id: 'organizations', label: 'Organizations' },
   ];
 
   return (
@@ -305,6 +310,16 @@ export function PlayerWindow({ player, onEdit }: PlayerWindowProps) {
           <PlayerLoreTab
             campaignId={player.campaignId}
             playerId={player.id}
+            canManage={player.canEdit}
+          />
+        )}
+
+        {activeTab === 'organizations' && (
+          <MemberOrganizationsTab
+            campaignId={player.campaignId}
+            memberKind="player"
+            memberId={player.id}
+            isGM={isGM}
             canManage={player.canEdit}
           />
         )}

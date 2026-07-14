@@ -6,6 +6,7 @@ import { normalizeTags } from '../utils/helpers';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { pruneLoreLinks } from '../utils/pruneLoreLinks';
 import { pruneEventLinks } from '../utils/pruneEventLinks';
+import { pruneMembershipsForMember } from './organizations';
 import { ensureTags as ensureTagsFn } from './tags';
 import type { CharacterData, CharacterListItem, PictureCrop } from '~/types/character';
 import {
@@ -316,6 +317,16 @@ export const deleteCharacter = async ({
 
     await pruneLoreLinks('character', data.id, data.campaignId);
     await pruneEventLinks('character', data.id, data.campaignId);
+
+    try {
+      await pruneMembershipsForMember('character', data.id, data.campaignId);
+    } catch (pruneError) {
+      serverCaptureException(pruneError, sessionUserId, {
+        action: 'deleteCharacter.pruneMemberships',
+        campaign_id: data.campaignId,
+        character_id: data.id,
+      });
+    }
 
     serverCaptureEvent(sessionUserId, 'character_deleted', {
       campaign_id: data.campaignId,

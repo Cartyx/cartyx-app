@@ -12,6 +12,8 @@ import {
   useUpdateCharacterRelationship,
   useRemoveCharacterRelationship,
 } from '~/hooks/useCharacters';
+import { MemberOrganizationsTab } from '~/components/shared/MemberOrganizationsTab';
+import { useCampaign } from '~/hooks/useCampaigns';
 
 function getCropStyle(crop: PictureCrop): React.CSSProperties {
   const centerX = (crop.x + crop.width / 2) * 100;
@@ -72,6 +74,8 @@ export function CharacterWindow({ character, onEdit }: CharacterWindowProps) {
   const { addRelationship } = useAddCharacterRelationship();
   const { updateRelationship } = useUpdateCharacterRelationship();
   const { removeRelationship } = useRemoveCharacterRelationship();
+  const { campaign } = useCampaign(character.campaignId);
+  const isGM = campaign?.isGM ?? false;
 
   const fullName = `${character.firstName} ${character.lastName}`.trim();
   const initials = getInitials(character.firstName, character.lastName);
@@ -91,6 +95,7 @@ export function CharacterWindow({ character, onEdit }: CharacterWindowProps) {
     { id: 'general', label: 'General' },
     { id: 'gmnotes', label: 'GM Notes', hidden: !character.canEdit },
     { id: 'relationships', label: 'Relationships' },
+    { id: 'organizations', label: 'Organizations' },
   ];
 
   return (
@@ -263,6 +268,16 @@ export function CharacterWindow({ character, onEdit }: CharacterWindowProps) {
               />
             )}
           </>
+        )}
+
+        {activeTab === 'organizations' && (
+          <MemberOrganizationsTab
+            campaignId={character.campaignId}
+            memberKind="character"
+            memberId={character.id}
+            isGM={isGM}
+            canManage={character.canEdit}
+          />
         )}
       </div>
     </div>

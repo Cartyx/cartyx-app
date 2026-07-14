@@ -6,8 +6,10 @@ vi.mock('~/server/db/models/Character', () => ({ Character: { find: vi.fn() } })
 vi.mock('~/server/db/models/Race', () => ({ Race: { find: vi.fn() } }));
 vi.mock('~/server/db/models/Rule', () => ({ Rule: { find: vi.fn() } }));
 vi.mock('~/server/db/models/Event', () => ({ Event: { find: vi.fn() } }));
+vi.mock('~/server/db/models/Organization', () => ({ Organization: { find: vi.fn() } }));
 
 import { Event } from '~/server/db/models/Event';
+import { Organization } from '~/server/db/models/Organization';
 import { hydrateRefs } from '~/server/functions/tabletop-hydration';
 
 const eventDocs = [
@@ -18,6 +20,14 @@ const eventDocs = [
 function mockEventFind() {
   vi.mocked(Event.find).mockReturnValue({
     lean: vi.fn().mockResolvedValue(eventDocs),
+  } as never);
+}
+
+const organizationDocs = [{ _id: 'orgPriv', name: 'Secret', publicInfo: '', isPublic: false }];
+
+function mockOrganizationFind() {
+  vi.mocked(Organization.find).mockReturnValue({
+    lean: vi.fn().mockResolvedValue(organizationDocs),
   } as never);
 }
 
@@ -49,5 +59,21 @@ describe('hydrateRefs — event privacy on shared screens', () => {
   it('defaults to GM (no redaction) when no viewer role is provided', async () => {
     const hydrated = await hydrateRefs(refs, 'camp-1');
     expect(hydrated['events:priv']).toBeDefined();
+  });
+});
+
+describe('hydrateRefs — organization privacy on shared screens', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockOrganizationFind();
+  });
+
+  it('omits non-public organizations for a non-GM viewer', async () => {
+    const result = await hydrateRefs(
+      [{ collection: 'organization', documentId: 'orgPriv' }],
+      'camp-1',
+      { isGM: false }
+    );
+    expect(result['organization:orgPriv']).toBeUndefined();
   });
 });

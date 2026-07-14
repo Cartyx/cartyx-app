@@ -29,6 +29,10 @@ import {
   LoreWindowWrapper,
   EditLoreModalWrapper,
 } from '~/components/mainview/gmscreens/LoreWindowWrapper';
+import {
+  OrganizationWindowWrapper,
+  EditOrganizationModalWrapper,
+} from '~/components/wiki/organizations/OrganizationWindowWrapper';
 import { EventWindowWrapper } from '~/components/mainview/gmscreens/EventWindowWrapper';
 import { RaceWindowWrapper, EditRaceModalWrapper } from '~/components/wiki/races/RaceWindowWrapper';
 import {
@@ -130,6 +134,7 @@ export function TabletopView({
   const [editingLocationId, setEditingLocationId] = useState<string | null>(null);
   const [editingMonsterId, setEditingMonsterId] = useState<string | null>(null);
   const [editingLoreId, setEditingLoreId] = useState<string | null>(null);
+  const [editingOrganizationId, setEditingOrganizationId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [localWindows, setLocalWindows] = useState<ManagedWindow[]>([]);
   const localScreenIdRef = useRef<string | null>(null);
@@ -385,6 +390,14 @@ export function TabletopView({
               onEdit={() => setEditingLoreId(w.documentId)}
             />
           );
+        } else if (w.collection === 'organization') {
+          windowContent = (
+            <OrganizationWindowWrapper
+              organizationId={w.documentId}
+              campaignId={campaignId}
+              onEdit={() => setEditingOrganizationId(w.documentId)}
+            />
+          );
         } else if (w.collection === 'events') {
           windowContent = <EventWindowWrapper eventId={w.documentId} campaignId={campaignId} />;
         } else {
@@ -405,7 +418,8 @@ export function TabletopView({
           w.collection === 'rule' ||
           w.collection === 'character' ||
           w.collection === 'location' ||
-          w.collection === 'lore'
+          w.collection === 'lore' ||
+          w.collection === 'organization'
         ) {
           if (doc?.isPublic === true) {
             titleIcon = (
@@ -718,6 +732,13 @@ export function TabletopView({
           campaignId={campaignId}
           loreId={editingLoreId}
           onClose={() => setEditingLoreId(null)}
+        />
+      )}
+      {editingOrganizationId !== null && (
+        <EditOrganizationModalWrapper
+          campaignId={campaignId}
+          organizationId={editingOrganizationId}
+          onClose={() => setEditingOrganizationId(null)}
         />
       )}
     </div>
