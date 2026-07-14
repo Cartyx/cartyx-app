@@ -1250,6 +1250,229 @@ def build_organization_membership_docs(*, org_ids, character_by_name,
     return [m for m in candidates if m is not None]
 
 
+def build_quest_docs(*, campaign_id, gm_id, character_by_name, player_doc_ids,
+                     org_ids, location_ids, event_ids, now):
+    """Return Quest docs for the rich campaign, matching Quest.ts exactly.
+
+    Exercises the full model: a public ACTIVE main quest with a character
+    giver, multi-kind links (character/location/organization), and linked
+    events; a public COMPLETED side quest; a public ON_HOLD personal quest
+    with a player giver and a player-kind link; a GM-only PRIVATE quest with
+    an organization giver, private link/event notes, and a private-info-only
+    linked event; and a SUB-QUEST whose parentQuestId points at the main
+    quest's _id (generated up front so it can be referenced before insertion).
+
+    Arguments
+    ---------
+    character_by_name : dict mapping "First Last" → Character _id (built by
+                        the caller from defn["characters"], same as the
+                        membership builder uses).
+    player_doc_ids    : list of Player document _ids.
+    org_ids           : dict mapping org key (build_organization_docs) → _id.
+    location_ids      : dict mapping location name → _id.
+    event_ids         : dict mapping event title (build_event_docs) → _id.
+
+    NOTE ON PRIVACY: the quest→event join always exposes the linked Event's
+    *title* to every viewer regardless of the Event's own isPublic flag (see
+    resolveEvents in app/server/functions/quests.ts) — only its
+    content/gmContent stay GM-gated. To avoid leaking a GM-only event's title
+    through a PUBLIC quest, only public quests link to public Events here;
+    the private quest's event link points at a private Event, which is safe
+    because the whole quest doc — and therefore its events array — is
+    filtered out for non-GM/non-creator viewers before that join ever runs.
+    """
+    def char(name):
+        return character_by_name.get(name)
+
+    phandalin = location_ids.get("Phandalin") or (
+        next(iter(location_ids.values())) if location_ids else None
+    )
+    player0 = player_doc_ids[0] if player_doc_ids else None
+    player1 = player_doc_ids[1] if len(player_doc_ids) > 1 else None
+
+    # Two generated images per quest — slugs MUST match the QUESTS list in
+    # scripts/gen_seed_quest_images.mjs, which renders the PNGs and (when the
+    # CDN is configured) uploads them to R2 under uploads/quests/ as part of
+    # `npm run dev:seed`.
+    def imgs(slug, name):
+        return [
+            {"url": public_url(f"/uploads/quests/{slug}-1.png"),
+             "caption": f"{name} — scene", "crop": None},
+            {"url": public_url(f"/uploads/quests/{slug}-2.png"),
+             "caption": f"{name} — detail", "crop": None},
+        ]
+
+    def link(kind, entity_id, role, public_info, private_info=""):
+        if not entity_id:
+            return None
+        return {"kind": kind, "id": entity_id, "role": role,
+                "publicInfo": public_info, "privateInfo": private_info}
+
+    def event_link(title, role, public_info, private_info=""):
+        event_id = event_ids.get(title)
+        if not event_id:
+            return None
+        return {"eventId": event_id, "role": role,
+                "publicInfo": public_info, "privateInfo": private_info}
+
+    def quest(name, *, type_, status, public_info, is_public, tags, slug,
+              private_info="", giver=None, parent_quest_id=None,
+              links=None, events=None, quest_id=None):
+        doc = {
+            "name": name,
+            "type": type_,
+            "status": status,
+            "publicInfo": public_info,
+            "privateInfo": private_info,
+            "isPublic": is_public,
+            "giver": giver,
+            "parentQuestId": parent_quest_id,
+            "links": [l for l in (links or []) if l is not None],
+            "events": [e for e in (events or []) if e is not None],
+            "images": imgs(slug, name),
+            "tags": tags,
+            "campaignId": campaign_id,
+            "createdBy": gm_id,
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        if quest_id is not None:
+            doc["_id"] = quest_id
+        return doc
+
+    # Generated up front so the sub-quest can reference it as parentQuestId
+    # before the batch is inserted.
+    main_quest_id = ObjectId()
+
+    return [
+        quest(
+            "Goblin Arrows",
+            type_="Main",
+            status="active",
+            slug="goblin_arrows",
+            quest_id=main_quest_id,
+            public_info=(
+                "Gundren Rockseeker's supply wagon was ambushed on the Triboar "
+                "Trail by Cragmaw goblins. Gundren is missing; his associate "
+                "Sildar Hallwinter asks the party to track the goblins, learn "
+                "what happened to Gundren, and see the wagon safely to Phandalin."
+            ),
+            private_info=(
+                "GM: the goblins report to Cragmaw Castle, which answers in "
+                "turn to the Black Spider — this is the thread that leads to "
+                "Wave Echo Cave."
+            ),
+            is_public=True,
+            giver={"kind": "character", "id": char("Sildar Hallwinter")},
+            tags=["main"],
+            links=[
+                link("location", phandalin, "Destination",
+                     "The wagon and its escort must reach Phandalin."),
+                link("character", char("Gundren Rockseeker"), "Missing",
+                     "Taken captive somewhere along the trail.",
+                     "GM: held at Cragmaw Castle on the Black Spider's orders."),
+                link("organization", org_ids.get("lords_alliance"),
+                     "Interested Party",
+                     "The Lords' Alliance wants the trade road kept safe.",
+                     "GM: quietly hopes for a permanent garrison once the mine reopens."),
+            ],
+            events=[
+                event_link("The Siege of Phandalin", "Started at",
+                           "The ambush was the opening blow of the troubles "
+                           "that soon engulfed Phandalin."),
+                event_link("Wave Echo Cave Rediscovered", "Continues in",
+                           "The search for Gundren leads on toward the lost mine."),
+            ],
+        ),
+        quest(
+            "Old Owl Well",
+            type_="Side",
+            status="completed",
+            slug="old_owl_well",
+            public_info=(
+                "Sister Garaele of the Shrine of Luck asked the party to "
+                "recover a Harper spellbook from the ruins at Old Owl Well, "
+                "last seen with the reclusive druid Reidoth."
+            ),
+            is_public=True,
+            giver={"kind": "character", "id": char("Sister Garaele")},
+            tags=["side"],
+            links=[
+                link("character", char("Reidoth the Druid"), "Contact",
+                     "Guided the party to the ruins and the spellbook's location."),
+                link("location", phandalin, "Origin",
+                     "Sister Garaele gave the party this task at the Shrine of Luck."),
+            ],
+        ),
+        quest(
+            "An Old Debt",
+            type_="Personal",
+            status="on_hold",
+            slug="an_old_debt",
+            public_info=(
+                "Before the road to Phandalin, this adventurer swore to repay "
+                "an old debt of honor. The matter is on hold until they find "
+                "the one they owe."
+            ),
+            is_public=True,
+            giver={"kind": "player", "id": player0},
+            tags=["personal"],
+            links=[
+                link("player", player1, "Confidant",
+                     "The only other member of the party who knows the whole story."),
+            ],
+        ),
+        quest(
+            "The Black Spider's Plot",
+            type_="Villain",
+            status="active",
+            slug="black_spiders_plot",
+            public_info="",
+            private_info=(
+                "GM only: Nezznar the Black Spider, a drow mage, seeks sole "
+                "control of the Forge of Spells in Wave Echo Cave. He ordered "
+                "Gundren captured and Iarno 'Glasstaff' Albrek placed as his "
+                "agent among the Redbrands. His network still has agents in "
+                "Phandalin the party hasn't uncovered."
+            ),
+            is_public=False,
+            giver={"kind": "organization", "id": org_ids.get("black_spider")},
+            tags=["villain", "secret"],
+            links=[
+                link("character", char("Halia Thornton"), "Suspected Agent",
+                     "",
+                     "GM: her Zhentarim ties may overlap with the Black "
+                     "Spider's network — worth investigating."),
+                link("location", phandalin, "Base of Operations",
+                     "",
+                     "GM: the Spider's agents used the cellar beneath "
+                     "Tresendar Manor as a waypoint before the Redbrands fell."),
+            ],
+            events=[
+                event_link("Gundren's Disappearance", "Ordered by",
+                          "", "GM: carried out on the Black Spider's orders."),
+            ],
+        ),
+        quest(
+            "Clear the Cragmaw Hideout",
+            type_="Side",
+            status="completed",
+            slug="cragmaw_hideout",
+            public_info=(
+                "The goblins' trail led to a cave hideout by a stream — the "
+                "party stormed it to free Sildar and recover the wagon."
+            ),
+            is_public=True,
+            parent_quest_id=main_quest_id,
+            tags=["main", "sub-quest"],
+            links=[
+                link("location", phandalin, "Nearby",
+                     "The hideout lies a short march off the Triboar Trail."),
+            ],
+        ),
+    ]
+
+
 # Generic in-character banter the builder samples to pad transcripts to length.
 # Speaker is a player; lines are character-agnostic so any party fits.
 _BANTER_POOL = [
@@ -1858,10 +2081,17 @@ def main() -> None:
                 character_ids=character_ids, location_ids=location_ids, race_ids=race_ids,
                 player_ids=player_doc_ids, session_ids=list(session_ids.values()),
             )
+            # event_ids: title → inserted _id, so quests can link back to the
+            # events they reference (e.g. "Started at" the Siege of Phandalin).
+            event_ids: dict[str, object] = {}
             if event_docs:
                 # Mongoose pluralizes model('Event') to the `events` collection.
-                db.events.insert_many(event_docs)
-            print(f"    events     inserted {len(event_docs)}")
+                event_result = db.events.insert_many(event_docs)
+                event_ids = {
+                    doc["title"]: oid
+                    for doc, oid in zip(event_docs, event_result.inserted_ids)
+                }
+            print(f"    events     inserted {len(event_ids)}")
 
             # Organizations + memberships — link factions to the seeded
             # locations, characters, and players. Includes GM-only private orgs
@@ -1897,6 +2127,20 @@ def main() -> None:
                 # → `organizationmemberships`.
                 db.organizationmemberships.insert_many(membership_docs)
             print(f"    org members inserted {len(membership_docs)}")
+
+            # Quests — a public active main quest, a completed side quest, an
+            # on_hold personal quest, a GM-only private quest, and a sub-quest
+            # of the main quest, wired to the entities/orgs/events above.
+            quest_docs = build_quest_docs(
+                campaign_id=campaign_id, gm_id=gm_id,
+                character_by_name=character_by_name,
+                player_doc_ids=player_doc_ids, org_ids=org_ids,
+                location_ids=location_ids, event_ids=event_ids, now=now,
+            )
+            if quest_docs:
+                # Mongoose pluralizes model('Quest') to the `quests` collection.
+                db.quests.insert_many(quest_docs)
+            print(f"    quests     inserted {len(quest_docs)}")
 
         print()
 
