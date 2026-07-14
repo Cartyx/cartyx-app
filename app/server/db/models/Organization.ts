@@ -10,11 +10,31 @@ const locationLinkSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const cropSchema = new mongoose.Schema(
+  {
+    x: { type: Number, required: true },
+    y: { type: Number, required: true },
+    width: { type: Number, required: true },
+    height: { type: Number, required: true },
+  },
+  { _id: false }
+);
+
+const imageSchema = new mongoose.Schema(
+  {
+    url: { type: String, required: true },
+    caption: { type: String, default: '' },
+    crop: { type: cropSchema, default: null },
+  },
+  { _id: false }
+);
+
 const organizationSchema = new mongoose.Schema({
   name: { type: String, required: true },
   publicInfo: { type: String, default: '' },
   privateInfo: { type: String, default: '' },
   isPublic: { type: Boolean, default: false },
+  images: { type: [imageSchema], default: [] },
   locations: { type: [locationLinkSchema], default: [] },
   tags: { type: [String], default: [] },
   campaignId: { type: mongoose.Schema.Types.ObjectId, ref: 'Campaign', required: true },

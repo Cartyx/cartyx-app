@@ -15,6 +15,7 @@ const org: OrganizationData = {
   publicInfo: 'A shadowy guild.',
   privateInfo: 'GM secret plans.',
   isPublic: true,
+  images: [],
   tags: ['faction'],
   locations: [{ locationId: 'l1', label: 'Waterdeep', publicInfo: 'HQ here.', privateInfo: '' }],
   canEdit: false,
@@ -37,5 +38,23 @@ describe('OrganizationWindow', () => {
   it('hides the private section when privateInfo is empty', () => {
     render(<OrganizationWindow organization={{ ...org, privateInfo: '' }} />);
     expect(screen.queryByText('GM Only')).not.toBeInTheDocument();
+  });
+
+  it('renders the images gallery with captions when present', () => {
+    render(
+      <OrganizationWindow
+        organization={{
+          ...org,
+          images: [{ url: 'https://cdn.example/guild.png', caption: 'Guild sigil', crop: null }],
+        }}
+      />
+    );
+    expect(screen.getByAltText('Guild sigil')).toBeInTheDocument();
+    expect(screen.getByText('Guild sigil')).toBeInTheDocument();
+  });
+
+  it('omits the images gallery when there are no images', () => {
+    render(<OrganizationWindow organization={{ ...org, images: [] }} />);
+    expect(screen.queryByText('Images')).not.toBeInTheDocument();
   });
 });

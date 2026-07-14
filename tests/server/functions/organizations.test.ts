@@ -10,15 +10,23 @@ vi.mock('~/server/session', () => ({ getSession: vi.fn() }));
 vi.mock('~/server/db/connection', () => ({ connectDB: vi.fn(), isDBConnected: vi.fn(() => true) }));
 vi.mock('~/server/db/models/User', () => ({ User: { findOne: vi.fn() } }));
 vi.mock('~/server/db/models/Campaign', () => ({ Campaign: { findById: vi.fn() } }));
-vi.mock('~/server/db/models/Organization', () => ({
-  Organization: {
+vi.mock('~/server/db/models/Organization', () => {
+  // `createOrganization` does `new Organization(doc); await doc.save()` — model
+  // the mock as a constructor (carrying the static query methods as properties)
+  // so that path is exercisable, matching how mongoose models behave.
+  function OrganizationMock(this: Record<string, unknown>, doc: Record<string, unknown>) {
+    Object.assign(this, doc);
+    this.save = vi.fn().mockResolvedValue(this);
+  }
+  Object.assign(OrganizationMock, {
     find: vi.fn(),
     findOne: vi.fn(),
     findById: vi.fn(),
     findOneAndUpdate: vi.fn(),
     deleteOne: vi.fn(),
-  },
-}));
+  });
+  return { Organization: OrganizationMock };
+});
 vi.mock('~/server/db/models/OrganizationMembership', () => ({
   OrganizationMembership: {
     find: vi.fn(),
@@ -48,6 +56,7 @@ import { Player } from '~/server/db/models/Player';
 import {
   listOrganizations,
   getOrganization,
+  createOrganization,
   updateOrganization,
   deleteOrganization,
   addMembership,
@@ -147,6 +156,49 @@ describe('getOrganization', () => {
     } as never);
     const result = await call(getOrganization)({ data: { id: 'o1', campaignId: 'camp-1' } });
     expect(result).toBeNull();
+  });
+
+  it('returns images for a non-GM viewer — images are public, not GM-gated', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign as never);
+    vi.mocked(Organization.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'o1',
+        campaignId: 'camp-1',
+        createdBy: 'someone',
+        name: 'Guild',
+        publicInfo: 'pub',
+        privateInfo: 'secret',
+        isPublic: true,
+        tags: [],
+        locations: [],
+        images: [{ url: 'https://cdn.example/org.png', caption: 'Banner', crop: null }],
+      }),
+    } as never);
+    const result = await call(getOrganization)({ data: { id: 'o1', campaignId: 'camp-1' } });
+    expect(result.images).toEqual([
+      { url: 'https://cdn.example/org.png', caption: 'Banner', crop: null },
+    ]);
+    // Confirm this is genuinely a non-GM path — privateInfo is still stripped.
+    expect(result.privateInfo).toBe('');
+  });
+});
+
+describe('createOrganization', () => {
+  it('round-trips images through create', async () => {
+    const images = [{ url: 'https://cdn.example/new-org.png', caption: 'Sigil', crop: null }];
+    const result = await call(createOrganization)({
+      data: {
+        campaignId: 'camp-1',
+        name: 'New Guild',
+        publicInfo: '',
+        privateInfo: '',
+        isPublic: true,
+        tags: [],
+        locations: [],
+        images,
+      },
+    });
+    expect(result.images).toEqual(images);
   });
 });
 
@@ -304,6 +356,59 @@ describe('updateOrganization', () => {
       $set: Record<string, unknown>;
     };
     expect(set.$set.privateInfo).toBe('new secret');
+  });
+
+  it('round-trips images through update', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue(gmCampaign as never);
+    const images = [{ url: 'https://cdn.example/updated-org.png', caption: 'Updated', crop: null }];
+    vi.mocked(Organization.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'o1',
+        campaignId: 'camp-1',
+        createdBy: 'user-1',
+        name: 'Guild',
+        publicInfo: 'p',
+        privateInfo: 'secret',
+        isPublic: false,
+        tags: [],
+        locations: [],
+        images: [],
+      }),
+    } as never);
+    vi.mocked(Organization.findOneAndUpdate).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'o1',
+        campaignId: 'camp-1',
+        createdBy: 'user-1',
+        name: 'Guild',
+        publicInfo: 'p',
+        privateInfo: 'secret',
+        isPublic: false,
+        tags: [],
+        locations: [],
+        images,
+      }),
+    } as never);
+
+    const result = await call(updateOrganization)({
+      data: {
+        id: 'o1',
+        campaignId: 'camp-1',
+        name: 'Guild',
+        publicInfo: 'p',
+        privateInfo: 'secret',
+        isPublic: false,
+        tags: [],
+        locations: [],
+        images,
+      },
+    });
+
+    const set = vi.mocked(Organization.findOneAndUpdate).mock.calls[0][1] as {
+      $set: Record<string, unknown>;
+    };
+    expect(set.$set.images).toEqual(images);
+    expect(result.images).toEqual(images);
   });
 });
 

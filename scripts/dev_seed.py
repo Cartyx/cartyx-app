@@ -1020,12 +1020,14 @@ def build_organization_docs(*, campaign_id, gm_id, location_ids, now):
         next(iter(location_ids.values())) if location_ids else None
     )
 
-    def org(name, public_info, *, public, tags, private_info="", locations=None):
+    def org(name, public_info, *, public, tags, private_info="", locations=None,
+            images=None):
         return {
             "name": name,
             "publicInfo": public_info,
             "privateInfo": private_info,
             "isPublic": public,
+            "images": images or [],
             "locations": locations or [],
             "tags": tags,
             "campaignId": campaign_id,
@@ -1039,6 +1041,9 @@ def build_organization_docs(*, campaign_id, gm_id, location_ids, now):
             return []
         return [{"locationId": phandalin, "publicInfo": public_info,
                  "privateInfo": private_info}]
+
+    def image(slug, caption):
+        return {"url": f"/uploads/seed-lore/{slug}.png", "caption": caption, "crop": None}
 
     return [
         ("lords_alliance", org(
@@ -1097,6 +1102,7 @@ def build_organization_docs(*, campaign_id, gm_id, location_ids, now):
                 "control of the Forge of Spells in Wave Echo Cave. Commands "
                 "bugbears and a doppelganger posing as a Rockseeker brother."
             ),
+            images=[image("black-spider", "A spider-sigil wax seal on a torn letter")],
         )),
     ]
 

@@ -6,12 +6,27 @@ const locationLinkInputSchema = z.object({
   privateInfo: z.string().optional().default(''),
 });
 
+const organizationImageSchema = z.object({
+  url: z.string().trim().min(1),
+  caption: z.string().trim().default(''),
+  crop: z
+    .object({
+      x: z.number().finite().min(0).max(1),
+      y: z.number().finite().min(0).max(1),
+      width: z.number().finite().gt(0).max(1),
+      height: z.number().finite().gt(0).max(1),
+    })
+    .nullable()
+    .default(null),
+});
+
 export const createOrganizationSchema = z.object({
   campaignId: z.string().trim().min(1),
   name: z.string().trim().min(1, 'Name is required'),
   publicInfo: z.string().optional().default(''),
   privateInfo: z.string().optional().default(''),
   isPublic: z.boolean().optional().default(false),
+  images: z.array(organizationImageSchema).default([]),
   tags: z.array(z.string()).optional().default([]),
   locations: z.array(locationLinkInputSchema).optional().default([]),
 });

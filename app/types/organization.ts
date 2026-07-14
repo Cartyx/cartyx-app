@@ -1,9 +1,17 @@
+import type { PictureCrop } from './character';
+
 export interface OrganizationLocationLink {
   locationId: string;
   label: string;
   publicInfo: string;
   /** GM-only; '' for non-GM viewers. */
   privateInfo: string;
+}
+
+export interface OrganizationImage {
+  url: string;
+  caption: string;
+  crop: PictureCrop | null;
 }
 
 export interface OrganizationData {
@@ -15,6 +23,7 @@ export interface OrganizationData {
   /** GM-only; '' for non-GM viewers. */
   privateInfo: string;
   isPublic: boolean;
+  images: OrganizationImage[];
   tags: string[];
   locations: OrganizationLocationLink[];
   canEdit: boolean;
@@ -70,6 +79,7 @@ export interface CreateOrganizationInput {
   publicInfo: string;
   privateInfo: string;
   isPublic: boolean;
+  images: OrganizationImage[];
   tags: string[];
   locations: OrganizationLocationLinkInput[];
 }

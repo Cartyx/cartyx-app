@@ -56,6 +56,7 @@ describe('Organization model', () => {
         'publicInfo',
         'privateInfo',
         'isPublic',
+        'images',
         'locations',
         'tags',
         'campaignId',

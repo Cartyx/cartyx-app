@@ -1,9 +1,21 @@
+import type React from 'react';
 import { Pencil, MapPin } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { OrganizationData } from '~/types/organization';
+import type { PictureCrop } from '~/types/character';
 import { MARKDOWN_PROSE_CLASSES } from '~/utils/markdownProseClasses';
 import { useMembershipsForOrg } from '~/hooks/useOrganizations';
+
+function getCropStyle(crop: PictureCrop): React.CSSProperties {
+  const centerX = (crop.x + crop.width / 2) * 100;
+  const centerY = (crop.y + crop.height / 2) * 100;
+  const scale = 1 / crop.width;
+  return {
+    objectPosition: `${centerX}% ${centerY}%`,
+    transform: `scale(${scale})`,
+  };
+}
 
 interface OrganizationWindowProps {
   organization: OrganizationData;
@@ -42,6 +54,32 @@ export function OrganizationWindow({ organization, onEdit }: OrganizationWindowP
       )}
 
       <div className="flex-1 overflow-y-auto p-3 min-h-0 space-y-5">
+        {/* Images gallery */}
+        {organization.images.length > 0 && (
+          <div className="flex flex-col gap-3">
+            <p className="text-[10px] uppercase tracking-wider text-slate-500">Images</p>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {organization.images.map((image, idx) => (
+                <div key={idx} className="flex flex-col gap-1">
+                  <div className="w-full aspect-square overflow-hidden rounded-lg border border-white/[0.08]">
+                    <img
+                      src={image.url}
+                      alt={image.caption || `Organization image ${idx + 1}`}
+                      className="w-full h-full object-cover"
+                      style={image.crop ? getCropStyle(image.crop) : undefined}
+                    />
+                  </div>
+                  {image.caption && (
+                    <p className="text-[10px] text-slate-500 text-center leading-tight">
+                      {image.caption}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Public info */}
         {organization.publicInfo && (
           <div className={MARKDOWN_PROSE_CLASSES}>

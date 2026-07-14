@@ -11,11 +11,13 @@ import { Character } from '../db/models/Character';
 import { Player } from '../db/models/Player';
 import type {
   OrganizationData,
+  OrganizationImage,
   OrganizationListItem,
   OrganizationLocationLink,
   OrganizationMembershipData,
   MemberKind,
 } from '~/types/organization';
+import type { PictureCrop } from '~/types/character';
 import {
   createOrganizationSchema,
   updateOrganizationSchema,
@@ -56,6 +58,18 @@ async function resolveLocationLabels(
       };
     })
   );
+}
+
+// Images are public — never gated on isGM (unlike privateInfo/locations.privateInfo).
+function serializeImages(raw: unknown): OrganizationImage[] {
+  return ((raw as unknown[]) ?? []).map((i) => {
+    const img = i as Record<string, unknown>;
+    return {
+      url: String(img.url),
+      caption: (img.caption as string) ?? '',
+      crop: (img.crop as unknown as PictureCrop) ?? null,
+    };
+  });
 }
 
 // Cap on list result sizes — a safety bound against a pathological campaign.
@@ -189,7 +203,7 @@ export const listOrganizations = async ({
     }
 
     const docs = (await Organization.find(filter)
-      .select('-publicInfo -privateInfo -locations')
+      .select('-publicInfo -privateInfo -images -locations')
       .sort({ updatedAt: -1 })
       .limit(LIST_LIMIT)
       .lean()) as AnyDoc[];
@@ -232,6 +246,7 @@ export const getOrganization = async ({
       publicInfo: (doc.publicInfo as string) ?? '',
       privateInfo: member.isGM ? ((doc.privateInfo as string) ?? '') : '',
       isPublic: Boolean(doc.isPublic),
+      images: serializeImages(doc.images),
       tags: (doc.tags as string[]) ?? [],
       locations,
       canEdit: isCreator || member.isGM,
@@ -268,6 +283,7 @@ export const createOrganization = async ({
       publicInfo: data.publicInfo,
       privateInfo: member.isGM ? data.privateInfo : '',
       isPublic: data.isPublic,
+      images: data.images,
       tags: finalTags,
       locations,
       createdAt: new Date(),
@@ -293,6 +309,7 @@ export const createOrganization = async ({
       publicInfo: data.publicInfo,
       privateInfo: member.isGM ? data.privateInfo : '',
       isPublic: data.isPublic,
+      images: data.images,
       tags: finalTags,
       locations: resolved,
       canEdit: true,
@@ -340,6 +357,7 @@ export const updateOrganization = async ({
       name: data.name.trim(),
       publicInfo: data.publicInfo,
       isPublic: data.isPublic,
+      images: data.images,
       tags: finalTags,
       locations,
       updatedAt: new Date(),
@@ -374,6 +392,7 @@ export const updateOrganization = async ({
       publicInfo: (org.publicInfo as string) ?? '',
       privateInfo: member.isGM ? ((org.privateInfo as string) ?? '') : '',
       isPublic: Boolean(org.isPublic),
+      images: serializeImages(org.images),
       tags: (org.tags as string[]) ?? [],
       locations: resolved,
       canEdit: isCreator || member.isGM,
