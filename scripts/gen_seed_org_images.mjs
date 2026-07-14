@@ -9,21 +9,86 @@
  *
  * Style mirrors gen_seed_lore_images.mjs (deterministic hue from the slug, a
  * heraldic shield glyph instead of a book), with a per-variant hue shift so the
- * two images for one org look distinct. Purely file I/O — no DB connection.
+ * two images for one org look distinct.
  *
- * Idempotent: files are always regenerated (overwritten) on each run.
+ * When the app's CDN is configured (CDN_URL + R2_* env vars) the PNGs are also
+ * uploaded to R2 — exactly like gen_seed_avatars.mjs — so the deployed dev app
+ * (which can't serve local public/uploads/ writes) resolves them via the CDN.
+ * The Python seed sets each image URL via `public_url(...)`, so the stored URL
+ * and the uploaded R2 key agree. Idempotent: local files are overwritten and
+ * R2 objects already present are skipped.
  *
  * Usage:
  *   node scripts/gen_seed_org_images.mjs
  *   npm run dev:seed   (called automatically as part of the chain)
+ *
+ * Safety: r2Env() refuses a production-looking R2 bucket.
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Resvg } from '@resvg/resvg-js';
+import { S3Client, PutObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
+
+// --- Minimal .env loader (mirrors gen_seed_avatars.mjs) ----------------------
+function loadEnv() {
+  const envPath = join(REPO_ROOT, '.env');
+  if (!existsSync(envPath)) return;
+  for (const raw of readFileSync(envPath, 'utf8').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    let val = line.slice(eq + 1).trim();
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1);
+    }
+    if (!(key in process.env)) process.env[key] = val;
+  }
+}
+
+// --- CDN / R2 (mirrors gen_seed_avatars.mjs) ---------------------------------
+function r2Env() {
+  const keys = [
+    'CDN_URL',
+    'R2_ACCOUNT_ID',
+    'R2_ACCESS_KEY_ID',
+    'R2_SECRET_ACCESS_KEY',
+    'R2_BUCKET',
+  ];
+  const env = Object.fromEntries(keys.map((k) => [k, process.env[k] ?? '']));
+  if (!keys.every((k) => env[k])) return null;
+  if (/prod/i.test(env.R2_BUCKET)) {
+    console.error('R2_BUCKET looks like a production bucket. Aborting.');
+    process.exit(1);
+  }
+  return env;
+}
+
+function r2ClientFor(env) {
+  return new S3Client({
+    region: 'auto',
+    endpoint: `https://${env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    credentials: { accessKeyId: env.R2_ACCESS_KEY_ID, secretAccessKey: env.R2_SECRET_ACCESS_KEY },
+  });
+}
+
+async function listExistingKeys(s3, bucket, prefix) {
+  const keys = new Set();
+  let token;
+  do {
+    const page = await s3.send(
+      new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token })
+    );
+    for (const obj of page.Contents ?? []) keys.add(obj.Key);
+    token = page.NextContinuationToken;
+  } while (token);
+  return keys;
+}
 
 // key → display name. Keys MUST match build_organization_docs in dev_seed.py.
 const ORGS = [
@@ -143,24 +208,70 @@ function renderPng(svg) {
   return new Resvg(svg, { fitTo: { mode: 'width', value: 320 } }).render().asPng();
 }
 
-function main() {
+async function main() {
+  loadEnv();
+  if (process.env.NODE_ENV === 'production' || /prod/i.test(process.env.MONGODB_URI ?? '')) {
+    console.error('Refusing to run against a production-looking environment.');
+    process.exit(1);
+  }
+
   const outDir = join(REPO_ROOT, 'public', 'uploads', 'seed-organizations');
   mkdirSync(outDir, { recursive: true });
 
-  let count = 0;
-  for (const { key, name } of ORGS) {
-    VARIANTS.forEach((v, i) => {
-      const slug = `${key}-${v.suffix}`;
-      const svg = orgBannerSvg(key, name, v.subtitle, i);
-      writeFileSync(join(outDir, `${slug}.png`), renderPng(svg));
-      console.log(`  wrote /uploads/seed-organizations/${slug}.png  («${name}» — ${v.subtitle})`);
-      count += 1;
-    });
+  // When the CDN is configured, mirror every image into R2 (the deployed dev
+  // app can't serve local public/uploads/ writes).
+  let cdn = null;
+  const env = r2Env();
+  if (env) {
+    const s3 = r2ClientFor(env);
+    cdn = {
+      s3,
+      bucket: env.R2_BUCKET,
+      existingKeys: await listExistingKeys(s3, env.R2_BUCKET, 'uploads/seed-organizations/'),
+    };
+    console.log(`CDN configured — uploading org images to R2 bucket '${env.R2_BUCKET}'`);
   }
 
+  let count = 0;
+  let uploaded = 0;
+  const uploads = [];
+  for (const { key, name } of ORGS) {
+    for (let i = 0; i < VARIANTS.length; i++) {
+      const v = VARIANTS[i];
+      const slug = `${key}-${v.suffix}`;
+      const png = renderPng(orgBannerSvg(key, name, v.subtitle, i));
+      writeFileSync(join(outDir, `${slug}.png`), png);
+      count += 1;
+      if (cdn) {
+        const objKey = `uploads/seed-organizations/${slug}.png`;
+        if (!cdn.existingKeys.has(objKey)) {
+          uploads.push(
+            cdn.s3
+              .send(
+                new PutObjectCommand({
+                  Bucket: cdn.bucket,
+                  Key: objKey,
+                  Body: png,
+                  ContentType: 'image/png',
+                })
+              )
+              .then(() => {
+                uploaded += 1;
+              })
+          );
+        }
+      }
+    }
+  }
+  await Promise.all(uploads);
+
   console.log(
-    `\ngen_seed_org_images: ${count} PNGs generated in public/uploads/seed-organizations/`
+    `\ngen_seed_org_images: ${count} PNGs generated in public/uploads/seed-organizations/` +
+      (cdn ? `, ${uploaded} uploaded to R2` : '')
   );
 }
 
-main();
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

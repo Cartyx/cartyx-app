@@ -1042,14 +1042,16 @@ def build_organization_docs(*, campaign_id, gm_id, location_ids, now):
         return [{"locationId": phandalin, "publicInfo": public_info,
                  "privateInfo": private_info}]
 
-    # Two generated images per org — the slugs MUST match the ORG_IMAGES list in
-    # scripts/gen_seed_org_images.mjs, which renders the PNGs into
-    # public/uploads/seed-organizations/ as part of `npm run dev:seed`.
+    # Two generated images per org — the slugs MUST match the ORGS list in
+    # scripts/gen_seed_org_images.mjs, which renders the PNGs and (when the CDN
+    # is configured) uploads them to R2 as part of `npm run dev:seed`.
+    # `public_url` yields the full CDN URL when R2/CDN is configured (so the
+    # deployed dev app resolves them) and the relative path otherwise.
     def imgs(slug_base, name):
         return [
-            {"url": f"/uploads/seed-organizations/{slug_base}-1.png",
+            {"url": public_url(f"/uploads/seed-organizations/{slug_base}-1.png"),
              "caption": f"{name} — crest", "crop": None},
-            {"url": f"/uploads/seed-organizations/{slug_base}-2.png",
+            {"url": public_url(f"/uploads/seed-organizations/{slug_base}-2.png"),
              "caption": f"{name} — banner hall", "crop": None},
         ]
 
