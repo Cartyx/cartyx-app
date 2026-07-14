@@ -519,7 +519,8 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
           w.collection === 'character' ||
           w.collection === 'location' ||
           w.collection === 'lore' ||
-          w.collection === 'organization'
+          w.collection === 'organization' ||
+          w.collection === 'quest'
         ) {
           if (doc?.isPublic === true) {
             titleIcon = (

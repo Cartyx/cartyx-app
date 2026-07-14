@@ -187,10 +187,26 @@ test('dragging a quest onto a GM screen opens a quest window', async ({ page }) 
 
   await expect(questWindow.first()).toBeVisible();
   await expect(page.getByText(QUEST_MARKER).first()).toBeVisible();
+
+  // Regression guard for the GM-screen hydration registry: without a `quest`
+  // fetcher in gmscreens.ts's COLLECTION_REGISTRY, the window TITLE BAR falls
+  // back to the raw `quest:<id>` key instead of the hydrated quest name. The
+  // title bar text is duplicated inside the window's own content (the quest
+  // heading), so assert via the title bar's minimize button, whose
+  // accessible name is built from the same `title` string FloatingWindow
+  // renders in its header — unambiguous, and only ever the header's title.
+  const questDialog = page.locator(`[role="dialog"]:has([data-testid="quest-window"])`).first();
+  await expect(questDialog.getByRole('button', { name: `Minimize ${QUEST_NAME}` })).toBeVisible();
+  await expect(
+    questDialog.getByRole('button', { name: `Minimize quest:${provisioned.questId}` })
+  ).toHaveCount(0);
 });
 
 test('the quest window persists across a reload (stored on the screen)', async ({ page }) => {
   await gotoGMScreens(page);
   await expect(page.getByTestId('quest-window').first()).toBeVisible({ timeout: 20000 });
   await expect(page.getByText(QUEST_MARKER).first()).toBeVisible();
+
+  const questDialog = page.locator(`[role="dialog"]:has([data-testid="quest-window"])`).first();
+  await expect(questDialog.getByRole('button', { name: `Minimize ${QUEST_NAME}` })).toBeVisible();
 });
