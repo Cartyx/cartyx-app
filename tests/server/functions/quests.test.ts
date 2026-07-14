@@ -29,8 +29,11 @@ vi.mock('~/server/functions/gmscreens-helpers', () => ({
  * faithfully without inventing new test infrastructure, `Quest` and
  * `Character` are backed by the shared in-memory model fake in
  * `./questTestDb` (see that file's header for why it exists and what
- * Mongoose query shapes it supports). Player/Location/Organization/Event are
+ * Mongoose query shapes it supports). Player/Location/Organization are
  * only ever read via a single `findOne`, so they get a simpler not-found stub.
+ * `Event` also uses the fake model (not the not-found stub) so tests can
+ * create events with an `isPublic` flag to exercise the private-event-link
+ * gating in resolveEvents/mergeEventPrivate.
  */
 
 vi.mock('~/server/db/models/Quest', () => ({ Quest: createFakeModel('q') }));
@@ -38,10 +41,11 @@ vi.mock('~/server/db/models/Character', () => ({ Character: createFakeModel('ch'
 vi.mock('~/server/db/models/Player', () => ({ Player: createNotFoundModel() }));
 vi.mock('~/server/db/models/Location', () => ({ Location: createNotFoundModel() }));
 vi.mock('~/server/db/models/Organization', () => ({ Organization: createNotFoundModel() }));
-vi.mock('~/server/db/models/Event', () => ({ Event: createNotFoundModel() }));
+vi.mock('~/server/db/models/Event', () => ({ Event: createFakeModel('ev') }));
 
 import { Quest } from '~/server/db/models/Quest';
 import { Character } from '~/server/db/models/Character';
+import { Event } from '~/server/db/models/Event';
 import {
   createQuest,
   getQuest,
@@ -57,6 +61,7 @@ const CAMPAIGN = '507f1f77bcf86cd799439011';
 beforeEach(async () => {
   await Quest.deleteMany({});
   await Character.deleteMany({});
+  await Event.deleteMany({});
   member.isGM = true;
   member.userId = 'u-gm';
 });
@@ -443,5 +448,114 @@ describe('quests server functions', () => {
 
     const newEvent = reloaded?.events.find((e) => e.eventId === 'evt-2');
     expect(newEvent?.privateInfo).toBe('');
+  });
+
+  it('drops a private-event link for a non-GM viewer but keeps a public one; a GM sees both', async () => {
+    const pubEvent = await Event.create({
+      title: 'Public Ambush',
+      campaignId: CAMPAIGN,
+      isPublic: true,
+    });
+    const privEvent = await Event.create({
+      title: 'Secret Meeting',
+      campaignId: CAMPAIGN,
+      isPublic: false,
+    });
+    const q = await createQuest({
+      data: {
+        campaignId: CAMPAIGN,
+        name: 'Multi-event quest',
+        type: '',
+        status: 'active',
+        publicInfo: '',
+        privateInfo: '',
+        isPublic: true,
+        giver: null,
+        parentQuestId: null,
+        links: [],
+        events: [
+          { eventId: String(pubEvent._id), role: 'r1', publicInfo: 'p1', privateInfo: 'gm1' },
+          { eventId: String(privEvent._id), role: 'r2', publicInfo: 'p2', privateInfo: 'gm2' },
+        ],
+        images: [],
+        tags: [],
+      },
+    });
+
+    const asGM = await getQuest({ data: { id: q.id, campaignId: CAMPAIGN } });
+    expect(asGM?.events.map((e) => e.eventId).sort()).toEqual(
+      [String(pubEvent._id), String(privEvent._id)].sort()
+    );
+
+    member.isGM = false;
+    member.userId = 'someone-else';
+    const asNonGM = await getQuest({ data: { id: q.id, campaignId: CAMPAIGN } });
+    expect(asNonGM?.events).toHaveLength(1);
+    expect(asNonGM?.events[0].eventId).toBe(String(pubEvent._id));
+    expect(asNonGM?.events[0].label).toBe('Public Ambush');
+  });
+
+  it('updateQuest (as non-GM) preserves a private-event link the writer never saw, even when omitted from their payload', async () => {
+    const privEvent = await Event.create({
+      title: 'Hidden Rendezvous',
+      campaignId: CAMPAIGN,
+      isPublic: false,
+    });
+    const q = await createQuest({
+      data: {
+        campaignId: CAMPAIGN,
+        name: 'Q',
+        type: '',
+        status: 'active',
+        publicInfo: '',
+        privateInfo: '',
+        isPublic: true,
+        giver: null,
+        parentQuestId: null,
+        links: [],
+        events: [
+          {
+            eventId: String(privEvent._id),
+            role: 'secret-role',
+            publicInfo: 'secret-pub',
+            privateInfo: 'secret-priv',
+          },
+        ],
+        images: [],
+        tags: [],
+      },
+    });
+
+    // Non-GM creator: resolveEvents never showed them the private-event link,
+    // so their submitted `events` payload legitimately omits it entirely.
+    member.isGM = false;
+    member.userId = 'u-gm';
+    await updateQuest({
+      data: {
+        id: q.id,
+        campaignId: CAMPAIGN,
+        name: 'Q renamed',
+        type: '',
+        status: 'active',
+        publicInfo: 'pub-updated',
+        privateInfo: 'attempted-wipe',
+        isPublic: true,
+        giver: null,
+        parentQuestId: null,
+        links: [],
+        events: [],
+        images: [],
+        tags: [],
+      },
+    });
+
+    member.isGM = true;
+    member.userId = 'u-gm';
+    const reloaded = await getQuest({ data: { id: q.id, campaignId: CAMPAIGN } });
+    const preserved = reloaded?.events.find((e) => e.eventId === String(privEvent._id));
+    expect(preserved).toBeDefined();
+    expect(preserved?.role).toBe('secret-role');
+    expect(preserved?.publicInfo).toBe('secret-pub');
+    expect(preserved?.privateInfo).toBe('secret-priv');
   });
 });

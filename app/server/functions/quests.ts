@@ -118,19 +118,27 @@ async function resolveEvents(
   isGM: boolean,
   campaignId: string
 ): Promise<QuestEventLink[]> {
-  return Promise.all(
-    (raw ?? []).map(async (e) => {
+  const resolved = await Promise.all(
+    (raw ?? []).map(async (e): Promise<QuestEventLink | null> => {
       const eventId = String(e.eventId);
       let label = '';
+      let dropForNonGM = false;
       try {
         const ev = (await Event.findOne(
           { _id: eventId, campaignId },
-          'title'
+          'title isPublic'
         ).lean()) as AnyDoc | null;
-        if (ev) label = String(ev.title ?? '');
+        if (ev) {
+          label = String(ev.title ?? '');
+          // A private event's title/content is GM-only (mirrors
+          // tabletop-hydration's `!isGM && isPublic === false` gate) — never
+          // let a non-GM viewer see the title of an event they can't open.
+          if (!isGM && ev.isPublic === false) dropForNonGM = true;
+        }
       } catch {
         label = '';
       }
+      if (dropForNonGM) return null;
       return {
         eventId,
         label,
@@ -140,6 +148,7 @@ async function resolveEvents(
       };
     })
   );
+  return resolved.filter((e): e is QuestEventLink => e !== null);
 }
 
 function questVisibilityFilter(member: { isGM: boolean; userId: string }) {
@@ -258,19 +267,55 @@ function mergeLinkPrivate(
     privateInfo: isGM ? l.privateInfo : (priv.get(`${l.kind}:${l.id}`) ?? ''),
   }));
 }
-function mergeEventPrivate(
+async function mergeEventPrivate(
   incoming: Array<{ eventId: string; role: string; publicInfo: string; privateInfo: string }>,
   existing: Array<Record<string, unknown>>,
-  isGM: boolean
-) {
+  isGM: boolean,
+  campaignId: string
+): Promise<Array<{ eventId: string; role: string; publicInfo: string; privateInfo: string }>> {
   const priv = new Map<string, string>();
   for (const e of existing ?? []) priv.set(String(e.eventId), (e.privateInfo as string) ?? '');
-  return incoming.map((e) => ({
+  const merged = incoming.map((e) => ({
     eventId: e.eventId,
     role: e.role,
     publicInfo: e.publicInfo,
     privateInfo: isGM ? e.privateInfo : (priv.get(e.eventId) ?? ''),
   }));
+  if (isGM) return merged;
+
+  // resolveEvents drops links to private events from what a non-GM viewer is
+  // shown, so a non-GM writer's submitted `events` array never mentions them
+  // — their absence means "never seen", not "deliberately removed". Re-add
+  // any existing event link omitted from the payload whose event is private
+  // (or no longer resolves at all — fail closed rather than silently
+  // deleting data the writer couldn't have seen).
+  const incomingIds = new Set(incoming.map((e) => e.eventId));
+  const omitted = (existing ?? []).filter((e) => !incomingIds.has(String(e.eventId)));
+  if (omitted.length === 0) return merged;
+
+  const preserved: typeof merged = [];
+  for (const e of omitted) {
+    const eventId = String(e.eventId);
+    let isPublic = false;
+    try {
+      const ev = (await Event.findOne(
+        { _id: eventId, campaignId },
+        'isPublic'
+      ).lean()) as AnyDoc | null;
+      isPublic = ev ? Boolean(ev.isPublic) : false;
+    } catch {
+      isPublic = false;
+    }
+    if (!isPublic) {
+      preserved.push({
+        eventId,
+        role: (e.role as string) ?? '',
+        publicInfo: (e.publicInfo as string) ?? '',
+        privateInfo: (e.privateInfo as string) ?? '',
+      });
+    }
+  }
+  return [...merged, ...preserved];
 }
 
 export const listQuests = async ({
@@ -413,10 +458,11 @@ export const updateQuest = async ({
       (existing.links as Array<Record<string, unknown>>) ?? [],
       member.isGM
     );
-    const events = mergeEventPrivate(
+    const events = await mergeEventPrivate(
       data.events,
       (existing.events as Array<Record<string, unknown>>) ?? [],
-      member.isGM
+      member.isGM,
+      data.campaignId
     );
 
     const set: Record<string, unknown> = {

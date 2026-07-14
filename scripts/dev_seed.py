@@ -1272,13 +1272,13 @@ def build_quest_docs(*, campaign_id, gm_id, character_by_name, player_doc_ids,
     location_ids      : dict mapping location name → _id.
     event_ids         : dict mapping event title (build_event_docs) → _id.
 
-    NOTE ON PRIVACY: the quest→event join always exposes the linked Event's
-    *title* to every viewer regardless of the Event's own isPublic flag (see
-    resolveEvents in app/server/functions/quests.ts) — only its
-    content/gmContent stay GM-gated. To avoid leaking a GM-only event's title
-    through a PUBLIC quest, only public quests link to public Events here;
-    the private quest's event link points at a private Event, which is safe
-    because the whole quest doc — and therefore its events array — is
+    NOTE ON PRIVACY: resolveEvents (app/server/functions/quests.ts) drops a
+    quest's event link entirely for a non-GM viewer if the linked Event's own
+    isPublic flag is false — so a public quest must only link to public
+    Events, or a non-GM reader will simply see fewer event links than a GM
+    does. Here, only public quests link to public Events; the private
+    quest's event link points at a private Event, which is doubly safe
+    because the whole quest doc — and therefore its events array — is also
     filtered out for non-GM/non-creator viewers before that join ever runs.
     """
     def char(name):
@@ -1307,6 +1307,11 @@ def build_quest_docs(*, campaign_id, gm_id, character_by_name, player_doc_ids,
             return None
         return {"kind": kind, "id": entity_id, "role": role,
                 "publicInfo": public_info, "privateInfo": private_info}
+
+    def giver_ref(kind, entity_id):
+        if not entity_id:
+            return None
+        return {"kind": kind, "id": entity_id}
 
     def event_link(title, role, public_info, private_info=""):
         event_id = event_ids.get(title)
@@ -1363,7 +1368,7 @@ def build_quest_docs(*, campaign_id, gm_id, character_by_name, player_doc_ids,
                 "Wave Echo Cave."
             ),
             is_public=True,
-            giver={"kind": "character", "id": char("Sildar Hallwinter")},
+            giver=giver_ref("character", char("Sildar Hallwinter")),
             tags=["main"],
             links=[
                 link("location", phandalin, "Destination",
@@ -1395,7 +1400,7 @@ def build_quest_docs(*, campaign_id, gm_id, character_by_name, player_doc_ids,
                 "last seen with the reclusive druid Reidoth."
             ),
             is_public=True,
-            giver={"kind": "character", "id": char("Sister Garaele")},
+            giver=giver_ref("character", char("Sister Garaele")),
             tags=["side"],
             links=[
                 link("character", char("Reidoth the Druid"), "Contact",
@@ -1415,7 +1420,7 @@ def build_quest_docs(*, campaign_id, gm_id, character_by_name, player_doc_ids,
                 "the one they owe."
             ),
             is_public=True,
-            giver={"kind": "player", "id": player0},
+            giver=giver_ref("player", player0),
             tags=["personal"],
             links=[
                 link("player", player1, "Confidant",
@@ -1436,7 +1441,7 @@ def build_quest_docs(*, campaign_id, gm_id, character_by_name, player_doc_ids,
                 "Phandalin the party hasn't uncovered."
             ),
             is_public=False,
-            giver={"kind": "organization", "id": org_ids.get("black_spider")},
+            giver=giver_ref("organization", org_ids.get("black_spider")),
             tags=["villain", "secret"],
             links=[
                 link("character", char("Halia Thornton"), "Suspected Agent",
