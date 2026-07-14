@@ -33,6 +33,10 @@ import {
   OrganizationWindowWrapper,
   EditOrganizationModalWrapper,
 } from '~/components/wiki/organizations/OrganizationWindowWrapper';
+import {
+  QuestWindowWrapper,
+  EditQuestModalWrapper,
+} from '~/components/wiki/quests/QuestWindowWrapper';
 import { EventWindowWrapper } from '~/components/mainview/gmscreens/EventWindowWrapper';
 import { RaceWindowWrapper, EditRaceModalWrapper } from '~/components/wiki/races/RaceWindowWrapper';
 import {
@@ -135,6 +139,7 @@ export function TabletopView({
   const [editingMonsterId, setEditingMonsterId] = useState<string | null>(null);
   const [editingLoreId, setEditingLoreId] = useState<string | null>(null);
   const [editingOrganizationId, setEditingOrganizationId] = useState<string | null>(null);
+  const [editingQuestId, setEditingQuestId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [localWindows, setLocalWindows] = useState<ManagedWindow[]>([]);
   const localScreenIdRef = useRef<string | null>(null);
@@ -396,6 +401,14 @@ export function TabletopView({
               organizationId={w.documentId}
               campaignId={campaignId}
               onEdit={() => setEditingOrganizationId(w.documentId)}
+            />
+          );
+        } else if (w.collection === 'quest') {
+          windowContent = (
+            <QuestWindowWrapper
+              questId={w.documentId}
+              campaignId={campaignId}
+              onEdit={() => setEditingQuestId(w.documentId)}
             />
           );
         } else if (w.collection === 'events') {
@@ -739,6 +752,13 @@ export function TabletopView({
           campaignId={campaignId}
           organizationId={editingOrganizationId}
           onClose={() => setEditingOrganizationId(null)}
+        />
+      )}
+      {editingQuestId !== null && (
+        <EditQuestModalWrapper
+          campaignId={campaignId}
+          questId={editingQuestId}
+          onClose={() => setEditingQuestId(null)}
         />
       )}
     </div>
