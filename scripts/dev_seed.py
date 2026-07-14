@@ -1691,6 +1691,22 @@ def main() -> None:
         ])
         print(f"    location types  ({len(DEFAULT_LOCATION_TYPES)} defaults)")
 
+        # A default GM screen so the GM Screens view has a tab to work with out
+        # of the box (drag entities onto it, build stacks). Without one the view
+        # opens with no active screen and drops are silently ignored. The
+        # GMScreen model pins collection 'gmscreen' (not the default plural).
+        db.gmscreen.insert_one({
+            "campaignId": campaign_id,
+            "name": "GM Screen",
+            "tabOrder": 0,
+            "createdBy": gm_id,
+            "windows": [],
+            "stacks": [],
+            "createdAt": now,
+            "updatedAt": now,
+        })
+        print("    gm screen   1 default")
+
         # Insert any seed locations defined for this campaign.
         # location_ids: maps location name → inserted _id (for lore links).
         location_ids: dict[str, object] = {}
