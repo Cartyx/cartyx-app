@@ -1042,8 +1042,16 @@ def build_organization_docs(*, campaign_id, gm_id, location_ids, now):
         return [{"locationId": phandalin, "publicInfo": public_info,
                  "privateInfo": private_info}]
 
-    def image(slug, caption):
-        return {"url": f"/uploads/seed-lore/{slug}.png", "caption": caption, "crop": None}
+    # Two generated images per org — the slugs MUST match the ORG_IMAGES list in
+    # scripts/gen_seed_org_images.mjs, which renders the PNGs into
+    # public/uploads/seed-organizations/ as part of `npm run dev:seed`.
+    def imgs(slug_base, name):
+        return [
+            {"url": f"/uploads/seed-organizations/{slug_base}-1.png",
+             "caption": f"{name} — crest", "crop": None},
+            {"url": f"/uploads/seed-organizations/{slug_base}-2.png",
+             "caption": f"{name} — banner hall", "crop": None},
+        ]
 
     return [
         ("lords_alliance", org(
@@ -1053,6 +1061,7 @@ def build_organization_docs(*, campaign_id, gm_id, location_ids, now):
             "agents work to bring order to frontier settlements like Phandalin.",
             public=True,
             tags=["faction", "politics", "lawful"],
+            images=imgs("lords_alliance", "The Lords' Alliance"),
             locations=loc_link(
                 "Maintains an interest in Phandalin through its agent Sildar Hallwinter.",
                 "GM: the Alliance quietly wants a permanent garrison here once the mine reopens.",
@@ -1065,6 +1074,7 @@ def build_organization_docs(*, campaign_id, gm_id, location_ids, now):
             "nearby, the Exchange takes its cut.",
             public=True,
             tags=["guild", "commerce"],
+            images=imgs("miners_exchange", "Phandalin Miner's Exchange"),
             locations=loc_link("Headquartered on Phandalin's town square."),
         )),
         ("harpers", org(
@@ -1074,6 +1084,48 @@ def build_organization_docs(*, campaign_id, gm_id, location_ids, now):
             "the shadows.",
             public=True,
             tags=["faction", "secret-society"],
+            images=imgs("harpers", "The Harpers"),
+        )),
+        ("order_gauntlet", org(
+            "The Order of the Gauntlet",
+            "Zealous, faithful, and vigilant, the Order of the Gauntlet seeks "
+            "out evil and roots it out wherever it hides, holding the line so "
+            "that the innocent can sleep safely.",
+            public=True,
+            tags=["faction", "militant", "lawful-good"],
+            images=imgs("order_gauntlet", "The Order of the Gauntlet"),
+        )),
+        ("emerald_enclave", org(
+            "The Emerald Enclave",
+            "A far-flung fellowship of hermits, wanderers, and druids who "
+            "preserve the balance of the wild and help others survive its "
+            "dangers — often the only friendly faces in the deep wilderness.",
+            public=True,
+            tags=["faction", "nature", "neutral"],
+            images=imgs("emerald_enclave", "The Emerald Enclave"),
+        )),
+        ("zhentarim", org(
+            "The Zhentarim",
+            "An unscrupulous shadow network of mercenaries and merchants — the "
+            "Black Network — that offers opportunity to anyone willing to look "
+            "the other way, and expands its influence at every turn.",
+            public=True,
+            tags=["faction", "mercenary", "commerce"],
+            images=imgs("zhentarim", "The Zhentarim"),
+            private_info=(
+                "**GM only:** Halia Thornton is the Zhentarim's agent in "
+                "Phandalin, quietly recruiting and angling to control the mine."
+            ),
+        )),
+        ("heroes_of_phandalin", org(
+            "The Heroes of Phandalin",
+            "The adventuring company the townsfolk credit with breaking the "
+            "Redbrands and reopening the road. Every member of the party holds "
+            "honorary standing, and grateful locals rally to their banner.",
+            public=True,
+            tags=["party", "heroes"],
+            images=imgs("heroes_of_phandalin", "The Heroes of Phandalin"),
+            locations=loc_link("Feted in Phandalin as the town's champions."),
         )),
         ("redbrands", org(
             "The Redbrands",
@@ -1081,6 +1133,7 @@ def build_organization_docs(*, campaign_id, gm_id, location_ids, now):
             "from their lair beneath Tresendar Manor.",
             public=False,
             tags=["villains", "secret"],
+            images=imgs("redbrands", "The Redbrands"),
             private_info=(
                 "**GM only:** Led by Iarno 'Glasstaff' Albrek, a wizard secretly "
                 "serving the Black Spider. Broken by the party, though a few "
@@ -1097,12 +1150,12 @@ def build_organization_docs(*, campaign_id, gm_id, location_ids, now):
             "caravans ambushed, prospectors vanished.",
             public=False,
             tags=["villain", "secret", "conspiracy"],
+            images=imgs("black_spider", "The Black Spider's Network"),
             private_info=(
                 "**GM only:** Nezznar the Black Spider, a drow mage seeking sole "
                 "control of the Forge of Spells in Wave Echo Cave. Commands "
                 "bugbears and a doppelganger posing as a Rockseeker brother."
             ),
-            images=[image("black-spider", "A spider-sigil wax seal on a torn letter")],
         )),
     ]
 
@@ -1149,21 +1202,44 @@ def build_organization_membership_docs(*, org_ids, character_by_name,
     player1 = player_doc_ids[1] if len(player_doc_ids) > 1 else None
 
     candidates = [
+        # --- Character members across the public factions ---
         member("character", char("Sildar Hallwinter"), "lords_alliance", "Agent",
                "Represents the Lords' Alliance in Phandalin.",
                "GM: quietly reports party movements back to Neverwinter."),
         member("character", char("Halia Thornton"), "miners_exchange", "Guildmaster",
                "Runs the Miner's Exchange.",
                "GM: secretly a Zhentarim agent angling to control the reopened mine."),
+        member("character", char("Halia Thornton"), "zhentarim", "Local Agent",
+               "A respected businesswoman of Phandalin.",
+               "GM: her true allegiance — recruiting quietly for the Black Network."),
+        member("character", char("Gundren Rockseeker"), "miners_exchange", "Claim Holder",
+               "Holds the deed to the lost mine at Wave Echo Cave."),
+        member("character", char("Linene Graywind"), "miners_exchange", "Merchant",
+               "Runs the Lionshield Coster trading post."),
         member("character", char("Sister Garaele"), "harpers", "Agent",
                "A Harper acolyte serving at the Shrine of Luck."),
-        member("character", char("Daran Edermath"), "harpers", "Retired Adventurer",
-               "An old ally who still does the occasional favor for the Harpers."),
-        # Party members (players) — public memberships show on their org tab.
+        member("character", char("Daran Edermath"), "order_gauntlet", "Retired Knight",
+               "A retired paladin and orchard-keeper who still answers the call."),
+        member("character", char("Sister Garaele"), "order_gauntlet", "Ally",
+               "Lends the Order her healing and her counsel."),
+        member("character", char("Reidoth the Druid"), "emerald_enclave", "Warden",
+               "Guards the ruins of Thundertree and the wilds around it."),
+        # --- The party org: EVERY player is a member ---
+        *[
+            member("player", pid, "heroes_of_phandalin", "Champion",
+                   "A founding hero of the company that saved Phandalin.")
+            for pid in player_doc_ids
+        ],
+        # A couple of townsfolk characters round out the party's org.
+        member("character", char("Toblen Stonehill"), "heroes_of_phandalin", "Patron",
+               "Keeps the Stonehill Inn — the party's home base in town."),
+        member("character", char("Qelline Alderleaf"), "heroes_of_phandalin", "Ally",
+               "A sensible farmer who shelters the heroes and shares local rumors."),
+        # Party members also carry standing in a couple of the public factions.
         member("player", player0, "lords_alliance", "Sworn Ally",
                "Granted honorary standing for services rendered to the Alliance."),
-        member("player", player1, "miners_exchange", "Claim Holder",
-               "Holds a registered mining claim through the Exchange."),
+        member("player", player1, "harpers", "Friend of the Harpers",
+               "Trusted with the occasional quiet errand."),
         # A player secretly tied to a PRIVATE org — must stay hidden from
         # non-GM viewers, including this member, on the Organizations tab.
         member("player", player0, "black_spider", "Unwitting Pawn", "",

@@ -32,7 +32,7 @@
     "db:verify": "tsx scripts/mongo-admin.ts verify",
     "db:sync": "tsx scripts/mongo-admin.ts sync",
     "dev:clear": "node scripts/run-python.cjs dev_clear.py",
-    "dev:seed": "node scripts/run-python.cjs dev_seed.py && node scripts/gen_seed_avatars.mjs && node scripts/gen_seed_lore_images.mjs",
+    "dev:seed": "node scripts/run-python.cjs dev_seed.py && node scripts/gen_seed_avatars.mjs && node scripts/gen_seed_lore_images.mjs && node scripts/gen_seed_org_images.mjs",
     "dev:repair-images": "node scripts/run-python.cjs repair_seed_images.py && node scripts/gen_seed_avatars.mjs",
     "dev:gen-avatars": "node scripts/gen_seed_avatars.mjs",
     "fixture": "tsx scripts/dev-fixtures/cli.ts",
