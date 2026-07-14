@@ -58,19 +58,71 @@ async function resolveLocationLabels(
   );
 }
 
-async function resolveMemberLabel(kind: MemberKind, id: string): Promise<string> {
+// Cap on list result sizes — a safety bound against a pathological campaign.
+// Real D&D campaigns hold far fewer orgs/members than this.
+const LIST_LIMIT = 500;
+
+function fullName(doc: AnyDoc): string {
+  return `${doc.firstName ?? ''} ${doc.lastName ?? ''}`.trim();
+}
+
+// Resolve a single member's display name, scoped to the campaign so an id from
+// another campaign can never resolve (defense-in-depth alongside the existence
+// check in addMembership).
+async function resolveMemberLabel(
+  kind: MemberKind,
+  id: string,
+  campaignId: string
+): Promise<string> {
   try {
-    if (kind === 'character') {
-      const c = (await Character.findById(id, 'firstName lastName').lean()) as AnyDoc | null;
-      if (c) return `${c.firstName ?? ''} ${c.lastName ?? ''}`.trim();
-    } else {
-      const p = (await Player.findById(id, 'firstName lastName').lean()) as AnyDoc | null;
-      if (p) return `${p.firstName ?? ''} ${p.lastName ?? ''}`.trim();
-    }
+    const model = kind === 'character' ? Character : Player;
+    const doc = (await model
+      .findOne({ _id: id, campaignId }, 'firstName lastName')
+      .lean()) as AnyDoc | null;
+    if (doc) return fullName(doc);
   } catch {
     /* ignore */
   }
   return '';
+}
+
+// Batch-resolve member labels for a roster in two queries (one per kind),
+// avoiding an N+1 findById per membership. Keyed by `"${kind}:${id}"`.
+async function resolveMemberLabels(
+  docs: AnyDoc[],
+  campaignId: string
+): Promise<Map<string, string>> {
+  const labels = new Map<string, string>();
+  const charIds = docs.filter((d) => d.memberKind === 'character').map((d) => String(d.memberId));
+  const playerIds = docs.filter((d) => d.memberKind === 'player').map((d) => String(d.memberId));
+  try {
+    const [chars, players] = (await Promise.all([
+      charIds.length
+        ? Character.find({ _id: { $in: charIds }, campaignId }, 'firstName lastName').lean()
+        : Promise.resolve([]),
+      playerIds.length
+        ? Player.find({ _id: { $in: playerIds }, campaignId }, 'firstName lastName').lean()
+        : Promise.resolve([]),
+    ])) as [AnyDoc[], AnyDoc[]];
+    for (const c of chars) labels.set(`character:${String(c._id)}`, fullName(c));
+    for (const p of players) labels.set(`player:${String(p._id)}`, fullName(p));
+  } catch {
+    /* ignore — labels default to '' */
+  }
+  return labels;
+}
+
+// Verify a member (player or character) actually belongs to the campaign before
+// it can be linked to an organization — prevents cross-campaign membership rows
+// and the name disclosure that label resolution would otherwise leak.
+async function memberExistsInCampaign(
+  kind: MemberKind,
+  id: string,
+  campaignId: string
+): Promise<boolean> {
+  const model = kind === 'character' ? Character : Player;
+  const exists = await model.exists({ _id: id, campaignId });
+  return !!exists;
 }
 
 function serializeListItem(doc: AnyDoc, canEdit: boolean): OrganizationListItem {
@@ -139,6 +191,7 @@ export const listOrganizations = async ({
     const docs = (await Organization.find(filter)
       .select('-publicInfo -privateInfo -locations')
       .sort({ updatedAt: -1 })
+      .limit(LIST_LIMIT)
       .lean()) as AnyDoc[];
 
     return docs.map((d) =>
@@ -399,6 +452,10 @@ export const addMembership = async ({
     if (!org) throw new Error('Organization not found');
     if (!member.isGM && String(org.createdBy) !== member.userId) throw new Error('Forbidden');
 
+    if (!(await memberExistsInCampaign(data.memberKind, data.memberId, data.campaignId))) {
+      throw new Error('Member not found');
+    }
+
     const doc = await OrganizationMembership.create({
       organizationId: data.organizationId,
       memberKind: data.memberKind,
@@ -412,7 +469,7 @@ export const addMembership = async ({
       updatedAt: new Date(),
     });
 
-    const label = await resolveMemberLabel(data.memberKind, data.memberId);
+    const label = await resolveMemberLabel(data.memberKind, data.memberId, data.campaignId);
     return serializeMembership(
       doc as unknown as AnyDoc,
       String(org.name ?? ''),
@@ -461,7 +518,11 @@ export const updateMembership = async ({
     ).lean()) as AnyDoc | null;
     if (!doc) throw new Error('Membership not found');
 
-    const label = await resolveMemberLabel(doc.memberKind as MemberKind, String(doc.memberId));
+    const label = await resolveMemberLabel(
+      doc.memberKind as MemberKind,
+      String(doc.memberId),
+      data.campaignId
+    );
     return serializeMembership(
       doc,
       String(org.name ?? ''),
@@ -523,20 +584,20 @@ export const listMembershipsForOrg = async ({
     const docs = (await OrganizationMembership.find({
       organizationId: data.organizationId,
       campaignId: data.campaignId,
-    }).lean()) as AnyDoc[];
+    })
+      .limit(LIST_LIMIT)
+      .lean()) as AnyDoc[];
 
-    return Promise.all(
-      docs.map(async (d) => {
-        const label = await resolveMemberLabel(d.memberKind as MemberKind, String(d.memberId));
-        return serializeMembership(
-          d,
-          String(org.name ?? ''),
-          Boolean(org.isPublic),
-          label,
-          member.isGM,
-          canEdit
-        );
-      })
+    const labels = await resolveMemberLabels(docs, data.campaignId);
+    return docs.map((d) =>
+      serializeMembership(
+        d,
+        String(org.name ?? ''),
+        Boolean(org.isPublic),
+        labels.get(`${d.memberKind}:${String(d.memberId)}`) ?? '',
+        member.isGM,
+        canEdit
+      )
     );
   } catch (e) {
     serverCaptureException(e, sessionUserId, { action: 'listMembershipsForOrg' });
@@ -558,7 +619,9 @@ export const listMembershipsForMember = async ({
       campaignId: data.campaignId,
       memberKind: data.memberKind,
       memberId: data.memberId,
-    }).lean()) as AnyDoc[];
+    })
+      .limit(LIST_LIMIT)
+      .lean()) as AnyDoc[];
     if (docs.length === 0) return [];
 
     const orgIds = [...new Set(docs.map((d) => String(d.organizationId)))];
@@ -568,7 +631,7 @@ export const listMembershipsForMember = async ({
     ).lean()) as AnyDoc[];
     const orgMap = new Map(orgs.map((o) => [String(o._id), o]));
 
-    const label = await resolveMemberLabel(data.memberKind, data.memberId);
+    const label = await resolveMemberLabel(data.memberKind, data.memberId, data.campaignId);
 
     const results: OrganizationMembershipData[] = [];
     for (const d of docs) {
