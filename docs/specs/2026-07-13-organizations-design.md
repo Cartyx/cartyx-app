@@ -21,16 +21,17 @@ names — `organizations` and `organizationmemberships`).
 
 ### `Organization` — `app/server/db/models/Organization.ts`
 
-| Field                     | Type                                                   | Notes                                          |
-| ------------------------- | ------------------------------------------------------ | ---------------------------------------------- |
-| `name`                    | String, required                                       | Display name / window title                    |
-| `publicInfo`              | String (Markdown)                                      | Rendered to everyone                           |
-| `privateInfo`             | String (Markdown)                                      | **GM-only**                                    |
-| `isPublic`                | Boolean, default `false`                               | Whole-entity visibility gate                   |
-| `locations`               | `[{ locationId → Location, publicInfo, privateInfo }]` | Embedded; each link's `privateInfo` is GM-only |
-| `tags`                    | `[String]`                                             | Normalized (lowercased/deduped)                |
-| `campaignId`, `createdBy` | ObjectId                                               | Scoping / ownership                            |
-| `createdAt`, `updatedAt`  | Date                                                   | Pre-save normalizes tags + bumps `updatedAt`   |
+| Field                     | Type                                                   | Notes                                                     |
+| ------------------------- | ------------------------------------------------------ | --------------------------------------------------------- |
+| `name`                    | String, required                                       | Display name / window title                               |
+| `publicInfo`              | String (Markdown)                                      | Rendered to everyone                                      |
+| `privateInfo`             | String (Markdown)                                      | **GM-only**                                               |
+| `isPublic`                | Boolean, default `false`                               | Whole-entity visibility gate                              |
+| `images`                  | `[{ url, caption, crop }]`                             | Multiple images (mirrors Lore); **public** — not GM-gated |
+| `locations`               | `[{ locationId → Location, publicInfo, privateInfo }]` | Embedded; each link's `privateInfo` is GM-only            |
+| `tags`                    | `[String]`                                             | Normalized (lowercased/deduped)                           |
+| `campaignId`, `createdBy` | ObjectId                                               | Scoping / ownership                                       |
+| `createdAt`, `updatedAt`  | Date                                                   | Pre-save normalizes tags + bumps `updatedAt`              |
 
 Indexes: `campaignId`, `{campaignId, updatedAt}`, `createdBy`, `tags`,
 `isPublic`, `locations.locationId`, and a text index on `{name, publicInfo}`.
