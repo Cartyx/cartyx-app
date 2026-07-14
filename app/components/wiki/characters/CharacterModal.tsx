@@ -8,6 +8,7 @@ import { MarkdownEditor } from '~/components/shared/MarkdownEditor';
 import { TagAutocompleteInput } from '~/components/shared/TagAutocompleteInput';
 import { TabBar } from '~/components/shared/TabBar';
 import { MemberOrganizationsTab } from '~/components/shared/MemberOrganizationsTab';
+import { EntityQuestsTab } from '~/components/shared/EntityQuestsTab';
 import { ImageCropInput } from './ImageCropInput';
 import { SessionMultiSelect } from './SessionMultiSelect';
 import {
@@ -77,7 +78,7 @@ export function CharacterModal({
   const [isPublic, setIsPublic] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [activeTab, setActiveTab] = useState<'details' | 'organizations'>('details');
+  const [activeTab, setActiveTab] = useState<'details' | 'organizations' | 'quests'>('details');
 
   const validate = useCallback((): FieldErrors => {
     const errors: FieldErrors = {};
@@ -274,9 +275,10 @@ export function CharacterModal({
           tabs={[
             { id: 'details', label: 'Details' },
             { id: 'organizations', label: 'Organizations' },
+            { id: 'quests', label: 'Quests' },
           ]}
           activeTab={activeTab}
-          onTabChange={(t) => setActiveTab(t as 'details' | 'organizations')}
+          onTabChange={(t) => setActiveTab(t as 'details' | 'organizations' | 'quests')}
         />
 
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 min-h-0">
@@ -302,6 +304,14 @@ export function CharacterModal({
             ) : (
               <p className="text-xs text-slate-500">
                 Save the character first to manage its organizations.
+              </p>
+            )
+          ) : activeTab === 'quests' ? (
+            isEdit && characterId ? (
+              <EntityQuestsTab campaignId={campaignId} kind="character" id={characterId} />
+            ) : (
+              <p className="text-xs text-slate-500">
+                Save the character first to see linked quests.
               </p>
             )
           ) : (
