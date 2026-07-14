@@ -9,6 +9,7 @@ import { Player } from '../db/models/Player';
 import { Location } from '../db/models/Location';
 import { Race } from '../db/models/Race';
 import { Lore } from '../db/models/Lore';
+import { pruneQuestRefs } from './quests';
 import {
   listEventsSchema,
   getEventSchema,
@@ -325,6 +326,17 @@ export const deleteEvent = async ({ data }: { data: z.infer<typeof deleteEventSc
     await Event.deleteOne({ _id: data.id, campaignId: data.campaignId });
     // Signature: removeDocumentRefsFromScreens(campaignId, collection, documentId)
     await removeDocumentRefsFromScreens(data.campaignId, 'events', data.id);
+
+    try {
+      await pruneQuestRefs('event', data.id, data.campaignId);
+    } catch (cleanupError) {
+      serverCaptureException(cleanupError, member.sessionUserId, {
+        action: 'deleteEvent.pruneQuests',
+        campaign_id: data.campaignId,
+        event_id: data.id,
+      });
+    }
+
     return { success: true };
   } catch (e) {
     serverCaptureException(e, undefined, { action: 'deleteEvent', eventId: data.id });
