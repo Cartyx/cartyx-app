@@ -92,7 +92,11 @@ export function MemberOrganizationsTab({
             <p className="text-xs font-bold text-slate-200 truncate">{m.organizationName}</p>
             {m.title && <p className="text-[11px] text-blue-400 truncate">{m.title}</p>}
           </div>
-          {canManage && (
+          {/* Gate per-row manage buttons on this membership's own canEdit (its
+              org's ownership), not the tab-level canManage — the list spans
+              orgs with different ownership, so a coarse gate would show
+              dead-end buttons on GM-owned orgs the viewer can't manage. */}
+          {m.canEdit && (
             <div className="flex items-center gap-1 shrink-0">
               <button
                 type="button"
