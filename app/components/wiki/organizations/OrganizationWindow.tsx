@@ -27,7 +27,7 @@ export function OrganizationWindow({ organization, onEdit }: OrganizationWindowP
   const showMeta = organization.tags.length > 0 || (organization.canEdit && !!onEdit);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col h-full" data-testid="organization-window">
       {showMeta && (
         <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/[0.05] shrink-0">
           <div className="flex flex-wrap gap-1 flex-1 min-w-0">
