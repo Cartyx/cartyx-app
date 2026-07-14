@@ -192,6 +192,21 @@ const COLLECTION_REGISTRY: Record<string, CollectionFetcher> = {
         ) as Promise<Array<{ _id: unknown; title?: string; content?: string; isPublic?: boolean }>>;
     },
   },
+  quest: {
+    async fetch(ids: string[], campaignId: string) {
+      const { Quest } = await import('../db/models/Quest');
+      return Quest.find({ _id: { $in: ids }, campaignId }, '_id name publicInfo isPublic status')
+        .lean()
+        .then((docs) =>
+          docs.map((d) => ({
+            _id: d._id,
+            title: (d as { name?: string }).name,
+            content: (d as { publicInfo?: string }).publicInfo,
+            isPublic: (d as { isPublic?: boolean }).isPublic,
+          }))
+        ) as Promise<Array<{ _id: unknown; title?: string; content?: string; isPublic?: boolean }>>;
+    },
+  },
 };
 
 /**
@@ -229,6 +244,7 @@ export async function hydrateRefs(
         // for a non-GM viewer, or its title/content would leak on a shared screen.
         if (!isGM && collectionName === 'events' && doc.isPublic === false) continue;
         if (!isGM && collectionName === 'organization' && doc.isPublic === false) continue;
+        if (!isGM && collectionName === 'quest' && doc.isPublic === false) continue;
         const id = String(doc._id);
         hydrated[`${collectionName}:${id}`] = {
           id,

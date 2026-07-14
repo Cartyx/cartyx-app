@@ -16,6 +16,7 @@ export const SUPPORTED_COLLECTIONS: [string, ...string[]] = [
   'lore',
   'events',
   'organization',
+  'quest',
 ];
 
 // ---------------------------------------------------------------------------
