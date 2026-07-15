@@ -40,11 +40,15 @@ vi.mock('~/server/db/models/Quest', () => ({ Quest: createFakeModel('q') }));
 vi.mock('~/server/db/models/Character', () => ({ Character: createFakeModel('ch') }));
 vi.mock('~/server/db/models/Player', () => ({ Player: createNotFoundModel() }));
 vi.mock('~/server/db/models/Location', () => ({ Location: createNotFoundModel() }));
-vi.mock('~/server/db/models/Organization', () => ({ Organization: createNotFoundModel() }));
+// Organization uses the fake model (not the not-found stub) so tests can create
+// orgs with an `isPublic` flag to exercise the private-org gating in
+// resolveLinks/resolveGiver/mergeLinkPrivate.
+vi.mock('~/server/db/models/Organization', () => ({ Organization: createFakeModel('org') }));
 vi.mock('~/server/db/models/Event', () => ({ Event: createFakeModel('ev') }));
 
 import { Quest } from '~/server/db/models/Quest';
 import { Character } from '~/server/db/models/Character';
+import { Organization } from '~/server/db/models/Organization';
 import { Event } from '~/server/db/models/Event';
 import {
   createQuest,
@@ -62,6 +66,7 @@ beforeEach(async () => {
   await Quest.deleteMany({});
   await Character.deleteMany({});
   await Event.deleteMany({});
+  await Organization.deleteMany({});
   member.isGM = true;
   member.userId = 'u-gm';
 });
@@ -553,6 +558,161 @@ describe('quests server functions', () => {
     member.userId = 'u-gm';
     const reloaded = await getQuest({ data: { id: q.id, campaignId: CAMPAIGN } });
     const preserved = reloaded?.events.find((e) => e.eventId === String(privEvent._id));
+    expect(preserved).toBeDefined();
+    expect(preserved?.role).toBe('secret-role');
+    expect(preserved?.publicInfo).toBe('secret-pub');
+    expect(preserved?.privateInfo).toBe('secret-priv');
+  });
+
+  it('drops a private-organization link for a non-GM but keeps a public one; a GM sees both', async () => {
+    const pubOrg = await Organization.create({
+      name: 'The Harpers',
+      campaignId: CAMPAIGN,
+      isPublic: true,
+    });
+    const privOrg = await Organization.create({
+      name: 'The Black Spider Network',
+      campaignId: CAMPAIGN,
+      isPublic: false,
+    });
+    const q = await createQuest({
+      data: {
+        campaignId: CAMPAIGN,
+        name: 'Faction quest',
+        type: '',
+        status: 'active',
+        publicInfo: '',
+        privateInfo: '',
+        isPublic: true,
+        giver: null,
+        parentQuestId: null,
+        links: [
+          {
+            kind: 'organization',
+            id: String(pubOrg._id),
+            role: 'ally',
+            publicInfo: 'p1',
+            privateInfo: 'gm1',
+          },
+          {
+            kind: 'organization',
+            id: String(privOrg._id),
+            role: 'enemy',
+            publicInfo: 'p2',
+            privateInfo: 'gm2',
+          },
+        ],
+        events: [],
+        images: [],
+        tags: [],
+      },
+    });
+
+    const asGM = await getQuest({ data: { id: q.id, campaignId: CAMPAIGN } });
+    expect(asGM?.links.map((l) => l.id).sort()).toEqual(
+      [String(pubOrg._id), String(privOrg._id)].sort()
+    );
+
+    member.isGM = false;
+    member.userId = 'someone-else';
+    const asNonGM = await getQuest({ data: { id: q.id, campaignId: CAMPAIGN } });
+    expect(asNonGM?.links).toHaveLength(1);
+    expect(asNonGM?.links[0].id).toBe(String(pubOrg._id));
+    expect(asNonGM?.links[0].label).toBe('The Harpers');
+  });
+
+  it('hides a private-organization giver from a non-GM but shows it to a GM', async () => {
+    const privOrg = await Organization.create({
+      name: 'The Black Spider Network',
+      campaignId: CAMPAIGN,
+      isPublic: false,
+    });
+    const q = await createQuest({
+      data: {
+        campaignId: CAMPAIGN,
+        name: 'Given by a secret org',
+        type: '',
+        status: 'active',
+        publicInfo: '',
+        privateInfo: '',
+        isPublic: true,
+        giver: { kind: 'organization', id: String(privOrg._id) },
+        parentQuestId: null,
+        links: [],
+        events: [],
+        images: [],
+        tags: [],
+      },
+    });
+
+    const asGM = await getQuest({ data: { id: q.id, campaignId: CAMPAIGN } });
+    expect(asGM?.giver?.label).toBe('The Black Spider Network');
+
+    member.isGM = false;
+    member.userId = 'someone-else';
+    const asNonGM = await getQuest({ data: { id: q.id, campaignId: CAMPAIGN } });
+    expect(asNonGM?.giver).toBeNull();
+  });
+
+  it('updateQuest (as non-GM) preserves a private-organization link the writer never saw, even when omitted from their payload', async () => {
+    const privOrg = await Organization.create({
+      name: 'The Cult of the Dragon',
+      campaignId: CAMPAIGN,
+      isPublic: false,
+    });
+    const q = await createQuest({
+      data: {
+        campaignId: CAMPAIGN,
+        name: 'Q',
+        type: '',
+        status: 'active',
+        publicInfo: '',
+        privateInfo: '',
+        isPublic: true,
+        giver: null,
+        parentQuestId: null,
+        links: [
+          {
+            kind: 'organization',
+            id: String(privOrg._id),
+            role: 'secret-role',
+            publicInfo: 'secret-pub',
+            privateInfo: 'secret-priv',
+          },
+        ],
+        events: [],
+        images: [],
+        tags: [],
+      },
+    });
+
+    // Non-GM creator: resolveLinks never showed them the private-org link,
+    // so their submitted `links` payload legitimately omits it entirely.
+    member.isGM = false;
+    member.userId = 'u-gm';
+    await updateQuest({
+      data: {
+        id: q.id,
+        campaignId: CAMPAIGN,
+        name: 'Q renamed',
+        type: '',
+        status: 'active',
+        publicInfo: 'pub-updated',
+        privateInfo: '',
+        isPublic: true,
+        giver: null,
+        parentQuestId: null,
+        links: [],
+        events: [],
+        images: [],
+        tags: [],
+      },
+    });
+
+    member.isGM = true;
+    member.userId = 'u-gm';
+    const reloaded = await getQuest({ data: { id: q.id, campaignId: CAMPAIGN } });
+    const preserved = reloaded?.links.find((l) => l.id === String(privOrg._id));
     expect(preserved).toBeDefined();
     expect(preserved?.role).toBe('secret-role');
     expect(preserved?.publicInfo).toBe('secret-pub');

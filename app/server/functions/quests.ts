@@ -83,13 +83,88 @@ async function resolveEntityLabel(
 
 async function resolveGiver(
   raw: Record<string, unknown> | null | undefined,
+  isGM: boolean,
   campaignId: string
 ): Promise<QuestGiver | null> {
   if (!raw || !raw.kind || !raw.id) return null;
   const kind = raw.kind as QuestGiverKind;
   const id = String(raw.id);
+  // An organization giver is GM-only when that org is private: hide the giver
+  // entirely from a non-GM (mirrors the link/event private-org/event gating)
+  // rather than leaking the org's name via the label.
+  if (kind === 'organization') {
+    const doc = (await Organization.findOne(
+      { _id: id, campaignId },
+      'name isPublic'
+    ).lean()) as AnyDoc | null;
+    if (!isGM && doc && doc.isPublic === false) return null;
+    return { kind, id, label: doc ? String(doc.name ?? '') : '' };
+  }
   const label = await resolveEntityLabel(kind, id, campaignId);
   return { kind, id, label };
+}
+
+// Batch-resolve display labels (and, for organizations, isPublic) for a set of
+// links grouped by kind — one query per collection instead of one per link.
+// Keyed by `${kind}:${id}`.
+async function resolveLinkEntities(
+  links: Array<{ kind: QuestLinkKind; id: string }>,
+  campaignId: string
+): Promise<Map<string, { label: string; isPublic?: boolean }>> {
+  const byKind: Record<QuestLinkKind, string[]> = {
+    character: [],
+    player: [],
+    location: [],
+    organization: [],
+  };
+  for (const l of links) byKind[l.kind]?.push(l.id);
+  const map = new Map<string, { label: string; isPublic?: boolean }>();
+  const tasks: Promise<void>[] = [];
+  if (byKind.character.length)
+    tasks.push(
+      Character.find({ _id: { $in: byKind.character }, campaignId }, 'firstName lastName')
+        .lean()
+        .then((docs) => {
+          for (const d of docs as AnyDoc[])
+            map.set(`character:${String(d._id)}`, { label: fullName(d) });
+        })
+    );
+  if (byKind.player.length)
+    tasks.push(
+      Player.find({ _id: { $in: byKind.player }, campaignId }, 'firstName lastName')
+        .lean()
+        .then((docs) => {
+          for (const d of docs as AnyDoc[])
+            map.set(`player:${String(d._id)}`, { label: fullName(d) });
+        })
+    );
+  if (byKind.location.length)
+    tasks.push(
+      Location.find({ _id: { $in: byKind.location }, campaignId }, 'name')
+        .lean()
+        .then((docs) => {
+          for (const d of docs as AnyDoc[])
+            map.set(`location:${String(d._id)}`, { label: String(d.name ?? '') });
+        })
+    );
+  if (byKind.organization.length)
+    tasks.push(
+      Organization.find({ _id: { $in: byKind.organization }, campaignId }, 'name isPublic')
+        .lean()
+        .then((docs) => {
+          for (const d of docs as AnyDoc[])
+            map.set(`organization:${String(d._id)}`, {
+              label: String(d.name ?? ''),
+              isPublic: Boolean(d.isPublic),
+            });
+        })
+    );
+  try {
+    await Promise.all(tasks);
+  } catch {
+    /* labels default to '' */
+  }
+  return map;
 }
 
 async function resolveLinks(
@@ -97,20 +172,31 @@ async function resolveLinks(
   isGM: boolean,
   campaignId: string
 ): Promise<QuestLink[]> {
-  return Promise.all(
-    (raw ?? []).map(async (l) => {
-      const kind = l.kind as QuestLinkKind;
-      const id = String(l.id);
-      return {
-        kind,
-        id,
-        label: await resolveEntityLabel(kind, id, campaignId),
-        role: (l.role as string) ?? '',
-        publicInfo: (l.publicInfo as string) ?? '',
-        privateInfo: isGM ? ((l.privateInfo as string) ?? '') : '',
-      };
-    })
+  const items = (raw ?? []).map((l) => ({
+    kind: l.kind as QuestLinkKind,
+    id: String(l.id),
+    raw: l,
+  }));
+  const entities = await resolveLinkEntities(
+    items.map(({ kind, id }) => ({ kind, id })),
+    campaignId
   );
+  const out: QuestLink[] = [];
+  for (const { kind, id, raw: l } of items) {
+    const ent = entities.get(`${kind}:${id}`);
+    // A private organization's name is GM-only (mirrors events + the tabletop
+    // hydration strip): never surface a private org as a link label to a non-GM.
+    if (!isGM && kind === 'organization' && ent && ent.isPublic === false) continue;
+    out.push({
+      kind,
+      id,
+      label: ent?.label ?? '',
+      role: (l.role as string) ?? '',
+      publicInfo: (l.publicInfo as string) ?? '',
+      privateInfo: isGM ? ((l.privateInfo as string) ?? '') : '',
+    });
+  }
+  return out;
 }
 
 async function resolveEvents(
@@ -118,37 +204,37 @@ async function resolveEvents(
   isGM: boolean,
   campaignId: string
 ): Promise<QuestEventLink[]> {
-  const resolved = await Promise.all(
-    (raw ?? []).map(async (e): Promise<QuestEventLink | null> => {
-      const eventId = String(e.eventId);
-      let label = '';
-      let dropForNonGM = false;
-      try {
-        const ev = (await Event.findOne(
-          { _id: eventId, campaignId },
-          'title isPublic'
-        ).lean()) as AnyDoc | null;
-        if (ev) {
-          label = String(ev.title ?? '');
-          // A private event's title/content is GM-only (mirrors
-          // tabletop-hydration's `!isGM && isPublic === false` gate) — never
-          // let a non-GM viewer see the title of an event they can't open.
-          if (!isGM && ev.isPublic === false) dropForNonGM = true;
-        }
-      } catch {
-        label = '';
-      }
-      if (dropForNonGM) return null;
-      return {
-        eventId,
-        label,
-        role: (e.role as string) ?? '',
-        publicInfo: (e.publicInfo as string) ?? '',
-        privateInfo: isGM ? ((e.privateInfo as string) ?? '') : '',
-      };
-    })
-  );
-  return resolved.filter((e): e is QuestEventLink => e !== null);
+  const items = (raw ?? []).map((e) => ({ eventId: String(e.eventId), raw: e }));
+  const ids = items.map((i) => i.eventId);
+  const evMap = new Map<string, { title: string; isPublic: boolean }>();
+  if (ids.length) {
+    try {
+      const docs = (await Event.find(
+        { _id: { $in: ids }, campaignId },
+        'title isPublic'
+      ).lean()) as AnyDoc[];
+      for (const d of docs)
+        evMap.set(String(d._id), { title: String(d.title ?? ''), isPublic: Boolean(d.isPublic) });
+    } catch {
+      /* labels default to '' */
+    }
+  }
+  const out: QuestEventLink[] = [];
+  for (const { eventId, raw: e } of items) {
+    const ev = evMap.get(eventId);
+    // A private event's title/content is GM-only (mirrors tabletop-hydration's
+    // `!isGM && isPublic === false` gate) — never let a non-GM viewer see the
+    // title of an event they can't open.
+    if (!isGM && ev && ev.isPublic === false) continue;
+    out.push({
+      eventId,
+      label: ev?.title ?? '',
+      role: (e.role as string) ?? '',
+      publicInfo: (e.publicInfo as string) ?? '',
+      privateInfo: isGM ? ((e.privateInfo as string) ?? '') : '',
+    });
+  }
+  return out;
 }
 
 function questVisibilityFilter(member: { isGM: boolean; userId: string }) {
@@ -213,7 +299,7 @@ async function serializeQuest(
   campaignId: string
 ): Promise<QuestData> {
   const [giver, links, events, parentQuest, subQuests] = await Promise.all([
-    resolveGiver(doc.giver as Record<string, unknown> | null, campaignId),
+    resolveGiver(doc.giver as Record<string, unknown> | null, member.isGM, campaignId),
     resolveLinks((doc.links as Array<Record<string, unknown>>) ?? [], member.isGM, campaignId),
     resolveEvents((doc.events as Array<Record<string, unknown>>) ?? [], member.isGM, campaignId),
     resolveParentSummary(doc.parentQuestId ? String(doc.parentQuestId) : null, campaignId, member),
@@ -245,7 +331,7 @@ async function serializeQuest(
 
 // Strip GM-only privateInfo out of an incoming links array for a non-GM writer,
 // preserving existing private values by matching on kind+id.
-function mergeLinkPrivate(
+async function mergeLinkPrivate(
   incoming: Array<{
     kind: string;
     id: string;
@@ -254,18 +340,54 @@ function mergeLinkPrivate(
     privateInfo: string;
   }>,
   existing: Array<Record<string, unknown>>,
-  isGM: boolean
-) {
+  isGM: boolean,
+  campaignId: string
+): Promise<
+  Array<{ kind: string; id: string; role: string; publicInfo: string; privateInfo: string }>
+> {
   const priv = new Map<string, string>();
   for (const l of existing ?? [])
     priv.set(`${l.kind}:${String(l.id)}`, (l.privateInfo as string) ?? '');
-  return incoming.map((l) => ({
+  const merged = incoming.map((l) => ({
     kind: l.kind,
     id: l.id,
     role: l.role,
     publicInfo: l.publicInfo,
     privateInfo: isGM ? l.privateInfo : (priv.get(`${l.kind}:${l.id}`) ?? ''),
   }));
+  if (isGM) return merged;
+
+  // resolveLinks drops private-organization links from what a non-GM viewer is
+  // shown, so a non-GM writer's submitted array never mentions them — their
+  // absence means "never seen", not "deliberately removed". Re-add any existing
+  // organization link omitted from the payload whose org is private (or no
+  // longer resolves — fail closed rather than deleting data they couldn't see).
+  const incomingKeys = new Set(incoming.map((l) => `${l.kind}:${l.id}`));
+  const omittedOrgs = (existing ?? []).filter(
+    (l) => l.kind === 'organization' && !incomingKeys.has(`organization:${String(l.id)}`)
+  );
+  if (omittedOrgs.length === 0) return merged;
+
+  const pubMap = new Map<string, boolean>();
+  try {
+    const docs = (await Organization.find(
+      { _id: { $in: omittedOrgs.map((l) => String(l.id)) }, campaignId },
+      '_id isPublic'
+    ).lean()) as AnyDoc[];
+    for (const d of docs) pubMap.set(String(d._id), Boolean(d.isPublic));
+  } catch {
+    /* fail closed: unresolved orgs stay private below */
+  }
+  const preserved = omittedOrgs
+    .filter((l) => pubMap.get(String(l.id)) !== true)
+    .map((l) => ({
+      kind: 'organization',
+      id: String(l.id),
+      role: (l.role as string) ?? '',
+      publicInfo: (l.publicInfo as string) ?? '',
+      privateInfo: (l.privateInfo as string) ?? '',
+    }));
+  return [...merged, ...preserved];
 }
 async function mergeEventPrivate(
   incoming: Array<{ eventId: string; role: string; publicInfo: string; privateInfo: string }>,
@@ -293,28 +415,24 @@ async function mergeEventPrivate(
   const omitted = (existing ?? []).filter((e) => !incomingIds.has(String(e.eventId)));
   if (omitted.length === 0) return merged;
 
-  const preserved: typeof merged = [];
-  for (const e of omitted) {
-    const eventId = String(e.eventId);
-    let isPublic = false;
-    try {
-      const ev = (await Event.findOne(
-        { _id: eventId, campaignId },
-        'isPublic'
-      ).lean()) as AnyDoc | null;
-      isPublic = ev ? Boolean(ev.isPublic) : false;
-    } catch {
-      isPublic = false;
-    }
-    if (!isPublic) {
-      preserved.push({
-        eventId,
-        role: (e.role as string) ?? '',
-        publicInfo: (e.publicInfo as string) ?? '',
-        privateInfo: (e.privateInfo as string) ?? '',
-      });
-    }
+  const pubMap = new Map<string, boolean>();
+  try {
+    const docs = (await Event.find(
+      { _id: { $in: omitted.map((e) => String(e.eventId)) }, campaignId },
+      '_id isPublic'
+    ).lean()) as AnyDoc[];
+    for (const d of docs) pubMap.set(String(d._id), Boolean(d.isPublic));
+  } catch {
+    /* fail closed: unresolved events stay private below */
   }
+  const preserved = omitted
+    .filter((e) => pubMap.get(String(e.eventId)) !== true)
+    .map((e) => ({
+      eventId: String(e.eventId),
+      role: (e.role as string) ?? '',
+      publicInfo: (e.publicInfo as string) ?? '',
+      privateInfo: (e.privateInfo as string) ?? '',
+    }));
   return [...merged, ...preserved];
 }
 
@@ -453,10 +571,11 @@ export const updateQuest = async ({
     if (!member.isGM && !isCreator) throw new Error('Forbidden');
 
     const finalTags = normalizeTags(data.tags ?? []);
-    const links = mergeLinkPrivate(
+    const links = await mergeLinkPrivate(
       data.links,
       (existing.links as Array<Record<string, unknown>>) ?? [],
-      member.isGM
+      member.isGM,
+      data.campaignId
     );
     const events = await mergeEventPrivate(
       data.events,

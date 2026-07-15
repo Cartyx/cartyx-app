@@ -184,9 +184,10 @@ export function createFakeModel(prefix: string) {
   };
 }
 
-// A read-only stub for models the quest functions only ever `findOne` for
+// A read-only stub for models the quest functions only ever read from for
 // label-resolution and never write to in these tests (Player, Location,
-// Organization, Event).
+// Organization, Event). `find` returns an empty batch (no matching entities),
+// `findOne` returns null — i.e. the entity never resolves.
 export function createNotFoundModel() {
-  return { findOne: () => chain(null) };
+  return { findOne: () => chain(null), find: () => chain([]) };
 }
