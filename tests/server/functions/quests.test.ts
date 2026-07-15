@@ -718,4 +718,111 @@ describe('quests server functions', () => {
     expect(preserved?.publicInfo).toBe('secret-pub');
     expect(preserved?.privateInfo).toBe('secret-priv');
   });
+
+  it('updateQuest (as non-GM) preserves a private-organization giver the writer never saw (submitted null)', async () => {
+    const privOrg = await Organization.create({
+      name: 'The Zhentarim',
+      campaignId: CAMPAIGN,
+      isPublic: false,
+    });
+    const q = await createQuest({
+      data: {
+        campaignId: CAMPAIGN,
+        name: 'Q',
+        type: '',
+        status: 'active',
+        publicInfo: '',
+        privateInfo: '',
+        isPublic: true,
+        giver: { kind: 'organization', id: String(privOrg._id) },
+        parentQuestId: null,
+        links: [],
+        events: [],
+        images: [],
+        tags: [],
+      },
+    });
+
+    // Non-GM creator never saw the private-org giver (resolveGiver returned null),
+    // so their payload submits giver: null — this must NOT wipe it.
+    member.isGM = false;
+    member.userId = 'u-gm';
+    await updateQuest({
+      data: {
+        id: q.id,
+        campaignId: CAMPAIGN,
+        name: 'Q renamed',
+        type: '',
+        status: 'active',
+        publicInfo: 'pub-updated',
+        privateInfo: '',
+        isPublic: true,
+        giver: null,
+        parentQuestId: null,
+        links: [],
+        events: [],
+        images: [],
+        tags: [],
+      },
+    });
+
+    member.isGM = true;
+    member.userId = 'u-gm';
+    const reloaded = await getQuest({ data: { id: q.id, campaignId: CAMPAIGN } });
+    expect(reloaded?.giver?.kind).toBe('organization');
+    expect(reloaded?.giver?.id).toBe(String(privOrg._id));
+    expect(reloaded?.giver?.label).toBe('The Zhentarim');
+  });
+
+  it('updateQuest (as non-GM) honors clearing a PUBLIC-org giver they could see', async () => {
+    const pubOrg = await Organization.create({
+      name: 'The Lords Alliance',
+      campaignId: CAMPAIGN,
+      isPublic: true,
+    });
+    const q = await createQuest({
+      data: {
+        campaignId: CAMPAIGN,
+        name: 'Q',
+        type: '',
+        status: 'active',
+        publicInfo: '',
+        privateInfo: '',
+        isPublic: true,
+        giver: { kind: 'organization', id: String(pubOrg._id) },
+        parentQuestId: null,
+        links: [],
+        events: [],
+        images: [],
+        tags: [],
+      },
+    });
+
+    // Non-GM COULD see the public-org giver, so submitting null is a genuine clear.
+    member.isGM = false;
+    member.userId = 'u-gm';
+    await updateQuest({
+      data: {
+        id: q.id,
+        campaignId: CAMPAIGN,
+        name: 'Q',
+        type: '',
+        status: 'active',
+        publicInfo: '',
+        privateInfo: '',
+        isPublic: true,
+        giver: null,
+        parentQuestId: null,
+        links: [],
+        events: [],
+        images: [],
+        tags: [],
+      },
+    });
+
+    member.isGM = true;
+    member.userId = 'u-gm';
+    const reloaded = await getQuest({ data: { id: q.id, campaignId: CAMPAIGN } });
+    expect(reloaded?.giver).toBeNull();
+  });
 });

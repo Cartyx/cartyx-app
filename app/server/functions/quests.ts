@@ -97,7 +97,7 @@ async function resolveGiver(
       { _id: id, campaignId },
       'name isPublic'
     ).lean()) as AnyDoc | null;
-    if (!isGM && doc && doc.isPublic === false) return null;
+    if (!isGM && doc && Boolean(doc.isPublic) === false) return null;
     return { kind, id, label: doc ? String(doc.name ?? '') : '' };
   }
   const label = await resolveEntityLabel(kind, id, campaignId);
@@ -436,6 +436,43 @@ async function mergeEventPrivate(
   return [...merged, ...preserved];
 }
 
+// resolveGiver hides a private-organization giver from a non-GM read (returns
+// null), so a non-GM writer whose payload has no giver may simply never have
+// seen it. Preserve an existing private (or unresolvable) org giver rather than
+// silently wiping it — the giver analogue of mergeLinkPrivate/mergeEventPrivate.
+async function mergeGiverPrivate(
+  incoming: { kind: string; id: string } | null | undefined,
+  existing: Record<string, unknown> | null | undefined,
+  isGM: boolean,
+  campaignId: string
+): Promise<{ kind: string; id: string } | null> {
+  const inc =
+    incoming && incoming.kind && incoming.id
+      ? { kind: String(incoming.kind), id: String(incoming.id) }
+      : null;
+  // GM writes are authoritative; a non-GM who submitted a giver took an explicit
+  // action on the field, so honor it (even replacing an unseen private one).
+  if (isGM || inc) return inc;
+  // Non-GM submitted no giver. If the existing giver is one they could see
+  // (no giver, or a character/player/public-org giver), the empty payload is a
+  // genuine clear. Only preserve an org giver that was hidden from them.
+  if (!existing || !existing.kind || !existing.id) return null;
+  const kind = String(existing.kind);
+  const id = String(existing.id);
+  if (kind !== 'organization') return null;
+  let isPublic = false;
+  try {
+    const doc = (await Organization.findOne(
+      { _id: id, campaignId },
+      'isPublic'
+    ).lean()) as AnyDoc | null;
+    isPublic = doc ? Boolean(doc.isPublic) : false;
+  } catch {
+    isPublic = false; // fail closed: unresolvable org stays preserved
+  }
+  return isPublic ? null : { kind, id };
+}
+
 export const listQuests = async ({
   data,
 }: {
@@ -583,6 +620,12 @@ export const updateQuest = async ({
       member.isGM,
       data.campaignId
     );
+    const giver = await mergeGiverPrivate(
+      data.giver,
+      existing.giver as Record<string, unknown> | null,
+      member.isGM,
+      data.campaignId
+    );
 
     const set: Record<string, unknown> = {
       name: data.name.trim(),
@@ -590,7 +633,7 @@ export const updateQuest = async ({
       status: data.status,
       publicInfo: data.publicInfo,
       isPublic: data.isPublic,
-      giver: data.giver,
+      giver,
       parentQuestId: data.parentQuestId,
       links,
       events,
