@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { X, Globe, Lock } from 'lucide-react';
 import { FormInput } from '~/components/FormInput';
@@ -8,58 +8,100 @@ import { TagAutocompleteInput } from '~/components/shared/TagAutocompleteInput';
 import { ShowOnTabletopButton } from '~/components/wiki/shared/ShowOnTabletopButton';
 import { useModalForm } from '~/hooks/useModalForm';
 import { useCampaign } from '~/hooks/useCampaigns';
+import { useCharacters } from '~/hooks/useCharacters';
+import { usePlayers } from '~/hooks/usePlayers';
+import { useOrganizations } from '~/hooks/useOrganizations';
 import {
-  useOrganization,
-  useCreateOrganization,
-  useUpdateOrganization,
-  useDeleteOrganization,
-} from '~/hooks/useOrganizations';
-import { OrganizationLocationsEditor } from './OrganizationLocationsEditor';
-import { OrganizationMembersEditor } from './OrganizationMembersEditor';
-import { EntityQuestsTab } from '~/components/shared/EntityQuestsTab';
+  useQuest,
+  useQuests,
+  useCreateQuest,
+  useUpdateQuest,
+  useDeleteQuest,
+} from '~/hooks/useQuests';
+import { QuestLinksEditor } from './QuestLinksEditor';
+import { QuestEventsEditor } from './QuestEventsEditor';
 import { uploadToR2 } from '~/utils/uploadToR2';
 import { compressImage } from '~/utils/compressImage';
-import type { OrganizationLocationLinkInput, OrganizationImage } from '~/types/organization';
+import type {
+  QuestImage,
+  QuestStatus,
+  QuestGiverKind,
+  QuestLinkInput,
+  QuestEventLinkInput,
+} from '~/types/quest';
 
-interface OrganizationModalProps {
+interface QuestModalProps {
   isOpen: boolean;
   onClose: () => void;
   campaignId: string;
-  organizationId?: string;
+  questId?: string;
 }
 
 interface FieldErrors {
   name?: string;
 }
 
-export function OrganizationModal({
-  isOpen,
-  onClose,
-  campaignId,
-  organizationId,
-}: OrganizationModalProps) {
-  const isEdit = !!organizationId;
+const STATUS_OPTIONS: { value: QuestStatus; label: string }[] = [
+  { value: 'not_started', label: 'Not started' },
+  { value: 'active', label: 'Active' },
+  { value: 'on_hold', label: 'On hold' },
+  { value: 'completed', label: 'Completed' },
+  { value: 'failed', label: 'Failed' },
+];
 
-  const { organization: existing, isLoading: isFetching } = useOrganization(
-    organizationId ?? '',
-    campaignId
-  );
-  const { create, isLoading: isCreating } = useCreateOrganization();
-  const { update, isLoading: isUpdating } = useUpdateOrganization();
-  const { remove, isLoading: isDeleting } = useDeleteOrganization();
+const GIVER_KIND_LABELS: Record<QuestGiverKind, string> = {
+  character: 'Character',
+  player: 'Player',
+  organization: 'Organization',
+};
+
+export function QuestModal({ isOpen, onClose, campaignId, questId }: QuestModalProps) {
+  const isEdit = !!questId;
+
+  const { quest: existing, isLoading: isFetching } = useQuest(questId ?? '', campaignId);
+  const { create, isLoading: isCreating } = useCreateQuest();
+  const { update, isLoading: isUpdating } = useUpdateQuest();
+  const { remove, isLoading: isDeleting } = useDeleteQuest();
   const { campaign } = useCampaign(campaignId);
   const isGM = campaign?.isGM ?? false;
 
+  const { characters } = useCharacters(campaignId);
+  const { players } = usePlayers(campaignId);
+  const { organizations } = useOrganizations(campaignId);
+  const { quests } = useQuests(campaignId);
+
   const [name, setName] = useState('');
+  const [type, setType] = useState('');
+  const [status, setStatus] = useState<QuestStatus>('not_started');
   const [publicInfo, setPublicInfo] = useState('');
   const [privateInfo, setPrivateInfo] = useState('');
   const [isPublic, setIsPublic] = useState(false);
-  const [images, setImages] = useState<OrganizationImage[]>([]);
+  const [images, setImages] = useState<QuestImage[]>([]);
   const [tags, setTags] = useState<string[]>([]);
-  const [locations, setLocations] = useState<OrganizationLocationLinkInput[]>([]);
+  const [giverKind, setGiverKind] = useState<QuestGiverKind>('character');
+  const [giverId, setGiverId] = useState('');
+  const [parentQuestId, setParentQuestId] = useState('');
+  const [links, setLinks] = useState<QuestLinkInput[]>([]);
+  const [events, setEvents] = useState<QuestEventLinkInput[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isUploadingImage, setIsUploadingImage] = useState(false);
+
+  const giverCandidates = useMemo<{ id: string; label: string }[]>(() => {
+    switch (giverKind) {
+      case 'character':
+        return characters.map((c) => ({ id: c.id, label: `${c.firstName} ${c.lastName}`.trim() }));
+      case 'player':
+        return players.map((p) => ({ id: p.id, label: `${p.firstName} ${p.lastName}`.trim() }));
+      case 'organization':
+        return organizations.map((o) => ({ id: o.id, label: o.name }));
+    }
+  }, [giverKind, characters, players, organizations]);
+
+  const parentQuestOptions = useMemo(
+    () => quests.filter((q) => q.id !== questId),
+    [quests, questId]
+  );
 
   const validate = useCallback((): FieldErrors => {
     const errors: FieldErrors = {};
@@ -70,33 +112,53 @@ export function OrganizationModal({
   const { fieldErrors, runValidation } = useModalForm({
     isOpen,
     onClose,
-    recordId: organizationId,
+    recordId: questId,
     isEdit,
     record: existing,
     reset: () => {
       setName('');
+      setType('');
+      setStatus('not_started');
       setPublicInfo('');
       setPrivateInfo('');
       setIsPublic(false);
       setImages([]);
       setTags([]);
-      setLocations([]);
+      setGiverKind('character');
+      setGiverId('');
+      setParentQuestId('');
+      setLinks([]);
+      setEvents([]);
       setError(null);
       setShowDeleteConfirm(false);
     },
-    populate: (org) => {
-      setName(org.name);
-      setPublicInfo(org.publicInfo);
-      setPrivateInfo(org.privateInfo);
-      setIsPublic(org.isPublic);
-      setImages(org.images);
-      setTags(org.tags);
-      setLocations(
-        org.locations.map((l) => ({
-          locationId: l.locationId,
-          label: l.label,
+    populate: (q) => {
+      setName(q.name);
+      setType(q.type);
+      setStatus(q.status);
+      setPublicInfo(q.publicInfo);
+      setPrivateInfo(q.privateInfo);
+      setIsPublic(q.isPublic);
+      setImages(q.images);
+      setTags(q.tags);
+      setGiverKind(q.giver?.kind ?? 'character');
+      setGiverId(q.giver?.id ?? '');
+      setParentQuestId(q.parentQuestId ?? '');
+      setLinks(
+        q.links.map((l) => ({
+          kind: l.kind,
+          id: l.id,
+          role: l.role,
           publicInfo: l.publicInfo,
           privateInfo: l.privateInfo,
+        }))
+      );
+      setEvents(
+        q.events.map((ev) => ({
+          eventId: ev.eventId,
+          role: ev.role,
+          publicInfo: ev.publicInfo,
+          privateInfo: ev.privateInfo,
         }))
       );
     },
@@ -108,8 +170,8 @@ export function OrganizationModal({
     setError(null);
     try {
       const compressed = await compressImage(file);
-      const { publicUrl } = await uploadToR2(compressed, 'uploads/organizations');
-      const newImage: OrganizationImage = { url: publicUrl, caption: '', crop: null };
+      const { publicUrl } = await uploadToR2(compressed, 'uploads/quests');
+      const newImage: QuestImage = { url: publicUrl, caption: '', crop: null };
       setImages((prev) => [...prev, newImage]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Image upload failed');
@@ -133,6 +195,11 @@ export function OrganizationModal({
     [handleAddImage]
   );
 
+  const handleGiverKindChange = (kind: QuestGiverKind) => {
+    setGiverKind(kind);
+    setGiverId('');
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (Object.keys(runValidation()).length > 0) return;
@@ -141,47 +208,49 @@ export function OrganizationModal({
     const payload = {
       campaignId,
       name,
+      type,
+      status,
       publicInfo,
       privateInfo,
       isPublic,
+      giver: giverId ? { kind: giverKind, id: giverId } : null,
+      parentQuestId: parentQuestId || null,
+      links,
+      events,
       images: images.map((img) => ({
         url: img.url,
         caption: img.caption,
         crop: img.crop,
       })),
       tags,
-      locations: locations.map((l) => ({
-        locationId: l.locationId,
-        publicInfo: l.publicInfo,
-        privateInfo: l.privateInfo,
-      })),
     };
 
     const result =
-      isEdit && organizationId
-        ? await update({ ...payload, id: organizationId })
-        : await create(payload);
+      isEdit && questId ? await update({ ...payload, id: questId }) : await create(payload);
 
     if (result) onClose();
-    else setError(`Failed to ${isEdit ? 'update' : 'create'} organization. Please try again.`);
+    else setError(`Failed to ${isEdit ? 'update' : 'create'} quest. Please try again.`);
   };
 
   const handleDelete = async () => {
-    if (!organizationId) return;
+    if (!questId) return;
     setError(null);
-    const result = await remove({ id: organizationId, campaignId });
+    const result = await remove({ id: questId, campaignId });
     if (result) onClose();
     else {
-      setError('Failed to delete organization. Please try again.');
+      setError('Failed to delete quest. Please try again.');
       setShowDeleteConfirm(false);
     }
   };
 
   if (!isOpen) return null;
 
-  const isLoadingOrg = !!(isEdit && isFetching);
+  const isLoadingQuest = !!(isEdit && isFetching);
   const isSaving = isCreating || isUpdating;
-  const isDisabled = isLoadingOrg || isSaving || isDeleting || isUploadingImage;
+  const isDisabled = isLoadingQuest || isSaving || isDeleting || isUploadingImage;
+
+  const selectClass =
+    'w-full bg-white/[0.04] border border-white/10 rounded-xl px-3 py-2.5 text-slate-200 text-sm focus:outline-none focus:border-blue-500/50 transition-all appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed';
 
   return createPortal(
     <div
@@ -193,22 +262,22 @@ export function OrganizationModal({
         onSubmit={handleSubmit}
         role="dialog"
         aria-modal="true"
-        aria-labelledby="organization-modal-title"
+        aria-labelledby="quest-modal-title"
         className="w-full h-full max-w-[90vw] max-h-[90vh] bg-[#0D1117] border border-white/[0.07] rounded-2xl overflow-hidden shadow-2xl flex flex-col"
       >
         <header className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-white/[0.07] shrink-0">
           <h2
-            id="organization-modal-title"
+            id="quest-modal-title"
             className="font-sans font-bold text-sm text-blue-400 uppercase tracking-widest"
           >
-            {isEdit ? 'Edit Organization' : 'Create Organization'}
+            {isEdit ? 'Edit Quest' : 'Create Quest'}
           </h2>
           <div className="flex items-center gap-1 shrink-0">
-            {isEdit && organizationId && (
+            {isEdit && questId && (
               <ShowOnTabletopButton
                 campaignId={campaignId}
-                collection="organization"
-                documentId={organizationId}
+                collection="quest"
+                documentId={questId}
                 isGM={isGM}
               />
             )}
@@ -230,9 +299,9 @@ export function OrganizationModal({
             </div>
           )}
 
-          {isLoadingOrg ? (
+          {isLoadingQuest ? (
             <div className="flex items-center justify-center py-12">
-              <p className="text-xs text-slate-500 animate-pulse">Loading organization...</p>
+              <p className="text-xs text-slate-500 animate-pulse">Loading quest...</p>
             </div>
           ) : (
             <>
@@ -243,8 +312,130 @@ export function OrganizationModal({
                 error={fieldErrors.name}
                 required
                 disabled={isDisabled}
-                placeholder="e.g. The Thieves' Guild"
+                placeholder="e.g. Goblin Arrows"
               />
+
+              <FormInput
+                label="Type"
+                value={type}
+                onChange={(e) => setType(e.target.value)}
+                disabled={isDisabled}
+                placeholder="e.g. Main, Side, Personal"
+              />
+
+              {/* Status */}
+              <div>
+                <label
+                  htmlFor="quest-status"
+                  className="block text-xs font-semibold text-slate-400 mb-2 tracking-wide"
+                >
+                  Status
+                </label>
+                <select
+                  id="quest-status"
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value as QuestStatus)}
+                  disabled={isDisabled}
+                  className={selectClass}
+                >
+                  {STATUS_OPTIONS.map((s) => (
+                    <option key={s.value} value={s.value} className="bg-[#0D1117]">
+                      {s.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Giver */}
+              <div>
+                <span className="block text-xs font-semibold text-slate-400 mb-2 tracking-wide">
+                  Quest giver
+                </span>
+                <div className="flex items-end gap-2">
+                  <div className="flex-shrink-0">
+                    <label
+                      htmlFor="quest-giver-kind"
+                      className="block text-[11px] text-slate-500 mb-1"
+                    >
+                      Type
+                    </label>
+                    <select
+                      id="quest-giver-kind"
+                      value={giverKind}
+                      onChange={(e) => handleGiverKindChange(e.target.value as QuestGiverKind)}
+                      disabled={isDisabled}
+                      className={selectClass}
+                    >
+                      {(Object.keys(GIVER_KIND_LABELS) as QuestGiverKind[]).map((k) => (
+                        <option key={k} value={k} className="bg-[#0D1117]">
+                          {GIVER_KIND_LABELS[k]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <label
+                      htmlFor="quest-giver-entity"
+                      className="block text-[11px] text-slate-500 mb-1"
+                    >
+                      Giver
+                    </label>
+                    <select
+                      id="quest-giver-entity"
+                      aria-label="Quest giver"
+                      value={giverId}
+                      onChange={(e) => setGiverId(e.target.value)}
+                      disabled={isDisabled || giverCandidates.length === 0}
+                      className={selectClass}
+                    >
+                      <option value="" className="bg-[#0D1117]">
+                        {giverCandidates.length === 0
+                          ? `No ${GIVER_KIND_LABELS[giverKind].toLowerCase()}s`
+                          : `Select ${GIVER_KIND_LABELS[giverKind].toLowerCase()}…`}
+                      </option>
+                      {giverCandidates.map((c) => (
+                        <option key={c.id} value={c.id} className="bg-[#0D1117]">
+                          {c.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setGiverId('')}
+                    disabled={isDisabled || !giverId}
+                    className="flex-shrink-0 px-3 py-2.5 rounded-xl text-sm font-semibold bg-white/[0.06] hover:bg-white/[0.1] disabled:opacity-50 disabled:cursor-not-allowed text-slate-300 transition-colors"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+
+              {/* Parent quest */}
+              <div>
+                <label
+                  htmlFor="quest-parent"
+                  className="block text-xs font-semibold text-slate-400 mb-2 tracking-wide"
+                >
+                  Parent quest
+                </label>
+                <select
+                  id="quest-parent"
+                  value={parentQuestId}
+                  onChange={(e) => setParentQuestId(e.target.value)}
+                  disabled={isDisabled}
+                  className={selectClass}
+                >
+                  <option value="" className="bg-[#0D1117]">
+                    None
+                  </option>
+                  {parentQuestOptions.map((q) => (
+                    <option key={q.id} value={q.id} className="bg-[#0D1117]">
+                      {q.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
               {/* Visibility toggle */}
               <div className="flex items-center gap-4">
@@ -253,7 +444,7 @@ export function OrganizationModal({
                 >
                   <input
                     type="radio"
-                    name="org-visibility"
+                    name="quest-visibility"
                     checked={!isPublic}
                     onChange={() => setIsPublic(false)}
                     disabled={isDisabled}
@@ -271,7 +462,7 @@ export function OrganizationModal({
                 >
                   <input
                     type="radio"
-                    name="org-visibility"
+                    name="quest-visibility"
                     checked={isPublic}
                     onChange={() => setIsPublic(true)}
                     disabled={isDisabled}
@@ -290,7 +481,7 @@ export function OrganizationModal({
                 label="Public info"
                 value={publicInfo}
                 onChange={setPublicInfo}
-                placeholder="Public description of this organization..."
+                placeholder="Public description of this quest..."
                 disabled={isDisabled}
                 minHeight="200px"
               />
@@ -300,7 +491,7 @@ export function OrganizationModal({
                   label="Private info (GM only)"
                   value={privateInfo}
                   onChange={setPrivateInfo}
-                  placeholder="GM-only notes about this organization..."
+                  placeholder="GM-only notes about this quest..."
                   disabled={isDisabled}
                   minHeight="200px"
                 />
@@ -317,7 +508,7 @@ export function OrganizationModal({
                       <div key={idx} className="relative group">
                         <img
                           src={img.url}
-                          alt={img.caption || `Organization image ${idx + 1}`}
+                          alt={img.caption || `Quest image ${idx + 1}`}
                           className="w-20 h-20 object-cover rounded-lg border border-white/10"
                         />
                         {!isDisabled && (
@@ -356,39 +547,21 @@ export function OrganizationModal({
                 disabled={isDisabled}
               />
 
-              <OrganizationLocationsEditor
+              <QuestLinksEditor
                 campaignId={campaignId}
-                value={locations}
-                onChange={setLocations}
+                links={links}
+                onChange={setLinks}
                 isGM={isGM}
                 disabled={isDisabled}
               />
 
-              {isEdit && organizationId ? (
-                <OrganizationMembersEditor
-                  campaignId={campaignId}
-                  organizationId={organizationId}
-                  isGM={isGM}
-                  canManage={existing?.canEdit ?? false}
-                />
-              ) : (
-                <p className="text-xs text-slate-500">
-                  Save the organization first to add members.
-                </p>
-              )}
-
-              {isEdit && organizationId && (
-                <div>
-                  <span className="block text-xs font-semibold text-slate-400 mb-2 tracking-wide">
-                    Linked Quests
-                  </span>
-                  <EntityQuestsTab
-                    campaignId={campaignId}
-                    kind="organization"
-                    id={organizationId}
-                  />
-                </div>
-              )}
+              <QuestEventsEditor
+                campaignId={campaignId}
+                events={events}
+                onChange={setEvents}
+                isGM={isGM}
+                disabled={isDisabled}
+              />
             </>
           )}
         </div>
@@ -398,9 +571,7 @@ export function OrganizationModal({
             <div className="flex items-center gap-2">
               {showDeleteConfirm ? (
                 <>
-                  <span className="text-xs text-rose-400 font-semibold">
-                    Delete this organization?
-                  </span>
+                  <span className="text-xs text-rose-400 font-semibold">Delete this quest?</span>
                   <PixelButton
                     type="button"
                     variant="danger"
@@ -438,7 +609,7 @@ export function OrganizationModal({
               Cancel
             </PixelButton>
             <PixelButton type="submit" disabled={isDisabled}>
-              {isSaving ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Organization'}
+              {isSaving ? 'Saving...' : isEdit ? 'Save Changes' : 'Create Quest'}
             </PixelButton>
           </div>
         </footer>

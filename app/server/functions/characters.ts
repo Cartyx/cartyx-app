@@ -8,6 +8,7 @@ import { pruneLoreLinks } from '../utils/pruneLoreLinks';
 import { pruneEventLinks } from '../utils/pruneEventLinks';
 import { pruneMembershipsForMember } from './organizations';
 import { ensureTags as ensureTagsFn } from './tags';
+import { pruneQuestRefs } from './quests';
 import type { CharacterData, CharacterListItem, PictureCrop } from '~/types/character';
 import {
   createCharacterSchema,
@@ -323,6 +324,16 @@ export const deleteCharacter = async ({
     } catch (pruneError) {
       serverCaptureException(pruneError, sessionUserId, {
         action: 'deleteCharacter.pruneMemberships',
+        campaign_id: data.campaignId,
+        character_id: data.id,
+      });
+    }
+
+    try {
+      await pruneQuestRefs('character', data.id, data.campaignId);
+    } catch (pruneError) {
+      serverCaptureException(pruneError, sessionUserId, {
+        action: 'deleteCharacter.pruneQuests',
         campaign_id: data.campaignId,
         character_id: data.id,
       });

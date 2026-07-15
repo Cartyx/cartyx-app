@@ -17,6 +17,7 @@ import type { LocationRef } from '~/types/location';
 import { LocationImageUpload } from './LocationImageUpload';
 import { ShowOnTabletopButton } from '~/components/wiki/shared/ShowOnTabletopButton';
 import { TagAutocompleteInput } from '~/components/shared/TagAutocompleteInput';
+import { EntityQuestsTab } from '~/components/shared/EntityQuestsTab';
 
 interface LocationModalProps {
   isOpen: boolean;
@@ -458,6 +459,16 @@ export function LocationModal({ isOpen, onClose, campaignId, locationId }: Locat
               </div>
             </label>
           </div>
+
+          {/* Linked Quests — edit mode only */}
+          {locationId && (
+            <div>
+              <h3 className="text-xs font-semibold text-slate-400 mb-2 tracking-wide">
+                Linked Quests
+              </h3>
+              <EntityQuestsTab campaignId={campaignId} kind="location" id={locationId} />
+            </div>
+          )}
         </div>
 
         <footer className="flex items-center justify-between px-4 sm:px-6 py-4 border-t border-white/[0.07] bg-white/[0.01] shrink-0">

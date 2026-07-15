@@ -7,6 +7,7 @@ import { MarkdownEditor } from '~/components/shared/MarkdownEditor';
 import { ColorPicker } from '~/components/shared/ColorPicker';
 import { TabBar } from '~/components/shared/TabBar';
 import { MemberOrganizationsTab } from '~/components/shared/MemberOrganizationsTab';
+import { EntityQuestsTab } from '~/components/shared/EntityQuestsTab';
 import { ImageCropInput } from '~/components/wiki/characters/ImageCropInput';
 import { usePlayer, useUpdatePlayer, useDeletePlayer } from '~/hooks/usePlayers';
 import { useCampaign } from '~/hooks/useCampaigns';
@@ -64,7 +65,7 @@ export function PlayerModal({ campaignId, playerId, onClose }: PlayerModalProps)
   const [gmNotes, setGmNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
-  const [activeTab, setActiveTab] = useState<'details' | 'organizations'>('details');
+  const [activeTab, setActiveTab] = useState<'details' | 'organizations' | 'quests'>('details');
 
   const validate = useCallback((): FieldErrors => {
     const errors: FieldErrors = {};
@@ -248,9 +249,10 @@ export function PlayerModal({ campaignId, playerId, onClose }: PlayerModalProps)
             tabs={[
               { id: 'details', label: 'Details' },
               { id: 'organizations', label: 'Organizations' },
+              { id: 'quests', label: 'Quests' },
             ]}
             activeTab={activeTab}
-            onTabChange={(t) => setActiveTab(t as 'details' | 'organizations')}
+            onTabChange={(t) => setActiveTab(t as 'details' | 'organizations' | 'quests')}
             accentColor={color || '#3498db'}
           />
         )}
@@ -274,6 +276,8 @@ export function PlayerModal({ campaignId, playerId, onClose }: PlayerModalProps)
               isGM={campaign?.isGM ?? false}
               canManage={campaign?.isGM || existingPlayer?.canEdit || false}
             />
+          ) : activeTab === 'quests' && isEdit && playerId ? (
+            <EntityQuestsTab campaignId={campaignId} kind="player" id={playerId} />
           ) : (
             <>
               {/* Picture upload */}

@@ -15,6 +15,7 @@ import {
 } from '~/hooks/usePlayers';
 import { PlayerLoreTab } from '~/components/wiki/players/PlayerLoreTab';
 import { MemberOrganizationsTab } from '~/components/shared/MemberOrganizationsTab';
+import { EntityQuestsTab } from '~/components/shared/EntityQuestsTab';
 import { useCampaign } from '~/hooks/useCampaigns';
 
 function getCropStyle(crop: PictureCrop): React.CSSProperties {
@@ -106,6 +107,7 @@ export function PlayerWindow({ player, onEdit }: PlayerWindowProps) {
     { id: 'relationships', label: 'Relationships' },
     { id: 'lore', label: 'Lore' },
     { id: 'organizations', label: 'Organizations' },
+    { id: 'quests', label: 'Quests' },
   ];
 
   return (
@@ -322,6 +324,10 @@ export function PlayerWindow({ player, onEdit }: PlayerWindowProps) {
             isGM={isGM}
             canManage={player.canEdit}
           />
+        )}
+
+        {activeTab === 'quests' && (
+          <EntityQuestsTab campaignId={player.campaignId} kind="player" id={player.id} />
         )}
       </div>
     </div>

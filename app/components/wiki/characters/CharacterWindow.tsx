@@ -13,6 +13,7 @@ import {
   useRemoveCharacterRelationship,
 } from '~/hooks/useCharacters';
 import { MemberOrganizationsTab } from '~/components/shared/MemberOrganizationsTab';
+import { EntityQuestsTab } from '~/components/shared/EntityQuestsTab';
 import { useCampaign } from '~/hooks/useCampaigns';
 
 function getCropStyle(crop: PictureCrop): React.CSSProperties {
@@ -96,6 +97,7 @@ export function CharacterWindow({ character, onEdit }: CharacterWindowProps) {
     { id: 'gmnotes', label: 'GM Notes', hidden: !character.canEdit },
     { id: 'relationships', label: 'Relationships' },
     { id: 'organizations', label: 'Organizations' },
+    { id: 'quests', label: 'Quests' },
   ];
 
   return (
@@ -278,6 +280,10 @@ export function CharacterWindow({ character, onEdit }: CharacterWindowProps) {
             isGM={isGM}
             canManage={character.canEdit}
           />
+        )}
+
+        {activeTab === 'quests' && (
+          <EntityQuestsTab campaignId={character.campaignId} kind="character" id={character.id} />
         )}
       </div>
     </div>

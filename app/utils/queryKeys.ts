@@ -195,6 +195,15 @@ export const queryKeys = {
     detail: (id: string, campaignId?: string) =>
       ['organizations', 'detail', campaignId ?? '', id] as const,
   },
+  quests: {
+    all: ['quests'] as const,
+    list: (campaignId: string, search?: string, tags?: string[], status?: string) =>
+      ['quests', 'list', campaignId, search ?? '', tags ?? [], status ?? ''] as const,
+    detail: (id: string, campaignId?: string) =>
+      ['quests', 'detail', campaignId ?? '', id] as const,
+    forEntity: (campaignId: string, kind: string, id: string) =>
+      ['quests', 'forEntity', campaignId, kind, id] as const,
+  },
   memberships: {
     all: ['memberships'] as const,
     forOrg: (campaignId: string, organizationId: string) =>

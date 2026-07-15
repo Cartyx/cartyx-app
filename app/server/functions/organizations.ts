@@ -4,6 +4,7 @@ import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { normalizeTags } from '../utils/helpers';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { ensureTags as ensureTagsFn } from './tags';
+import { pruneQuestRefs } from './quests';
 import { Organization } from '../db/models/Organization';
 import { OrganizationMembership } from '../db/models/OrganizationMembership';
 import { Location } from '../db/models/Location';
@@ -430,6 +431,16 @@ export const deleteOrganization = async ({
     } catch (cleanupError) {
       serverCaptureException(cleanupError, sessionUserId, {
         action: 'deleteOrganization.cleanup',
+        campaign_id: data.campaignId,
+        organization_id: data.id,
+      });
+    }
+
+    try {
+      await pruneQuestRefs('organization', data.id, data.campaignId);
+    } catch (cleanupError) {
+      serverCaptureException(cleanupError, sessionUserId, {
+        action: 'deleteOrganization.pruneQuests',
         campaign_id: data.campaignId,
         organization_id: data.id,
       });

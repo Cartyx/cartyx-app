@@ -7,6 +7,7 @@ import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { pruneLoreLinks } from '../utils/pruneLoreLinks';
 import { pruneEventLinks } from '../utils/pruneEventLinks';
 import { ensureTags as ensureTagsFn } from './tags';
+import { pruneQuestRefs } from './quests';
 import { S3Client, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import type { LocationData, LocationListItem, LocationRef } from '~/types/location';
 import {
@@ -349,6 +350,16 @@ export const deleteLocation = async ({ data }: { data: z.infer<typeof deleteLoca
     } catch (cleanupError) {
       serverCaptureException(cleanupError, sessionUserId, {
         action: 'deleteLocation.cleanup',
+        campaignId: data.campaignId,
+        locationId: data.id,
+      });
+    }
+
+    try {
+      await pruneQuestRefs('location', data.id, data.campaignId);
+    } catch (cleanupError) {
+      serverCaptureException(cleanupError, sessionUserId, {
+        action: 'deleteLocation.pruneQuests',
         campaignId: data.campaignId,
         locationId: data.id,
       });

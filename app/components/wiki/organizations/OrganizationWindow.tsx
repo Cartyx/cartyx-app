@@ -6,6 +6,7 @@ import type { OrganizationData } from '~/types/organization';
 import type { PictureCrop } from '~/types/character';
 import { MARKDOWN_PROSE_CLASSES } from '~/utils/markdownProseClasses';
 import { useMembershipsForOrg } from '~/hooks/useOrganizations';
+import { EntityQuestsTab } from '~/components/shared/EntityQuestsTab';
 
 function getCropStyle(crop: PictureCrop): React.CSSProperties {
   const centerX = (crop.x + crop.width / 2) * 100;
@@ -172,6 +173,18 @@ export function OrganizationWindow({ organization, onEdit }: OrganizationWindowP
             </div>
           </div>
         )}
+
+        {/* Linked Quests */}
+        <div>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">
+            Linked Quests
+          </p>
+          <EntityQuestsTab
+            campaignId={organization.campaignId}
+            kind="organization"
+            id={organization.id}
+          />
+        </div>
       </div>
     </div>
   );

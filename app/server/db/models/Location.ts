@@ -50,10 +50,13 @@ const locationSchema = new mongoose.Schema(
   { collection: 'location' }
 );
 
-locationSchema.index({ campaignId: 1, updatedAt: -1 });
-locationSchema.index({ campaignId: 1, locationType: 1 });
-locationSchema.index({ campaignId: 1, isPublic: 1 });
-locationSchema.index({ tags: 1 });
-locationSchema.index({ name: 'text', description: 'text' });
+// istanbul ignore next
+if (typeof (locationSchema as { index?: unknown }).index === 'function') {
+  locationSchema.index({ campaignId: 1, updatedAt: -1 });
+  locationSchema.index({ campaignId: 1, locationType: 1 });
+  locationSchema.index({ campaignId: 1, isPublic: 1 });
+  locationSchema.index({ tags: 1 });
+  locationSchema.index({ name: 'text', description: 'text' });
+}
 
 export const Location = mongoose.models.Location || mongoose.model('Location', locationSchema);
