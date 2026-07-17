@@ -228,9 +228,11 @@ export const createEvent = async ({ data }: { data: z.infer<typeof createEventSc
       tags: data.tags,
       color: data.color,
       campaignId: data.campaignId,
-      calendarId: calendarId,
+      // calendarId comes off a .lean() doc typed `unknown` by the AnyDoc
+      // convention; it's always the Calendar's real ObjectId at runtime.
+      calendarId: calendarId as string,
       createdBy: member.userId,
-    })) as AnyDoc;
+    })) as unknown as AnyDoc;
 
     return {
       success: true,
