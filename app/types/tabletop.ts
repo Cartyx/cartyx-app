@@ -59,8 +59,24 @@ export interface TabletopPlayerStateData {
   campaignId: string;
   userId: string;
   activeScreenId: string | null;
+  activeGMScreenId: string | null;
   viewports: ViewportData[];
   windowOverrides: WindowOverrideData[];
+  privateWindows: PrivateWindowData[];
+}
+
+export interface PrivateWindowData {
+  id: string;
+  surface: 'tabletop' | 'gmscreen';
+  screenId: string;
+  collection: string;
+  documentId: string;
+  x: number;
+  y: number;
+  width: number | null;
+  height: number | null;
+  zIndex: number;
+  state: 'open' | 'minimized' | 'hidden';
 }
 
 export interface ViewportData {

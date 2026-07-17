@@ -15,6 +15,7 @@ import type {
   TabletopPlayerStateData,
   ViewportData,
   WindowOverrideData,
+  PrivateWindowData,
   TabletopMode,
   GridStyle,
 } from '~/types/tabletop';
@@ -99,6 +100,7 @@ function serializePlayerState(doc: {
   campaignId: unknown;
   userId: unknown;
   activeScreenId?: unknown;
+  activeGMScreenId?: unknown;
   viewports?: Array<{
     screenId: unknown;
     zoom?: number;
@@ -113,6 +115,19 @@ function serializePlayerState(doc: {
     height?: number;
     state?: string;
   }>;
+  privateWindows?: Array<{
+    _id?: unknown;
+    surface?: string;
+    screenId?: unknown;
+    collection?: string;
+    documentId?: unknown;
+    x?: number;
+    y?: number;
+    width?: number | null;
+    height?: number | null;
+    zIndex?: number;
+    state?: string;
+  }>;
 }): TabletopPlayerStateData {
   const WINDOW_STATES = ['open', 'minimized', 'hidden'] as const;
   type WS = (typeof WINDOW_STATES)[number];
@@ -121,6 +136,7 @@ function serializePlayerState(doc: {
     campaignId: String(doc.campaignId),
     userId: String(doc.userId),
     activeScreenId: doc.activeScreenId ? String(doc.activeScreenId) : null,
+    activeGMScreenId: doc.activeGMScreenId ? String(doc.activeGMScreenId) : null,
     viewports: (doc.viewports ?? []).map((v): ViewportData => ({
       screenId: String(v.screenId),
       zoom: v.zoom ?? 1,
@@ -134,6 +150,19 @@ function serializePlayerState(doc: {
       width: wo.width ?? 0,
       height: wo.height ?? 0,
       state: WINDOW_STATES.includes(wo.state as WS) ? (wo.state as WS) : 'open',
+    })),
+    privateWindows: (doc.privateWindows ?? []).map((pw): PrivateWindowData => ({
+      id: String(pw._id),
+      surface: pw.surface === 'gmscreen' ? 'gmscreen' : 'tabletop',
+      screenId: String(pw.screenId),
+      collection: pw.collection ?? '',
+      documentId: String(pw.documentId),
+      x: pw.x ?? 0,
+      y: pw.y ?? 0,
+      width: pw.width ?? null,
+      height: pw.height ?? null,
+      zIndex: pw.zIndex ?? 0,
+      state: WINDOW_STATES.includes(pw.state as WS) ? (pw.state as WS) : 'open',
     })),
   };
 }
@@ -889,6 +918,7 @@ export const getPlayerState = async ({ data }: { data: z.infer<typeof getPlayerS
       campaignId: unknown;
       userId: unknown;
       activeScreenId?: unknown;
+      activeGMScreenId?: unknown;
       viewports?: Array<{
         screenId: unknown;
         zoom?: number;
@@ -901,6 +931,19 @@ export const getPlayerState = async ({ data }: { data: z.infer<typeof getPlayerS
         y?: number;
         width?: number;
         height?: number;
+        state?: string;
+      }>;
+      privateWindows?: Array<{
+        _id?: unknown;
+        surface?: string;
+        screenId?: unknown;
+        collection?: string;
+        documentId?: unknown;
+        x?: number;
+        y?: number;
+        width?: number | null;
+        height?: number | null;
+        zIndex?: number;
         state?: string;
       }>;
     } | null;
@@ -1068,6 +1111,7 @@ export const updatePlayerState = async ({
       campaignId: unknown;
       userId: unknown;
       activeScreenId?: unknown;
+      activeGMScreenId?: unknown;
       viewports?: Array<{
         screenId: unknown;
         zoom?: number;
@@ -1080,6 +1124,19 @@ export const updatePlayerState = async ({
         y?: number;
         width?: number;
         height?: number;
+        state?: string;
+      }>;
+      privateWindows?: Array<{
+        _id?: unknown;
+        surface?: string;
+        screenId?: unknown;
+        collection?: string;
+        documentId?: unknown;
+        x?: number;
+        y?: number;
+        width?: number | null;
+        height?: number | null;
+        zIndex?: number;
         state?: string;
       }>;
     } | null;

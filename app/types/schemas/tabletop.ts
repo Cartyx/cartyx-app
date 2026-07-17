@@ -85,6 +85,7 @@ export const getPlayerStateSchema = z.object({
 export const updatePlayerStateSchema = z.object({
   campaignId: z.string().trim().min(1),
   activeScreenId: z.string().nullable().optional(),
+  activeGMScreenId: z.string().nullable().optional(),
   viewport: z
     .object({
       screenId: z.string().trim().min(1),
@@ -103,6 +104,21 @@ export const updatePlayerStateSchema = z.object({
       state: z.enum(['open', 'minimized', 'hidden']),
     })
     .optional(),
+});
+
+export const addPrivateWindowSchema = z.object({
+  campaignId: z.string().trim().min(1),
+  surface: z.enum(['tabletop', 'gmscreen']),
+  screenId: z.string().trim().min(1),
+  collection: z.enum(TABLETOP_COLLECTIONS),
+  documentId: z.string().trim().min(1),
+  x: z.number().optional(),
+  y: z.number().optional(),
+});
+
+export const removePrivateWindowSchema = z.object({
+  campaignId: z.string().trim().min(1),
+  privateWindowId: z.string().trim().min(1),
 });
 
 // ---------------------------------------------------------------------------
