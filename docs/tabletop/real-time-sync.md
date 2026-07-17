@@ -92,16 +92,6 @@ All messages conform to the `TabletopMessage` discriminated union defined in
 
 ```typescript
 {
-  type: 'ping';
-  screenId: string;
-  x: number;
-  y: number;
-  userId: string;
-  userName: string;
-  color: string;
-}
-
-{
   type: 'grid:style-change';
   screenId: string;
   gridStyle: GridStyle;
