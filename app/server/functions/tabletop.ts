@@ -31,6 +31,8 @@ import {
   closeTabletopWindowSchema,
   getPlayerStateSchema,
   updatePlayerStateSchema,
+  addPrivateWindowSchema,
+  removePrivateWindowSchema,
 } from '~/types/schemas/tabletop';
 
 // ---------------------------------------------------------------------------
@@ -1145,6 +1147,126 @@ export const updatePlayerState = async ({
   } catch (e) {
     serverCaptureException(e, sessionUserId, {
       action: 'updatePlayerState',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Private windows — the caller's own, never shared, never broadcast
+// ---------------------------------------------------------------------------
+//
+// SECURITY: these are the ONLY member-writable window operations. Every other
+// window op is `requireCampaignGM` because it writes TabletopScreen.windows[],
+// which is shared and broadcast to the whole campaign. These two are
+// `requireCampaignMember` instead, and that relaxation is only sound because
+// of one invariant:
+//
+//   Every findOne/updateOne filter below is scoped by BOTH `campaignId` AND
+//   `member.userId` — the authenticated user id resolved from the session by
+//   requireCampaignMember. No user id is ever read from `data`. A caller
+//   therefore cannot address, read, or mutate another member's player-state
+//   document, so they cannot inject windows into anyone else's view.
+//
+// They also must never broadcast: private means private.
+
+export { addPrivateWindowSchema, removePrivateWindowSchema };
+
+/** Per surface+screen. Mirrors TABLETOP_LIMITS.MAX_WINDOWS. */
+export const MAX_PRIVATE_WINDOWS = 20;
+
+/** The shape serializePlayerState accepts — mirrors the lean() document. */
+type PlayerStateLean = Parameters<typeof serializePlayerState>[0];
+
+/**
+ * Reads the caller's own player-state document. The filter is scoped to the
+ * authenticated `userId`, never a payload-supplied one.
+ */
+async function findOwnPlayerState(
+  campaignId: string,
+  userId: string
+): Promise<PlayerStateLean | null> {
+  return (await TabletopPlayerState.findOne({
+    campaignId,
+    userId,
+  }).lean()) as PlayerStateLean | null;
+}
+
+export const addPrivateWindow = async ({
+  data,
+}: {
+  data: z.infer<typeof addPrivateWindowSchema>;
+}): Promise<TabletopPlayerStateData> => {
+  let sessionUserId: string | undefined;
+  try {
+    // Member, not GM: this writes only to the caller's own player-state
+    // document and cannot affect what anyone else sees.
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+
+    const existing = await findOwnPlayerState(data.campaignId, member.userId);
+
+    const onThisScreen = (existing?.privateWindows ?? []).filter(
+      (pw) => pw.surface === data.surface && String(pw.screenId) === data.screenId
+    );
+    if (onThisScreen.length >= MAX_PRIVATE_WINDOWS) {
+      throw new Error(`Private window limit reached (${MAX_PRIVATE_WINDOWS} per screen)`);
+    }
+
+    await TabletopPlayerState.updateOne(
+      { campaignId: data.campaignId, userId: member.userId },
+      {
+        $push: {
+          privateWindows: {
+            surface: data.surface,
+            screenId: data.screenId,
+            collection: data.collection,
+            documentId: data.documentId,
+            x: data.x ?? 0,
+            y: data.y ?? 0,
+            zIndex: 0,
+            state: 'open',
+          },
+        },
+        $setOnInsert: { campaignId: data.campaignId, userId: member.userId },
+      },
+      { upsert: true }
+    );
+
+    const doc = await findOwnPlayerState(data.campaignId, member.userId);
+    if (!doc) throw new Error('Player state not found');
+    return serializePlayerState(doc);
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'addPrivateWindow',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
+
+export const removePrivateWindow = async ({
+  data,
+}: {
+  data: z.infer<typeof removePrivateWindowSchema>;
+}): Promise<TabletopPlayerStateData> => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+
+    await TabletopPlayerState.updateOne(
+      { campaignId: data.campaignId, userId: member.userId },
+      { $pull: { privateWindows: { _id: data.privateWindowId } } }
+    );
+
+    const doc = await findOwnPlayerState(data.campaignId, member.userId);
+    if (!doc) throw new Error('Player state not found');
+    return serializePlayerState(doc);
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'removePrivateWindow',
       campaignId: data.campaignId,
     });
     throw e;
