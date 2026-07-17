@@ -952,7 +952,31 @@ export const getPlayerState = async ({ data }: { data: z.infer<typeof getPlayerS
 
     if (!doc) return null;
 
-    return serializePlayerState(doc);
+    const state = serializePlayerState(doc);
+
+    // Private windows live on player state, so getTabletopScreen's hydration —
+    // which only ever sees TabletopScreen.windows — never covers them. Hydrate
+    // them here or the owner's windows render titled "collection:documentId".
+    // This query is the one add/removePrivateWindow invalidate, so the titles
+    // stay coherent with the private-window list itself.
+    //
+    // Monsters are GM-only (getTabletopScreen drops monster windows outright
+    // for players). addPrivateWindow is member-level and does not constrain
+    // `collection`, so a crafted call could park a monster on a player's own
+    // state — never hydrate it back, or its name and gmNotes would leak.
+    const isGM = member.role === 'gm';
+    const hydrated = await hydrateRefs(
+      state.privateWindows
+        .filter((pw) => isGM || pw.collection !== 'monster')
+        .map((pw) => ({
+          collection: pw.collection,
+          documentId: pw.documentId,
+        })),
+      data.campaignId,
+      { isGM }
+    );
+
+    return { ...state, hydrated };
   } catch (e) {
     serverCaptureException(e, sessionUserId, {
       action: 'getPlayerState',

@@ -50,6 +50,10 @@ vi.mock('~/server/db/models/Note', () => ({ Note: { find: vi.fn() } }));
 vi.mock('~/server/db/models/Character', () => ({ Character: { find: vi.fn() } }));
 vi.mock('~/server/db/models/Race', () => ({ Race: { find: vi.fn() } }));
 vi.mock('~/server/db/models/Rule', () => ({ Rule: { find: vi.fn() } }));
+// hydrateRefs lazily `await import`s these — getPlayerState now hydrates the
+// caller's private windows, so they get pulled in by that path.
+vi.mock('~/server/db/models/Lore', () => ({ Lore: { find: vi.fn() } }));
+vi.mock('~/server/db/models/Monster', () => ({ Monster: { find: vi.fn() } }));
 vi.mock('mongoose', () => ({
   default: { startSession: vi.fn() },
 }));
@@ -58,7 +62,10 @@ import { getSession } from '~/server/session';
 import { User } from '~/server/db/models/User';
 import { Campaign } from '~/server/db/models/Campaign';
 import { TabletopScreen } from '~/server/db/models/TabletopScreen';
-import { openTabletopWindow } from '~/server/functions/tabletop';
+import { TabletopPlayerState } from '~/server/db/models/TabletopPlayerState';
+import { Lore } from '~/server/db/models/Lore';
+import { Monster } from '~/server/db/models/Monster';
+import { openTabletopWindow, getPlayerState } from '~/server/functions/tabletop';
 
 // ---------------------------------------------------------------------------
 // Schema-only tests — validate Zod schemas from ~/types/schemas/tabletop
@@ -687,5 +694,122 @@ describe('openTabletopWindow (handler)', () => {
         $expr: { $lt: [{ $size: { $ifNull: ['$windows', []] } }, 20] },
       });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getPlayerState hydrates the caller's private windows.
+//
+// Private windows hang off TabletopPlayerState, so getTabletopScreen's
+// hydration (which only reads TabletopScreen.windows) never covers them. If
+// this hydration regresses, private windows silently render titled
+// "collection:documentId".
+// ---------------------------------------------------------------------------
+
+describe('getPlayerState (handler) — private-window hydration', () => {
+  const mockDbUser = { _id: 'dbuser-1', firstName: 'Test', lastName: 'User' };
+
+  const _getPlayerState = getPlayerState as unknown as (args: {
+    data: Record<string, unknown>;
+  }) => Promise<{
+    privateWindows: Array<{ id: string; collection: string }>;
+    hydrated: Record<string, { title: string; content: string }>;
+  } | null>;
+
+  function mockSessionAs(role: 'gm' | 'player') {
+    const session = {
+      id: 'session-user-1',
+      provider: 'google',
+      name: 'Test User',
+      email: 'test@example.com',
+      avatar: null,
+      role,
+      accessToken: null,
+      refreshToken: null,
+      tokenIssuedAt: 0,
+    };
+    vi.mocked(getSession).mockResolvedValue(session);
+    vi.mocked(User.findOne).mockResolvedValue(mockDbUser as never);
+    vi.mocked(Campaign.findById).mockResolvedValue({
+      _id: 'camp-1',
+      gameMasterId: role === 'gm' ? 'dbuser-1' : 'someone-else',
+      members: [{ userId: 'dbuser-1', role }],
+    } as never);
+  }
+
+  function mockPlayerStateDoc(privateWindows: Array<Record<string, unknown>>) {
+    vi.mocked(TabletopPlayerState.findOne).mockReturnValue({
+      lean: vi.fn().mockResolvedValue({
+        _id: 'ps-1',
+        campaignId: 'camp-1',
+        userId: 'dbuser-1',
+        privateWindows,
+      }),
+    } as never);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(Lore.find).mockReturnValue({
+      lean: vi.fn().mockResolvedValue([{ _id: 'lore-1', title: 'The Sunken Crown', content: 'x' }]),
+    } as never);
+    vi.mocked(Monster.find).mockReturnValue({
+      lean: vi.fn().mockResolvedValue([{ _id: 'mon-1', name: 'Beholder', gmNotes: 'secret' }]),
+    } as never);
+  });
+
+  it('hydrates a private window so the owner gets a real title', async () => {
+    mockSessionAs('gm');
+    mockPlayerStateDoc([
+      {
+        _id: 'pw-1',
+        surface: 'tabletop',
+        screenId: 'ts-1',
+        collection: 'lore',
+        documentId: 'lore-1',
+      },
+    ]);
+
+    const result = await _getPlayerState({ data: { campaignId: 'camp-1' } });
+
+    expect(result?.hydrated['lore:lore-1']).toMatchObject({ title: 'The Sunken Crown' });
+  });
+
+  it('never hydrates a monster private window for a player', async () => {
+    // addPrivateWindow is member-level and does not constrain `collection`, so a
+    // crafted call could park a monster on a player's own state. Hydrating it
+    // would hand back the monster's name and gmNotes.
+    mockSessionAs('player');
+    mockPlayerStateDoc([
+      {
+        _id: 'pw-1',
+        surface: 'tabletop',
+        screenId: 'ts-1',
+        collection: 'monster',
+        documentId: 'mon-1',
+      },
+    ]);
+
+    const result = await _getPlayerState({ data: { campaignId: 'camp-1' } });
+
+    expect(result?.hydrated['monster:mon-1']).toBeUndefined();
+    expect(Monster.find).not.toHaveBeenCalled();
+  });
+
+  it('does hydrate a monster private window for the GM', async () => {
+    mockSessionAs('gm');
+    mockPlayerStateDoc([
+      {
+        _id: 'pw-1',
+        surface: 'tabletop',
+        screenId: 'ts-1',
+        collection: 'monster',
+        documentId: 'mon-1',
+      },
+    ]);
+
+    const result = await _getPlayerState({ data: { campaignId: 'camp-1' } });
+
+    expect(result?.hydrated['monster:mon-1']).toMatchObject({ title: 'Beholder' });
   });
 });

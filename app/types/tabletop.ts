@@ -63,6 +63,14 @@ export interface TabletopPlayerStateData {
   viewports: ViewportData[];
   windowOverrides: WindowOverrideData[];
   privateWindows: PrivateWindowData[];
+  /**
+   * Hydrated docs for `privateWindows`, keyed `"collection:documentId"` — the
+   * same shape as TabletopScreenDetailData.hydrated. Private windows hang off
+   * player state, so the screen-detail hydration never covers them and their
+   * titles must come from here. Only `getPlayerState` populates it; the
+   * mutations that return player state leave it undefined.
+   */
+  hydrated?: Record<string, HydratedDocument>;
 }
 
 export interface PrivateWindowData {
