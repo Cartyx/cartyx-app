@@ -20,7 +20,7 @@ import {
 function serializeNote(n: {
   _id: unknown;
   campaignId: unknown;
-  sessionId: unknown;
+  sessionId?: unknown;
   createdBy: unknown;
   title?: string;
   note?: string;
@@ -163,8 +163,9 @@ export const updateNote = async ({ data }: { data: z.infer<typeof updateNoteSche
     if (existing.isReadOnly) throw new Error('Note is read-only');
 
     const finalTags = normalizeTags(data.tags ?? []);
-    existing.sessionId =
-      data.sessionId && data.sessionId !== '__none__' ? data.sessionId : undefined;
+    existing.sessionId = (data.sessionId && data.sessionId !== '__none__'
+      ? data.sessionId
+      : undefined) as unknown as typeof existing.sessionId;
     existing.title = data.title.trim();
     existing.note = data.note.trim();
     existing.tags = finalTags;
