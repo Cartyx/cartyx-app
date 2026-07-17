@@ -4,8 +4,12 @@ import { createElement } from 'react';
 import type { MenuItem } from '~/components/shared/OverflowMenu';
 import { useCampaign } from '~/hooks/useCampaigns';
 import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
-import { useTabletopScreenList, useTabletopMutations } from '~/hooks/useTabletopScreens';
-import { useGMScreenList } from '~/hooks/useGMScreens';
+import {
+  useTabletopScreenList,
+  useTabletopScreenDetail,
+  useTabletopMutations,
+} from '~/hooks/useTabletopScreens';
+import { useGMScreenList, useGMScreenDetail } from '~/hooks/useGMScreens';
 
 interface UseWikiCardActionsParams {
   collection: string;
@@ -54,6 +58,37 @@ export function useWikiCardActions({
   const tabletopMutations = useTabletopMutations(campaignId);
   const { playerState, addPrivateWindow } = useTabletopPlayerState(campaignId);
 
+  // Hoist the target screen ids so the detail hooks can run unconditionally
+  // (hooks can't live inside the branches below). Both mirror the persisted
+  // active screen with a first-screen fallback for a fresh campaign, exactly
+  // as the display-action branches do.
+  const tabletopScreenId = playerState?.activeScreenId ?? tabletopScreens[0]?.id ?? null;
+  const gmScreenId = playerState?.activeGMScreenId ?? gmScreens[0]?.id ?? null;
+
+  // The SHARED window lists for each surface (everyone-visible windows). Needed
+  // so a display action dedups across BOTH the caller's private windows AND the
+  // shared windows — opening the same item twice (in either form) must instead
+  // focus the one that's already there.
+  const { screen: tabletopScreen } = useTabletopScreenDetail(campaignId, tabletopScreenId);
+  const { screen: gmScreen } = useGMScreenDetail(campaignId, gmScreenId);
+
+  // Is this exact item (collection + documentId) already open on a given
+  // surface+screen, in EITHER the caller's private list OR the shared list?
+  const isAlreadyOpen = (
+    surf: 'tabletop' | 'gmscreen',
+    sid: string | null,
+    sharedWindows: Array<{ collection: string; documentId: string }>
+  ) =>
+    !!sid &&
+    ((playerState?.privateWindows ?? []).some(
+      (pw) =>
+        pw.surface === surf &&
+        pw.screenId === sid &&
+        pw.collection === collection &&
+        pw.documentId === documentId
+    ) ||
+      sharedWindows.some((w) => w.collection === collection && w.documentId === documentId));
+
   const items: MenuItem[] = [];
 
   if (canEdit && onEdit) {
@@ -70,23 +105,12 @@ export function useWikiCardActions({
   const surface = tab === 'tabletop' ? 'tabletop' : tab === 'gmscreens' ? 'gmscreen' : null;
 
   if (surface) {
-    // Prefer the persisted active screen, but fall back to the first screen when
-    // it isn't set yet — on a fresh campaign the view auto-selects its only
-    // screen without persisting, so activeScreenId/activeGMScreenId is null on
-    // first visit. Without this fallback "Show on Tab" renders disabled even
-    // though a screen is right there (this mirrors the push branch below).
-    const screenId =
-      surface === 'tabletop'
-        ? (playerState?.activeScreenId ?? tabletopScreens[0]?.id ?? null)
-        : (playerState?.activeGMScreenId ?? gmScreens[0]?.id ?? null);
-
-    const alreadyPrivate = (playerState?.privateWindows ?? []).some(
-      (pw) =>
-        pw.surface === surface &&
-        pw.screenId === screenId &&
-        pw.collection === collection &&
-        pw.documentId === documentId
-    );
+    // The target screen for this surface (already hoisted above with the
+    // first-screen fallback for a fresh campaign — see tabletopScreenId).
+    const screenId = surface === 'tabletop' ? tabletopScreenId : gmScreenId;
+    // The shared window list for the surface we're looking at.
+    const sharedWindows =
+      (surface === 'tabletop' ? tabletopScreen?.windows : gmScreen?.windows) ?? [];
 
     items.push({
       key: 'show-on-tab',
@@ -96,8 +120,9 @@ export function useWikiCardActions({
       title: screenId ? 'Show here — only you will see it' : 'No screen available',
       onSelect: () => {
         if (!screenId) return;
-        // Already open: the surface focuses + flashes it; nothing to add.
-        if (alreadyPrivate) {
+        // Already open on this tab in EITHER form (your private window OR a
+        // shared one): the surface focuses + flashes it; nothing to add.
+        if (isAlreadyOpen(surface, screenId, sharedWindows)) {
           focusExistingWindow(surface, collection, documentId);
           return;
         }
@@ -109,7 +134,6 @@ export function useWikiCardActions({
   // Push is GM-only and ALWAYS targets the tabletop, even from GM Screens
   // (or the Dashboard, when the caller opts in via allowPushFromDashboard).
   if (isGM && (surface || allowPushFromDashboard)) {
-    const tabletopScreenId = playerState?.activeScreenId ?? tabletopScreens[0]?.id ?? null;
     items.push({
       key: 'push',
       label: 'Push to Tabletop',
@@ -120,6 +144,14 @@ export function useWikiCardActions({
         : 'No tabletop screen available',
       onSelect: () => {
         if (!tabletopScreenId) return;
+        // Already on the tabletop in EITHER form (a shared window the server
+        // would dedup anyway, OR your own private window it wouldn't): focus the
+        // existing one and DON'T open a second. No promotion — a private window
+        // stays private.
+        if (isAlreadyOpen('tabletop', tabletopScreenId, tabletopScreen?.windows ?? [])) {
+          focusExistingWindow('tabletop', collection, documentId);
+          return;
+        }
         tabletopMutations.openWindow.mutate({
           screenId: tabletopScreenId,
           collection,

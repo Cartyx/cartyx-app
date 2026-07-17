@@ -26,9 +26,11 @@ vi.mock('~/hooks/useTabletopPlayerState', () => ({
   }),
 }));
 vi.mock('~/hooks/useGMScreens', () => ({
+  useGMScreenDetail: () => ({ screen: null }),
   useGMScreenList: () => ({ screens: [] }),
 }));
 vi.mock('~/hooks/useTabletopScreens', () => ({
+  useTabletopScreenDetail: () => ({ screen: null }),
   useTabletopScreenList: () => ({ screens: [] }),
   useTabletopMutations: () => ({ openWindow: { mutate: vi.fn(), isPending: false } }),
 }));

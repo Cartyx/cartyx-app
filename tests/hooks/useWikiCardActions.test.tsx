@@ -5,6 +5,10 @@ import { useWikiCardActions } from '~/hooks/useWikiCardActions';
 const mockSearch = vi.fn();
 const mockCampaign = vi.fn();
 const mockPlayerState = vi.fn();
+// The screen-detail hooks expose each surface's SHARED window list. Tests set
+// these to seed shared windows and prove cross-list dedup.
+const mockTabletopDetail = vi.fn();
+const mockGMDetail = vi.fn();
 // Hoisted so individual tests can assert on what the push action dispatched.
 const openWindowMutate = vi.fn();
 const addPrivateWindowMutate = vi.fn();
@@ -21,11 +25,13 @@ vi.mock('~/hooks/useTabletopScreens', () => ({
   // screens[0] is deliberately NOT the active screen, so a test that expects
   // 'active' fails loudly if the old screens[0] targeting ever comes back.
   useTabletopScreenList: () => ({ screens: [{ id: 'first' }, { id: 'active' }] }),
+  useTabletopScreenDetail: () => mockTabletopDetail(),
   useTabletopMutations: () => ({ openWindow: { mutate: openWindowMutate, isPending: false } }),
 }));
 vi.mock('~/hooks/useGMScreens', () => ({
   // gm-first is the fallback; gm1 is the "active" GM screen the beforeEach pins.
   useGMScreenList: () => ({ screens: [{ id: 'gm-first' }, { id: 'gm1' }] }),
+  useGMScreenDetail: () => mockGMDetail(),
 }));
 
 const keys = (items: { key: string }[]) => items.map((i) => i.key);
@@ -39,6 +45,9 @@ beforeEach(() => {
     addPrivateWindow: { mutate: addPrivateWindowMutate },
     removePrivateWindow: { mutate: vi.fn() },
   });
+  // Default: no shared windows on either surface.
+  mockTabletopDetail.mockReturnValue({ screen: null });
+  mockGMDetail.mockReturnValue({ screen: null });
 });
 
 describe('useWikiCardActions', () => {
@@ -229,6 +238,108 @@ describe('useWikiCardActions', () => {
     } finally {
       window.removeEventListener('cartyx:focus-window', focusSpy);
     }
+  });
+
+  // --- Cross-list dedup (private <-> shared) ---
+
+  it('Push does NOT open a second window when the item is already a private window (the reported bug)', () => {
+    mockPlayerState.mockReturnValue({
+      playerState: {
+        activeScreenId: 'active',
+        activeGMScreenId: 'gm1',
+        privateWindows: [
+          {
+            id: 'pw1',
+            surface: 'tabletop',
+            screenId: 'active',
+            collection: 'character',
+            documentId: 'd1',
+          },
+        ],
+      },
+      addPrivateWindow: { mutate: addPrivateWindowMutate },
+      removePrivateWindow: { mutate: vi.fn() },
+    });
+    const focusSpy = vi.fn();
+    window.addEventListener('cartyx:focus-window', focusSpy);
+    try {
+      const { result } = renderHook(() =>
+        useWikiCardActions({ collection: 'character', documentId: 'd1' })
+      );
+      result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
+      expect(openWindowMutate).not.toHaveBeenCalled();
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+      expect(focusSpy.mock.calls[0][0].detail).toEqual({
+        surface: 'tabletop',
+        collection: 'character',
+        documentId: 'd1',
+      });
+    } finally {
+      window.removeEventListener('cartyx:focus-window', focusSpy);
+    }
+  });
+
+  it('Push does NOT open a second window when the item is already a shared window', () => {
+    mockTabletopDetail.mockReturnValue({
+      screen: { windows: [{ id: 'w1', collection: 'character', documentId: 'd1' }] },
+    });
+    const focusSpy = vi.fn();
+    window.addEventListener('cartyx:focus-window', focusSpy);
+    try {
+      const { result } = renderHook(() =>
+        useWikiCardActions({ collection: 'character', documentId: 'd1' })
+      );
+      result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
+      expect(openWindowMutate).not.toHaveBeenCalled();
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener('cartyx:focus-window', focusSpy);
+    }
+  });
+
+  it('Push DOES open a window when nothing is already open (regression)', () => {
+    const { result } = renderHook(() =>
+      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    );
+    result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
+    expect(openWindowMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ screenId: 'active', collection: 'character', documentId: 'd1' })
+    );
+  });
+
+  it('Show on Tab does NOT add a private window when the item is already a shared window', () => {
+    mockTabletopDetail.mockReturnValue({
+      screen: { windows: [{ id: 'w1', collection: 'character', documentId: 'd1' }] },
+    });
+    const focusSpy = vi.fn();
+    window.addEventListener('cartyx:focus-window', focusSpy);
+    try {
+      const { result } = renderHook(() =>
+        useWikiCardActions({ collection: 'character', documentId: 'd1' })
+      );
+      result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
+      expect(addPrivateWindowMutate).not.toHaveBeenCalled();
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+      expect(focusSpy.mock.calls[0][0].detail).toEqual({
+        surface: 'tabletop',
+        collection: 'character',
+        documentId: 'd1',
+      });
+    } finally {
+      window.removeEventListener('cartyx:focus-window', focusSpy);
+    }
+  });
+
+  it('Show on Tab on GM Screens dedups against the GM screen SHARED windows', () => {
+    mockSearch.mockReturnValue({ tab: 'gmscreens' });
+    mockGMDetail.mockReturnValue({
+      screen: { windows: [{ id: 'w1', collection: 'character', documentId: 'd1' }] },
+    });
+    const { result } = renderHook(() =>
+      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    );
+    result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
+    expect(addPrivateWindowMutate).not.toHaveBeenCalled();
   });
 
   it('offers Push to Tabletop from the Dashboard when allowPushFromDashboard is set, but still hides Show on Tab', () => {

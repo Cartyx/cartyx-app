@@ -18,9 +18,11 @@ vi.mock('~/hooks/useTags', () => ({
   useTags: () => ({ tags: [], isLoading: false, error: null }),
 }));
 vi.mock('~/hooks/useGMScreens', () => ({
+  useGMScreenDetail: () => ({ screen: null }),
   useGMScreenList: () => ({ screens: [] }),
 }));
 vi.mock('~/hooks/useTabletopScreens', () => ({
+  useTabletopScreenDetail: () => ({ screen: null }),
   useTabletopScreenList: () => ({ screens: [], isLoading: false, error: null }),
   useTabletopMutations: () => ({
     openWindow: { mutate: vi.fn(), isPending: false },
