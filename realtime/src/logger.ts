@@ -9,6 +9,9 @@ import pino from 'pino';
  * would write container-local files nothing scrapes, and a worker-thread
  * transport breaks under bundling.
  */
+// Duplicated in the sibling service's logger — realtime/ is a separate build
+// unit (rootDir: src, no workspaces), so it cannot import from app/.
+// tests/server/utils/redact-parity.test.ts fails if the two lists drift.
 export const REDACT_PATHS = [
   'sessionId',
   '*.sessionId',
