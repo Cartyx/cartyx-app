@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 const viewportSchema = new mongoose.Schema(
   {
@@ -47,6 +47,8 @@ const tabletopPlayerStateSchema = new mongoose.Schema(
 
 tabletopPlayerStateSchema.index({ campaignId: 1, userId: 1 }, { unique: true });
 
-export const TabletopPlayerState =
-  mongoose.models.TabletopPlayerState ||
-  mongoose.model('TabletopPlayerState', tabletopPlayerStateSchema);
+export type ITabletopPlayerState = InferSchemaType<typeof tabletopPlayerStateSchema>;
+
+export const TabletopPlayerState: Model<ITabletopPlayerState> =
+  (mongoose.models.TabletopPlayerState as Model<ITabletopPlayerState>) ||
+  mongoose.model<ITabletopPlayerState>('TabletopPlayerState', tabletopPlayerStateSchema);
