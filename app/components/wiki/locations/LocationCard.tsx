@@ -1,12 +1,14 @@
 import { Globe, Lock } from 'lucide-react';
 import type { LocationListItem } from '~/types/location';
+import { WikiCardMenu } from '~/components/wiki/shared/WikiCardMenu';
 
 interface LocationCardProps {
   location: LocationListItem;
   onClick: (location: LocationListItem) => void;
+  onEdit?: (location: LocationListItem) => void;
 }
 
-export function LocationCard({ location, onClick }: LocationCardProps) {
+export function LocationCard({ location, onClick, onEdit }: LocationCardProps) {
   return (
     <div
       role="button"
@@ -34,8 +36,27 @@ export function LocationCard({ location, onClick }: LocationCardProps) {
           onClick(location);
         }
       }}
-      className="flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
+      className="relative flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
     >
+      {/* Overflow menu. Stops propagation so opening it never fires the card's
+          own click/keyboard activation, and is not itself draggable. */}
+      <div
+        role="presentation"
+        className="absolute right-2 top-2"
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <WikiCardMenu
+          collection="location"
+          documentId={location.id}
+          label="Location actions"
+          canEdit={location.canEdit}
+          onEdit={onEdit ? () => onEdit(location) : undefined}
+        />
+      </div>
+
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
           <span className="text-sm font-semibold text-slate-200 group-hover:text-blue-400 transition-colors truncate">

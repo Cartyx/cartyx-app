@@ -1,6 +1,7 @@
 import React from 'react';
 import { Globe, Lock } from 'lucide-react';
 import type { LoreListItem } from '~/types/lore';
+import { WikiCardMenu } from '~/components/wiki/shared/WikiCardMenu';
 import { setTokenDragImage } from '~/utils/setTokenDragImage';
 
 const GRADIENT_PAIRS = [
@@ -24,9 +25,10 @@ function hashName(name: string): number {
 interface LoreCardProps {
   lore: LoreListItem;
   onClick: (lore: LoreListItem) => void;
+  onEdit?: (lore: LoreListItem) => void;
 }
 
-export function LoreCard({ lore, onClick }: LoreCardProps) {
+export function LoreCard({ lore, onClick, onEdit }: LoreCardProps) {
   const gradientIndex = hashName(lore.title) % GRADIENT_PAIRS.length;
   const [gradFrom] = GRADIENT_PAIRS[gradientIndex]!;
   const firstImageUrl = lore.images[0]?.url ?? null;
@@ -65,8 +67,27 @@ export function LoreCard({ lore, onClick }: LoreCardProps) {
           onClick(lore);
         }
       }}
-      className="flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
+      className="relative flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
     >
+      {/* Overflow menu. Stops propagation so opening it never fires the card's
+          own click/keyboard activation, and is not itself draggable. */}
+      <div
+        role="presentation"
+        className="absolute right-2 top-2"
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <WikiCardMenu
+          collection="lore"
+          documentId={lore.id}
+          label="Lore actions"
+          canEdit={lore.canEdit}
+          onEdit={onEdit ? () => onEdit(lore) : undefined}
+        />
+      </div>
+
       {/* Avatar / first image thumbnail */}
       <div
         className="w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center overflow-hidden mt-0.5"

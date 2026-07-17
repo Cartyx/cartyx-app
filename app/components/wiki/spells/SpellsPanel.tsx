@@ -50,6 +50,13 @@ export function SpellsPanel({ onBack }: SpellsPanelProps) {
     }
   };
 
+  // The menu's Edit only renders when spell.canEdit (isGM && homebrew), which
+  // implies isGM, so this always reaches the editor.
+  const handleSpellEdit = (spell: SpellListItem) => {
+    setSelectedSpellId(spell.id);
+    setIsModalOpen(true);
+  };
+
   return (
     <div className="flex flex-col h-full w-full bg-[#080A12]">
       <WikiCategoryHeader title="Spells" onBack={onBack} />
@@ -89,7 +96,12 @@ export function SpellsPanel({ onBack }: SpellsPanelProps) {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="flex flex-col">
             {spells.map((spell) => (
-              <SpellCard key={spell.id} spell={spell} onClick={handleSpellClick} />
+              <SpellCard
+                key={spell.id}
+                spell={spell}
+                onClick={handleSpellClick}
+                onEdit={handleSpellEdit}
+              />
             ))}
           </div>
         </div>

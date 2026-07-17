@@ -52,6 +52,12 @@ export function QuestsPanel({ onBack }: QuestsPanelProps) {
     }
   };
 
+  // The menu's Edit only renders when canEdit, so this always goes to the editor.
+  const handleEdit = (quest: QuestListItem) => {
+    setSelectedId(quest.id);
+    setIsModalOpen(true);
+  };
+
   return (
     <div className="flex flex-col h-full w-full bg-[#080A12]">
       <WikiCategoryHeader title="Quests" onBack={onBack} />
@@ -109,7 +115,7 @@ export function QuestsPanel({ onBack }: QuestsPanelProps) {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="flex flex-col">
             {quests.map((quest) => (
-              <QuestCard key={quest.id} quest={quest} onClick={handleClick} />
+              <QuestCard key={quest.id} quest={quest} onClick={handleClick} onEdit={handleEdit} />
             ))}
           </div>
         </div>

@@ -1,9 +1,11 @@
 import type { PlayerListItem } from '~/types/player';
+import { WikiCardMenu } from '~/components/wiki/shared/WikiCardMenu';
 import { setTokenDragImage } from '~/utils/setTokenDragImage';
 
 interface PlayerCardProps {
   player: PlayerListItem;
   onClick: () => void;
+  onEdit?: () => void;
 }
 
 function getInitials(firstName: string, lastName: string): string {
@@ -12,7 +14,7 @@ function getInitials(firstName: string, lastName: string): string {
   return l ? `${f}${l}` : f;
 }
 
-export function PlayerCard({ player, onClick }: PlayerCardProps) {
+export function PlayerCard({ player, onClick, onEdit }: PlayerCardProps) {
   const fullName = `${player.firstName} ${player.lastName}`.trim();
   const initials = getInitials(player.firstName, player.lastName);
   const isDeceased = player.status?.value === 'deceased';
@@ -53,7 +55,7 @@ export function PlayerCard({ player, onClick }: PlayerCardProps) {
           onClick();
         }
       }}
-      className={`flex items-center gap-3 w-full px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors text-left cursor-grab active:cursor-grabbing${isDeceased ? ' opacity-70' : ''}`}
+      className={`group relative flex items-center gap-3 w-full px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors text-left cursor-grab active:cursor-grabbing${isDeceased ? ' opacity-70' : ''}`}
       style={
         isDeceased
           ? {
@@ -65,6 +67,25 @@ export function PlayerCard({ player, onClick }: PlayerCardProps) {
           : { borderLeftWidth: 4, borderLeftStyle: 'solid', borderLeftColor: player.color }
       }
     >
+      {/* Overflow menu. Stops propagation so opening it never fires the card's
+          own click/keyboard activation, and is not itself draggable. */}
+      <div
+        role="presentation"
+        className="absolute right-2 top-2"
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <WikiCardMenu
+          collection="player"
+          documentId={player.id}
+          label="Player actions"
+          canEdit={player.canEdit}
+          onEdit={onEdit}
+        />
+      </div>
+
       {/* Avatar */}
       <div
         className="w-10 h-10 rounded-full flex-shrink-0 flex items-center justify-center overflow-hidden"

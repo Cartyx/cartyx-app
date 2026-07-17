@@ -53,6 +53,14 @@ export function LocationsPanel({ onBack }: LocationsPanelProps) {
     }
   };
 
+  // Deliberately NOT handleLocationClick: that routes on isGM, but the server
+  // grants edit to the creator too (canEdit = isOwner || isGM). The menu's Edit
+  // only renders when canEdit, so it must always reach the editor.
+  const handleLocationEdit = (location: LocationListItem) => {
+    setSelectedLocationId(location.id);
+    setIsModalOpen(true);
+  };
+
   const handleModalClose = () => {
     setIsModalOpen(false);
     setSelectedLocationId(undefined);
@@ -131,7 +139,12 @@ export function LocationsPanel({ onBack }: LocationsPanelProps) {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="flex flex-col">
             {locations.map((location) => (
-              <LocationCard key={location.id} location={location} onClick={handleLocationClick} />
+              <LocationCard
+                key={location.id}
+                location={location}
+                onClick={handleLocationClick}
+                onEdit={handleLocationEdit}
+              />
             ))}
           </div>
         </div>

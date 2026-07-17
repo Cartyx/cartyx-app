@@ -45,6 +45,12 @@ export function OrganizationsPanel({ onBack }: OrganizationsPanelProps) {
     }
   };
 
+  // The menu's Edit only renders when canEdit, so this always goes to the editor.
+  const handleEdit = (org: OrganizationListItem) => {
+    setSelectedId(org.id);
+    setIsModalOpen(true);
+  };
+
   const toggleLocation = (id: string) => {
     setFilterLocationIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
@@ -110,7 +116,12 @@ export function OrganizationsPanel({ onBack }: OrganizationsPanelProps) {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="flex flex-col">
             {organizations.map((org) => (
-              <OrganizationCard key={org.id} organization={org} onClick={handleClick} />
+              <OrganizationCard
+                key={org.id}
+                organization={org}
+                onClick={handleClick}
+                onEdit={handleEdit}
+              />
             ))}
           </div>
         </div>

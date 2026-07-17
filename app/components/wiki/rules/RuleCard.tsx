@@ -1,12 +1,16 @@
 import { Globe, Lock } from 'lucide-react';
 import type { RuleListItem } from '~/types/rule';
+import { WikiCardMenu } from '~/components/wiki/shared/WikiCardMenu';
 
 interface RuleCardProps {
   rule: RuleListItem;
+  /** RuleListItem carries no canEdit — the panel gates rule edits on isGM. */
+  canEdit?: boolean;
   onClick: (rule: RuleListItem) => void;
+  onEdit?: (rule: RuleListItem) => void;
 }
 
-export function RuleCard({ rule, onClick }: RuleCardProps) {
+export function RuleCard({ rule, canEdit, onClick, onEdit }: RuleCardProps) {
   return (
     <div
       role="button"
@@ -34,8 +38,27 @@ export function RuleCard({ rule, onClick }: RuleCardProps) {
           onClick(rule);
         }
       }}
-      className="flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
+      className="relative flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
     >
+      {/* Overflow menu. Stops propagation so opening it never fires the card's
+          own click/keyboard activation, and is not itself draggable. */}
+      <div
+        role="presentation"
+        className="absolute right-2 top-2"
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <WikiCardMenu
+          collection="rule"
+          documentId={rule.id}
+          label="Rule actions"
+          canEdit={canEdit}
+          onEdit={onEdit ? () => onEdit(rule) : undefined}
+        />
+      </div>
+
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
           <span className="text-sm font-semibold text-slate-200 group-hover:text-blue-400 transition-colors truncate">

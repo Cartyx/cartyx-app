@@ -1,12 +1,14 @@
 import type { SpellListItem } from '~/types/spell';
 import { formatSpellLevel, formatSchool } from '~/constants/spells';
+import { WikiCardMenu } from '~/components/wiki/shared/WikiCardMenu';
 
 interface SpellCardProps {
   spell: SpellListItem;
   onClick: (spell: SpellListItem) => void;
+  onEdit?: (spell: SpellListItem) => void;
 }
 
-export function SpellCard({ spell, onClick }: SpellCardProps) {
+export function SpellCard({ spell, onClick, onEdit }: SpellCardProps) {
   return (
     <div
       role="button"
@@ -30,8 +32,29 @@ export function SpellCard({ spell, onClick }: SpellCardProps) {
           onClick(spell);
         }
       }}
-      className="flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
+      className="relative flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
     >
+      {/* Overflow menu. Stops propagation so opening it never fires the card's
+          own click/keyboard activation, and is not itself draggable.
+          canEdit comes from the DTO (isGM && homebrew) — NOT bare isGM, which
+          would offer Edit on read-only SRD spells. */}
+      <div
+        role="presentation"
+        className="absolute right-2 top-2"
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <WikiCardMenu
+          collection="spell"
+          documentId={spell.id}
+          label="Spell actions"
+          canEdit={spell.canEdit}
+          onEdit={onEdit ? () => onEdit(spell) : undefined}
+        />
+      </div>
+
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
           <span className="text-sm font-semibold text-slate-200 group-hover:text-blue-400 transition-colors truncate">

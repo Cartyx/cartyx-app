@@ -1,10 +1,14 @@
 import { Skull } from 'lucide-react';
 import type { MonsterListItem } from '~/types/monster';
+import { WikiCardMenu } from '~/components/wiki/shared/WikiCardMenu';
 import { setTokenDragImage } from '~/utils/setTokenDragImage';
 
 interface MonsterCardProps {
   monster: MonsterListItem;
+  /** MonsterListItem carries no canEdit — the panel gates monster edits on isGM. */
+  canEdit?: boolean;
   onClick: (monster: MonsterListItem) => void;
+  onEdit?: (monster: MonsterListItem) => void;
 }
 
 const SIZE_LABELS: Record<MonsterListItem['size'], string> = {
@@ -24,7 +28,7 @@ function formatCR(value: number): string {
   return String(value);
 }
 
-export function MonsterCard({ monster, onClick }: MonsterCardProps) {
+export function MonsterCard({ monster, canEdit, onClick, onEdit }: MonsterCardProps) {
   const typeText = [monster.type, monster.subtype && `(${monster.subtype})`]
     .filter(Boolean)
     .join(' ');
@@ -62,11 +66,30 @@ export function MonsterCard({ monster, onClick }: MonsterCardProps) {
           onClick(monster);
         }
       }}
-      className="flex w-full cursor-grab items-center gap-3 border-b border-white/[0.05] px-4 py-3 text-left transition-colors hover:bg-white/[0.03] active:cursor-grabbing"
+      className="group relative flex w-full cursor-grab items-center gap-3 border-b border-white/[0.05] px-4 py-3 text-left transition-colors hover:bg-white/[0.03] active:cursor-grabbing"
       style={{ borderLeftWidth: 4, borderLeftStyle: 'solid', borderLeftColor: monster.color }}
       title="Drag onto the map to place a token · hold Shift while dropping to place several"
       data-testid="monster-card"
     >
+      {/* Overflow menu. Stops propagation so opening it never fires the card's
+          own click/keyboard activation, and is not itself draggable. */}
+      <div
+        role="presentation"
+        className="absolute right-2 top-2"
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <WikiCardMenu
+          collection="monster"
+          documentId={monster.id}
+          label="Monster actions"
+          canEdit={canEdit}
+          onEdit={onEdit ? () => onEdit(monster) : undefined}
+        />
+      </div>
+
       {/* Avatar */}
       <div
         className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-full"

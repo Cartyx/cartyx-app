@@ -9,6 +9,27 @@ vi.mock('~/utils/setTokenDragImage', () => ({
   setTokenDragImage: vi.fn(),
 }));
 
+// The card now renders WikiCardMenu, whose useWikiCardActions reads the router
+// and campaign/tabletop state. Stub that context so the card still renders
+// standalone here (the menu itself is covered by useWikiCardActions.test.tsx).
+vi.mock('@tanstack/react-router', () => ({
+  useParams: () => ({ campaignId: 'c1' }),
+  useSearch: () => ({ tab: 'wiki' }),
+}));
+vi.mock('~/hooks/useCampaigns', () => ({
+  useCampaign: () => ({ campaign: { isGM: false } }),
+}));
+vi.mock('~/hooks/useTabletopPlayerState', () => ({
+  useTabletopPlayerState: () => ({
+    playerState: null,
+    addPrivateWindow: { mutate: vi.fn() },
+  }),
+}));
+vi.mock('~/hooks/useTabletopScreens', () => ({
+  useTabletopScreenList: () => ({ screens: [] }),
+  useTabletopMutations: () => ({ openWindow: { mutate: vi.fn(), isPending: false } }),
+}));
+
 const lore = {
   id: 'l1',
   title: 'The Fall of Phandalin',

@@ -91,7 +91,13 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="flex flex-col">
             {monsters.map((m) => (
-              <MonsterCard key={m.id} monster={m} onClick={handleClick} />
+              <MonsterCard
+                key={m.id}
+                monster={m}
+                canEdit={isGM}
+                onClick={handleClick}
+                onEdit={handleClick}
+              />
             ))}
           </div>
         </div>

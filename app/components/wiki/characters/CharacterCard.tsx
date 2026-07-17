@@ -1,6 +1,7 @@
 import React from 'react';
 import { Globe, Lock, ExternalLink } from 'lucide-react';
 import type { CharacterListItem, PictureCrop } from '~/types/character';
+import { WikiCardMenu } from '~/components/wiki/shared/WikiCardMenu';
 import { setTokenDragImage } from '~/utils/setTokenDragImage';
 
 function getCropStyle(crop: PictureCrop): React.CSSProperties {
@@ -16,6 +17,7 @@ function getCropStyle(crop: PictureCrop): React.CSSProperties {
 interface CharacterCardProps {
   character: CharacterListItem;
   onClick: (character: CharacterListItem) => void;
+  onEdit?: (character: CharacterListItem) => void;
 }
 
 const GRADIENT_PAIRS = [
@@ -42,7 +44,7 @@ function getInitials(firstName: string, lastName: string): string {
   return l ? `${f}${l}` : f;
 }
 
-export function CharacterCard({ character, onClick }: CharacterCardProps) {
+export function CharacterCard({ character, onClick, onEdit }: CharacterCardProps) {
   const fullName = `${character.firstName} ${character.lastName}`.trim();
   const initials = getInitials(character.firstName, character.lastName);
   const gradientIndex = hashName(fullName) % GRADIENT_PAIRS.length;
@@ -86,8 +88,27 @@ export function CharacterCard({ character, onClick }: CharacterCardProps) {
           onClick(character);
         }
       }}
-      className={`flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing${isDeceased ? ' opacity-60' : ''}`}
+      className={`relative flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing${isDeceased ? ' opacity-60' : ''}`}
     >
+      {/* Overflow menu. Stops propagation so opening it never fires the card's
+          own click/keyboard activation, and is not itself draggable. */}
+      <div
+        role="presentation"
+        className="absolute right-2 top-2"
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <WikiCardMenu
+          collection="character"
+          documentId={character.id}
+          label="Character actions"
+          canEdit={character.canEdit}
+          onEdit={onEdit ? () => onEdit(character) : undefined}
+        />
+      </div>
+
       {/* Avatar */}
       <div
         className="w-12 h-12 rounded-full flex-shrink-0 flex items-center justify-center overflow-hidden mt-0.5"

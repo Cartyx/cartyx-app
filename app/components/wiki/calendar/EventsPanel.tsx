@@ -145,7 +145,13 @@ export function EventsPanel({ onBack }: EventsPanelProps) {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="flex flex-col">
             {events.map((item) => (
-              <EventCard key={item.id} event={item} cfg={cfg!} onClick={handleEventClick} />
+              <EventCard
+                key={item.id}
+                event={item}
+                cfg={cfg!}
+                onClick={handleEventClick}
+                onEdit={handleEventClick}
+              />
             ))}
           </div>
         </div>

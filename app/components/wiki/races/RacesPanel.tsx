@@ -45,6 +45,12 @@ export function RacesPanel({ onBack }: RacesPanelProps) {
     }
   };
 
+  // The menu's Edit only renders when canEdit, so this always goes to the editor.
+  const handleRaceEdit = (race: RaceListItem) => {
+    setSelectedRaceId(race.id);
+    setIsModalOpen(true);
+  };
+
   const handleModalClose = () => {
     setIsModalOpen(false);
     setSelectedRaceId(undefined);
@@ -94,7 +100,12 @@ export function RacesPanel({ onBack }: RacesPanelProps) {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="flex flex-col">
             {races.map((race) => (
-              <RaceCard key={race.id} race={race} onClick={handleRaceClick} />
+              <RaceCard
+                key={race.id}
+                race={race}
+                onClick={handleRaceClick}
+                onEdit={handleRaceEdit}
+              />
             ))}
           </div>
         </div>

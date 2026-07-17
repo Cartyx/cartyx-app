@@ -19,6 +19,14 @@ vi.mock('~/hooks/useTabletopScreens', () => ({
 }));
 vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ campaignId: 'campaign-123' }),
+  // RuleCard's WikiCardMenu reads the main-view tab via useSearch.
+  useSearch: () => ({ tab: 'wiki' }),
+}));
+vi.mock('~/hooks/useTabletopPlayerState', () => ({
+  useTabletopPlayerState: () => ({
+    playerState: null,
+    addPrivateWindow: { mutate: vi.fn() },
+  }),
 }));
 
 const mockRules = [

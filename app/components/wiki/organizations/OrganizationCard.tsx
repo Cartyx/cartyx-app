@@ -1,11 +1,13 @@
 import type { OrganizationListItem } from '~/types/organization';
+import { WikiCardMenu } from '~/components/wiki/shared/WikiCardMenu';
 
 interface OrganizationCardProps {
   organization: OrganizationListItem;
   onClick: (organization: OrganizationListItem) => void;
+  onEdit?: (organization: OrganizationListItem) => void;
 }
 
-export function OrganizationCard({ organization, onClick }: OrganizationCardProps) {
+export function OrganizationCard({ organization, onClick, onEdit }: OrganizationCardProps) {
   return (
     <div
       role="button"
@@ -33,8 +35,27 @@ export function OrganizationCard({ organization, onClick }: OrganizationCardProp
           onClick(organization);
         }
       }}
-      className="flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
+      className="relative flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
     >
+      {/* Overflow menu. Stops propagation so opening it never fires the card's
+          own click/keyboard activation, and is not itself draggable. */}
+      <div
+        role="presentation"
+        className="absolute right-2 top-2"
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <WikiCardMenu
+          collection="organization"
+          documentId={organization.id}
+          label="Organization actions"
+          canEdit={organization.canEdit}
+          onEdit={onEdit ? () => onEdit(organization) : undefined}
+        />
+      </div>
+
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
           <span className="text-sm font-semibold text-slate-200 group-hover:text-blue-400 transition-colors truncate">

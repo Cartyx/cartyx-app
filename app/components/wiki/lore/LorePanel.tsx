@@ -46,6 +46,12 @@ export function LorePanel({ onBack }: LorePanelProps) {
     }
   };
 
+  // The menu's Edit only renders when canEdit, so this always goes to the editor.
+  const handleLoreEdit = (item: LoreListItem) => {
+    setSelectedLoreId(item.id);
+    setIsModalOpen(true);
+  };
+
   const handleModalClose = () => {
     setIsModalOpen(false);
     setSelectedLoreId(undefined);
@@ -96,7 +102,12 @@ export function LorePanel({ onBack }: LorePanelProps) {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="flex flex-col">
             {lore.map((item) => (
-              <LoreCard key={item.id} lore={item} onClick={handleLoreClick} />
+              <LoreCard
+                key={item.id}
+                lore={item}
+                onClick={handleLoreClick}
+                onEdit={handleLoreEdit}
+              />
             ))}
           </div>
         </div>

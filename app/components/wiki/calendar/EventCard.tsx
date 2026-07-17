@@ -3,6 +3,7 @@ import { Globe, Lock } from 'lucide-react';
 import type { EventListItem } from '~/types/event';
 import type { CalendarConfig } from '~/utils/calendarEngine';
 import { formatDate } from '~/utils/calendarEngine';
+import { WikiCardMenu } from '~/components/wiki/shared/WikiCardMenu';
 import { setTokenDragImage } from '~/utils/setTokenDragImage';
 
 const GRADIENT_PAIRS = [
@@ -27,9 +28,10 @@ interface EventCardProps {
   event: EventListItem;
   cfg: CalendarConfig;
   onClick: (event: EventListItem) => void;
+  onEdit?: (event: EventListItem) => void;
 }
 
-export function EventCard({ event, cfg, onClick }: EventCardProps) {
+export function EventCard({ event, cfg, onClick, onEdit }: EventCardProps) {
   const gradientIndex = hashName(event.title) % GRADIENT_PAIRS.length;
   const [gradFrom] = GRADIENT_PAIRS[gradientIndex]!;
   const firstImageUrl = event.images[0]?.url ?? null;
@@ -68,8 +70,27 @@ export function EventCard({ event, cfg, onClick }: EventCardProps) {
           onClick(event);
         }
       }}
-      className="flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
+      className="relative flex items-start gap-3 px-4 py-3 border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
     >
+      {/* Overflow menu. Stops propagation so opening it never fires the card's
+          own click/keyboard activation, and is not itself draggable. */}
+      <div
+        role="presentation"
+        className="absolute right-2 top-2"
+        draggable={false}
+        onDragStart={(e) => e.preventDefault()}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => e.stopPropagation()}
+      >
+        <WikiCardMenu
+          collection="events"
+          documentId={event.id}
+          label="Event actions"
+          canEdit={event.canEdit}
+          onEdit={onEdit ? () => onEdit(event) : undefined}
+        />
+      </div>
+
       {/* Avatar / first image thumbnail */}
       <div
         className="w-10 h-10 rounded-lg flex-shrink-0 flex items-center justify-center overflow-hidden mt-0.5"

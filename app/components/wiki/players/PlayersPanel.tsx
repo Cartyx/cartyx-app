@@ -59,6 +59,7 @@ export function PlayersPanel({ onBack }: PlayersPanelProps) {
                 key={player.id}
                 player={player}
                 onClick={() => handlePlayerClick(player.id)}
+                onEdit={() => handlePlayerClick(player.id)}
               />
             ))}
           </div>

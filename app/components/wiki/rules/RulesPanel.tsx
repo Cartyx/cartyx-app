@@ -46,6 +46,12 @@ export function RulesPanel({ onBack }: RulesPanelProps) {
     }
   };
 
+  // The menu's Edit only renders when canEdit (isGM), so this reaches the editor.
+  const handleRuleEdit = (rule: RuleListItem) => {
+    setSelectedRuleId(rule.id);
+    setIsModalOpen(true);
+  };
+
   const handleModalClose = () => {
     setIsModalOpen(false);
     setSelectedRuleId(undefined);
@@ -95,7 +101,13 @@ export function RulesPanel({ onBack }: RulesPanelProps) {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="flex flex-col">
             {rules.map((rule) => (
-              <RuleCard key={rule.id} rule={rule} onClick={handleRuleClick} />
+              <RuleCard
+                key={rule.id}
+                rule={rule}
+                canEdit={isGM}
+                onClick={handleRuleClick}
+                onEdit={handleRuleEdit}
+              />
             ))}
           </div>
         </div>

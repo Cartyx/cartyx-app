@@ -49,6 +49,12 @@ export function CharactersPanel({ onBack }: CharactersPanelProps) {
     }
   };
 
+  // The menu's Edit only renders when canEdit, so this always goes to the editor.
+  const handleCharacterEdit = (character: CharacterListItem) => {
+    setSelectedCharacterId(character.id);
+    setIsModalOpen(true);
+  };
+
   const handleModalClose = () => {
     setIsModalOpen(false);
     setSelectedCharacterId(undefined);
@@ -103,6 +109,7 @@ export function CharactersPanel({ onBack }: CharactersPanelProps) {
                 key={character.id}
                 character={character}
                 onClick={handleCharacterClick}
+                onEdit={handleCharacterEdit}
               />
             ))}
           </div>
