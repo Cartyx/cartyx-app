@@ -1,8 +1,10 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { GMScreenData, GMScreenDetailData } from '~/types/gmscreen';
+import type { HydratedDocument, PrivateWindowData } from '~/types/tabletop';
 
 // ---------------------------------------------------------------------------
 // Mocks
@@ -110,18 +112,65 @@ vi.mock('~/hooks/useGMScreens', () => ({
 // QueryClient (which fails in jsdom and only "works" because retry:false
 // settles the query to an error quickly — an incidental pass, not a real one).
 const mockUpdateStateMutate = vi.fn();
+const mockRemovePrivateWindowMutate = vi.fn();
+
+type MockPlayerState = {
+  activeGMScreenId: string | null;
+  privateWindows?: PrivateWindowData[];
+  hydrated?: Record<string, HydratedDocument>;
+};
+
 let playerStateResult: {
-  playerState: { activeGMScreenId: string | null } | null;
+  playerState: MockPlayerState | null;
   isLoading: boolean;
   updateState: { mutate: typeof mockUpdateStateMutate };
+  removePrivateWindow: { mutate: typeof mockRemovePrivateWindowMutate };
 } = {
   playerState: null,
   isLoading: false,
   updateState: { mutate: mockUpdateStateMutate },
+  removePrivateWindow: { mutate: mockRemovePrivateWindowMutate },
 };
+
+function makePlayerState(overrides: Partial<MockPlayerState> = {}): typeof playerStateResult {
+  return {
+    playerState: { activeGMScreenId: null, ...overrides },
+    isLoading: false,
+    updateState: { mutate: mockUpdateStateMutate },
+    removePrivateWindow: { mutate: mockRemovePrivateWindowMutate },
+  };
+}
 
 vi.mock('~/hooks/useTabletopPlayerState', () => ({
   useTabletopPlayerState: (_campaignId: string) => playerStateResult,
+}));
+
+// Stands in for the real manager: renders each window and exposes a close
+// button that calls onWindowsChange with the window removed — exactly what the
+// real FloatingWindowManager.handleClose does.
+type MockWindow = { id: string; title: string; className?: string };
+vi.mock('~/components/mainview/FloatingWindowManager', () => ({
+  FloatingWindowManager: ({
+    windows,
+    onWindowsChange,
+  }: {
+    windows: MockWindow[];
+    onWindowsChange: (next: MockWindow[]) => void;
+  }) => (
+    <div data-testid="floating-window-manager">
+      {windows.map((w) => (
+        <div key={w.id} data-testid={`fwm-window-${w.id}`} className={w.className}>
+          {w.title}
+          <button
+            data-testid={`fwm-close-${w.id}`}
+            onClick={() => onWindowsChange(windows.filter((x) => x.id !== w.id))}
+          >
+            close
+          </button>
+        </div>
+      ))}
+    </div>
+  ),
 }));
 
 // Lazy import after mocks are set up
@@ -143,11 +192,7 @@ describe('GMScreensView — screen selection', () => {
     vi.clearAllMocks();
     listResult = { screens: mockScreens, isLoading: false, error: null };
     detailResult = { screen: mockDetail, isLoading: false, error: null };
-    playerStateResult = {
-      playerState: null,
-      isLoading: false,
-      updateState: { mutate: mockUpdateStateMutate },
-    };
+    playerStateResult = { ...makePlayerState(), playerState: null };
   });
 
   it('auto-selects the first screen by tab order on mount', async () => {
@@ -248,11 +293,7 @@ describe('GMScreensView — active screen persistence', () => {
     vi.clearAllMocks();
     listResult = { screens: mockScreens, isLoading: false, error: null };
     detailResult = { screen: mockDetail, isLoading: false, error: null };
-    playerStateResult = {
-      playerState: null,
-      isLoading: false,
-      updateState: { mutate: mockUpdateStateMutate },
-    };
+    playerStateResult = { ...makePlayerState(), playerState: null };
   });
 
   it('falls back to the first screen on first visit (activeGMScreenId is null)', async () => {
@@ -264,11 +305,7 @@ describe('GMScreensView — active screen persistence', () => {
   });
 
   it('restores the persisted screen from player state', async () => {
-    playerStateResult = {
-      playerState: { activeGMScreenId: 'scr-c' },
-      isLoading: false,
-      updateState: { mutate: mockUpdateStateMutate },
-    };
+    playerStateResult = makePlayerState({ activeGMScreenId: 'scr-c' });
 
     render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
 
@@ -281,11 +318,7 @@ describe('GMScreensView — active screen persistence', () => {
     // Screens are already resolved (listLoading: false) but player state is
     // still loading — the seeding effect must wait rather than flashing
     // screens[0] before the persisted value is known.
-    playerStateResult = {
-      playerState: null,
-      isLoading: true,
-      updateState: { mutate: mockUpdateStateMutate },
-    };
+    playerStateResult = { ...makePlayerState(), playerState: null, isLoading: true };
 
     const { rerender } = render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
 
@@ -295,11 +328,7 @@ describe('GMScreensView — active screen persistence', () => {
     expect(screen.getByTestId('screen-tab-scr-c')).toHaveAttribute('aria-selected', 'false');
 
     // Player state now resolves with a persisted screen, after the screen list settled.
-    playerStateResult = {
-      playerState: { activeGMScreenId: 'scr-c' },
-      isLoading: false,
-      updateState: { mutate: mockUpdateStateMutate },
-    };
+    playerStateResult = makePlayerState({ activeGMScreenId: 'scr-c' });
     rerender(<GMScreensView campaignId="c1" />);
 
     await waitFor(() => {
@@ -308,11 +337,7 @@ describe('GMScreensView — active screen persistence', () => {
   });
 
   it('falls back to the first screen when the persisted screen was deleted', async () => {
-    playerStateResult = {
-      playerState: { activeGMScreenId: 'scr-deleted' },
-      isLoading: false,
-      updateState: { mutate: mockUpdateStateMutate },
-    };
+    playerStateResult = makePlayerState({ activeGMScreenId: 'scr-deleted' });
 
     render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
 
@@ -359,11 +384,7 @@ describe('GMScreensView — active screen persistence', () => {
     // Simulate the persisted value round-tripping back from the server after
     // the mutation's onSuccess invalidation. The screen set hasn't changed,
     // so the seeding effect must not re-fire, re-select, or re-persist.
-    playerStateResult = {
-      playerState: { activeGMScreenId: 'scr-b' },
-      isLoading: false,
-      updateState: { mutate: mockUpdateStateMutate },
-    };
+    playerStateResult = makePlayerState({ activeGMScreenId: 'scr-b' });
     rerender(<GMScreensView campaignId="c1" />);
 
     expect(screen.getByTestId('screen-tab-scr-b')).toHaveAttribute('aria-selected', 'true');
@@ -376,11 +397,7 @@ describe('GMScreensView — campaign switching without remount', () => {
     vi.clearAllMocks();
     listResult = { screens: mockScreens, isLoading: false, error: null };
     detailResult = { screen: mockDetail, isLoading: false, error: null };
-    playerStateResult = {
-      playerState: null,
-      isLoading: false,
-      updateState: { mutate: mockUpdateStateMutate },
-    };
+    playerStateResult = { ...makePlayerState(), playerState: null };
   });
 
   it("restores campaign B's own persisted screen after switching from campaign A in place", async () => {
@@ -395,15 +412,280 @@ describe('GMScreensView — campaign switching without remount', () => {
 
     // Switch to campaign B in place — new screens, new persisted selection.
     listResult = { screens: mockScreensCampaign2, isLoading: false, error: null };
-    playerStateResult = {
-      playerState: { activeGMScreenId: 'scr-y' },
-      isLoading: false,
-      updateState: { mutate: mockUpdateStateMutate },
-    };
+    playerStateResult = makePlayerState({ activeGMScreenId: 'scr-y' });
     rerender(<GMScreensView campaignId="c2" />);
 
     await waitFor(() => {
       expect(screen.getByTestId('screen-tab-scr-y')).toHaveAttribute('aria-selected', 'true');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Private windows — owner-only, invisible to co-GMs
+// ---------------------------------------------------------------------------
+
+describe('GMScreensView — private windows', () => {
+  function makePrivateWindow(overrides: Partial<PrivateWindowData> = {}): PrivateWindowData {
+    return {
+      id: 'pw-1',
+      surface: 'gmscreen',
+      screenId: 'scr-a',
+      collection: 'lore',
+      documentId: 'doc-1',
+      x: 10,
+      y: 20,
+      width: null,
+      height: null,
+      zIndex: 1,
+      state: 'open',
+      ...overrides,
+    };
+  }
+
+  const privateHydration: Record<string, HydratedDocument> = {
+    'lore:doc-1': {
+      id: 'doc-1',
+      collection: 'lore',
+      title: 'The Sunken Crown',
+      content: 'secret lore',
+    },
+  };
+
+  function withPrivateWindows(windows: PrivateWindowData[]) {
+    playerStateResult = makePlayerState({
+      activeGMScreenId: 'scr-a',
+      privateWindows: windows,
+      hydrated: privateHydration,
+    });
+  }
+
+  const sharedWindow = {
+    id: 'w-shared',
+    collection: 'lore' as const,
+    documentId: 'doc-shared',
+    state: 'open' as const,
+    x: 0,
+    y: 0,
+    width: null,
+    height: null,
+    zIndex: 1,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listResult = { screens: mockScreens, isLoading: false, error: null };
+    detailResult = { screen: mockDetail, isLoading: false, error: null };
+    playerStateResult = { ...makePlayerState(), playerState: null };
+  });
+
+  it("renders the caller's private window, titled from player-state hydration", async () => {
+    withPrivateWindows([makePrivateWindow()]);
+    render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
+
+    await waitFor(() => expect(screen.getByTestId('fwm-window-pw-1')).toBeInTheDocument());
+    // A missing hydration source would fall back to the literal key "lore:doc-1".
+    expect(screen.getByTestId('fwm-window-pw-1')).toHaveTextContent('The Sunken Crown');
+  });
+
+  it('does not render private windows for another screen or the tabletop surface', async () => {
+    withPrivateWindows([
+      makePrivateWindow({ id: 'pw-other-screen', screenId: 'scr-b' }),
+      makePrivateWindow({ id: 'pw-tabletop', surface: 'tabletop' }),
+    ]);
+    render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
+
+    await waitFor(() => expect(screen.getByTestId('floating-window-manager')).toBeInTheDocument());
+    expect(screen.queryByTestId('fwm-window-pw-other-screen')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('fwm-window-pw-tabletop')).not.toBeInTheDocument();
+  });
+
+  it('closing a private window calls removePrivateWindow and never closeWindow', async () => {
+    // closeWindow removes the SHARED window from GMScreen.windows — routing a
+    // private close there would delete another GM's window for everyone.
+    const user = userEvent.setup();
+    withPrivateWindows([makePrivateWindow()]);
+    render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
+
+    await waitFor(() => expect(screen.getByTestId('fwm-close-pw-1')).toBeInTheDocument());
+    await user.click(screen.getByTestId('fwm-close-pw-1'));
+
+    expect(mockRemovePrivateWindowMutate).toHaveBeenCalledWith({ privateWindowId: 'pw-1' });
+    expect(noopMutation.mutate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ windowId: 'pw-1' })
+    );
+  });
+
+  it('closing a shared window still calls closeWindow and not removePrivateWindow', async () => {
+    const user = userEvent.setup();
+    detailResult = {
+      screen: {
+        ...mockDetail,
+        windows: [sharedWindow],
+        hydrated: {
+          'lore:doc-shared': {
+            id: 'doc-shared',
+            collection: 'lore',
+            title: 'Shared Lore',
+            content: '',
+          },
+        },
+      },
+      isLoading: false,
+      error: null,
+    };
+    withPrivateWindows([makePrivateWindow()]);
+    render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
+
+    await waitFor(() => expect(screen.getByTestId('fwm-close-w-shared')).toBeInTheDocument());
+    await user.click(screen.getByTestId('fwm-close-w-shared'));
+
+    expect(noopMutation.mutate).toHaveBeenCalledWith({ screenId: 'scr-a', windowId: 'w-shared' });
+    expect(mockRemovePrivateWindowMutate).not.toHaveBeenCalled();
+  });
+
+  it('flashes a matching private window on a cartyx:focus-window event', async () => {
+    withPrivateWindows([makePrivateWindow()]);
+    render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
+    await waitFor(() => expect(screen.getByTestId('fwm-window-pw-1')).toBeInTheDocument());
+
+    await waitFor(() => {
+      window.dispatchEvent(
+        new CustomEvent('cartyx:focus-window', {
+          detail: { surface: 'gmscreen', collection: 'lore', documentId: 'doc-1' },
+        })
+      );
+      expect(screen.getByTestId('fwm-window-pw-1')).toHaveClass('animate-flash-border');
+    });
+  });
+
+  it('ignores focus events aimed at the tabletop surface', async () => {
+    withPrivateWindows([makePrivateWindow()]);
+    render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
+    await waitFor(() => expect(screen.getByTestId('fwm-window-pw-1')).toBeInTheDocument());
+
+    // Asserted SYNCHRONOUSLY after the dispatch, not inside waitFor: the flash
+    // self-clears after 700ms, so a retrying waitFor would go green even if the
+    // guard were removed and the window really did flash.
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('cartyx:focus-window', {
+          detail: { surface: 'tabletop', collection: 'lore', documentId: 'doc-1' },
+        })
+      );
+    });
+
+    expect(screen.getByTestId('fwm-window-pw-1')).not.toHaveClass('animate-flash-border');
+  });
+
+  it('focusing a private window never persists it through the GM-screens updateWindow', async () => {
+    // updateWindow addresses GMScreen.windows by id; a private window is not in
+    // that array, so the mutation would be a no-op at best.
+    withPrivateWindows([makePrivateWindow()]);
+    render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
+    await waitFor(() => expect(screen.getByTestId('fwm-window-pw-1')).toBeInTheDocument());
+
+    window.dispatchEvent(
+      new CustomEvent('cartyx:focus-window', {
+        detail: { surface: 'gmscreen', collection: 'lore', documentId: 'doc-1' },
+      })
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('fwm-window-pw-1')).toHaveClass('animate-flash-border')
+    );
+    expect(noopMutation.mutate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ windowId: 'pw-1' })
+    );
+  });
+
+  it('focusing a SHARED window still persists its z-index through updateWindow', async () => {
+    detailResult = {
+      screen: {
+        ...mockDetail,
+        windows: [sharedWindow],
+        hydrated: {
+          'lore:doc-shared': {
+            id: 'doc-shared',
+            collection: 'lore',
+            title: 'Shared Lore',
+            content: '',
+          },
+        },
+      },
+      isLoading: false,
+      error: null,
+    };
+    withPrivateWindows([makePrivateWindow({ zIndex: 7 })]);
+    render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
+    await waitFor(() => expect(screen.getByTestId('fwm-window-w-shared')).toBeInTheDocument());
+
+    window.dispatchEvent(
+      new CustomEvent('cartyx:focus-window', {
+        detail: { surface: 'gmscreen', collection: 'lore', documentId: 'doc-shared' },
+      })
+    );
+
+    // Raised above the private window at z=7, not just above the shared set.
+    await waitFor(() =>
+      expect(noopMutation.mutate).toHaveBeenCalledWith({
+        screenId: 'scr-a',
+        windowId: 'w-shared',
+        zIndex: 8,
+        state: 'open',
+      })
+    );
+  });
+});
+
+describe('GMScreensView — flash lifecycle', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listResult = { screens: mockScreens, isLoading: false, error: null };
+    detailResult = { screen: mockDetail, isLoading: false, error: null };
+    playerStateResult = { ...makePlayerState(), playerState: null };
+  });
+
+  // Regression: the 700ms flash timer used to be cleared inside the
+  // flush-on-unmount effect, whose deps are [mutations] — a fresh object every
+  // render. That cleanup ran on EVERY render, so the timer set by
+  // setFlashWindowId was killed by the very re-render it caused and the flash
+  // class stuck forever. Covers the drop-handler flash too, not just this path.
+  it('clears the flash class after 700ms instead of leaving it stuck on', async () => {
+    playerStateResult = makePlayerState({
+      activeGMScreenId: 'scr-a',
+      privateWindows: [
+        {
+          id: 'pw-1',
+          surface: 'gmscreen',
+          screenId: 'scr-a',
+          collection: 'lore',
+          documentId: 'doc-1',
+          x: 1,
+          y: 1,
+          width: null,
+          height: null,
+          zIndex: 1,
+          state: 'open',
+        },
+      ],
+      hydrated: { 'lore:doc-1': { id: 'doc-1', collection: 'lore', title: 'T', content: '' } },
+    });
+    render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
+    await waitFor(() => expect(screen.getByTestId('fwm-window-pw-1')).toBeInTheDocument());
+
+    await waitFor(() => {
+      window.dispatchEvent(
+        new CustomEvent('cartyx:focus-window', {
+          detail: { surface: 'gmscreen', collection: 'lore', documentId: 'doc-1' },
+        })
+      );
+      expect(screen.getByTestId('fwm-window-pw-1')).toHaveClass('animate-flash-border');
+    });
+
+    await waitFor(
+      () => expect(screen.getByTestId('fwm-window-pw-1')).not.toHaveClass('animate-flash-border'),
+      { timeout: 2000 }
+    );
   });
 });

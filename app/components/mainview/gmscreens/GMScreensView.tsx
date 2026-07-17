@@ -74,7 +74,9 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     playerState,
     isLoading: playerStateLoading,
     updateState,
+    removePrivateWindow,
   } = useTabletopPlayerState(campaignId);
+  const removePrivateWindowMutate = removePrivateWindow.mutate;
   const [dialog, setDialog] = useState<DialogState>({ type: 'none' });
   const mutations = useGMScreenMutations(campaignId);
   const [editingCharacterId, setEditingCharacterId] = useState<string | null>(null);
@@ -165,6 +167,18 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     error: detailError,
   } = useGMScreenDetail(campaignId, activeScreenId);
 
+  // The caller's own private windows for this GM screen. GM screens are
+  // campaign-scoped and shared between co-GMs, so "private" still means
+  // something here: these live on player state, are only ever returned to their
+  // owner, and no other GM sees them.
+  const privateWindows = useMemo(
+    () =>
+      (playerState?.privateWindows ?? []).filter(
+        (pw) => pw.surface === 'gmscreen' && pw.screenId === activeScreenId
+      ),
+    [playerState, activeScreenId]
+  );
+
   // --- Debounced persistence refs ---
   // Per-window timers so multi-window updates don't clobber each other
   const updateTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -184,9 +198,20 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
         mutations.updateWindow.mutate(payload);
       }
       pending.clear();
-      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
     };
   }, [mutations]);
+
+  // Flash timer cleanup is deliberately its OWN unmount-only effect. It used to
+  // live in the flush effect above, whose deps are [mutations] — and
+  // useGMScreenMutations returns a fresh object every render, so that cleanup
+  // runs on every render, not just unmount. It therefore cleared the 700ms
+  // timer immediately after setFlashWindowId re-rendered, and the flash class
+  // stuck on the window forever instead of fading.
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    };
+  }, []);
 
   // --- Screen selection ---
 
@@ -275,9 +300,23 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
       // Optimistically update local state immediately
       setLocalWindows(nextWindows);
 
+      const nextIds = new Set(nextWindows.map((w) => w.id));
+
+      // Route each disappeared window by the list it came from, NOT by a tag
+      // riding on the ManagedWindow (which could go stale). A private window
+      // must never go through closeWindow: that mutation removes the SHARED
+      // window from GMScreen.windows for every GM of the campaign.
+      for (const pw of privateWindows) {
+        if (!nextIds.has(pw.id)) {
+          removePrivateWindowMutate({ privateWindowId: pw.id });
+        }
+      }
+
       if (!activeScreenId || !activeScreen) return;
 
-      // Persist changes debounced — one timer per window
+      // Persist layout changes debounced — one timer per window. Private
+      // windows have no `orig` here and are skipped: updateWindow addresses
+      // GMScreen.windows by id and has nothing to write for them.
       for (const nw of nextWindows) {
         const orig = activeScreen.windows.find((w) => w.id === nw.id);
         if (!orig) continue;
@@ -316,8 +355,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
         }
       }
 
-      // Handle closes — clear pending timers before firing the close mutation
-      const nextIds = new Set(nextWindows.map((w) => w.id));
+      // Handle shared closes — clear pending timers before firing the mutation
       for (const w of activeScreen.windows) {
         if (!nextIds.has(w.id)) {
           const pending = updateTimersRef.current.get(w.id);
@@ -329,7 +367,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
         }
       }
     },
-    [activeScreenId, activeScreen, mutations]
+    [activeScreenId, activeScreen, mutations, privateWindows, removePrivateWindowMutate]
   );
 
   const openWindow = mutations.openWindow.mutate;
@@ -340,6 +378,83 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     },
     [activeScreenId, openWindow]
   );
+
+  // Focus + flash an already-open window (shared or private) — the single flash
+  // path for both the drop handler and wiki focus requests.
+  //
+  // A SHARED window's z-index is campaign-wide layout, so it persists through
+  // updateWindow (unchanged from the drop handler's original behaviour). A
+  // PRIVATE window has no such mutation — updateWindow addresses
+  // GMScreen.windows and would not find it — and its stacking is the owner's
+  // own business, so it is raised in local state only.
+  const focusWindow = useCallback(
+    (windowId: string) => {
+      const shared = activeScreen?.windows.find((w) => w.id === windowId);
+
+      if (shared && activeScreenId) {
+        // Max across BOTH kinds: raising above only the shared windows could
+        // still leave the target underneath one of the caller's own private
+        // windows.
+        const maxZ = [...(activeScreen?.windows ?? []), ...privateWindows].reduce(
+          (max, w) => Math.max(max, w.zIndex),
+          0
+        );
+        mutations.updateWindow.mutate({
+          screenId: activeScreenId,
+          windowId,
+          zIndex: maxZ + 1,
+          state: 'open',
+        });
+      } else {
+        setLocalWindows((prev) => {
+          const target = prev.find((w) => w.id === windowId);
+          if (!target) return prev;
+          const maxZ = prev.reduce((max, w) => Math.max(max, w.zIndex), 0);
+          if (target.zIndex === maxZ && target.state !== 'minimized') return prev;
+          return prev.map((w) =>
+            w.id === windowId
+              ? { ...w, zIndex: maxZ + 1, state: w.state === 'minimized' ? 'normal' : w.state }
+              : w
+          );
+        });
+      }
+
+      setFlashWindowId(windowId);
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = setTimeout(() => {
+        flashTimerRef.current = null;
+        setFlashWindowId(null);
+      }, 700);
+    },
+    [activeScreen, activeScreenId, mutations, privateWindows]
+  );
+
+  // --- Focus requests from the wiki ("Show on Screen" on an already-open item) ---
+  // The event detail carries no screenId, so match on collection+documentId
+  // within the active screen, across both shared and private windows.
+  useEffect(() => {
+    const onFocus = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        surface?: string;
+        collection?: string;
+        documentId?: string;
+      } | null;
+      if (!detail || detail.surface !== 'gmscreen') return;
+
+      const match =
+        privateWindows.find(
+          (pw) => pw.collection === detail.collection && pw.documentId === detail.documentId
+        ) ??
+        activeScreen?.windows.find(
+          (w) => w.collection === detail.collection && w.documentId === detail.documentId
+        );
+      if (!match) return;
+      focusWindow(match.id);
+    };
+
+    window.addEventListener('cartyx:focus-window', onFocus);
+    return () => window.removeEventListener('cartyx:focus-window', onFocus);
+  }, [privateWindows, activeScreen, focusWindow]);
 
   const handleDragOver = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
@@ -382,19 +497,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
 
       if (existing) {
         // Focus + flash the existing window
-        const maxZ = activeScreen.windows.reduce((max, w) => Math.max(max, w.zIndex), 0);
-        mutations.updateWindow.mutate({
-          screenId: activeScreenId,
-          windowId: existing.id,
-          zIndex: maxZ + 1,
-          state: 'open',
-        });
-        setFlashWindowId(existing.id);
-        if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-        flashTimerRef.current = setTimeout(() => {
-          flashTimerRef.current = null;
-          setFlashWindowId(null);
-        }, 700);
+        focusWindow(existing.id);
         return;
       }
 
@@ -411,7 +514,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
         y,
       });
     },
-    [activeScreenId, activeScreen, mutations]
+    [activeScreenId, activeScreen, mutations, focusWindow]
   );
 
   // --- Stack handlers ---
@@ -471,15 +574,27 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     const isScreenSwitch = localScreenIdRef.current !== activeScreenId;
     localScreenIdRef.current = activeScreenId;
 
+    // Shared windows (GMScreen.windows — every GM of the campaign sees them)
+    // and the caller's own private windows render through the SAME branch chain
+    // below; only their close route and hydration source differ. Close routing
+    // keys off which list an id came from (see handleWindowsChange), so the
+    // merged entries need no private/shared tag of their own.
+    const sources = [...activeScreen.windows, ...privateWindows];
+
+    // Both maps are keyed `collection:documentId`. Private-window docs are
+    // hydrated by getPlayerState (which also enforces the per-collection
+    // security filter); shared ones come from the screen-detail query.
+    const hydratedDocs = { ...activeScreen.hydrated, ...(playerState?.hydrated ?? {}) };
+
     setLocalWindows((prev) => {
       const prevById = isScreenSwitch
         ? new Map<string, ManagedWindow>()
         : new Map(prev.map((w) => [w.id, w]));
-      const serverIds = new Set(activeScreen.windows.map((w) => w.id));
+      const sourceIds = new Set(sources.map((w) => w.id));
 
-      const merged = activeScreen.windows.map((w) => {
+      const merged = sources.map((w) => {
         const key = `${w.collection}:${w.documentId}`;
-        const doc = activeScreen.hydrated[key];
+        const doc = hydratedDocs[key];
         const title = doc?.title || key;
         const markdownContent = doc?.content || '';
 
@@ -668,14 +783,23 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
             p.iconKey === merged[i]!.iconKey &&
             p.className === merged[i]!.className
         ) &&
-        serverIds.size === prev.length
+        sourceIds.size === prev.length
       ) {
         return prev;
       }
 
       return merged;
     });
-  }, [activeScreen, activeScreenId, flashWindowId, campaignId, isGM, handleOpenItem]);
+  }, [
+    activeScreen,
+    activeScreenId,
+    flashWindowId,
+    campaignId,
+    isGM,
+    handleOpenItem,
+    privateWindows,
+    playerState,
+  ]);
 
   // --- Render ---
 
