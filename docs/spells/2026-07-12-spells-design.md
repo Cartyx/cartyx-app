@@ -28,8 +28,8 @@ changes required for them.
   screen, tests.
 - **Phase 2 (future):** Roll damage dice from a spell's `modifiers` using the
   existing dice roller. No model changes.
-- **Phase 3 (future):** Draw a spell's `areaOfEffect` on the tabletop `spell-fx`
-  map layer. No model changes.
+- **Phase 3 (future):** Draw a spell's `areaOfEffect` on the tabletop as an SVG
+  overlay above the map/grid. No model changes.
 
 ## Decisions (locked)
 
@@ -317,11 +317,11 @@ the Settings panel's existing icon convention>, gmOnly: false }` to
   (the existing dice bridge). No model changes; the `modifiers` field already
   carries the structured dice.
 - **Phase 3 — map overlay:** `areaOfEffect` (+ `range`) drive an AoE template on
-  the tabletop `spell-fx` layer. This is net-new: `spell-fx` is currently a
-  placeholder and no cone/sphere tool exists — only a straight-line ruler. It
-  extends `useRulerTool` (feet-per-square calibration) and `MapDrawingLayer`
-  (SVG shape rendering). No model changes; `areaOfEffect` already carries the
-  shape + size.
+  the tabletop, rendered by `MapAoELayer` as an SVG overlay above the map/grid
+  and beneath drawings/tokens. It is not a Layers-panel layer: visibility is a
+  per-viewer zoom-toolbar toggle. It extends `useRulerTool` (feet-per-square
+  calibration) and `MapDrawingLayer` (SVG shape rendering). No model changes;
+  `areaOfEffect` already carries the shape + size.
 
 ---
 

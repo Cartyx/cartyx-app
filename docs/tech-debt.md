@@ -247,7 +247,8 @@ earlier map-editor work. Kept for traceability.
   The HTTP broadcast endpoint is no longer unauthenticated. `onRequest` now
   requires a signed **`tabletop-broadcast`** JWT (HS256, verified against
   `SESSION_SECRET`, `scope === 'tabletop-broadcast'`) before accepting a
-  `map:active-changed` POST — see `party/tabletop-map.ts` (~lines 130–142).
+  `map:active-changed` POST — now `realtime/src/parties/tabletopMap.ts`
+  (`onRequest`), after the PartyKit `party/` directory was retired.
   Confirmed 2026-06-15.
 - **`listMapTokens` IDOR — RESOLVED (commit `7887a43`).** `listMapTokens` is now
   scoped by `campaignId`, closing the cross-campaign read.
