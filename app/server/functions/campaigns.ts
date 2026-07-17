@@ -211,7 +211,7 @@ export const getCampaign = async ({ data }: { data: z.infer<typeof getCampaignSc
     // Only members can see campaigns; treat gameMasterId as implicit member for legacy campaigns
     const members = c.members ?? [];
     const isMember = userId
-      ? members.some((m: { userId: unknown }) => String(m.userId) === userId) ||
+      ? members.some((m) => String(m.userId) === userId) ||
         (members.length === 0 && c.gameMasterId != null && String(c.gameMasterId) === userId)
       : false;
     if (!isMember) return null;
@@ -542,7 +542,11 @@ export const updateCampaign = async ({
       time: schedTime ?? null,
       timezone: schedTz ?? null,
     };
-    campaign.links = links ?? [];
+    // Mongoose casts a plain array into a DocumentArray on assignment at
+    // runtime, and unit tests mock `campaign` as a plain object (no `.set`),
+    // so this must stay a plain assignment. The DocumentArray type is a
+    // compile-time-only distinction here; this narrow cast is the boundary.
+    campaign.links = (links ?? []) as unknown as typeof campaign.links;
     campaign.maxPlayers = parseMaxPlayers(maxPlayers);
     campaign.updatedAt = new Date();
 
@@ -597,9 +601,8 @@ export const joinCampaign = async ({ data }: { data: z.infer<typeof joinCampaign
 
     // Treat GM as implicit member (consistent with getCampaign)
     const alreadyMember =
-      (campaign.members ?? []).some(
-        (m: { userId: unknown }) => String(m.userId) === String(dbUser._id)
-      ) || String(campaign.gameMasterId) === String(dbUser._id);
+      (campaign.members ?? []).some((m) => String(m.userId) === String(dbUser._id)) ||
+      String(campaign.gameMasterId) === String(dbUser._id);
     if (alreadyMember) throw new Error('Already a member of this campaign');
 
     const now = new Date();

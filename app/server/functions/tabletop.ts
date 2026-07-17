@@ -184,14 +184,12 @@ async function requireCampaignMember(
   // GM access: user is the gameMasterId OR has role 'gm' in members
   const isGM =
     String(campaign.gameMasterId) === userId ||
-    members.some(
-      (m: { userId: unknown; role?: string }) => String(m.userId) === userId && m.role === 'gm'
-    );
+    members.some((m) => String(m.userId) === userId && m.role === 'gm');
 
   if (isGM) return { userId, role: 'gm', sessionUserId: user.id };
 
   // Player access: user is in the members list
-  const isMember = members.some((m: { userId: unknown }) => String(m.userId) === userId);
+  const isMember = members.some((m) => String(m.userId) === userId);
   if (isMember) return { userId, role: 'player', sessionUserId: user.id };
 
   throw new Error('Forbidden');

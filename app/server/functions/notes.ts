@@ -89,8 +89,7 @@ async function requireCampaignMember(
   const userId = String(dbUser._id);
   const members = campaign.members ?? [];
   const isMember =
-    members.some((m: { userId: unknown }) => String(m.userId) === userId) ||
-    String(campaign.gameMasterId) === userId;
+    members.some((m) => String(m.userId) === userId) || String(campaign.gameMasterId) === userId;
   if (!isMember) throw new Error('Forbidden');
 
   return { userId, sessionUserId: user.id };
