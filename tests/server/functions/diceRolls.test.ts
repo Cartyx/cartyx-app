@@ -65,7 +65,9 @@ beforeEach(() => {
       lean: vi.fn().mockResolvedValue(mockDbSession),
     }),
   } as never);
-  vi.mocked(Campaign.findById).mockResolvedValue(mockCampaign);
+  vi.mocked(Campaign.findById).mockReturnValue({
+    lean: vi.fn().mockResolvedValue(mockCampaign),
+  } as never);
 });
 
 const _listDiceRolls = listDiceRolls as unknown as (args: {
@@ -151,7 +153,9 @@ describe('listDiceRolls — GM channel filtering', () => {
       gameMasterId: 'other-user',
       members: [{ userId: 'dbuser-1', role: 'player' }],
     };
-    vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign);
+    vi.mocked(Campaign.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(playerCampaign),
+    } as never);
 
     const mockSort = vi.fn().mockReturnValue({
       limit: vi.fn().mockReturnValue({
@@ -186,7 +190,9 @@ describe('saveDiceRoll', () => {
       gameMasterId: 'other-user',
       members: [{ userId: 'dbuser-1', role: 'player' }],
     };
-    vi.mocked(Campaign.findById).mockResolvedValue(playerCampaign);
+    vi.mocked(Campaign.findById).mockReturnValue({
+      lean: vi.fn().mockResolvedValue(playerCampaign),
+    } as never);
 
     await expect(
       _saveDiceRoll({

@@ -12,16 +12,12 @@ export const requireSessionAccess = withLogging(
     const session = await Session.findById(sessionId).select('campaignId').lean();
     if (!session) throw new Error('Session not found');
 
-    const campaign = await Campaign.findById((session as any).campaignId);
+    const campaign = await Campaign.findById(session.campaignId).lean();
     if (!campaign) throw new Error('Campaign not found');
 
-    const member = (campaign as any).members?.find(
-      (m: { userId: unknown }) => String(m.userId) === String(dbUser._id)
-    );
+    const member = campaign.members?.find((m) => String(m.userId) === String(dbUser._id));
     if (!member) throw new Error('Forbidden');
 
-    const isGM = member.role === 'gm';
-
-    return { dbUser, campaignId: String((session as any).campaignId), isGM };
+    return { dbUser, campaignId: String(session.campaignId), isGM: member.role === 'gm' };
   }
 );
