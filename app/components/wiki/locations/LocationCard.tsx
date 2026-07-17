@@ -6,9 +6,10 @@ interface LocationCardProps {
   location: LocationListItem;
   onClick: (location: LocationListItem) => void;
   onEdit?: (location: LocationListItem) => void;
+  onDelete?: (location: LocationListItem) => void;
 }
 
-export function LocationCard({ location, onClick, onEdit }: LocationCardProps) {
+export function LocationCard({ location, onClick, onEdit, onDelete }: LocationCardProps) {
   return (
     <div
       role="button"
@@ -54,6 +55,7 @@ export function LocationCard({ location, onClick, onEdit }: LocationCardProps) {
           label="Location actions"
           canEdit={location.canEdit}
           onEdit={onEdit ? () => onEdit(location) : undefined}
+          onDelete={onDelete ? () => onDelete(location) : undefined}
         />
       </div>
 

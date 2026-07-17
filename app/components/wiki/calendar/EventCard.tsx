@@ -29,9 +29,10 @@ interface EventCardProps {
   cfg: CalendarConfig;
   onClick: (event: EventListItem) => void;
   onEdit?: (event: EventListItem) => void;
+  onDelete?: (event: EventListItem) => void;
 }
 
-export function EventCard({ event, cfg, onClick, onEdit }: EventCardProps) {
+export function EventCard({ event, cfg, onClick, onEdit, onDelete }: EventCardProps) {
   const gradientIndex = hashName(event.title) % GRADIENT_PAIRS.length;
   const [gradFrom] = GRADIENT_PAIRS[gradientIndex]!;
   const firstImageUrl = event.images[0]?.url ?? null;
@@ -88,6 +89,7 @@ export function EventCard({ event, cfg, onClick, onEdit }: EventCardProps) {
           label="Event actions"
           canEdit={event.canEdit}
           onEdit={onEdit ? () => onEdit(event) : undefined}
+          onDelete={onDelete ? () => onDelete(event) : undefined}
         />
       </div>
 

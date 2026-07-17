@@ -6,9 +6,10 @@ interface SpellCardProps {
   spell: SpellListItem;
   onClick: (spell: SpellListItem) => void;
   onEdit?: (spell: SpellListItem) => void;
+  onDelete?: (spell: SpellListItem) => void;
 }
 
-export function SpellCard({ spell, onClick, onEdit }: SpellCardProps) {
+export function SpellCard({ spell, onClick, onEdit, onDelete }: SpellCardProps) {
   return (
     <div
       role="button"
@@ -52,6 +53,7 @@ export function SpellCard({ spell, onClick, onEdit }: SpellCardProps) {
           label="Spell actions"
           canEdit={spell.canEdit}
           onEdit={onEdit ? () => onEdit(spell) : undefined}
+          onDelete={onDelete ? () => onDelete(spell) : undefined}
         />
       </div>
 

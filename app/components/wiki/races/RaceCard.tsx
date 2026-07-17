@@ -5,9 +5,10 @@ interface RaceCardProps {
   race: RaceListItem;
   onClick: (race: RaceListItem) => void;
   onEdit?: (race: RaceListItem) => void;
+  onDelete?: (race: RaceListItem) => void;
 }
 
-export function RaceCard({ race, onClick, onEdit }: RaceCardProps) {
+export function RaceCard({ race, onClick, onEdit, onDelete }: RaceCardProps) {
   return (
     <div
       role="button"
@@ -53,6 +54,7 @@ export function RaceCard({ race, onClick, onEdit }: RaceCardProps) {
           label="Race actions"
           canEdit={race.canEdit}
           onEdit={onEdit ? () => onEdit(race) : undefined}
+          onDelete={onDelete ? () => onDelete(race) : undefined}
         />
       </div>
 

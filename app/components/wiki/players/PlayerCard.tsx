@@ -6,6 +6,7 @@ interface PlayerCardProps {
   player: PlayerListItem;
   onClick: () => void;
   onEdit?: () => void;
+  onDelete?: () => void;
 }
 
 function getInitials(firstName: string, lastName: string): string {
@@ -14,7 +15,7 @@ function getInitials(firstName: string, lastName: string): string {
   return l ? `${f}${l}` : f;
 }
 
-export function PlayerCard({ player, onClick, onEdit }: PlayerCardProps) {
+export function PlayerCard({ player, onClick, onEdit, onDelete }: PlayerCardProps) {
   const fullName = `${player.firstName} ${player.lastName}`.trim();
   const initials = getInitials(player.firstName, player.lastName);
   const isDeceased = player.status?.value === 'deceased';
@@ -83,6 +84,7 @@ export function PlayerCard({ player, onClick, onEdit }: PlayerCardProps) {
           label="Player actions"
           canEdit={player.canEdit}
           onEdit={onEdit}
+          onDelete={onDelete}
         />
       </div>
 

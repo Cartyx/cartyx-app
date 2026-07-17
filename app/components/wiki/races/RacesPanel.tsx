@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { Dna } from 'lucide-react';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
 import { WikiCategoryHeader } from '~/components/wiki/shared/WikiCategoryHeader';
 import { WikiFilterBar } from '~/components/wiki/shared/WikiFilterBar';
 import { RaceCard } from './RaceCard';
 import { RaceModal } from './RaceModal';
 import { RaceViewModal } from './RaceViewModal';
-import { useRaces } from '~/hooks/useRaces';
+import { useRaces, useDeleteRace } from '~/hooks/useRaces';
 import { useCampaign } from '~/hooks/useCampaigns';
 import type { RaceListItem } from '~/types/race';
 
@@ -23,6 +24,8 @@ export function RacesPanel({ onBack }: RacesPanelProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedRaceId, setSelectedRaceId] = useState<string | undefined>();
   const [viewRaceId, setViewRaceId] = useState<string | undefined>();
+  const [pendingDelete, setPendingDelete] = useState<RaceListItem | undefined>();
+  const { remove: removeItem, isLoading: isDeleting } = useDeleteRace();
 
   const isGM = campaign?.isGM ?? false;
 
@@ -58,6 +61,13 @@ export function RacesPanel({ onBack }: RacesPanelProps) {
 
   const handleViewModalClose = () => {
     setViewRaceId(undefined);
+  };
+
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const handleDeleteConfirm = async () => {
+    if (!pendingDelete) return;
+    await removeItem({ id: pendingDelete.id, campaignId });
+    setPendingDelete(undefined);
   };
 
   return (
@@ -105,6 +115,7 @@ export function RacesPanel({ onBack }: RacesPanelProps) {
                 race={race}
                 onClick={handleRaceClick}
                 onEdit={handleRaceEdit}
+                onDelete={() => setPendingDelete(race)}
               />
             ))}
           </div>
@@ -125,6 +136,17 @@ export function RacesPanel({ onBack }: RacesPanelProps) {
           onClose={handleViewModalClose}
           raceId={viewRaceId}
           campaignId={campaignId}
+        />
+      )}
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete race"
+          message={`Delete "${pendingDelete.title}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={isDeleting}
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => setPendingDelete(undefined)}
         />
       )}
     </div>

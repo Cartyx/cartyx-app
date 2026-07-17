@@ -13,9 +13,10 @@ interface QuestCardProps {
   quest: QuestListItem;
   onClick: (quest: QuestListItem) => void;
   onEdit?: (quest: QuestListItem) => void;
+  onDelete?: (quest: QuestListItem) => void;
 }
 
-export function QuestCard({ quest, onClick, onEdit }: QuestCardProps) {
+export function QuestCard({ quest, onClick, onEdit, onDelete }: QuestCardProps) {
   return (
     <div
       role="button"
@@ -61,6 +62,7 @@ export function QuestCard({ quest, onClick, onEdit }: QuestCardProps) {
           label="Quest actions"
           canEdit={quest.canEdit}
           onEdit={onEdit ? () => onEdit(quest) : undefined}
+          onDelete={onDelete ? () => onDelete(quest) : undefined}
         />
       </div>
 

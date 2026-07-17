@@ -26,9 +26,10 @@ interface LoreCardProps {
   lore: LoreListItem;
   onClick: (lore: LoreListItem) => void;
   onEdit?: (lore: LoreListItem) => void;
+  onDelete?: (lore: LoreListItem) => void;
 }
 
-export function LoreCard({ lore, onClick, onEdit }: LoreCardProps) {
+export function LoreCard({ lore, onClick, onEdit, onDelete }: LoreCardProps) {
   const gradientIndex = hashName(lore.title) % GRADIENT_PAIRS.length;
   const [gradFrom] = GRADIENT_PAIRS[gradientIndex]!;
   const firstImageUrl = lore.images[0]?.url ?? null;
@@ -85,6 +86,7 @@ export function LoreCard({ lore, onClick, onEdit }: LoreCardProps) {
           label="Lore actions"
           canEdit={lore.canEdit}
           onEdit={onEdit ? () => onEdit(lore) : undefined}
+          onDelete={onDelete ? () => onDelete(lore) : undefined}
         />
       </div>
 

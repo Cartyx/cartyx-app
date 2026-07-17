@@ -4,7 +4,8 @@ import { Skull } from 'lucide-react';
 import { WikiCategoryHeader } from '~/components/wiki/shared/WikiCategoryHeader';
 import { WikiFilterBar } from '~/components/wiki/shared/WikiFilterBar';
 import { useCampaign } from '~/hooks/useCampaigns';
-import { useMonsters } from '~/hooks/useMonsters';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
+import { useMonsters, useMonsterMutations } from '~/hooks/useMonsters';
 import { MonsterCard } from './MonsterCard';
 import { MonsterModal } from './MonsterModal';
 import type { MonsterListItem } from '~/types/monster';
@@ -23,6 +24,7 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
   const [filterTags, setFilterTags] = useState<string[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | undefined>(undefined);
+  const [pendingDelete, setPendingDelete] = useState<MonsterListItem | undefined>();
 
   const {
     data: monsters = [],
@@ -33,6 +35,7 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
     tags: filterTags.length > 0 ? filterTags : undefined,
     sessionId: sessionId || undefined,
   });
+  const { remove } = useMonsterMutations(campaignId);
 
   const handleCreate = () => {
     setEditId(undefined);
@@ -42,6 +45,20 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
   const handleClick = (m: MonsterListItem) => {
     setEditId(m.id);
     setModalOpen(true);
+  };
+
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  // Unlike the other wiki delete hooks, useMonsterMutations exposes the raw
+  // mutation, whose mutateAsync rejects on failure — the hook's own onError
+  // already reports it, so swallow here rather than trip an unhandled rejection.
+  const handleDeleteConfirm = async () => {
+    if (!pendingDelete) return;
+    try {
+      await remove.mutateAsync(pendingDelete.id);
+    } catch {
+      // reported by useMonsterMutations' onError
+    }
+    setPendingDelete(undefined);
   };
 
   return (
@@ -97,6 +114,7 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
                 canEdit={isGM}
                 onClick={handleClick}
                 onEdit={handleClick}
+                onDelete={() => setPendingDelete(m)}
               />
             ))}
           </div>
@@ -112,6 +130,17 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
           setEditId(undefined);
         }}
       />
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete monster"
+          message={`Delete "${pendingDelete.name}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={remove.isPending}
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => setPendingDelete(undefined)}
+        />
+      )}
     </div>
   );
 }

@@ -8,9 +8,10 @@ interface RuleCardProps {
   canEdit?: boolean;
   onClick: (rule: RuleListItem) => void;
   onEdit?: (rule: RuleListItem) => void;
+  onDelete?: (rule: RuleListItem) => void;
 }
 
-export function RuleCard({ rule, canEdit, onClick, onEdit }: RuleCardProps) {
+export function RuleCard({ rule, canEdit, onClick, onEdit, onDelete }: RuleCardProps) {
   return (
     <div
       role="button"
@@ -56,6 +57,7 @@ export function RuleCard({ rule, canEdit, onClick, onEdit }: RuleCardProps) {
           label="Rule actions"
           canEdit={canEdit}
           onEdit={onEdit ? () => onEdit(rule) : undefined}
+          onDelete={onDelete ? () => onDelete(rule) : undefined}
         />
       </div>
 

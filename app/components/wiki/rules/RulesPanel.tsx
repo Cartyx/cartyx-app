@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { ScrollText } from 'lucide-react';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
 import { WikiCategoryHeader } from '~/components/wiki/shared/WikiCategoryHeader';
 import { WikiFilterBar } from '~/components/wiki/shared/WikiFilterBar';
 import { RuleCard } from './RuleCard';
 import { RuleModal } from './RuleModal';
 import { RuleViewModal } from './RuleViewModal';
-import { useRules } from '~/hooks/useRules';
+import { useRules, useDeleteRule } from '~/hooks/useRules';
 import { useCampaign } from '~/hooks/useCampaigns';
 import type { RuleListItem } from '~/types/rule';
 
@@ -25,6 +26,8 @@ export function RulesPanel({ onBack }: RulesPanelProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedRuleId, setSelectedRuleId] = useState<string | undefined>();
   const [viewRuleId, setViewRuleId] = useState<string | undefined>();
+  const [pendingDelete, setPendingDelete] = useState<RuleListItem | undefined>();
+  const { remove: removeItem, isLoading: isDeleting } = useDeleteRule();
 
   const { rules, isLoading, error } = useRules(campaignId, {
     search: search || undefined,
@@ -59,6 +62,13 @@ export function RulesPanel({ onBack }: RulesPanelProps) {
 
   const handleViewModalClose = () => {
     setViewRuleId(undefined);
+  };
+
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const handleDeleteConfirm = async () => {
+    if (!pendingDelete) return;
+    await removeItem({ id: pendingDelete.id, campaignId });
+    setPendingDelete(undefined);
   };
 
   return (
@@ -107,6 +117,7 @@ export function RulesPanel({ onBack }: RulesPanelProps) {
                 canEdit={isGM}
                 onClick={handleRuleClick}
                 onEdit={handleRuleEdit}
+                onDelete={() => setPendingDelete(rule)}
               />
             ))}
           </div>
@@ -127,6 +138,17 @@ export function RulesPanel({ onBack }: RulesPanelProps) {
           onClose={handleViewModalClose}
           ruleId={viewRuleId}
           campaignId={campaignId}
+        />
+      )}
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete rule"
+          message={`Delete "${pendingDelete.title}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={isDeleting}
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => setPendingDelete(undefined)}
         />
       )}
     </div>

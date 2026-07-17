@@ -1,13 +1,14 @@
 import { useState } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { MapPin, Settings } from 'lucide-react';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
 import { WikiCategoryHeader } from '~/components/wiki/shared/WikiCategoryHeader';
 import { WikiFilterBar } from '~/components/wiki/shared/WikiFilterBar';
 import { LocationCard } from './LocationCard';
 import { LocationModal } from './LocationModal';
 import { LocationViewModal } from './LocationViewModal';
 import { LocationTypeManager } from './LocationTypeManager';
-import { useLocations } from '~/hooks/useLocations';
+import { useLocations, useDeleteLocation } from '~/hooks/useLocations';
 import { useLocationTypes } from '~/hooks/useLocationTypes';
 import { useCampaign } from '~/hooks/useCampaigns';
 import type { LocationListItem } from '~/types/location';
@@ -29,6 +30,8 @@ export function LocationsPanel({ onBack }: LocationsPanelProps) {
   const [selectedLocationId, setSelectedLocationId] = useState<string | undefined>();
   const [viewLocationId, setViewLocationId] = useState<string | undefined>();
   const [showTypeManager, setShowTypeManager] = useState(false);
+  const [pendingDelete, setPendingDelete] = useState<LocationListItem | undefined>();
+  const { remove: removeItem, isLoading: isDeleting } = useDeleteLocation();
 
   const { locationTypes } = useLocationTypes(campaignId);
 
@@ -68,6 +71,13 @@ export function LocationsPanel({ onBack }: LocationsPanelProps) {
 
   const handleViewModalClose = () => {
     setViewLocationId(undefined);
+  };
+
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const handleDeleteConfirm = async () => {
+    if (!pendingDelete) return;
+    await removeItem({ id: pendingDelete.id, campaignId });
+    setPendingDelete(undefined);
   };
 
   return (
@@ -144,6 +154,7 @@ export function LocationsPanel({ onBack }: LocationsPanelProps) {
                 location={location}
                 onClick={handleLocationClick}
                 onEdit={handleLocationEdit}
+                onDelete={() => setPendingDelete(location)}
               />
             ))}
           </div>
@@ -164,6 +175,17 @@ export function LocationsPanel({ onBack }: LocationsPanelProps) {
           onClose={handleViewModalClose}
           locationId={viewLocationId}
           campaignId={campaignId}
+        />
+      )}
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete location"
+          message={`Delete "${pendingDelete.name}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={isDeleting}
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => setPendingDelete(undefined)}
         />
       )}
     </div>

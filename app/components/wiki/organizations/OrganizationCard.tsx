@@ -5,9 +5,15 @@ interface OrganizationCardProps {
   organization: OrganizationListItem;
   onClick: (organization: OrganizationListItem) => void;
   onEdit?: (organization: OrganizationListItem) => void;
+  onDelete?: (organization: OrganizationListItem) => void;
 }
 
-export function OrganizationCard({ organization, onClick, onEdit }: OrganizationCardProps) {
+export function OrganizationCard({
+  organization,
+  onClick,
+  onEdit,
+  onDelete,
+}: OrganizationCardProps) {
   return (
     <div
       role="button"
@@ -53,6 +59,7 @@ export function OrganizationCard({ organization, onClick, onEdit }: Organization
           label="Organization actions"
           canEdit={organization.canEdit}
           onEdit={onEdit ? () => onEdit(organization) : undefined}
+          onDelete={onDelete ? () => onDelete(organization) : undefined}
         />
       </div>
 

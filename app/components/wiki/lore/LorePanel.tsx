@@ -6,7 +6,8 @@ import { WikiFilterBar } from '~/components/wiki/shared/WikiFilterBar';
 import { LoreCard } from './LoreCard';
 import { LoreModal } from './LoreModal';
 import { LoreViewModal } from './LoreViewModal';
-import { useLore } from '~/hooks/useLore';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
+import { useLore, useDeleteLore } from '~/hooks/useLore';
 import { useCampaign } from '~/hooks/useCampaigns';
 import type { LoreListItem } from '~/types/lore';
 
@@ -25,12 +26,14 @@ export function LorePanel({ onBack }: LorePanelProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedLoreId, setSelectedLoreId] = useState<string | undefined>();
   const [viewLoreId, setViewLoreId] = useState<string | undefined>();
+  const [pendingDelete, setPendingDelete] = useState<LoreListItem | undefined>();
 
   const { lore, isLoading, error } = useLore(campaignId, {
     search: search || undefined,
     visibility,
     tags: filterTags.length > 0 ? filterTags : undefined,
   });
+  const { remove: removeLore, isLoading: isDeleting } = useDeleteLore();
 
   const handleCreateClick = () => {
     setSelectedLoreId(undefined);
@@ -50,6 +53,13 @@ export function LorePanel({ onBack }: LorePanelProps) {
   const handleLoreEdit = (item: LoreListItem) => {
     setSelectedLoreId(item.id);
     setIsModalOpen(true);
+  };
+
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const handleDeleteConfirm = async () => {
+    if (!pendingDelete) return;
+    await removeLore({ id: pendingDelete.id, campaignId });
+    setPendingDelete(undefined);
   };
 
   const handleModalClose = () => {
@@ -107,6 +117,7 @@ export function LorePanel({ onBack }: LorePanelProps) {
                 lore={item}
                 onClick={handleLoreClick}
                 onEdit={handleLoreEdit}
+                onDelete={() => setPendingDelete(item)}
               />
             ))}
           </div>
@@ -125,6 +136,17 @@ export function LorePanel({ onBack }: LorePanelProps) {
           onClose={handleViewModalClose}
           loreId={viewLoreId}
           campaignId={campaignId}
+        />
+      )}
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete lore"
+          message={`Delete "${pendingDelete.title}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={isDeleting}
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => setPendingDelete(undefined)}
         />
       )}
     </div>

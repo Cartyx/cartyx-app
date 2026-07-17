@@ -9,6 +9,7 @@ interface MonsterCardProps {
   canEdit?: boolean;
   onClick: (monster: MonsterListItem) => void;
   onEdit?: (monster: MonsterListItem) => void;
+  onDelete?: (monster: MonsterListItem) => void;
 }
 
 const SIZE_LABELS: Record<MonsterListItem['size'], string> = {
@@ -28,7 +29,7 @@ function formatCR(value: number): string {
   return String(value);
 }
 
-export function MonsterCard({ monster, canEdit, onClick, onEdit }: MonsterCardProps) {
+export function MonsterCard({ monster, canEdit, onClick, onEdit, onDelete }: MonsterCardProps) {
   const typeText = [monster.type, monster.subtype && `(${monster.subtype})`]
     .filter(Boolean)
     .join(' ');
@@ -87,6 +88,7 @@ export function MonsterCard({ monster, canEdit, onClick, onEdit }: MonsterCardPr
           label="Monster actions"
           canEdit={canEdit}
           onEdit={onEdit ? () => onEdit(monster) : undefined}
+          onDelete={onDelete ? () => onDelete(monster) : undefined}
         />
       </div>
 

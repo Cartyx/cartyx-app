@@ -4,7 +4,9 @@ import { UserCircle, Loader2 } from 'lucide-react';
 import { WikiCategoryHeader } from '~/components/wiki/shared/WikiCategoryHeader';
 import { PlayerCard } from './PlayerCard';
 import { PlayerModal } from './PlayerModal';
-import { usePlayers } from '~/hooks/usePlayers';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
+import { usePlayers, useDeletePlayer } from '~/hooks/usePlayers';
+import type { PlayerListItem } from '~/types/player';
 
 interface PlayersPanelProps {
   onBack: () => void;
@@ -15,10 +17,20 @@ export function PlayersPanel({ onBack }: PlayersPanelProps) {
   const [search, setSearch] = useState('');
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
 
+  const [pendingDelete, setPendingDelete] = useState<PlayerListItem | undefined>();
+
   const { players, isLoading, error } = usePlayers(campaignId, search || undefined);
+  const { remove: removePlayer, isLoading: isDeleting } = useDeletePlayer();
 
   const handlePlayerClick = (playerId: string) => {
     setSelectedPlayerId(playerId);
+  };
+
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const handleDeleteConfirm = async () => {
+    if (!pendingDelete) return;
+    await removePlayer({ id: pendingDelete.id, campaignId });
+    setPendingDelete(undefined);
   };
 
   return (
@@ -60,6 +72,7 @@ export function PlayersPanel({ onBack }: PlayersPanelProps) {
                 player={player}
                 onClick={() => handlePlayerClick(player.id)}
                 onEdit={() => handlePlayerClick(player.id)}
+                onDelete={() => setPendingDelete(player)}
               />
             ))}
           </div>
@@ -70,6 +83,17 @@ export function PlayersPanel({ onBack }: PlayersPanelProps) {
           campaignId={campaignId}
           playerId={selectedPlayerId}
           onClose={() => setSelectedPlayerId(null)}
+        />
+      )}
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete player"
+          message={`Delete "${pendingDelete.firstName} ${pendingDelete.lastName}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={isDeleting}
+          onConfirm={handleDeleteConfirm}
+          onCancel={() => setPendingDelete(undefined)}
         />
       )}
     </div>

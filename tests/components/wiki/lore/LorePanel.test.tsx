@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { LorePanel } from '~/components/wiki/lore/LorePanel';
-import { useLore } from '~/hooks/useLore';
+import { useLore, useDeleteLore } from '~/hooks/useLore';
 import { useCampaign } from '~/hooks/useCampaigns';
 
 // Stub the modal components to avoid portal / query-client complexity.
@@ -60,6 +60,8 @@ const mockLore = [
   },
 ];
 
+const mockRemoveLore = vi.fn();
+
 function setupMocks(overrides: { isGM?: boolean; lore?: typeof mockLore } = {}) {
   const { isGM = true, lore = mockLore } = overrides;
   (useCampaign as ReturnType<typeof vi.fn>).mockReturnValue({
@@ -69,6 +71,12 @@ function setupMocks(overrides: { isGM?: boolean; lore?: typeof mockLore } = {}) 
   });
   (useLore as ReturnType<typeof vi.fn>).mockReturnValue({
     lore,
+    isLoading: false,
+    error: null,
+  });
+  mockRemoveLore.mockResolvedValue({ success: true });
+  (useDeleteLore as ReturnType<typeof vi.fn>).mockReturnValue({
+    remove: mockRemoveLore,
     isLoading: false,
     error: null,
   });
@@ -175,6 +183,55 @@ describe('LorePanel', () => {
     });
     render(<LorePanel onBack={vi.fn()} />);
     expect(screen.getByText('Failed to fetch lore')).toBeInTheDocument();
+  });
+
+  it('GM choosing Delete opens the confirm dialog and confirming removes the lore', async () => {
+    setupMocks({ isGM: true });
+    const user = userEvent.setup();
+    render(<LorePanel onBack={vi.fn()} />);
+
+    await user.click(await screen.findByLabelText('Lore actions'));
+    await user.click(screen.getByRole('menuitem', { name: /delete/i }));
+
+    // The confirm dialog opens rather than deleting straight away.
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toBeInTheDocument();
+    expect(mockRemoveLore).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      expect(mockRemoveLore).toHaveBeenCalledWith({
+        id: 'lore-1',
+        campaignId: 'campaign-123',
+      });
+    });
+    // Dialog closes once the delete resolves.
+    await waitFor(() => {
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+    });
+  });
+
+  it('GM cancelling the delete confirm does not remove the lore', async () => {
+    setupMocks({ isGM: true });
+    const user = userEvent.setup();
+    render(<LorePanel onBack={vi.fn()} />);
+
+    await user.click(await screen.findByLabelText('Lore actions'));
+    await user.click(screen.getByRole('menuitem', { name: /delete/i }));
+    await user.click(await screen.findByRole('button', { name: 'Cancel' }));
+
+    expect(mockRemoveLore).not.toHaveBeenCalled();
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('non-GM never sees a Delete action, even on lore they can edit', async () => {
+    setupMocks({ isGM: false, lore: [{ ...mockLore[0]!, canEdit: true }] });
+    const user = userEvent.setup();
+    render(<LorePanel onBack={vi.fn()} />);
+
+    await user.click(await screen.findByLabelText('Lore actions'));
+    expect(screen.queryByRole('menuitem', { name: /delete/i })).not.toBeInTheDocument();
   });
 
   it('calls onBack when header back button is clicked', async () => {

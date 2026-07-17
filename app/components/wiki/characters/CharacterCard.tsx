@@ -18,6 +18,7 @@ interface CharacterCardProps {
   character: CharacterListItem;
   onClick: (character: CharacterListItem) => void;
   onEdit?: (character: CharacterListItem) => void;
+  onDelete?: (character: CharacterListItem) => void;
 }
 
 const GRADIENT_PAIRS = [
@@ -44,7 +45,7 @@ function getInitials(firstName: string, lastName: string): string {
   return l ? `${f}${l}` : f;
 }
 
-export function CharacterCard({ character, onClick, onEdit }: CharacterCardProps) {
+export function CharacterCard({ character, onClick, onEdit, onDelete }: CharacterCardProps) {
   const fullName = `${character.firstName} ${character.lastName}`.trim();
   const initials = getInitials(character.firstName, character.lastName);
   const gradientIndex = hashName(fullName) % GRADIENT_PAIRS.length;
@@ -106,6 +107,7 @@ export function CharacterCard({ character, onClick, onEdit }: CharacterCardProps
           label="Character actions"
           canEdit={character.canEdit}
           onEdit={onEdit ? () => onEdit(character) : undefined}
+          onDelete={onDelete ? () => onDelete(character) : undefined}
         />
       </div>
 
