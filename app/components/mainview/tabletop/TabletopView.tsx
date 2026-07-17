@@ -117,6 +117,7 @@ export function TabletopView({
 }: TabletopViewProps) {
   const { screens, isLoading } = useTabletopScreenList(campaignId);
   const mutations = useTabletopMutations(campaignId);
+  const openWindow = mutations.openWindow.mutate;
   const { playerState, updateState } = useTabletopPlayerState(campaignId);
   const [activeScreenId, setActiveScreenId] = useState<string | null>(null);
   // Active map is per-tab — render the active map of the tab being viewed.
@@ -349,7 +350,7 @@ export function TabletopView({
               onEdit={() => setEditingLocationId(w.documentId)}
               onOpenLocation={(locId) => {
                 if (activeScreenId) {
-                  mutations.openWindow.mutate({
+                  openWindow({
                     screenId: activeScreenId,
                     collection: 'location',
                     documentId: locId,
@@ -493,7 +494,7 @@ export function TabletopView({
 
       return merged;
     });
-  }, [activeScreen, activeScreenId, campaignId, isGM]);
+  }, [activeScreen, activeScreenId, campaignId, isGM, openWindow]);
 
   // --- Window change handler (local state + close mutation) ---
   const handleWindowsChange = useCallback(
