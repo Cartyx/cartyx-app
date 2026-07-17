@@ -101,13 +101,4 @@ export type TabletopMessage =
   | { type: 'tab:delete'; screenId: string }
   | { type: 'tab:focus-all'; screenId: string }
   | { type: 'tab:content-added'; screenId: string }
-  | {
-      type: 'ping';
-      screenId: string;
-      x: number;
-      y: number;
-      userId: string;
-      userName: string;
-      color: string;
-    }
   | { type: 'grid:style-change'; screenId: string; gridStyle: GridStyle };

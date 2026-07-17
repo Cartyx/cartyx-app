@@ -158,31 +158,3 @@ Badges alert a user that content was added to a tab they are not viewing.
 ```
 
 Badges are entirely client-side. They are not persisted and reset on page reload.
-
-## Ping Lifecycle
-
-Pings are ephemeral visual signals.
-
-```
-  1. User triggers ping at (x, y) on the canvas
-     |
-     v
-  2. Client sends: { type: 'ping', screenId, x, y, userId, userName, color }
-     |
-     v
-  3. Other clients receive the message and add a PingData entry
-     |
-     v
-  4. PingOverlay renders:
-     - Expanding ring (Circle, radius grows over 3s)
-     - Center dot (Circle, radius 5)
-     - Username label (Text)
-     - All elements fade from opacity 1 -> 0 over 3 seconds
-     |
-     v
-  5. After PING_DURATION_MS (3000ms), onPingExpired fires
-     - PingData entry removed from state
-     - Animation stops
-```
-
-Pings are never persisted. They exist only in React state for 3 seconds.

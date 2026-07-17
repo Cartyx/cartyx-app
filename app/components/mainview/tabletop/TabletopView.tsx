@@ -60,7 +60,6 @@ import type { ToolType } from '~/components/mainview/ToolBar';
 import { ToolWindow } from './ToolWindow';
 import { TOOL_WINDOW_META, type ToolWindowId } from './toolWindowState';
 import { useToolWindows } from './useToolWindows';
-import type { PingData } from './PingOverlay';
 
 // ---------------------------------------------------------------------------
 // Dialog state (mirrors GMScreenDialogs pattern)
@@ -129,7 +128,6 @@ export function TabletopView({
   const sendMapMessage = useTabletopMapSync(campaignId, getToken, isGM);
 
   const [badgeScreenIds, setBadgeScreenIds] = useState<Set<string>>(new Set());
-  const [_pings, setPings] = useState<PingData[]>([]);
   const [dialog, setDialog] = useState<DialogState>({ type: 'none' });
   const [editingCharacterId, setEditingCharacterId] = useState<string | null>(null);
   const [editingRaceId, setEditingRaceId] = useState<string | null>(null);
@@ -191,11 +189,6 @@ export function TabletopView({
   // Fetch detail for active screen
   const { screen: activeScreen } = useTabletopScreenDetail(campaignId, activeScreenId);
 
-  // Handle ping expired (used when PingOverlay is wired in)
-  const _handlePingExpired = useCallback((id: string) => {
-    setPings((prev) => prev.filter((p) => p.id !== id));
-  }, []);
-
   // Realtime message handler
   const handleMessage = useCallback(
     (msg: TabletopMessage) => {
@@ -220,19 +213,6 @@ export function TabletopView({
           if (msg.screenId === activeScreenId) {
             mutations.invalidateDetail(msg.screenId);
           }
-          break;
-        case 'ping':
-          setPings((prev) => [
-            ...prev,
-            {
-              id: `${msg.userId}-${Date.now()}`,
-              x: msg.x,
-              y: msg.y,
-              userName: msg.userName,
-              color: msg.color,
-              createdAt: Date.now(),
-            },
-          ]);
           break;
         case 'grid:style-change':
           if (msg.screenId === activeScreenId) {
