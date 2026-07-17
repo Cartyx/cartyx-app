@@ -298,6 +298,55 @@ test.describe('wiki card overflow menu', () => {
     await prepareState();
   });
 
+  // Symmetric cleanup. `prepareState` resets BEFORE each test, but without this
+  // the suite would leave residue for OTHER specs sharing the dev DB: the last
+  // test's quest windows (shared + private) and the `activeScreenId` we pinned
+  // on the GM's and player's player-states. We scope the `$pull`s to THIS
+  // fixture's questId exactly as `prepareState` does, so globalSetup's seeded
+  // location window on the E2E screen is never touched.
+  test.afterAll(async () => {
+    const { mongoUri } = loadEnv();
+    const seed = readSeed();
+    const campaignId = new mongoose.Types.ObjectId(seed.campaignId);
+
+    await mongoose.connect(mongoUri, { dbName: process.env.MONGODB_DB });
+    try {
+      const db = mongoose.connection.db;
+      if (!db) throw new Error('Mongo connection has no db handle');
+
+      const quest = await db.collection('quests').findOne({ campaignId, name: E2E_QUEST_NAME });
+      if (quest) {
+        const questId = quest._id;
+        await db
+          .collection('tabletopscreen')
+          .updateMany(
+            { campaignId },
+            { $pull: { windows: { collection: 'quest', documentId: questId } } }
+          );
+        await db
+          .collection('tabletopplayerstate')
+          .updateMany(
+            { campaignId },
+            { $pull: { privateWindows: { collection: 'quest', documentId: questId } } }
+          );
+      }
+
+      // Unpin the activeScreenId we set in prepareState so we don't leave the GM
+      // and player fixed to the E2E screen for whatever spec runs next.
+      await db.collection('tabletopplayerstate').updateMany(
+        {
+          campaignId,
+          userId: {
+            $in: [gmUserId, playerUserId].map((id) => new mongoose.Types.ObjectId(id)),
+          },
+        },
+        { $unset: { activeScreenId: '' } }
+      );
+    } finally {
+      await mongoose.disconnect();
+    }
+  });
+
   test('Push to Tabletop is shared — a player sees the pushed window', async ({
     page,
     browser,
@@ -312,11 +361,25 @@ test.describe('wiki card overflow menu', () => {
 
     // A real PLAYER, in their own browser, opens the SAME shared screen and sees
     // the same window — because Push writes to the screen doc every member reads.
+    //
+    // Push is NOT broadcast live (no client emits `window:show`), so the player
+    // converges on the pushed window ONLY via a data fetch. If the player's
+    // first fetch on navigation raced ahead of the GM's server `$push` landing,
+    // the window simply isn't in that response yet — the product delivers it on
+    // the NEXT fetch. So we reflect exactly that: reload to force a fresh fetch
+    // and re-check, retrying until the window arrives. This removes the race
+    // without weakening the assertion — the window MUST appear via refetch, and
+    // it does not lean on the GM's own (local-cache) visibility as a signal.
     const { ctx, page: playerPage } = await openPlayer(browser);
     try {
       await playerPage.goto(campaignUrl + '?tab=tabletop');
-      await openTabletopTab(playerPage, screenId);
-      await expect(playerPage.getByTestId('quest-window').first()).toBeVisible({ timeout: 20_000 });
+      await expect(async () => {
+        await playerPage.reload();
+        await openTabletopTab(playerPage, screenId);
+        await expect(playerPage.getByTestId('quest-window').first()).toBeVisible({
+          timeout: 5_000,
+        });
+      }).toPass({ timeout: 30_000 });
     } finally {
       await ctx.close();
     }
@@ -327,6 +390,7 @@ test.describe('wiki card overflow menu', () => {
     browser,
     campaignUrl,
     screenId,
+    locationName,
   }) => {
     // GM-A shows the fixture quest on their OWN tab (private player-state).
     await openQuestMenu(page, campaignUrl, screenId);
@@ -341,8 +405,22 @@ test.describe('wiki card overflow menu', () => {
     try {
       await playerPage.goto(campaignUrl + '?tab=tabletop');
       await openTabletopTab(playerPage, screenId);
-      // Let the tabletop settle (screen fetched, its windows rendered) so we are
-      // not asserting absence before any window has had a chance to appear.
+
+      // POSITIVE CONTROL. Absence-of-quest-window is only meaningful if the
+      // player's fetch of the shared screen actually succeeded AND rendered its
+      // windows. So first assert the player DOES see the seeded location window
+      // that globalSetup pins to this screen (a shared window, visible to every
+      // member) — proving the fetch/render path worked. Without this, a
+      // silently-failed fetch would render zero windows and make the negative
+      // assertion below pass for the wrong reason.
+      await expect(playerPage.getByRole('dialog', { name: locationName })).toBeVisible({
+        timeout: 20_000,
+      });
+
+      // Now the negative assertion is trustworthy: the player's screen is fully
+      // rendered, yet the GM's PRIVATE quest window (written only to the GM's own
+      // player-state) is nowhere on it. Keep a short settle as a backstop so we
+      // don't assert absence a frame before a late window could paint.
       await playerPage.waitForTimeout(2000);
       await expect(playerPage.getByTestId('quest-window')).toHaveCount(0);
     } finally {
