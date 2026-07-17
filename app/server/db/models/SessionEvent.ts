@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 import { SESSION_EVENT_TYPES } from '~/types/tabletop';
 
 const sessionEventSchema = new mongoose.Schema(
@@ -41,5 +41,8 @@ const sessionEventSchema = new mongoose.Schema(
 
 sessionEventSchema.index({ campaignId: 1, sessionId: 1, timestamp: 1 });
 
-export const SessionEvent =
-  mongoose.models.SessionEvent || mongoose.model('SessionEvent', sessionEventSchema);
+export type ISessionEvent = InferSchemaType<typeof sessionEventSchema>;
+
+export const SessionEvent: Model<ISessionEvent> =
+  (mongoose.models.SessionEvent as Model<ISessionEvent>) ||
+  mongoose.model<ISessionEvent>('SessionEvent', sessionEventSchema);
