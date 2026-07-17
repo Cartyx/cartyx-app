@@ -7,7 +7,7 @@ import { Campaign } from '../db/models/Campaign';
 import { TabletopScreen, TABLETOP_LIMITS } from '../db/models/TabletopScreen';
 import { TabletopPlayerState } from '../db/models/TabletopPlayerState';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
-import { hydrateRefs, hydratePrivateWindowRefs, GM_ONLY_COLLECTIONS } from './tabletop-hydration';
+import { hydrateRefs, hydratePrivateWindowRefs, canHydratePrivately } from './tabletop-hydration';
 import type {
   TabletopScreenData,
   TabletopScreenDetailData,
@@ -1241,8 +1241,12 @@ export const addPrivateWindow = async ({
 
     // Defense in depth. getPlayerState's hydration filter is the load-bearing
     // guard — it also covers rows written before this check existed — but
-    // there is no legitimate reason for a player to store a GM-only window.
-    if (member.role !== 'gm' && GM_ONLY_COLLECTIONS.has(data.collection)) {
+    // there is no legitimate reason for a player to store a window their own
+    // hydration would just filter back out. Reject exactly what
+    // canHydratePrivately would deny, so the write- and read-side checks can
+    // never drift apart again (that drift is what let a player accumulate
+    // invisible `note` windows that still counted against MAX_PRIVATE_WINDOWS).
+    if (!canHydratePrivately(data.collection, member.role === 'gm')) {
       throw new Error('Not authorized to open this collection');
     }
 

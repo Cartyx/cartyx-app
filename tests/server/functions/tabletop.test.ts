@@ -1060,4 +1060,28 @@ describe('addPrivateWindow (handler) — GM-only collection guard', () => {
 
     expect(TabletopPlayerState.updateOne).toHaveBeenCalled();
   });
+
+  // -------------------------------------------------------------------------
+  // `note` is not in GM_ONLY_COLLECTIONS (it isn't "GM-only" — GMs and players
+  // both have notes), but getPlayerState's hydration filter denies it on the
+  // PRIVATE-window path for non-GMs (see tabletop-hydration.ts). Without a
+  // matching guard here, a player's addPrivateWindow({ collection: 'note' })
+  // succeeds, is never hydrated back, and still burns a MAX_PRIVATE_WINDOWS
+  // slot — a silent void plus a quota leak.
+  // -------------------------------------------------------------------------
+
+  it('rejects a note private window from a player', async () => {
+    mockSessionAs('player');
+
+    await expect(_addPrivateWindow({ data: payload('note') })).rejects.toThrow();
+    expect(TabletopPlayerState.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('allows a note private window from the GM', async () => {
+    mockSessionAs('gm');
+
+    await _addPrivateWindow({ data: payload('note') });
+
+    expect(TabletopPlayerState.updateOne).toHaveBeenCalled();
+  });
 });
