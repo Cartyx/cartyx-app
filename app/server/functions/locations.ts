@@ -246,7 +246,7 @@ export const updateLocation = async ({ data }: { data: z.infer<typeof updateLoca
     existing.locationType = data.locationType.trim();
     existing.description = (data.description ?? '').trim();
     existing.gmNotes = (data.gmNotes ?? '').trim();
-    existing.parentLocations = newParents;
+    existing.parentLocations = newParents as unknown as typeof existing.parentLocations;
     existing.tags = finalTags;
     if (data.isPublic !== undefined) {
       existing.isPublic = data.isPublic;
