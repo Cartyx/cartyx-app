@@ -26,8 +26,8 @@ defined in the type system but not yet rendered.
   overrides). Stored as `TabletopPlayerState` in MongoDB.
 - **Session Event** -- Write-once records that capture GM actions during a session
   (reveal document, start battle, etc.). Used for timeline and recap.
-- **Ping** -- An ephemeral, 3-second animation at a point on the canvas. Never
-  persisted; broadcast to all connected clients.
+- **Ping** _(planned, Phase 3 -- not built)_ -- An ephemeral, 3-second animation
+  at a point on the canvas. Never persisted; broadcast to all connected clients.
 - **Floating Window** -- A draggable/resizable panel on the tabletop that shows
   hydrated content from any wiki collection (notes, characters, races, rules,
   players).
@@ -45,7 +45,7 @@ defined in the type system but not yet rendered.
 ## Phased Implementation
 
 **Phase 1 (current):** Grid mode, tab management, floating windows, real-time
-sync, ping, "Show on Tabletop" button, session events.
+sync, "Show on Tabletop" button, session events.
 
 **Phase 2:** Map mode via Leaflet, location binding, fog of war layer.
 
