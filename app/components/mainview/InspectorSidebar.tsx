@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import type { IconDefinition } from '@fortawesome/fontawesome-svg-core';
 import { ChatPanel } from './ChatPanel';
 import { NotesPanel } from './NotesPanel';
@@ -8,13 +8,13 @@ import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faMessage, faBook, faNoteSticky, faGear, faDice } from '@fortawesome/pro-solid-svg-icons';
 import { DicePanel } from './DicePanel';
 import { ChevronRight } from 'lucide-react';
-import { useOptionalFeatureFlag } from '~/utils/featureFlags';
 import { usePartySession } from '~/hooks/usePartySession';
 import { useBeyond20 } from '~/hooks/useBeyond20';
 import { useChatMessages } from '~/hooks/useChatMessages';
 import { useDiceRolls } from '~/hooks/useDiceRolls';
 import { useAuth } from '~/hooks/useAuth';
 import { onDiceBroadcastRequest, reportDiceDelivery } from '~/utils/diceRollerBridge';
+import { onChatBroadcastRequest, reportChatDelivery } from '~/utils/chatBridge';
 import { createServerFn } from '@tanstack/react-start';
 import { z } from 'zod';
 
@@ -56,63 +56,9 @@ export function InspectorSidebar({
   campaignId,
   sessions,
 }: InspectorSidebarProps) {
-  const chatFlagValue = import.meta.env.VITE_PUBLIC_FF_CHAT ?? '';
-  const diceFlagValue = import.meta.env.VITE_PUBLIC_FF_DICE ?? '';
-  const wikiFlagValue = import.meta.env.VITE_PUBLIC_FF_WIKI ?? '';
-  const notesFlagValue = import.meta.env.VITE_PUBLIC_FF_NOTES ?? '';
-  const settingsFlagValue = import.meta.env.VITE_PUBLIC_FF_SETTINGS ?? '';
-
-  const chatFlag = useOptionalFeatureFlag(chatFlagValue);
-  const diceFlag = useOptionalFeatureFlag(diceFlagValue);
-  const wikiFlag = useOptionalFeatureFlag(wikiFlagValue);
-  const notesFlag = useOptionalFeatureFlag(notesFlagValue);
-  const settingsFlag = useOptionalFeatureFlag(settingsFlagValue);
-
-  const tabs = useMemo(
-    () =>
-      ALL_TABS.filter((tab) => {
-        if (tab.id === 'chat') return chatFlag.isEnabled;
-        if (tab.id === 'dice') return diceFlag.isEnabled;
-        if (tab.id === 'wiki') return wikiFlag.isEnabled;
-        if (tab.id === 'notes') return notesFlag.isEnabled;
-        if (tab.id === 'settings') return settingsFlag.isEnabled;
-        return true;
-      }),
-    [
-      chatFlag.isEnabled,
-      diceFlag.isEnabled,
-      wikiFlag.isEnabled,
-      notesFlag.isEnabled,
-      settingsFlag.isEnabled,
-    ]
-  );
-
-  const isLoading =
-    chatFlag.isLoading ||
-    diceFlag.isLoading ||
-    wikiFlag.isLoading ||
-    notesFlag.isLoading ||
-    settingsFlag.isLoading;
-
-  const initialTab = tabs.some((t) => t.id === defaultTab) ? defaultTab : (tabs[0]?.id ?? 'chat');
-  const [activeTab, setActiveTab] = useState<InspectorTab>(initialTab);
-  const hasInteracted = useRef(false);
+  const tabs = ALL_TABS;
+  const [activeTab, setActiveTab] = useState<InspectorTab>(defaultTab);
   const tablistRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!tabs.some((t) => t.id === activeTab)) {
-      // Active tab became unavailable (flag disabled) — fall back to first available
-      setActiveTab(tabs[0]?.id ?? 'chat');
-    } else if (
-      !hasInteracted.current &&
-      activeTab !== defaultTab &&
-      tabs.some((t) => t.id === defaultTab)
-    ) {
-      // Flags finished loading and defaultTab is now available; restore it
-      // only if the user has not manually navigated away
-      setActiveTab(defaultTab);
-    }
-  }, [tabs, activeTab, defaultTab]);
 
   // Real-time wiring — only active when campaignId is provided
   const { user } = useAuth();
@@ -182,6 +128,19 @@ export function InspectorSidebar({
     });
   }, [socket, sendDiceRoll, isViewingActive, activeSessionId, user?.name]);
 
+  // Relay "share in chat" requests (e.g. the spell view → window event) to the
+  // session socket as a chat message, same gating as dice rolls.
+  useEffect(() => {
+    return onChatBroadcastRequest(({ requestId, text, channel }) => {
+      const canSend =
+        isViewingActive && !!activeSessionId && !!socket && socket.readyState === WebSocket.OPEN;
+      if (canSend) {
+        sendMessage(text, channel, user?.id ?? '', user?.name || 'Player', socket);
+      }
+      reportChatDelivery({ requestId, delivered: canSend });
+    });
+  }, [socket, sendMessage, isViewingActive, activeSessionId, user?.id, user?.name]);
+
   const sessionList = (sessions ?? []).map((s) => ({
     id: s.id,
     name: s.name,
@@ -210,7 +169,6 @@ export function InspectorSidebar({
       return;
     }
 
-    hasInteracted.current = true;
     setActiveTab(tabs[nextIndex]!.id);
     const buttons = tablistRef.current?.querySelectorAll<HTMLButtonElement>('[role="tab"]');
     buttons?.[nextIndex]?.focus();
@@ -241,10 +199,7 @@ export function InspectorSidebar({
                 aria-label={tab.label}
                 tabIndex={isActive ? 0 : -1}
                 data-testid={tabId(tab.id)}
-                onClick={() => {
-                  hasInteracted.current = true;
-                  setActiveTab(tab.id);
-                }}
+                onClick={() => setActiveTab(tab.id)}
                 className={[
                   'flex flex-1 items-center justify-center text-base transition-colors relative',
                   isActive
@@ -272,66 +227,56 @@ export function InspectorSidebar({
       </div>
 
       {/* Tab panels — one per tab, only active is visible */}
-      {isLoading && tabs.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center">
-          <p className="font-sans font-semibold text-xs text-slate-500">Loading panels...</p>
-        </div>
-      ) : tabs.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center">
-          <p className="font-sans font-semibold text-xs text-slate-500">No panels available</p>
-        </div>
-      ) : (
-        tabs.map((tab) => {
-          const isActive = tab.id === activeTab;
-          return (
-            <div
-              key={tab.id}
-              id={panelId(tab.id)}
-              data-testid={isActive ? 'inspector-panel' : undefined}
-              role="tabpanel"
-              aria-labelledby={tabId(tab.id)}
-              hidden={!isActive}
-              className="flex flex-1 min-h-0 w-full"
-            >
-              {tab.id === 'chat' ? (
-                <ChatPanel
-                  messages={messages}
-                  onSendMessage={(text, channel) =>
-                    sendMessage(text, channel, user?.id ?? '', user?.name ?? '', socket)
-                  }
-                  sessions={sessionList}
-                  activeSessionId={viewingSessionId}
-                  onSessionChange={setViewingSessionId}
-                  saveError={chatSaveError}
-                  onDismissError={() => setChatSaveError(null)}
-                />
-              ) : tab.id === 'dice' ? (
-                <DicePanel
-                  rolls={rolls}
-                  isConnected={isConnected}
-                  sessions={sessionList}
-                  activeSessionId={viewingSessionId}
-                  onSessionChange={setViewingSessionId}
-                  saveError={diceSaveError}
-                  onDismissError={() => setDiceSaveError(null)}
-                />
-              ) : tab.id === 'wiki' ? (
-                <WikiPanel />
-              ) : tab.id === 'notes' ? (
-                <NotesPanel />
-              ) : tab.id === 'settings' ? (
-                <SettingsPanel />
-              ) : (
-                <div className="flex flex-1 items-center justify-center">
-                  <span className="font-sans font-semibold text-xs text-slate-600">
-                    {tab.label} — Coming Soon
-                  </span>
-                </div>
-              )}
-            </div>
-          );
-        })
-      )}
+      {tabs.map((tab) => {
+        const isActive = tab.id === activeTab;
+        return (
+          <div
+            key={tab.id}
+            id={panelId(tab.id)}
+            data-testid={isActive ? 'inspector-panel' : undefined}
+            role="tabpanel"
+            aria-labelledby={tabId(tab.id)}
+            hidden={!isActive}
+            className="flex flex-1 min-h-0 w-full"
+          >
+            {tab.id === 'chat' ? (
+              <ChatPanel
+                messages={messages}
+                onSendMessage={(text, channel) =>
+                  sendMessage(text, channel, user?.id ?? '', user?.name ?? '', socket)
+                }
+                sessions={sessionList}
+                activeSessionId={viewingSessionId}
+                onSessionChange={setViewingSessionId}
+                saveError={chatSaveError}
+                onDismissError={() => setChatSaveError(null)}
+              />
+            ) : tab.id === 'dice' ? (
+              <DicePanel
+                rolls={rolls}
+                isConnected={isConnected}
+                sessions={sessionList}
+                activeSessionId={viewingSessionId}
+                onSessionChange={setViewingSessionId}
+                saveError={diceSaveError}
+                onDismissError={() => setDiceSaveError(null)}
+              />
+            ) : tab.id === 'wiki' ? (
+              <WikiPanel />
+            ) : tab.id === 'notes' ? (
+              <NotesPanel />
+            ) : tab.id === 'settings' ? (
+              <SettingsPanel />
+            ) : (
+              <div className="flex flex-1 items-center justify-center">
+                <span className="font-sans font-semibold text-xs text-slate-600">
+                  {tab.label} — Coming Soon
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -1,29 +1,9 @@
 import React from 'react';
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ToolBar } from '~/components/mainview/ToolBar';
 import type { ToolType } from '~/components/mainview/ToolBar';
-
-// The interactive dice roller is gated behind VITE_PUBLIC_FF_DICE. Default the
-// mock flag to enabled so the existing full-tool-list assertions below keep
-// passing; the "dice tool feature flag" describe block toggles it off/on.
-let diceFlagEnabled = true;
-vi.mock('~/utils/featureFlags', () => ({
-  useOptionalFeatureFlag: (flag: string) => ({
-    isEnabled: Boolean(flag) && diceFlagEnabled,
-    isLoading: false,
-  }),
-}));
-
-beforeEach(() => {
-  diceFlagEnabled = true;
-  vi.stubEnv('VITE_PUBLIC_FF_DICE', 'cartyx-dice-dev');
-});
-
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
 
 const allTools: ToolType[] = [
   'pointer',
@@ -31,6 +11,7 @@ const allTools: ToolType[] = [
   'drawing',
   'text',
   'ruler',
+  'aoe',
   'dice',
   'stamp',
   'layer',
@@ -49,7 +30,7 @@ function renderToolBar(props: Partial<React.ComponentProps<typeof ToolBar>> = {}
 }
 
 describe('ToolBar', () => {
-  it('renders all 8 tool buttons when expanded (GM)', () => {
+  it('renders all 9 tool buttons when expanded (GM)', () => {
     renderToolBar();
     for (const tool of allTools) {
       expect(screen.getByTestId(`tool-${tool}`)).toBeInTheDocument();
@@ -148,23 +129,14 @@ describe('ToolBar', () => {
   });
 });
 
-describe('dice tool feature flag', () => {
-  it('hides the dice tool when the flag is disabled', () => {
-    diceFlagEnabled = false;
-    renderToolBar();
-    expect(screen.queryByTestId('tool-dice')).not.toBeInTheDocument();
-  });
-
-  it('shows the dice tool when the flag is enabled', () => {
-    diceFlagEnabled = true;
+describe('dice tool', () => {
+  it('always shows the dice tool (no feature flag)', () => {
     renderToolBar();
     expect(screen.getByTestId('tool-dice')).toBeInTheDocument();
   });
 
-  it('hides the dice tool when the flag env var is unset', () => {
-    vi.stubEnv('VITE_PUBLIC_FF_DICE', '');
-    diceFlagEnabled = true; // flag would be on, but no flag name is configured
-    renderToolBar();
-    expect(screen.queryByTestId('tool-dice')).not.toBeInTheDocument();
+  it('shows the dice tool for non-GMs too', () => {
+    renderToolBar({ isGM: false });
+    expect(screen.getByTestId('tool-dice')).toBeInTheDocument();
   });
 });

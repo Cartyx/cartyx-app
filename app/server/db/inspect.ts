@@ -10,6 +10,9 @@ import { Race } from './models/Race';
 import { User } from './models/User';
 import { Map as MapModel } from './models/Map';
 import { MapToken } from './models/MapToken';
+import { MapText } from './models/MapText';
+import { MapDrawing } from './models/MapDrawing';
+import { MapAoE } from './models/MapAoE';
 import { Monster } from './models/Monster';
 
 /** All Mongoose models the app declares. Order does not matter. */
@@ -25,6 +28,9 @@ export const ALL_MODELS: mongoose.Model<any>[] = [
   Race,
   MapModel,
   MapToken,
+  MapText,
+  MapDrawing,
+  MapAoE,
   Monster,
 ];
 

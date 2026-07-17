@@ -128,16 +128,6 @@ jobs:
       # code path throws on a missing BASE_URL even though e2e uses a pre-minted
       # session cookie rather than the live OAuth flow.
       BASE_URL: http://localhost:3000
-      # Inspector feature flags are plain booleans baked in at build time
-      # since #490 (parseBooleanFlag in app/utils/featureFlags.tsx accepts
-      # only 'true'/'1'). They must be 'true' here or the gated inspector
-      # tabs never render — the Wiki tab being absent is what times out
-      # every calendar/locations/lore spec.
-      VITE_PUBLIC_FF_DICE: 'true'
-      VITE_PUBLIC_FF_CHAT: 'true'
-      VITE_PUBLIC_FF_WIKI: 'true'
-      VITE_PUBLIC_FF_NOTES: 'true'
-      VITE_PUBLIC_FF_SETTINGS: 'true'
     steps:
       - name: Checkout code
         uses: actions/checkout@v7

@@ -5,28 +5,24 @@ import {
   Pencil,
   Type,
   Ruler,
+  Cone,
   Dices,
   Stamp,
   Layers,
   ChevronLeft,
 } from 'lucide-react';
-import { useOptionalFeatureFlag } from '~/utils/featureFlags';
+import type { ToolWindowId } from './tabletop/toolWindowState';
 
 export type ToolType =
-  | 'pointer'
-  | 'hand'
-  | 'drawing'
-  | 'text'
-  | 'ruler'
-  | 'dice'
-  | 'stamp'
-  | 'layer';
+  'pointer' | 'hand' | 'drawing' | 'text' | 'ruler' | 'aoe' | 'dice' | 'stamp' | 'layer';
 
 export interface ToolBarProps {
   activeTool: ToolType;
   onToolChange: (tool: ToolType) => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  /** Tool windows currently open — their icons render highlighted too. */
+  openWindows?: ToolWindowId[];
   /** When false, GM-only tools (e.g. Drawing) are hidden. */
   isGM?: boolean;
 }
@@ -38,6 +34,7 @@ const tools: { id: ToolType; icon: React.ElementType; label: string; gmOnly?: bo
   { id: 'drawing', icon: Pencil, label: 'Drawing', gmOnly: true },
   { id: 'text', icon: Type, label: 'Text' },
   { id: 'ruler', icon: Ruler, label: 'Ruler' },
+  { id: 'aoe', icon: Cone, label: 'Spell AoE' },
   { id: 'dice', icon: Dices, label: 'Dice' },
   { id: 'stamp', icon: Stamp, label: 'Stamp' },
   // The Layers panel is GM-only (only rendered for the GM in ActiveMapStage), so
@@ -51,19 +48,16 @@ export function ToolBar({
   onToolChange,
   collapsed,
   onToggleCollapse,
+  openWindows = [],
   isGM = false,
 }: ToolBarProps) {
-  // The interactive dice roller ships behind the same boolean flag as the Dice feed tab.
-  const diceFlag = useOptionalFeatureFlag(import.meta.env.VITE_PUBLIC_FF_DICE ?? '');
-  const visibleTools = tools.filter(
-    (t) => (!t.gmOnly || isGM) && (t.id !== 'dice' || diceFlag.isEnabled)
-  );
+  const visibleTools = tools.filter((t) => !t.gmOnly || isGM);
   return (
     <div className="flex flex-col items-center h-full py-2 bg-[#080A12]">
       {!collapsed && (
         <div id="toolbar-tools" className="flex flex-col items-center gap-1 flex-1">
           {visibleTools.map(({ id, icon: Icon, label }) => {
-            const isActive = id === activeTool;
+            const isActive = id === activeTool || (openWindows as string[]).includes(id);
             return (
               <button
                 key={id}

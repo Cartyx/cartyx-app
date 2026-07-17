@@ -5,6 +5,9 @@ import { FormInput } from '~/components/FormInput';
 import { PixelButton } from '~/components/PixelButton';
 import { MarkdownEditor } from '~/components/shared/MarkdownEditor';
 import { ColorPicker } from '~/components/shared/ColorPicker';
+import { TabBar } from '~/components/shared/TabBar';
+import { MemberOrganizationsTab } from '~/components/shared/MemberOrganizationsTab';
+import { EntityQuestsTab } from '~/components/shared/EntityQuestsTab';
 import { ImageCropInput } from '~/components/wiki/characters/ImageCropInput';
 import { usePlayer, useUpdatePlayer, useDeletePlayer } from '~/hooks/usePlayers';
 import { useCampaign } from '~/hooks/useCampaigns';
@@ -62,6 +65,7 @@ export function PlayerModal({ campaignId, playerId, onClose }: PlayerModalProps)
   const [gmNotes, setGmNotes] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [activeTab, setActiveTab] = useState<'details' | 'organizations' | 'quests'>('details');
 
   const validate = useCallback((): FieldErrors => {
     const errors: FieldErrors = {};
@@ -105,6 +109,7 @@ export function PlayerModal({ campaignId, playerId, onClose }: PlayerModalProps)
       setGmNotes('');
       setError(null);
       setShowDeleteConfirm(false);
+      setActiveTab('details');
     },
     populate: (p) => {
       setFirstName(p.firstName);
@@ -239,6 +244,19 @@ export function PlayerModal({ campaignId, playerId, onClose }: PlayerModalProps)
           </button>
         </header>
 
+        {isEdit && playerId && (
+          <TabBar
+            tabs={[
+              { id: 'details', label: 'Details' },
+              { id: 'organizations', label: 'Organizations' },
+              { id: 'quests', label: 'Quests' },
+            ]}
+            activeTab={activeTab}
+            onTabChange={(t) => setActiveTab(t as 'details' | 'organizations' | 'quests')}
+            accentColor={color || '#3498db'}
+          />
+        )}
+
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 min-h-0">
           {error && (
             <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-lg text-rose-400 text-xs font-semibold">
@@ -250,6 +268,16 @@ export function PlayerModal({ campaignId, playerId, onClose }: PlayerModalProps)
             <div className="flex items-center justify-center py-12">
               <p className="text-xs text-slate-500 animate-pulse">Loading player...</p>
             </div>
+          ) : activeTab === 'organizations' && isEdit && playerId ? (
+            <MemberOrganizationsTab
+              campaignId={campaignId}
+              memberKind="player"
+              memberId={playerId}
+              isGM={campaign?.isGM ?? false}
+              canManage={campaign?.isGM || existingPlayer?.canEdit || false}
+            />
+          ) : activeTab === 'quests' && isEdit && playerId ? (
+            <EntityQuestsTab campaignId={campaignId} kind="player" id={playerId} />
           ) : (
             <>
               {/* Picture upload */}

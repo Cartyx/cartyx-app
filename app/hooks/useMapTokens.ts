@@ -1,6 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { captureException } from '~/providers/TelemetryProvider';
+import { showToast } from '~/components/Toast';
 import { queryKeys } from '~/utils/queryKeys';
 import type { MapTokenData } from '~/types/mapToken';
 import type { TokenSource } from '~/types/schemas/mapTokens';
@@ -75,6 +76,13 @@ export function useMapTokenMutations(campaignId: string, mapId: string) {
   const qc = useQueryClient();
   const invalidate = () =>
     qc.invalidateQueries({ queryKey: queryKeys.mapTokens.list(campaignId, mapId) });
+  // On failure: tell the user, log it, and reconcile the optimistic cache with
+  // server truth instead of leaving a lie.
+  const onError = (action: string, userMessage: string) => (e: unknown) => {
+    captureException(e, { action });
+    showToast(userMessage, 'error');
+    invalidate();
+  };
 
   const create = useMutation({
     mutationFn: async (input: {
@@ -86,7 +94,7 @@ export function useMapTokenMutations(campaignId: string, mapId: string) {
       return await createMapTokenFn({ data: { campaignId, mapId, ...input } });
     },
     onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapTokenMutations.create' }),
+    onError: onError('useMapTokenMutations.create', 'Couldn’t add the token. Please try again.'),
   });
 
   const createBatch = useMutation({
@@ -96,7 +104,10 @@ export function useMapTokenMutations(campaignId: string, mapId: string) {
       });
     },
     onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapTokenMutations.createBatch' }),
+    onError: onError(
+      'useMapTokenMutations.createBatch',
+      'Couldn’t add the tokens. Please try again.'
+    ),
   });
 
   const move = useMutation({
@@ -104,7 +115,7 @@ export function useMapTokenMutations(campaignId: string, mapId: string) {
       return await moveMapTokenFn({ data: { campaignId, mapId, ...input } });
     },
     onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapTokenMutations.move' }),
+    onError: onError('useMapTokenMutations.move', 'Couldn’t move the token. Please try again.'),
   });
 
   const update = useMutation({
@@ -114,7 +125,7 @@ export function useMapTokenMutations(campaignId: string, mapId: string) {
       return await updateMapTokenFn({ data: { campaignId, mapId, ...input } });
     },
     onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapTokenMutations.update' }),
+    onError: onError('useMapTokenMutations.update', 'Couldn’t update the token. Please try again.'),
   });
 
   const remove = useMutation({
@@ -122,7 +133,7 @@ export function useMapTokenMutations(campaignId: string, mapId: string) {
       return await deleteMapTokenFn({ data: { campaignId, mapId, tokenId } });
     },
     onSuccess: invalidate,
-    onError: (e) => captureException(e, { action: 'useMapTokenMutations.remove' }),
+    onError: onError('useMapTokenMutations.remove', 'Couldn’t remove the token. Please try again.'),
   });
 
   return { create, createBatch, move, update, remove };

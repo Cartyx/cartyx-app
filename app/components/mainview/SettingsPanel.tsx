@@ -1,10 +1,11 @@
 import { useState, type ComponentType } from 'react';
 import { useParams } from '@tanstack/react-router';
-import { Cog } from 'lucide-react';
+import { Cog, ScrollText } from 'lucide-react';
 import { GameSettingsModal } from './settings/GameSettingsModal';
+import { SrdLicensingModal } from './settings/SrdLicensingModal';
 import { useCampaign } from '~/hooks/useCampaigns';
 
-type SettingsCategoryId = 'game-settings';
+type SettingsCategoryId = 'game-settings' | 'srd-licensing';
 
 interface SettingsCategory {
   id: SettingsCategoryId;
@@ -15,6 +16,7 @@ interface SettingsCategory {
 
 const SETTINGS_CATEGORIES: SettingsCategory[] = [
   { id: 'game-settings', label: 'Game Settings', icon: Cog, gmOnly: true },
+  { id: 'srd-licensing', label: 'SRD Licensing', icon: ScrollText, gmOnly: false },
 ];
 
 export function SettingsPanel() {
@@ -63,6 +65,11 @@ export function SettingsPanel() {
           campaignId={campaignId}
         />
       )}
+
+      <SrdLicensingModal
+        isOpen={openCategory === 'srd-licensing'}
+        onClose={() => setOpenCategory(null)}
+      />
     </div>
   );
 }

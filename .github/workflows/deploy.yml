@@ -49,8 +49,8 @@ jobs:
           docker push "${{ steps.tags.outputs.realtime }}"
 
       - name: Build and push web image
-        # VITE_PUBLIC_* are baked into the client bundle HERE. Changing a
-        # feature flag or the ws host = edit deploy/build/web-$DEPLOY_ENV.args
+        # VITE_PUBLIC_* are baked into the client bundle HERE. Changing the
+        # ws host or another client value = edit deploy/build/web-$DEPLOY_ENV.args
         # and merge — a values-only change cannot do it.
         run: |
           args=()

@@ -1,0 +1,522 @@
+[
+  {
+    "title": "Adventuring Equipment",
+    "content": "# Adventuring Equipment\n\nAs adventurers explore, their equipment can help\nthem in many ways. For example, they can reach\nout-of-the-way places with a Ladder, perceive things\nthey wouldn’t otherwise notice with a Torch or\nanother light source, bypass locked doors and containers with Thieves’ Tools, and create obstacles for\npursuers with Caltrops.\nSee “Equipment” for rules on many items that are\nuseful on adventures. The items in the“Tools” and\n“Adventuring Gear” sections are especially useful.\nThe weapons in “Equipment” can also be used for\nmore than battle; you could use a Quarterstaff,\nfor example, to push a sinister-looking button that\nyou’re reluctant to touch.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Always Prepared Spells",
+    "content": "# Always-Prepared Spells\n\nCertain features might give you a spell that you\nalways have prepared. If you also have a list of prepared spells that you can change, a spell that you\nalways have prepared doesn’t count against the\nnumber of spells on that list.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Attack Rolls",
+    "content": "# Attack Rolls\n\nSome spells require the caster to make an attack\nroll to determine whether the spell hits a target.\nHere’s how to calculate the attack modifier for your\nspells:\nSpell attack modifier = your spellcasting ability\nmodifier + your Proficiency Bonus\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Blinded",
+    "content": "# Blinded (Condition)\n\nWhile you have the Blinded condition, you experience the following effects.\nCan’t See. You can’t see and automatically fail any\nability check that requires sight.\nAttacks Affected. Attack rolls against you have\nAdvantage, and your attack rolls have Disadvantage.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Breaking Objects",
+    "content": "# Breaking Objects\n\nAs an action, you can automatically break or otherwise destroy a fragile, nonmagical object, such\nas a glass container or a piece of paper. If you try to\ndamage something more resilient, the GM might use\nthe rules on breaking objects in “Rules Glossary.”\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Breaking Up Your Move",
+    "content": "# Breaking Up Your Move\n\nYou can break up your move, using some of its\nmovement before and after any action, Bonus Action, or Reaction you take on the same turn. For\nexample, if you have a Speed of 30 feet, you could go\n10 feet, take an action, and then go 20 feet.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Carrying Objects",
+    "content": "# Carrying Objects\n\nYou can usually carry your gear and treasure without worrying about the weight of those objects. If\nyou try to haul an unusually heavy object or a massive number of lighter objects, the GM might require\nyou to abide by the rules for carrying capacity in\n“Rules Glossary.”\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Casting In Armor",
+    "content": "# Casting in Armor\n\nYou must have training with any armor you are wearing to cast spells while wearing it. You are otherwise\ntoo hampered by the armor for spellcasting.\n\nEvery spell has a level from 0 to 9, which is indicated in a spell’s description. A spell’s level is an\nindicator of how powerful it is. Cantrips—simple\nspells that can be cast almost by rote—are level 0.\nThe rules for each spellcasting class say when its\nmembers gain access to spells of certain levels.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Casting Spells",
+    "content": "# Casting Spells\n\nEach spell description has a series of entries that\nprovide the details needed to cast the spell. The following sections explain each of those entries, which\nfollow a spell’s name.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Casting Time",
+    "content": "# Casting Time\n\nMost spells require the Magic action to cast, but\nsome spells require a Bonus Action, a Reaction, or 1\nminute or more. A spell’s Casting Time entry specifies which of those is required.\n\nOne Spell with a Spell Slot per Turn\n\nOn a turn, you can expend only one spell slot to cast\na spell. This rule means you can’t, for example, cast\na spell with a spell slot using the Magic action and\nanother one using a Bonus Action on the same turn.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Character Demise",
+    "content": "# Character Demise\n\nIf your character dies, others might find a magical\nway to revive your character, such as with the Raise\nDead spell. Or talk with the GM about making a new\ncharacter to join the group. “Rules Glossary” has\nmore information on being dead.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Charmed",
+    "content": "# Charmed (Condition)\n\nWhile you have the Charmed condition, you experience the following effects.\nCan’t Harm the Charmer. You can’t attack the\ncharmer or target the charmer with damaging abilities or magical effects.\nSocial Advantage. The charmer has Advantage on\nany ability check to interact with you socially.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Class Spell Lists",
+    "content": "# Class Spell Lists\n\nIf a spell is on a class’s spell list, the class’s name\nappears in parentheses after the spell’s school of\nmagic. Some features add a spell to a character’s\nspell list even if the character isn’t a member of a\nclass in the parentheses.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Combat Overview",
+    "content": "# Combat (Overview)\n\nAdventurers encounter many dangerous monsters\nand nefarious villains. In those moments, combat\noften breaks out.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Combat Step By Step",
+    "content": "# Combat Step by Step\n\nCombat unfolds in these steps:\n\n1: Establish Positions. The Game Master determines where all the characters and monsters are\nlocated. Given the adventurers’ marching order\nor their stated positions in the room or other location, the GM figures out where the adversaries\nare—how far away and in what direction.\n2: Roll Initiative. Everyone involved in the combat\nencounter rolls Initiative, determining the order\nof combatants’ turns.\n3: Take Turns. Each participant in the battle takes\na turn in Initiative order. When everyone involved in the combat has had a turn, the round\nends. Repeat this step until the fighting stops.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Combining Spell Effects",
+    "content": "# Combining Spell Effects\n\nThe effects of different spells add together while\ntheir durations overlap. In contrast, the effects of\nthe same spell cast multiple times don’t combine.\nInstead, the most potent effect—such as the highest bonus—from those castings applies while their\ndurations overlap. The most recent effect applies if\nthe castings are equally potent and their durations\noverlap. For example, if two Clerics cast Bless on\nthe same target, that target gains the spell’s benefit\nonly once; the target doesn’t receive two bonus dice.\nBut if the durations of the spells overlap, the effect\ncontinues until the duration of the second Bless\nends.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Components",
+    "content": "# Components\n\nA spell’s components are physical requirements the\nspellcaster must meet to cast the spell. Each spell’s\ndescription indicates whether it requires Verbal\n(V), Somatic (S), or Material (M) components. If the\nspellcaster can’t provide one or more of a spell’s\ncomponents, the spellcaster can’t cast the spell.\n\nVerbal (V)\n\nA Verbal component is the chanting of esoteric\nwords that sound like nonsense to the uninitiated.\nThe words must be uttered in a normal speaking\nvoice. The words themselves aren’t the source of the\nspell’s power; rather, the particular combination of\nsounds, with specific pitch and resonance, sets the\nthreads of magic in motion. Thus, a creature who is\ngagged or in an area of magical silence can’t cast a\nspell with a Verbal component.\n\nSomatic (S)\n\nA Somatic component is a forceful gesticulation\nor an intricate set of gestures. A spellcaster must\nuse at least one of their hands to perform these\nmovements.\n\nMaterial (M)\n\nA Material component is a particular material used\nin a spell’s casting, as specified in parentheses in\nthe Components entry. These materials aren’t consumed by the spell unless the spell’s description\nstates otherwise. The spellcaster must have a hand\nfree to access them, but it can be the same hand\nused to perform Somatic components, if any.\nIf a spell doesn’t consume its materials and\ndoesn’t specify a cost for them, a spellcaster can use\na Component Pouch (see “Equipment”) instead of\nproviding the materials specified in the spell, or the\n\nspellcaster can substitute a Spellcasting Focus if the\ncaster has a feature that allows that substitution. To\nuse a Component Pouch, you must have a hand free\nto reach into it, and to use a Spellcasting Focus, you\nmust hold it unless its description says otherwise\n(see “Equipment” for descriptions).\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Controlling A Mount",
+    "content": "# Controlling a Mount\n\nYou can control a mount only if it has been trained\nto accept a rider. Domesticated horses, mules, and\nsimilar creatures have such training.\nThe Initiative of a controlled mount changes to\nmatch yours when you mount it. It moves on your\nturn as you direct it, and it has only three action options during that turn: Dash, Disengage, and Dodge.\nA controlled mount can move and act even on the\nturn that you mount it.\nIn contrast, an independent mount—one that lets\nyou ride but ignores your control—retains its place\nin the Initiative order and moves and acts as it likes.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Cover",
+    "content": "# Cover\n\nWalls, trees, creatures, and other obstacles can provide cover, making a target more difficult to harm.\nAs detailed in the Cover table, there are three degrees of cover, each of which gives a different benefit to a target.\nA target can benefit from cover only when an attack or other effect originates on the opposite side\nof the cover. If a target is behind multiple sources\nof cover, only the most protective degree of cover\napplies; the degrees aren’t added together. For example, if a target is behind a creature that gives Half\nCover and a tree trunk that gives Three-Quarters\nCover, the target has Three-Quarters Cover.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Creature Size",
+    "content": "# Creature Size\n\nA creature belongs to a size category, which determines the width of the square space the creature\noccupies on a map, as shown on the Creature Size\nand Space table. That table lists the sizes from\nsmallest (Tiny) to largest (Gargantuan). A creature’s\nspace is the area that it effectively controls in combat and the area it needs to fight effectively.\nA character’s size is determined by species, and\na monster’s size is specified in the monster’s stat\nblock.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Critical Hits",
+    "content": "# Critical Hits\n\nWhen you score a Critical Hit, you deal extra damage. Roll the attack’s damage dice twice, add them\ntogether, and add any relevant modifiers as normal.\nFor example, if you score a Critical Hit with a Dagger, roll 2d4 for the damage rather than 1d4, and\nadd your relevant ability modifier. If the attack involves other damage dice, such as from the Rogue’s\nSneak Attack feature, you also roll those dice twice.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Damage Against Multiple Targets",
+    "content": "# Damage against Multiple Targets\n\nWhen you create a damaging effect that forces two\nor more targets to make saving throws against it at\nthe same time, roll the damage once for all the targets. For example, when a wizard casts Fireball, the\nspell’s damage is rolled once for all creatures caught\nin the blast.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Damage Rolls",
+    "content": "# Damage Rolls\n\nEach weapon, spell, and damaging monster ability\nspecifies the damage it deals. You roll the damage\ndice, add any modifiers, and deal the damage to\nyour target. If there’s a penalty to the damage, it’s\npossible to deal 0 damage but not negative damage.\nWhen attacking with a weapon, you add your ability modifier—the same modifier used for the attack\nroll—to the damage roll. A spell tells you which dice\nto roll for damage and whether to add any modifiers. Unless a rule says otherwise, you don’t add\nyour ability modifier to a fixed damage amount that\ndoesn’t use a roll, such as the damage of a Blowgun.\nSee “Equipment” for weapons’ damage dice and\n“Spells” for spells’ damage dice.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Damage Types",
+    "content": "# Damage Types\n\nEach instance of damage has a type, like Fire\nor Slashing. Damage types are listed in “Rules\n\nGlossary” and have no rules of their own, but other\nrules, such as Resistance, rely on damage types.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Deafened",
+    "content": "# Deafened (Condition)\n\nWhile you have the Deafened condition, you experience the following effect.\nCan’t Hear. You can’t hear and automatically fail\nany ability check that requires hearing.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Death Saving Throws",
+    "content": "# Death Saving Throws\n\nWhenever you start your turn with 0 Hit Points,\nyou must make a Death Saving Throw to determine\nwhether you creep closer to death or hang on to life.\nUnlike other saving throws, this one isn’t tied to an\nability score. You’re in the hands of fate now.\nThree Successes/Failures. Roll 1d20. If the roll\nis 10 or higher, you succeed. Otherwise, you fail. A\nsuccess or failure has no effect by itself. On your\nthird success, you become Stable (see “Stabilizing a\nCharacter” below). On your third failure, you die.\nThe successes and failures don’t need to be consecutive; keep track of both until you collect three\nof a kind. The number of both is reset to zero when\nyou regain any Hit Points or become Stable.\n\nRolling a 1 or 20. When you roll a 1 on the d20\nfor a Death Saving Throw, you suffer two failures. If\nyou roll a 20 on the d20, you regain 1 Hit Point.\nDamage at 0 Hit Points. If you take any damage\nwhile you have 0 Hit Points, you suffer a Death Saving Throw failure. If the damage is from a Critical\nHit, you suffer two failures instead. If the damage\nequals or exceeds your Hit Point maximum, you die.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Difficult Terrain",
+    "content": "# Difficult Terrain\n\nCombatants are often slowed down by Difficult\nTerrain. Low furniture, rubble, undergrowth, steep\nstairs, snow, and shallow bogs are examples of Difficult Terrain.\nEvery foot of movement in Difficult Terrain costs\n1 extra foot, even if multiple things in a space count\nas Difficult Terrain.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Dropping Prone",
+    "content": "# Dropping Prone\n\nOn your turn, you can give yourself the Prone condition (see “Rules Glossary”) without using an action\nor any of your Speed, but you can’t do so if your\nSpeed is 0.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Duration",
+    "content": "# Duration\n\nTemporary Hit Points last until they’re depleted or\nyou finish a Long Rest (see “Rules Glossary”).\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Duration",
+    "content": "# Duration\n\nA spell’s duration is the length of time the spell persists after it is cast. A duration typically takes one of\nthe following forms:\n\nConcentration. A duration that requires Concentration follows the Concentration rules (see “Rules\nGlossary”).\nInstantaneous. An instantaneous duration means\nthe spell’s magic appears only for a moment and\nthen disappears.\nTime Span. A duration that provides a time span\nspecifies how long the spell lasts in rounds, minutes, hours, or the like. For example, a Duration\nentry might say “1 minute,” meaning the spell\nends after 1 minute has passed. While a time-span\nspell that you cast is ongoing, you can dismiss it\n(no action required) if you don’t have the Incapacitated condition.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Effects",
+    "content": "# Effects\n\nThe effects of a spell are detailed after its duration entry. Those details present exactly what the\nspell does, which ignores mundane physical laws;\nany outcomes beyond those effects are under the\nGM’s purview. Whatever the effects, they typically\ndeal with targets, saving throws, attack rolls, or all\nthree, each of which is detailed below.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Ending Combat",
+    "content": "# Ending Combat\n\nCombat ends when one side or the other is defeated,\nwhich can mean the creatures are killed or knocked\nout or have surrendered or fled. Combat can also\nend when both sides agree to end it.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Exhaustion",
+    "content": "# Exhaustion (Condition)\n\nWhile you have the Exhaustion condition, you\nexperience the following effects.\nExhaustion Levels. This condition is cumulative.\nEach time you receive it, you gain 1 Exhaustion\nlevel. You die if your Exhaustion level is 6.\nD20 Tests Affected. When you make a D20 Test,\nthe roll is reduced by 2 times your Exhaustion level.\nSpeed Reduced. Your Speed is reduced by a number of feet equal to 5 times your Exhaustion level.\nRemoving Exhaustion Levels. Finishing a Long\nRest removes 1 of your Exhaustion levels. When\nyour Exhaustion level reaches 0, the condition ends.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Exploration Overview",
+    "content": "# Exploration (Overview)\n\nExploration involves delving into places that are\ndangerous and full of mystery. The rules in this section detail some of the ways adventurers interact\nwith the environment in such places.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Falling Off",
+    "content": "# Falling Off\n\nIf an effect is about to move your mount against its\nwill while you’re on it, you must succeed on a DC 10\nDexterity saving throw or fall off, landing with the\nProne condition (see “Rules Glossary”) in an unoccupied space within 5 feet of the mount.\nWhile mounted, you must make the same save if\nyou’re knocked Prone or the mount is.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Falling Unconscious",
+    "content": "# Falling Unconscious\n\nIf you reach 0 Hit Points and don’t die instantly, you\nhave the Unconscious condition (see “Rules Glossary”) until you regain any Hit Points, and you now\nface making Death Saving Throws (see below).\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Finding Hidden Objects",
+    "content": "# Finding Hidden Objects\n\nWhen your character searches for hidden things,\nsuch as a secret door or a trap, the GM typically asks\nyou to make a Wisdom (Perception) check, provided\nyou describe the character searching in the hidden\nobject’s vicinity. On a success, you find the object,\nother important details, or both.\nIf you describe your character searching nowhere\nnear a hidden object, a Wisdom (Perception) check\nwon’t reveal the object, no matter the check’s total.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Fire Resistance",
+    "content": "# Fire Resistance\n\nAnything underwater has Resistance to Fire damage (explained in “Damage and Healing”).\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Frightened",
+    "content": "# Frightened (Condition)\n\nWhile you have the Frightened condition, you experience the following effects.\nAbility Checks and Attacks Affected. You have\nDisadvantage on ability checks and attack rolls\nwhile the source of fear is within line of sight.\nCan’t Approach. You can’t willingly move closer to\nthe source of fear.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Gaining Spells",
+    "content": "# Gaining Spells\n\nBefore you can cast a spell, you must have the spell\nprepared in your mind or have access to the spell\nfrom a magic item, such as a Spell Scroll. Your features specify which spells you have access to, if any;\nwhether you always have certain spells prepared;\nand whether you can change the list of spells you\nhave prepared.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Grappled",
+    "content": "# Grappled (Condition)\n\nWhile you have the Grappled condition, you experience the following effects.\nSpeed 0. Your Speed is 0 and can’t increase.\nAttacks Affected. You have Disadvantage on attack rolls against any target other than the grappler.\nMovable. The grappler can drag or carry you\nwhen it moves, but every foot of movement costs it 1\nextra foot unless you are Tiny or two or more sizes\nsmaller than it.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Half Damage",
+    "content": "# Half Damage\n\nMany saving throw effects deal half damage (round\ndown) to a target when the target succeeds on the\nsaving throw. The halved damage is equal to half\nthe damage that would be dealt on a failed save.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Hazards",
+    "content": "# Hazards\n\nMonsters are the main perils characters face, but\nother dangers await. “Rules Glossary” defines the\nfollowing hazards:\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Healing",
+    "content": "# Healing\n\nHit Points can be restored by magic, such as the\nCure Wounds spell or a Potion of Healing, or by a\nShort or Long Rest (see “Rules Glossary”).\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Hiding",
+    "content": "# Hiding\n\nAdventurers and monsters often hide, whether to\nspy on one another, sneak past a guardian, or set an\nambush. The Game Master decides when circumstances are appropriate for hiding. When you try to\nhide, you take the Hide action.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Hit Points",
+    "content": "# Hit Points\n\nHit Points represent durability and the will to live.\nCreatures with more Hit Points are more difficult\nto kill. Your Hit Point maximum is the number of\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Identifying An Ongoing Spell",
+    "content": "# Identifying an Ongoing Spell\n\nYou can try to identify a non-instantaneous spell by\nits observable effects if its duration is ongoing. To\nidentify it, you must take the Study action and succeed on a DC 15 Intelligence (Arcana) check.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Immunity",
+    "content": "# Immunity\n\nSome creatures and objects have Immunity to certain damage types and conditions. Immunity to a\ndamage type means you don’t take damage of that\ntype, and Immunity to a condition means you aren’t\naffected by it.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Impeded Weapons",
+    "content": "# Impeded Weapons\n\nWhen making a melee attack roll with a weapon\nunderwater, a creature that lacks a Swim Speed has\nDisadvantage on the attack roll unless the weapon\ndeals Piercing damage.\nA ranged attack roll with a weapon underwater\nautomatically misses a target beyond the weapon’s\nnormal range, and the attack roll has Disadvantage\nagainst a target within normal range.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Incapacitated",
+    "content": "# Incapacitated (Condition)\n\nWhile you have the Incapacitated condition, you experience the following effects.\nInactive. You can’t take any action, Bonus Action,\nor Reaction.\nNo Concentration. Your Concentration is broken.\nSpeechless. You can’t speak.\nSurprised. If you’re Incapacitated when you roll\nInitiative, you have Disadvantage on the roll.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Initiative",
+    "content": "# Initiative\n\nInitiative determines the order of turns during\ncombat. When combat starts, every participant\nrolls Initiative; they make a Dexterity check that\ndetermines their place in the Initiative order. The\nGM rolls for monsters. For a group of identical creatures, the GM makes a single roll, so each member of\nthe group has the same Initiative.\nSurprise. If a combatant is surprised by combat\nstarting, that combatant has Disadvantage on their\nInitiative roll. For example, if an ambusher starts\ncombat while hidden from a foe who is unaware\nthat combat is starting, that foe is surprised.\nInitiative Order. A combatant’s check total is\ncalled their Initiative count, or Initiative for short.\nThe GM ranks the combatants, from highest to\nlowest Initiative. This is the order in which they act\nduring each round. The Initiative order remains the\nsame from round to round.\nTies. If a tie occurs, the GM decides the order\namong tied monsters, and the players decide the\norder among tied characters. The GM decides the\n\norder if the tie is between a monster and a player\ncharacter.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Instant Death",
+    "content": "# Instant Death\n\nHere are the main ways a creature can die instantly.\nMonster Death. A monster dies the instant it\ndrops to 0 Hit Points, although a Game Master can\nignore this rule for an individual monster and treat\nit like a character.\nHit Point Maximum of 0. A creature dies if its Hit\nPoint maximum reaches 0. Certain effects drain life\nenergy, reducing a creature’s Hit Point maximum.\nMassive Damage. When damage reduces a character to 0 Hit Points and damage remains, the character dies if the remainder equals or exceeds their\nHit Point maximum. For example, if your character\nhas a Hit Point maximum of 12, currently has 6 Hit\nPoints, and takes 18 damage, the character drops to\n0 Hit Points, but 12 damage remains. The character\nthen dies, since 12 equals their Hit Point maximum.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Interacting With Objects",
+    "content": "# Interacting with Objects\n\nInteracting with objects is often simple to resolve.\nThe player tells the GM that their character is doing something, such as moving a lever or opening\n\na door, and the GM describes what happens. Sometimes, however, rules govern what you can do with\nan object, as detailed in the following sections.\n\nWhat Is an Object?\n\nFor the purpose of the rules, an object is a discrete,\ninanimate item like a window, door, sword, book,\ntable, chair, or stone. It isn’t a building or a vehicle,\nwhich are composed of many objects.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Invisible",
+    "content": "# Invisible (Condition)\n\nWhile you have the Invisible condition, you experience the following effects.\nSurprise. If you’re Invisible when you roll Initiative, you have Advantage on the roll.\nConcealed. You aren’t affected by any effect that\nrequires its target to be seen unless the effect’s creator can somehow see you. Any equipment you are\nwearing or carrying is also concealed.\nAttacks Affected. Attack rolls against you have\nDisadvantage, and your attack rolls have Advantage. If a creature can somehow see you, you don’t\ngain this benefit against that creature.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Knocking Out A Creature",
+    "content": "# Knocking Out a Creature\n\nWhen you would reduce a creature to 0 Hit Points\nwith a melee attack, you can instead reduce the creature to 1 Hit Point and give it the Unconscious condition. It then starts a Short Rest, at the end of which\nthat condition ends on it. The condition ends early\nif the creature regains any Hit Points or if someone\ntakes an action to administer first aid to it, making a\nsuccessful DC 10 Wisdom (Medicine) check.\n\nWhen you receive healing, add the restored Hit\nPoints to your current Hit Points. Your Hit Points\ncan’t exceed your Hit Point maximum, so any Hit\nPoints regained in excess of the maximum are lost.\nFor example, if you receive 8 Hit Points of healing\nand have 14 Hit Points and a Hit Point maximum of\n20, you regain 6 Hit Points, not 8.\n\nDropping to 0 Hit Points\n\nWhen a creature drops to 0 Hit Points, it either dies\noutright or falls unconscious, as explained below.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Light",
+    "content": "# Light\n\nThe presence or absence of light determines the category of illumination in an area, as defined below.\nBright Light. Bright Light lets most creatures see\nnormally. Even gloomy days provide Bright Light, as\ndo torches, lanterns, fires, and other sources of illumination within a specific radius.\nDim Light. Dim Light, also called shadows, creates a Lightly Obscured area. An area of Dim Light\nis usually a boundary between Bright Light and\nsurrounding Darkness. The soft light of twilight and\ndawn also counts as Dim Light. A full moon might\nbathe the land in Dim Light.\nDarkness. Darkness creates a Heavily Obscured\narea. Characters face Darkness outdoors at night\n(even most moonlit nights), within the confines of\nan unlit dungeon, or in an area of magical Darkness.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Longer Casting Times",
+    "content": "# Longer Casting Times\n\nCertain spells—including a spell cast as a Ritual—require more time to cast: minutes or even\nhours. While you cast a spell with a casting time of\n1 minute or more, you must take the Magic action\non each of your turns, and you must maintain Concentration (see “Rules Glossary”) while you do so. If\nyour Concentration is broken, the spell fails, but you\ndon’t expend a spell slot. To cast the spell again, you\nmust start over.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Lose Temporary Hit Points First",
+    "content": "# Lose Temporary Hit Points First\n\nIf you have Temporary Hit Points and take damage,\nthose points are lost first, and any leftover damage\ncarries over to your Hit Points. For example, if you\nhave 5 Temporary Hit Points and take 7 damage,\nyou lose those points and then lose 2 Hit Points.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Making An Attack",
+    "content": "# Making an Attack\n\nWhen you take the Attack action, you make an\nattack. Some other actions, Bonus Actions, and Reactions also let you make an attack. Whether you\nstrike with a Melee weapon, fire a Ranged weapon,\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Marching Order",
+    "content": "# Marching Order\n\nThe adventurers should establish a marching order\nwhile they travel, whether indoors or outdoors. A\nmarching order makes it easier to determine which\ncharacters are affected by traps, which ones can spot\nhidden enemies, and which ones are the closest to\nthose enemies if a fight breaks out. You can change\nyour marching order outside combat and record the\norder any way you like: write it down, for example,\nor arrange miniatures to show it.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Melee Attacks",
+    "content": "# Melee Attacks\n\nA melee attack allows you to attack a target within\nyour reach. A melee attack typically uses a handheld weapon or an Unarmed Strike. Many monsters\nmake melee attacks with claws, teeth, or other body\nparts. A few spells also involve melee attacks.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Mounted Combat",
+    "content": "# Mounted Combat\n\nA willing creature that is at least one size larger\nthan a rider and that has an appropriate anatomy\ncan serve as a mount, using the following rules.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Mounting And Dismounting",
+    "content": "# Mounting and Dismounting\n\nDuring your move, you can mount a creature that\nis within 5 feet of you or dismount. Doing so costs\nan amount of movement equal to half your Speed\n(round down). For example, if your Speed is 30 feet,\nyou spend 15 feet of movement to mount a horse.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Movement And Position",
+    "content": "# Movement and Position\n\nOn your turn, you can move a distance equal to your\nSpeed or less. Or you can decide not to move.\nYour movement can include climbing, crawling,\njumping, and swimming (each explained in “Rules\nGlossary”). These different modes of movement can\nbe combined with your regular movement, or they\ncan constitute your entire move.\nHowever you’re moving with your Speed, you\ndeduct the distance of each part of your move from\nit until it is used up or until you are done moving,\nwhichever comes first.\nA character’s Speed is determined during character creation. A monster’s Speed is noted in the\nmonster’s stat block. See “Rules Glossary” for more\nabout Speed as well as about special speeds, such as\na Climb Speed, Fly Speed, or Swim Speed.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Moving Around Other Creatures",
+    "content": "# Moving around Other Creatures\n\nDuring your move, you can pass through the space\nof an ally, a creature that has the Incapacitated\ncondition (see “Rules Glossary”), a Tiny creature, or\na creature that is two sizes larger or smaller than\nyou.\nAnother creature’s space is Difficult Terrain for\nyou unless that creature is Tiny or your ally.\nYou can’t willingly end a move in a space occupied\nby another creature. If you somehow end a turn in\na space with another creature, you have the Prone\ncondition (see “Rules Glossary”) unless you are Tiny\nor are of a larger size than the other creature.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "No Stacking",
+    "content": "# No Stacking\n\nMultiple instances of Resistance or Vulnerability\nthat affect the same damage type count as only one\ninstance. For example, if you have Resistance to Necrotic damage as well as Resistance to all damage,\nNecrotic damage is reduced by half against you.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Obscured Areas",
+    "content": "# Obscured Areas\n\nAn area might be Lightly or Heavily Obscured. In a\nLightly Obscured area—such as an area with Dim\nLight, patchy fog, or moderate foliage—you have\nDisadvantage on Wisdom (Perception) checks that\nrely on sight.\nA Heavily Obscured area—such as an area with\nDarkness, heavy fog, or dense foliage—is opaque.\nYou have the Blinded condition (see “Rules Glossary”) when trying to see something there.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Opportunity Attacks",
+    "content": "# Opportunity Attacks\n\nCombatants watch for enemies to drop their guard.\nIf you move heedlessly past your foes, you put yourself in danger by provoking an Opportunity Attack.\nAvoiding Opportunity Attacks. You can avoid\nprovoking an Opportunity Attack by taking the\nDisengage action. You also don’t provoke an Opportunity Attack when you Teleport or when you are\nmoved without using your movement, action, Bonus\nAction, or Reaction. For example, you don’t provoke\nan Opportunity Attack if an explosion hurls you out\nof a foe’s reach or if you fall past an enemy.\nMaking an Opportunity Attack. You can make an\nOpportunity Attack when a creature that you can\nsee leaves your reach. To make the attack, take a Reaction to make one melee attack with a weapon or\nan Unarmed Strike against that creature. The attack\noccurs right before it leaves your reach.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Order Of Application",
+    "content": "# Order of Application\n\nModifiers to damage are applied in the following\norder: adjustments such as bonuses, penalties, or\nmultipliers are applied first; Resistance is applied\nsecond; and Vulnerability is applied third.\nFor example, a creature has Resistance to all damage and Vulnerability to Fire damage, and it’s within\na magical aura that reduces all damage by 5. If it\ntakes 28 Fire damage, the damage is first reduced\nby 5 (to 23), then halved for the creature’s Resistance (and rounded down to 11), then doubled for\nits Vulnerability (to 22).\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Paralyzed",
+    "content": "# Paralyzed (Condition)\n\nWhile you have the Paralyzed condition, you experience the following effects.\nIncapacitated. You have the Incapacitated\ncondition.\nSpeed 0. Your Speed is 0 and can’t increase.\nSaving Throws Affected. You automatically fail\nStrength and Dexterity saving throws.\nAttacks Affected. Attack rolls against you have\nAdvantage.\nAutomatic Critical Hits. Any attack roll that hits\nyou is a Critical Hit if the attacker is within 5 feet of\nyou.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Petrified",
+    "content": "# Petrified (Condition)\n\nWhile you have the Petrified condition, you experience the following effects.\nTurned to Inanimate Substance. You are transformed, along with any nonmagical objects you are\nwearing and carrying, into a solid inanimate substance (usually stone). Your weight increases by a\nfactor of ten, and you cease aging.\nIncapacitated. You have the Incapacitated\ncondition.\nSpeed 0. Your Speed is 0 and can’t increase.\nAttacks Affected. Attack rolls against you have\nAdvantage.\nSaving Throws Affected. You automatically fail\nStrength and Dexterity saving throws.\nResist Damage. You have Resistance to all\ndamage.\nPoison Immunity. You have Immunity to the Poisoned condition.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Playing On A Grid",
+    "content": "# Playing on a Grid\n\nIf you play using a square grid and miniatures or\nother tokens, follow these rules.\nSquares. Each square represents 5 feet.\nSpeed. Rather than moving foot by foot, move\nsquare by square on the grid, using your Speed in\n5-foot segments. You can translate your Speed into\nsquares by dividing it by 5. For example, a Speed of\n30 feet translates into 6 squares. If you use a grid often, consider writing your Speed in squares on your\ncharacter sheet.\nEntering a Square. To enter a square, you must\nhave enough movement left to pay for entering. It\ncosts 1 square of movement to enter an unoccupied\nsquare that’s adjacent to your space (orthogonally\nor diagonally adjacent). A square of Difficult Terrain\ncosts 2 squares to enter. Other effects might make a\nsquare cost even more.\nCorners. Diagonal movement can’t cross the corner of a wall, a large tree, or another terrain feature\nthat fills its space.\nRanges. To determine the range on a grid between two things—whether creatures or objects—\ncount squares from a square adjacent to one of them\nand stop counting in the space of the other one.\nCount by the shortest route.\n\nThe GM might require you to use an action for\nany of these activities when it needs special care or\nwhen it presents an unusual obstacle. For instance,\nthe GM might require you to take the Utilize action\nto open a stuck door or turn a crank to lower a\ndrawbridge.\nDoing Nothing on Your Turn. You can forgo moving, taking an action, or doing anything at all on\nyour turn. If you can’t decide what to do, consider\ntaking the defensive Dodge action or the Ready action to delay acting.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Poisoned",
+    "content": "# Poisoned (Condition)\n\nWhile you have the Poisoned condition, you experience the following effect.\nAbility Checks and Attacks Affected. You have\nDisadvantage on attack rolls and ability checks.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Preparing Spells",
+    "content": "# Preparing Spells\n\nIf you have a list of level 1+ spells you prepare, your\nspellcasting feature specifies when you can change\nthe list and the number of spells you can change, as\nsummarized in the Spell Preparation by Class table.\n\nMost spellcasting monsters don’t change their lists\nof prepared spells, but the GM is free to alter them.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Prone",
+    "content": "# Prone (Condition)\n\nWhile you have the Prone condition, you experience\nthe following effects.\nRestricted Movement. Your only movement options are to crawl or to spend an amount of movement equal to half your Speed (round down) to\nright yourself and thereby end the condition. If your\nSpeed is 0, you can’t right yourself.\nAttacks Affected. You have Disadvantage on attack rolls. An attack roll against you has Advantage\nif the attacker is within 5 feet of you. Otherwise,\nthat attack roll has Disadvantage.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Range",
+    "content": "# Range\n\nYou can make ranged attacks only against targets\nwithin a specified range. If a ranged attack, such as\none made with a spell, has a single range, you can’t\nattack a target beyond this range.\n\nSome ranged attacks, such as those made with a\nLongbow, have two ranges. The smaller number is\nthe normal range, and the larger number is the long\nrange. Your attack roll has Disadvantage when your\ntarget is beyond normal range, and you can’t attack\na target beyond long range.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Range",
+    "content": "# Range\n\nA spell’s range indicates how far from the spellcaster the spell’s effect can originate, and the spell’s\ndescription specifies which part of the effect is limited by the range.\nA range usually takes one of the following forms:\n\nDistance. The range is expressed in feet.\nTouch. The spell’s effect originates on something,\nas defined by the spell, that the spellcaster must\ntouch within their reach.\nSelf. The spell is cast on the spellcaster or emanates\nfrom them, as specified in the spell.\nIf a spell has movable effects, they aren’t restricted\nby its range unless the spell’s description says\notherwise.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Ranged Attacks",
+    "content": "# Ranged Attacks\n\nWhen you make a ranged attack, you fire a bow,\nhurl an axe, or otherwise send projectiles to strike a\nfoe at a distance. Many spells also involve making a\nranged attack.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Ranged Attacks In Close Combat",
+    "content": "# Ranged Attacks in Close Combat\n\nAiming a ranged attack is more difficult when a foe\nis next to you. When you make a ranged attack roll\nwith a weapon, a spell, or some other means, you\nhave Disadvantage on the roll if you are within 5\nfeet of an enemy who can see you and doesn’t have\nthe Incapacitated condition (see “Rules Glossary”).\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Reach",
+    "content": "# Reach\n\nA creature has a 5-foot reach and can thus attack\ntargets within 5 feet when making a melee attack.\nCertain creatures have melee attacks with a reach\ngreater than 5 feet, as noted in their descriptions.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Reaction And Bonus Action Triggers",
+    "content": "# Reaction and Bonus Action Triggers\n\nA spell that has a casting time of a Reaction is cast\nin response to a trigger that is defined in the spell’s\nCasting Time entry. Some spells that have a casting\ntime of a Bonus Action are also cast in response to a\ntrigger defined in the spell.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Resistance And Vulnerability",
+    "content": "# Resistance and Vulnerability\n\nSome creatures and objects have Resistance or\nVulnerability to certain damage types. If you have\nResistance to a damage type, damage of that type\nis halved against you (round down). If you have\nVulnerability to a damage type, damage of that type\nis doubled against you. For example, if you have\nResistance to Cold damage, such damage is halved\nagainst you, and if you have Vulnerability to Fire\ndamage, such damage is doubled against you.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Resting",
+    "content": "# Resting\n\nAdventurers can’t spend every hour adventuring.\nThey need rest. Any creature can take hour-long\nShort Rests in the midst of a day and an 8-hour Long\nRest to end it. Regaining Hit Points is one of the main\nbenefits of a rest. “Rules Glossary” provides the\nrules for Short and Long Rests.\n\nHit Points you have when uninjured. Your current\nHit Points can be any number from that maximum\ndown to 0, which is the lowest Hit Points can go.\nWhenever you take damage, subtract it from your\nHit Points. Hit Point loss has no effect on your capabilities until you reach 0 Hit Points.\nIf you have half your Hit Points or fewer, you’re\nBloodied, which has no game effect on its own but\nwhich might trigger other game effects.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Restrained",
+    "content": "# Restrained (Condition)\n\nWhile you have the Restrained condition, you experience the following effects.\nSpeed 0. Your Speed is 0 and can’t increase.\nAttacks Affected. Attack rolls against you have\nAdvantage, and your attack rolls have Disadvantage.\nSaving Throws Affected. You have Disadvantage\non Dexterity saving throws.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Saving Throws",
+    "content": "# Saving Throws\n\nMany spells specify that a target makes a saving\nthrow to avoid some or all of a spell’s effects. The\nspell specifies the ability that the target uses for\nthe save and what happens on a success or failure.\nHere’s how to calculate the DC for your spells:\n\nSpell save DC = 8 + your spellcasting ability modifier + your Proficiency Bonus\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "School Of Magic",
+    "content": "# School of Magic\n\nEach spell belongs to a school of magic. The schools\nare listed in the Schools of Magic table. These categories help describe spells but have no rules of their\nown, although some other rules refer to them.\n\n| School        | Typical Effects                                              |\n| ------------- | ------------------------------------------------------------ |\n| Abjuration    | Prevents or reverses harmful effects                         |\n| Conjuration   | Transports creatures or objects                              |\n| Divination    | Reveals information                                          |\n| Enchantment   | Influences minds                                             |\n| Evocation     | Channels energy to create effects that are often destructive |\n| Illusion      | Deceives the mind or senses                                  |\n| Necromancy    | Manipulates life and death                                   |\n| Transmutation | Transforms creatures or objects                              |\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Special Senses",
+    "content": "# Special Senses\n\nSome creatures have special senses that help them\nperceive things in certain situations. “Rules Glossary” defines the following special senses:\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Spell Slots",
+    "content": "# Spell Slots\n\nSpellcasting is taxing, so a spellcaster can cast only\na limited number of level 1+ spells before resting.\nSpell slots are the main way a spellcaster’s magical\npotential is represented. Each spellcasting class\ngives its members a limited number of spell slots of\ncertain spell levels. For example, a level 3 Wizard\nhas four level 1 spell slots and two level 2 slots.\nWhen you cast a spell, you expend a slot of that\nspell’s level or higher, effectively “filling” a slot with\nthe spell. Imagine a spell slot is a groove of a certain\nsize—small for a level 1 slot and larger for a higher-level spell. A level 1 spell fits into a slot of any\nsize, but a level 2 spell fits only into a slot that’s at\nleast level 2. So when a level 3 Wizard casts Magic\nMissile, a level 1 spell, that Wizard spends one of\nfour level 1 slots and has three remaining.\nFinishing a Long Rest restores any expended spell\nslots.\n\nCasting without Slots\n\nThere are several ways to cast a spell without\nexpending a spell slot:\n\nCantrips. A cantrip is cast without a spell slot.\nRituals. Certain spells have the Ritual tag in the\nCasting Time entry. Such a spell can be cast following the normal rules for spellcasting, or it can\nbe cast as a Ritual. The Ritual version of a spell\ntakes 10 minutes longer to cast than normal, but it\ndoesn’t expend a spell slot. To cast a spell as a Ritual, a spellcaster must have it prepared.\nSpecial Abilities. Some characters and monsters\nhave special abilities that allow them to cast specific spells without a spell slot. This casting is usually limited in another way, such as being able to\ncast the spell a limited number of times per day.\nMagic Items. Spell Scrolls and some other magic\nitems contain spells that can be cast without a\nspell slot. The description of such an item specifies how many times a spell can be cast from it.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Stabilizing A Character",
+    "content": "# Stabilizing a Character\n\nYou can take the Help action to try to stabilize a\ncreature with 0 Hit Points, which requires a successful DC 10 Wisdom (Medicine) check.\nA Stable creature doesn’t make Death Saving\nThrows even though it has 0 Hit Points, but it still\nhas the Unconscious condition. If the creature takes\ndamage, it stops being Stable and starts making\nDeath Saving Throws again. A Stable creature that\nisn’t healed regains 1 Hit Point after 1d4 hours.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Stunned",
+    "content": "# Stunned (Condition)\n\nWhile you have the Stunned condition, you experience the following effects.\nIncapacitated. You have the Incapacitated\ncondition.\nSaving Throws Affected. You automatically fail\nStrength and Dexterity saving throws.\nAttacks Affected. Attack rolls against you have\nAdvantage.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Targets",
+    "content": "# Targets\n\nA typical spell requires the caster to pick one or\nmore targets to be affected by the spell’s magic. A\nspell’s description says whether the spell targets\ncreatures, objects, or something else.\nA Clear Path to the Target. To target something\nwith a spell, a caster must have a clear path to it, so\nit can’t be behind Total Cover.\nTargeting Yourself. If a spell targets a creature\nof your choice, you can choose yourself unless the\ncreature must be Hostile or specifically a creature\nother than you.\nAreas of Effect. Some spells, such as Thunderwave, cover an area called an area of effect, which\nis defined in “Rules Glossary.” The area determines\nwhat the spell targets. The description of a spell\nspecifies whether it has an area of effect, which is\ntypically one of these shapes: Cone, Cube, Cylinder,\nEmanation, Line, or Sphere.\n\nAwareness of Being Targeted. Unless a spell has\na perceptible effect, a creature doesn’t know it was\ntargeted by the spell. An effect like lightning is obvious, but a more subtle effect, such as an attempt\nto read thoughts, goes unnoticed unless a spell’s\ndescription says otherwise.\nInvalid Targets. If you cast a spell on someone\nor something that can’t be affected by it, nothing\nhappens to that target, but if you used a spell slot to\ncast the spell, the slot is still expended.\nIf the spell normally has no effect on a target that\nsucceeds on a saving throw, the invalid target appears to have succeeded on its saving throw, even\nthough it didn’t attempt one (giving no hint that the\ncreature is an invalid target). Otherwise, you perceive that the spell did nothing to the target.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Temporary Hit Points",
+    "content": "# Temporary Hit Points\n\nSome spells and other effects confer Temporary Hit\nPoints, which are a buffer against losing actual Hit\nPoints, as explained below.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "The Order Of Combat",
+    "content": "# The Order of Combat\n\nA typical combat encounter is a clash between two\nsides: a flurry of weapon swings, feints, parries,\nfootwork, and spellcasting. The game organizes\ncombat into a cycle of rounds and turns. A round\nrepresents about 6 seconds in the game world.\nDuring a round, each participant in a battle takes a\nturn. The order of turns is determined at the beginning of combat when everyone rolls Initiative. Once\neveryone has taken a turn, the fight continues to the\nnext round if neither side is defeated.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "They Don T Stack",
+    "content": "# They Don’t Stack\n\nTemporary Hit Points can’t be added together. If\nyou have Temporary Hit Points and receive more\nof them, you decide whether to keep the ones you\nhave or to gain the new ones. For example, if a spell\ngrants you 12 Temporary Hit Points when you already have 10, you can have 12 or 10, not 22.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "They Re Not Hit Points Or Healing",
+    "content": "# They’re Not Hit Points or Healing\n\nTemporary Hit Points can’t be added to your Hit\nPoints, healing can’t restore them, and receiving\nTemporary Hit Points doesn’t count as healing. Because Temporary Hit Points aren’t Hit Points, a creature can be at full Hit Points and receive Temporary\nHit Points.\nIf you have 0 Hit Points, receiving Temporary Hit\nPoints doesn’t restore you to consciousness. Only\ntrue healing can save you.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "damage"]
+  },
+  {
+    "title": "Time Limited Object Interactions",
+    "content": "# Time-Limited Object Interactions\n\nWhen time is short, such as in combat, interactions\nwith objects are limited: one free interaction per\nturn. That interaction must occur during a creature’s movement or action. Any additional interactions require the Utilize action, as explained in\n“Combat” later in “Playing the Game.”\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Travel",
+    "content": "# Travel\n\nDuring an adventure, the characters might travel\nlong distances on trips that could take hours or\ndays. The GM can summarize this travel without\ncalculating exact distances or travel times, or the\nGM might have you use the travel pace rules below.\nIf you need to know how fast you can move when\nevery second matters, see the movement rules in\n“Combat” later in “Playing the Game.”\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Travel Pace",
+    "content": "# Travel Pace\n\nWhile traveling outside combat, a group can move\nat a Fast, Normal, or Slow pace, as shown on the\nTravel Pace table. The table states how far the\nparty can move in a period of time; if riding horses\nor other mounts, the group can move twice that\ndistance for 1 hour, after which the mounts need a\nShort or Long Rest before they can move at that increased pace again (see “Equipment” for a selection\nof mounts for sale). “Gameplay Toolbox” has rules\nthat affect which pace you can choose in certain\ntypes of terrain.\n\nEach travel pace has a game effect, as defined below.\nFast. Traveling at a Fast pace imposes Disadvantage on a traveler’s Wisdom (Perception or Survival) and Dexterity (Stealth) checks.\nNormal. Traveling at a Normal pace imposes Disadvantage on Dexterity (Stealth) checks.\nSlow. Traveling at a Slow pace grants Advantage\non Wisdom (Perception or Survival) checks.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Unconscious",
+    "content": "# Unconscious (Condition)\n\nWhile you have the Unconscious condition, you experience the following effects.\nInert. You have the Incapacitated and Prone\nconditions, and you drop whatever you’re holding.\nWhen this condition ends, you remain Prone.\nSpeed 0. Your Speed is 0 and can’t increase.\nAttacks Affected. Attack rolls against you have\nAdvantage.\nSaving Throws Affected. You automatically fail\nStrength and Dexterity saving throws.\nAutomatic Critical Hits. Any attack roll that hits\nyou is a Critical Hit if the attacker is within 5 feet of\nyou.\nUnaware. You’re unaware of your surroundings.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "conditions"]
+  },
+  {
+    "title": "Unseen Attackers And Targets",
+    "content": "# Unseen Attackers and Targets\n\nWhen you make an attack roll against a target you\ncan’t see, you have Disadvantage on the roll. This is\ntrue whether you’re guessing the target’s location or\ntargeting a creature you can hear but not see. If the\ntarget isn’t in the location you targeted, you miss.\nWhen a creature can’t see you, you have Advantage\non attack rolls against it.\nIf you are hidden when you make an attack roll,\nyou give away your location when the attack hits or\nmisses.\n\nor make an attack roll as part of a spell, an attack\nhas the following structure:\n\n1: Choose a Target. Pick a target within your attack’s range: a creature, an object, or a location.\n2: Determine Modifiers. The GM determines\nwhether the target has Cover (see the next section) and whether you have Advantage or Disadvantage against the target. In addition, spells,\nspecial abilities, and other effects can apply penalties or bonuses to your attack roll.\n3: Resolve the Attack. Make the attack roll, as\ndetailed earlier in “Playing the Game.” On a hit,\nyou roll damage unless the particular attack\nhas rules that specify otherwise. Some attacks\ncause special effects in addition to or instead of\ndamage.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  },
+  {
+    "title": "Using A Higher Level Spell Slot",
+    "content": "# Using a Higher-Level Spell Slot\n\nWhen a spellcaster casts a spell using a slot that is\nof a higher level than the spell, the spell takes on\nthe higher level for that casting. For instance, if a\nWizard casts Magic Missile using a level 2 slot, that\nMagic Missile is level 2. Effectively, the spell expands\nto fill the slot it is put into.\n\nSome spells, such as Magic Missile and Cure\nWounds, have more powerful effects when cast at a\nhigher level, as detailed in a spell’s description.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "spells"]
+  },
+  {
+    "title": "Vehicles",
+    "content": "# Vehicles\n\nTravelers in wagons, carriages, or other land vehicles choose a pace as normal. Characters in a waterborne vessel are limited to the speed of the vessel,\nand they don’t choose a travel pace. Depending on\nthe vessel and the size of the crew, ships might be\nable to travel for up to 24 hours per day. “Equipment” includes vehicles for sale.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Vision And Light",
+    "content": "# Vision and Light\n\nSome adventuring tasks—such as noticing danger,\nhitting an enemy, and targeting certain spells—are\naffected by sight, so effects that obscure vision can\nhinder you, as explained below.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "exploration"]
+  },
+  {
+    "title": "Your Turn",
+    "content": "# Your Turn\n\nOn your turn, you can move a distance up to your\nSpeed and take one action. You decide whether to\nmove first or take your action first.\nThe main actions you can take are listed in “Actions” earlier in “Playing the Game.” A character’s\nfeatures and a monster’s stat block also provide\naction options. “Movement and Position” later in\n“Playing the Game” gives the rules for movement.\nCommunicating. You can communicate however\nyou are able—through brief utterances and gestures—as you take your turn. Doing so uses neither\nyour action nor your move.\nExtended communication, such as a detailed explanation of something or an attempt to persuade a\nfoe, requires an action. The Influence action is the\nmain way you try to influence a monster.\nInteracting with Things. You can interact with\none object or feature of the environment for free,\nduring either your move or action. For example, you\ncould open a door during your move as you stride\ntoward a foe.\nIf you want to interact with a second object, you\nneed to take the Utilize action. Some magic items\nand other special objects always require an action\nto use, as stated in their descriptions.\n\n---\n\n_Adapted from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of\nthe Coast LLC, licensed under [CC-BY 4.0](https://creativecommons.org/licenses/by/4.0/legalcode)._\n",
+    "tags": ["srd", "combat"]
+  }
+]

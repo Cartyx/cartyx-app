@@ -34,11 +34,6 @@ services:
       context: ../..
       dockerfile: Dockerfile.web
       args:
-        VITE_PUBLIC_FF_CHAT: ${VITE_PUBLIC_FF_CHAT:-}
-        VITE_PUBLIC_FF_DICE: ${VITE_PUBLIC_FF_DICE:-}
-        VITE_PUBLIC_FF_WIKI: ${VITE_PUBLIC_FF_WIKI:-}
-        VITE_PUBLIC_FF_NOTES: ${VITE_PUBLIC_FF_NOTES:-}
-        VITE_PUBLIC_FF_SETTINGS: ${VITE_PUBLIC_FF_SETTINGS:-}
         # The browser connects to realtime via the HOST port mapping.
         VITE_PUBLIC_PARTYKIT_HOST: localhost:1999
     image: cartyx-web:local

@@ -68,6 +68,32 @@ const drawingData = z.object({
   updatedAt: isoDate,
 });
 
+// Bound so a forged broadcast can't inject a giant transient template — mirrors
+// MAX_AOE_PX in ~/types/schemas/mapAoe.
+const MAX_AOE_PX = 20000;
+
+const aoeData = z.object({
+  id,
+  mapId: id,
+  campaignId: id,
+  shape: z.enum(['sphere', 'cone', 'cube', 'line', 'cylinder']),
+  originX: num,
+  originY: num,
+  // Match the create schema so a forged peer frame can't inject a degenerate
+  // template (negative/zero radius, non-hex color) even transiently.
+  sizePx: num.positive().max(MAX_AOE_PX),
+  widthPx: num.positive().max(MAX_AOE_PX).optional(),
+  rotation: num,
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  label: z.string().max(60).optional(),
+  createdBy: z.string(),
+  // `.default('')` tolerates older senders that predate this field; a generous
+  // cap blocks a giant-text abuse without rejecting legitimate long names.
+  createdByName: z.string().max(200).default(''),
+  createdAt: isoDate,
+  updatedAt: isoDate,
+});
+
 const messageSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('map:active-changed'),
@@ -109,6 +135,17 @@ const messageSchema = z.discriminatedUnion('type', [
   }),
   z.object({ type: z.literal('drawing:removed'), mapId: id, drawingId: id }),
   z.object({ type: z.literal('drawing:cleared'), mapId: id }),
+  z.object({ type: z.literal('aoe:added'), mapId: id, aoe: aoeData }),
+  z.object({
+    type: z.literal('aoe:moved'),
+    mapId: id,
+    aoeId: id,
+    originX: z.number().finite(),
+    originY: z.number().finite(),
+    final: z.boolean().optional(),
+  }),
+  z.object({ type: z.literal('aoe:removed'), mapId: id, aoeId: id }),
+  z.object({ type: z.literal('aoe:cleared'), mapId: id }),
 ]);
 
 /** Parse + validate a raw inbound frame. Returns null for malformed messages. */

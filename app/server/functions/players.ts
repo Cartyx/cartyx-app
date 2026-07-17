@@ -11,6 +11,8 @@ import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { removeDocumentRefsFromScreens } from './gmscreens-helpers';
 import { pruneLoreLinks } from '../utils/pruneLoreLinks';
 import { pruneEventLinks } from '../utils/pruneEventLinks';
+import { pruneMembershipsForMember } from './organizations';
+import { pruneQuestRefs } from './quests';
 import type { PlayerData, PlayerListItem } from '~/types/player';
 import type { PictureCrop } from '~/types/character';
 import {
@@ -337,6 +339,26 @@ export const deletePlayer = async ({ data }: { data: z.infer<typeof deletePlayer
 
     await pruneLoreLinks('player', data.id, data.campaignId);
     await pruneEventLinks('player', data.id, data.campaignId);
+
+    try {
+      await pruneMembershipsForMember('player', data.id, data.campaignId);
+    } catch (pruneError) {
+      serverCaptureException(pruneError, sessionUserId, {
+        action: 'deletePlayer.pruneMemberships',
+        campaign_id: data.campaignId,
+        player_id: data.id,
+      });
+    }
+
+    try {
+      await pruneQuestRefs('player', data.id, data.campaignId);
+    } catch (pruneError) {
+      serverCaptureException(pruneError, sessionUserId, {
+        action: 'deletePlayer.pruneQuests',
+        campaign_id: data.campaignId,
+        player_id: data.id,
+      });
+    }
 
     serverCaptureEvent(sessionUserId, 'player_deleted', {
       campaign_id: data.campaignId,

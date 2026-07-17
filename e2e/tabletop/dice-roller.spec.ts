@@ -142,8 +142,33 @@ async function openRoller(page: Page): Promise<void> {
   await page.goto(`/campaigns/${campaignId}/play?tab=tabletop`);
   await expect(page.getByTestId('tabletop-workspace')).toBeVisible({ timeout: 30_000 });
   await page.getByTestId('tool-dice').click();
+  await expect(page.getByTestId('tool-window-dice')).toBeVisible();
   await expect(page.getByTestId('dice-roller-panel')).toBeVisible();
 }
+
+test('the dice tool opens/closes a unified tool window (grip + icon + title + close X)', async ({
+  page,
+}) => {
+  await openRoller(page);
+
+  const header = page.getByTestId('tool-window-dice-header');
+  await expect(header).toContainText('Dice Roller');
+  await expect(page.getByTestId('tool-window-dice-close')).toBeVisible();
+  // No FloatingWindow chrome (minimize/maximize/tray) — just the shared ToolWindow.
+  await expect(page.getByTestId('tool-window-dice')).not.toContainText('Minimize');
+  await expect(page.getByTestId('tool-dice')).toHaveAttribute('aria-pressed', 'true');
+
+  // X closes the window.
+  await page.getByTestId('tool-window-dice-close').click();
+  await expect(page.getByTestId('tool-window-dice')).toHaveCount(0);
+  await expect(page.getByTestId('tool-dice')).toHaveAttribute('aria-pressed', 'false');
+
+  // Clicking the toolbar icon again toggles it back open, then closed.
+  await page.getByTestId('tool-dice').click();
+  await expect(page.getByTestId('tool-window-dice')).toBeVisible();
+  await page.getByTestId('tool-dice').click();
+  await expect(page.getByTestId('tool-window-dice')).toHaveCount(0);
+});
 
 test('private roll shows a verifiable per-die breakdown and stays out of the feed', async ({
   page,

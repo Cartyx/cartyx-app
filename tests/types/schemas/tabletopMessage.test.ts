@@ -56,6 +56,22 @@ describe('parseTabletopMapMessage', () => {
     createdAt: '2026-06-15T00:00:00Z',
     updatedAt: '2026-06-15T00:00:00Z',
   };
+  const fullAoe = {
+    id: 'a1',
+    mapId: 'm1',
+    campaignId: 'c1',
+    shape: 'cone',
+    originX: 5,
+    originY: 5,
+    sizePx: 100,
+    rotation: 0,
+    color: '#ff0000',
+    label: 'Fireball',
+    createdBy: 'u1',
+    createdByName: 'Ada Lovelace',
+    createdAt: '2026-06-15T00:00:00Z',
+    updatedAt: '2026-06-15T00:00:00Z',
+  };
 
   it('accepts entity-bearing frames carrying a fully-shaped payload', () => {
     expect(
@@ -80,6 +96,104 @@ describe('parseTabletopMapMessage', () => {
     expect(
       parseTabletopMapMessage({ type: 'drawing:added', mapId: 'm1', drawing: { id: 'd1' } })
     ).toBeNull();
+  });
+
+  it('accepts a well-formed aoe:added frame (shared, not GM-gated)', () => {
+    // AoE templates are broadcast to all viewers (like map text), unlike
+    // drawings which are dropped for non-GM receivers — see
+    // useTabletopMapSync's inbound reducer.
+    const msg = parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: fullAoe });
+    expect(msg).toMatchObject({ type: 'aoe:added', mapId: 'm1', aoe: fullAoe });
+  });
+
+  it('accepts an aoe:added frame missing createdByName (older sender), defaulting to empty string', () => {
+    // Robustness against senders on an older build that predates createdByName.
+    const noCreatedByName: Record<string, unknown> = { ...fullAoe };
+    delete noCreatedByName.createdByName;
+    const msg = parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: noCreatedByName });
+    expect(msg).not.toBeNull();
+    expect((msg as { aoe: { createdByName: string } }).aoe.createdByName).toBe('');
+  });
+
+  it('accepts an aoe:added frame without the optional label', () => {
+    const noLabel: Record<string, unknown> = { ...fullAoe };
+    delete noLabel.label;
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: noLabel })
+    ).not.toBeNull();
+  });
+
+  it('accepts aoe:removed and aoe:cleared frames', () => {
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:removed', mapId: 'm1', aoeId: 'a1' })
+    ).not.toBeNull();
+    expect(parseTabletopMapMessage({ type: 'aoe:cleared', mapId: 'm1' })).not.toBeNull();
+  });
+
+  it('rejects an aoe:added frame with a degenerate size or non-hex color', () => {
+    // Non-positive radius — a forged frame can't inject a zero/negative shape.
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: { ...fullAoe, sizePx: 0 } })
+    ).toBeNull();
+    // Non-hex color must be rejected (matches the create schema).
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: { ...fullAoe, color: 'red' } })
+    ).toBeNull();
+  });
+
+  it('accepts a well-formed aoe:moved frame', () => {
+    const msg = parseTabletopMapMessage({
+      type: 'aoe:moved',
+      mapId: 'm1',
+      aoeId: 'a1',
+      originX: 10,
+      originY: 20,
+      final: true,
+    });
+    expect(msg).toMatchObject({
+      type: 'aoe:moved',
+      mapId: 'm1',
+      aoeId: 'a1',
+      originX: 10,
+      originY: 20,
+      final: true,
+    });
+  });
+
+  it('rejects a malformed aoe:moved frame', () => {
+    // Missing originX.
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:moved', mapId: 'm1', aoeId: 'a1', originY: 20 })
+    ).toBeNull();
+    // Non-finite originX.
+    expect(
+      parseTabletopMapMessage({
+        type: 'aoe:moved',
+        mapId: 'm1',
+        aoeId: 'a1',
+        originX: Infinity,
+        originY: 20,
+      })
+    ).toBeNull();
+    // Missing aoeId.
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:moved', mapId: 'm1', originX: 1, originY: 2 })
+    ).toBeNull();
+  });
+
+  it('rejects a malformed aoe:added frame', () => {
+    // Missing required fields (shape, sizePx, rotation, etc).
+    expect(
+      parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: { id: 'a1' } })
+    ).toBeNull();
+    // Invalid shape enum value.
+    const badShape = { ...fullAoe, shape: 'triangle' };
+    expect(parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: badShape })).toBeNull();
+    // Non-finite originX.
+    const badOrigin = { ...fullAoe, originX: Infinity };
+    expect(parseTabletopMapMessage({ type: 'aoe:added', mapId: 'm1', aoe: badOrigin })).toBeNull();
+    // Missing aoeId on aoe:removed.
+    expect(parseTabletopMapMessage({ type: 'aoe:removed', mapId: 'm1' })).toBeNull();
   });
 
   it('accepts map:active-changed with null mapId', () => {

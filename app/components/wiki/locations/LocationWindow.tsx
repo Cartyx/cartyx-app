@@ -5,6 +5,7 @@ import remarkGfm from 'remark-gfm';
 import type { LocationData } from '~/types/location';
 import { MARKDOWN_PROSE_CLASSES } from '~/utils/markdownProseClasses';
 import { LocationGallery } from './LocationGallery';
+import { EntityQuestsTab } from '~/components/shared/EntityQuestsTab';
 
 interface LocationWindowProps {
   location: LocationData;
@@ -13,7 +14,7 @@ interface LocationWindowProps {
   onOpenLocation?: (locationId: string) => void;
 }
 
-type Tab = 'general' | 'gallery' | 'gm-notes' | 'hierarchy';
+type Tab = 'general' | 'gallery' | 'gm-notes' | 'hierarchy' | 'quests';
 
 export function LocationWindow({ location, isGM, onEdit, onOpenLocation }: LocationWindowProps) {
   const [activeTab, setActiveTab] = useState<Tab>('general');
@@ -23,6 +24,7 @@ export function LocationWindow({ location, isGM, onEdit, onOpenLocation }: Locat
     { id: 'gallery', label: 'Gallery' },
     ...(isGM ? [{ id: 'gm-notes' as Tab, label: 'GM Notes' }] : []),
     { id: 'hierarchy', label: 'Hierarchy' },
+    { id: 'quests', label: 'Quests' },
   ];
 
   return (
@@ -165,6 +167,10 @@ export function LocationWindow({ location, isGM, onEdit, onOpenLocation }: Locat
               <p className="text-xs text-slate-600 italic">No location hierarchy configured yet.</p>
             )}
           </div>
+        )}
+
+        {activeTab === 'quests' && (
+          <EntityQuestsTab campaignId={location.campaignId} kind="location" id={location.id} />
         )}
       </div>
     </div>

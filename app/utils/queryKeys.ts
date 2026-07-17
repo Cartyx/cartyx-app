@@ -89,6 +89,21 @@ export const queryKeys = {
       ['races', 'list', campaignId, search ?? '', tags ?? []] as const,
     detail: (id: string, campaignId?: string) => ['races', 'detail', campaignId ?? '', id] as const,
   },
+  spells: {
+    all: ['spells'] as const,
+    list: (campaignId: string, search?: string, tags?: string[], level?: number, school?: string) =>
+      [
+        'spells',
+        'list',
+        campaignId,
+        search ?? '',
+        tags ?? [],
+        level ?? null,
+        school ?? '',
+      ] as const,
+    detail: (id: string, campaignId?: string) =>
+      ['spells', 'detail', campaignId ?? '', id] as const,
+  },
   chat: {
     all: ['chat'] as const,
     list: (sessionId: string) => ['chat', 'list', sessionId] as const,
@@ -161,6 +176,10 @@ export const queryKeys = {
     list: (campaignId: string, mapId: string) =>
       ['mapDrawings', 'list', campaignId, mapId] as const,
   },
+  mapAoe: {
+    all: ['mapAoe'] as const,
+    list: (campaignId: string, mapId: string) => ['mapAoe', 'list', campaignId, mapId] as const,
+  },
   lore: {
     all: ['lore'] as const,
     list: (campaignId: string, filters?: string) =>
@@ -168,6 +187,29 @@ export const queryKeys = {
     detail: (id: string, campaignId: string) => ['lore', 'detail', id, campaignId] as const,
     linked: (campaignId: string, kind: string, id: string) =>
       ['lore', 'linked', campaignId, kind, id] as const,
+  },
+  organizations: {
+    all: ['organizations'] as const,
+    list: (campaignId: string, search?: string, tags?: string[], locationIds?: string[]) =>
+      ['organizations', 'list', campaignId, search ?? '', tags ?? [], locationIds ?? []] as const,
+    detail: (id: string, campaignId?: string) =>
+      ['organizations', 'detail', campaignId ?? '', id] as const,
+  },
+  quests: {
+    all: ['quests'] as const,
+    list: (campaignId: string, search?: string, tags?: string[], status?: string) =>
+      ['quests', 'list', campaignId, search ?? '', tags ?? [], status ?? ''] as const,
+    detail: (id: string, campaignId?: string) =>
+      ['quests', 'detail', campaignId ?? '', id] as const,
+    forEntity: (campaignId: string, kind: string, id: string) =>
+      ['quests', 'forEntity', campaignId, kind, id] as const,
+  },
+  memberships: {
+    all: ['memberships'] as const,
+    forOrg: (campaignId: string, organizationId: string) =>
+      ['memberships', 'forOrg', campaignId, organizationId] as const,
+    forMember: (campaignId: string, memberKind: string, memberId: string) =>
+      ['memberships', 'forMember', campaignId, memberKind, memberId] as const,
   },
   calendar: {
     all: ['calendar'] as const,

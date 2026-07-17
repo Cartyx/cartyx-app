@@ -33,7 +33,7 @@ export function MapConfirmDialog({
       role="presentation"
       onPointerDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
-      className="absolute inset-0 z-30 flex items-center justify-center bg-black/60"
+      className="absolute inset-0 z-50 flex items-center justify-center bg-black/60"
     >
       <div
         role="alertdialog"

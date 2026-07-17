@@ -6,6 +6,9 @@ import { FormSelect } from '~/components/FormSelect';
 import { PixelButton } from '~/components/PixelButton';
 import { MarkdownEditor } from '~/components/shared/MarkdownEditor';
 import { TagAutocompleteInput } from '~/components/shared/TagAutocompleteInput';
+import { TabBar } from '~/components/shared/TabBar';
+import { MemberOrganizationsTab } from '~/components/shared/MemberOrganizationsTab';
+import { EntityQuestsTab } from '~/components/shared/EntityQuestsTab';
 import { ImageCropInput } from './ImageCropInput';
 import { SessionMultiSelect } from './SessionMultiSelect';
 import {
@@ -75,6 +78,7 @@ export function CharacterModal({
   const [isPublic, setIsPublic] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [activeTab, setActiveTab] = useState<'details' | 'organizations' | 'quests'>('details');
 
   const validate = useCallback((): FieldErrors => {
     const errors: FieldErrors = {};
@@ -110,6 +114,7 @@ export function CharacterModal({
       setIsPublic(false);
       setError(null);
       setShowDeleteConfirm(false);
+      setActiveTab('details');
     },
     populate: (c) => {
       setFirstName(c.firstName);
@@ -266,6 +271,16 @@ export function CharacterModal({
           </div>
         </header>
 
+        <TabBar
+          tabs={[
+            { id: 'details', label: 'Details' },
+            { id: 'organizations', label: 'Organizations' },
+            { id: 'quests', label: 'Quests' },
+          ]}
+          activeTab={activeTab}
+          onTabChange={(t) => setActiveTab(t as 'details' | 'organizations' | 'quests')}
+        />
+
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 min-h-0">
           {error && (
             <div className="p-3 bg-rose-500/10 border border-rose-500/20 rounded-lg text-rose-400 text-xs font-semibold">
@@ -277,6 +292,28 @@ export function CharacterModal({
             <div className="flex items-center justify-center py-12">
               <p className="text-xs text-slate-500 animate-pulse">Loading character...</p>
             </div>
+          ) : activeTab === 'organizations' ? (
+            isEdit && characterId ? (
+              <MemberOrganizationsTab
+                campaignId={campaignId}
+                memberKind="character"
+                memberId={characterId}
+                isGM={isGM}
+                canManage={isGM || existingCharacter?.canEdit || false}
+              />
+            ) : (
+              <p className="text-xs text-slate-500">
+                Save the character first to manage its organizations.
+              </p>
+            )
+          ) : activeTab === 'quests' ? (
+            isEdit && characterId ? (
+              <EntityQuestsTab campaignId={campaignId} kind="character" id={characterId} />
+            ) : (
+              <p className="text-xs text-slate-500">
+                Save the character first to see linked quests.
+              </p>
+            )
           ) : (
             <>
               {/* Picture upload */}
