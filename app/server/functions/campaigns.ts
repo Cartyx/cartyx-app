@@ -221,12 +221,7 @@ export const getCampaign = async ({ data }: { data: z.infer<typeof getCampaignSc
     // Load players and sessions in parallel; GM also gets gmscreen docs.
     // The active session's summary is fetched separately to avoid including
     // potentially large catch-up markdown in every session row.
-    const queries: [
-      ReturnType<typeof Player.find>,
-      ReturnType<typeof Session.find>,
-      ReturnType<typeof GMScreen.find> | null,
-      ReturnType<typeof Session.findOne>,
-    ] = [
+    const queries = [
       Player.find(
         { campaignId: c._id },
         '_id campaignId userId characterName characterClass avatar'
@@ -236,7 +231,7 @@ export const getCampaign = async ({ data }: { data: z.infer<typeof getCampaignSc
         .lean(),
       isOwner ? GMScreen.find({ campaignId: c._id }, '_id name').lean() : null,
       Session.findOne({ campaignId: c._id, status: 'active' }, '_id summary').lean(),
-    ];
+    ] as const;
 
     const [playerDocs, sessionDocs, gmScreenDocs, activeSessionDoc] = await Promise.all(queries);
 
