@@ -223,6 +223,66 @@ const COLLECTION_REGISTRY: Record<string, CollectionFetcher> = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// Private-window visibility policy
+// ---------------------------------------------------------------------------
+
+/**
+ * Collections whose documents are GM-only in their entirety. `getTabletopScreen`
+ * already drops monster windows outright for players; events carry GM plot
+ * content the same way.
+ */
+export const GM_ONLY_COLLECTIONS: ReadonlySet<string> = new Set(['monster', 'events']);
+
+/**
+ * Collections a non-GM may never hydrate through the PRIVATE-window path.
+ *
+ * `note` is here rather than isPublic-filtered because `Note.isPublic` defaults
+ * to `false` and the note fetcher above does not select the field. Selecting it
+ * would change what the SHARED path returns for note windows, so notes fail
+ * closed for non-GMs instead. See the report for the follow-up.
+ */
+const PRIVATE_DENIED_FOR_PLAYERS: ReadonlySet<string> = new Set([...GM_ONLY_COLLECTIONS, 'note']);
+
+/** Whether `collection` may be hydrated at all on the private-window path. */
+export function canHydratePrivately(collection: string, isGM: boolean): boolean {
+  return isGM || !PRIVATE_DENIED_FOR_PLAYERS.has(collection);
+}
+
+/**
+ * Hydrate private-window refs under the caller's visibility.
+ *
+ * Private windows are added by `addPrivateWindow`, which is member-level and
+ * whose schema accepts every collection — so a player can craft a window
+ * pointing at ANY document id. This path must therefore enforce the same rules
+ * the sanctioned per-collection getters do (e.g. `getLore` returns null for a
+ * non-public doc to a non-GM), which the shared-window filter in `hydrateRefs`
+ * does not: it only covers events/organization/quest.
+ *
+ * A ref that is denied simply has no entry in the returned map, which lets the
+ * caller drop the window rather than render an untitled ghost.
+ */
+export async function hydratePrivateWindowRefs(
+  refs: Array<{ collection: string; documentId: string }>,
+  campaignId: string,
+  opts: { isGM: boolean }
+): Promise<Record<string, HydratedDocument>> {
+  const { isGM } = opts;
+
+  // GM-only collections are never fetched for a player in the first place.
+  const allowed = refs.filter((ref) => canHydratePrivately(ref.collection, isGM));
+  const hydrated = await hydrateRefs(allowed, campaignId, { isGM });
+  if (isGM) return hydrated;
+
+  // Fail closed on every collection carrying isPublic — lore, location,
+  // character, rule, organization, quest, events — not just the three
+  // `hydrateRefs` happens to filter for the shared path.
+  for (const [key, doc] of Object.entries(hydrated)) {
+    if (doc.isPublic === false) delete hydrated[key];
+  }
+  return hydrated;
+}
+
 /**
  * Batch-hydrate a set of `{ collection, documentId }` refs.
  * Groups by collection, fetches each batch, and returns a lookup map

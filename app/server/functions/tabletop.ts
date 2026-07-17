@@ -7,7 +7,7 @@ import { Campaign } from '../db/models/Campaign';
 import { TabletopScreen, TABLETOP_LIMITS } from '../db/models/TabletopScreen';
 import { TabletopPlayerState } from '../db/models/TabletopPlayerState';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
-import { hydrateRefs } from './tabletop-hydration';
+import { hydrateRefs, hydratePrivateWindowRefs, GM_ONLY_COLLECTIONS } from './tabletop-hydration';
 import type {
   TabletopScreenData,
   TabletopScreenDetailData,
@@ -960,23 +960,30 @@ export const getPlayerState = async ({ data }: { data: z.infer<typeof getPlayerS
     // This query is the one add/removePrivateWindow invalidate, so the titles
     // stay coherent with the private-window list itself.
     //
-    // Monsters are GM-only (getTabletopScreen drops monster windows outright
-    // for players). addPrivateWindow is member-level and does not constrain
-    // `collection`, so a crafted call could park a monster on a player's own
-    // state — never hydrate it back, or its name and gmNotes would leak.
+    // addPrivateWindow is member-level and its schema accepts every collection,
+    // so a crafted call can park ANY document id on the caller's own state.
+    // hydratePrivateWindowRefs applies the visibility rules the sanctioned
+    // per-collection getters enforce; anything denied gets no hydration entry.
     const isGM = member.role === 'gm';
-    const hydrated = await hydrateRefs(
-      state.privateWindows
-        .filter((pw) => isGM || pw.collection !== 'monster')
-        .map((pw) => ({
-          collection: pw.collection,
-          documentId: pw.documentId,
-        })),
+    const hydrated = await hydratePrivateWindowRefs(
+      state.privateWindows.map((pw) => ({
+        collection: pw.collection,
+        documentId: pw.documentId,
+      })),
       data.campaignId,
       { isGM }
     );
 
-    return { ...state, hydrated };
+    // Drop denied windows outright rather than returning them unhydrated —
+    // mirrors how getTabletopScreen drops monster windows for players, and
+    // avoids rendering an untitled ghost window.
+    const privateWindows = isGM
+      ? state.privateWindows
+      : state.privateWindows.filter(
+          (pw) => hydrated[`${pw.collection}:${pw.documentId}`] !== undefined
+        );
+
+    return { ...state, privateWindows, hydrated };
   } catch (e) {
     serverCaptureException(e, sessionUserId, {
       action: 'getPlayerState',
@@ -1231,6 +1238,13 @@ export const addPrivateWindow = async ({
     // document and cannot affect what anyone else sees.
     const member = await requireCampaignMember(data.campaignId);
     sessionUserId = member.sessionUserId;
+
+    // Defense in depth. getPlayerState's hydration filter is the load-bearing
+    // guard — it also covers rows written before this check existed — but
+    // there is no legitimate reason for a player to store a GM-only window.
+    if (member.role !== 'gm' && GM_ONLY_COLLECTIONS.has(data.collection)) {
+      throw new Error('Not authorized to open this collection');
+    }
 
     const existing = await findOwnPlayerState(data.campaignId, member.userId);
 
