@@ -8,6 +8,7 @@ import { SpellCard } from './SpellCard';
 import { SpellModal } from './SpellModal';
 import { SpellViewModal } from './SpellViewModal';
 import { useSpells, useDeleteSpell } from '~/hooks/useSpells';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import { useCampaign } from '~/hooks/useCampaigns';
 import type { SpellListItem, SpellSchool } from '~/types/spell';
 
@@ -27,8 +28,13 @@ export function SpellsPanel({ onBack }: SpellsPanelProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedSpellId, setSelectedSpellId] = useState<string | undefined>();
   const [viewSpellId, setViewSpellId] = useState<string | undefined>();
-  const [pendingDelete, setPendingDelete] = useState<SpellListItem | undefined>();
   const { remove: removeItem, isLoading: isDeleting } = useDeleteSpell();
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<SpellListItem>(
+      (item) => removeItem({ id: item.id, campaignId }),
+      'Failed to delete spell. Please try again.'
+    );
 
   const { spells, isLoading, error } = useSpells(campaignId, {
     search: search || undefined,
@@ -58,13 +64,6 @@ export function SpellsPanel({ onBack }: SpellsPanelProps) {
   const handleSpellEdit = (spell: SpellListItem) => {
     setSelectedSpellId(spell.id);
     setIsModalOpen(true);
-  };
-
-  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
-  const handleDeleteConfirm = async () => {
-    if (!pendingDelete) return;
-    await removeItem({ id: pendingDelete.id, campaignId });
-    setPendingDelete(undefined);
   };
 
   return (
@@ -111,7 +110,7 @@ export function SpellsPanel({ onBack }: SpellsPanelProps) {
                 spell={spell}
                 onClick={handleSpellClick}
                 onEdit={handleSpellEdit}
-                onDelete={() => setPendingDelete(spell)}
+                onDelete={() => requestDelete(spell)}
               />
             ))}
           </div>
@@ -144,8 +143,9 @@ export function SpellsPanel({ onBack }: SpellsPanelProps) {
           confirmLabel="Delete"
           danger
           isLoading={isDeleting}
-          onConfirm={handleDeleteConfirm}
-          onCancel={() => setPendingDelete(undefined)}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

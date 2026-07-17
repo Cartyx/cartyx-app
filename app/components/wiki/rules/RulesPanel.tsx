@@ -8,6 +8,7 @@ import { RuleCard } from './RuleCard';
 import { RuleModal } from './RuleModal';
 import { RuleViewModal } from './RuleViewModal';
 import { useRules, useDeleteRule } from '~/hooks/useRules';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import { useCampaign } from '~/hooks/useCampaigns';
 import type { RuleListItem } from '~/types/rule';
 
@@ -26,8 +27,13 @@ export function RulesPanel({ onBack }: RulesPanelProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedRuleId, setSelectedRuleId] = useState<string | undefined>();
   const [viewRuleId, setViewRuleId] = useState<string | undefined>();
-  const [pendingDelete, setPendingDelete] = useState<RuleListItem | undefined>();
   const { remove: removeItem, isLoading: isDeleting } = useDeleteRule();
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<RuleListItem>(
+      (item) => removeItem({ id: item.id, campaignId }),
+      'Failed to delete rule. Please try again.'
+    );
 
   const { rules, isLoading, error } = useRules(campaignId, {
     search: search || undefined,
@@ -62,13 +68,6 @@ export function RulesPanel({ onBack }: RulesPanelProps) {
 
   const handleViewModalClose = () => {
     setViewRuleId(undefined);
-  };
-
-  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
-  const handleDeleteConfirm = async () => {
-    if (!pendingDelete) return;
-    await removeItem({ id: pendingDelete.id, campaignId });
-    setPendingDelete(undefined);
   };
 
   return (
@@ -117,7 +116,7 @@ export function RulesPanel({ onBack }: RulesPanelProps) {
                 canEdit={isGM}
                 onClick={handleRuleClick}
                 onEdit={handleRuleEdit}
-                onDelete={() => setPendingDelete(rule)}
+                onDelete={() => requestDelete(rule)}
               />
             ))}
           </div>
@@ -147,8 +146,9 @@ export function RulesPanel({ onBack }: RulesPanelProps) {
           confirmLabel="Delete"
           danger
           isLoading={isDeleting}
-          onConfirm={handleDeleteConfirm}
-          onCancel={() => setPendingDelete(undefined)}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

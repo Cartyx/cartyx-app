@@ -8,6 +8,7 @@ import { QuestModal } from './QuestModal';
 import { QuestViewModal } from './QuestViewModal';
 import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
 import { useQuests, useDeleteQuest } from '~/hooks/useQuests';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import type { QuestListItem, QuestStatus } from '~/types/quest';
 
 interface QuestsPanelProps {
@@ -32,7 +33,6 @@ export function QuestsPanel({ onBack }: QuestsPanelProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | undefined>();
   const [viewId, setViewId] = useState<string | undefined>();
-  const [pendingDelete, setPendingDelete] = useState<QuestListItem | undefined>();
 
   const { quests, isLoading, error } = useQuests(campaignId, {
     search: search || undefined,
@@ -40,13 +40,12 @@ export function QuestsPanel({ onBack }: QuestsPanelProps) {
     status: statusFilter === 'all' ? undefined : statusFilter,
   });
   const { remove: removeQuest, isLoading: isDeleting } = useDeleteQuest();
-
   // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
-  const handleDeleteConfirm = async () => {
-    if (!pendingDelete) return;
-    await removeQuest({ id: pendingDelete.id, campaignId });
-    setPendingDelete(undefined);
-  };
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<QuestListItem>(
+      (item) => removeQuest({ id: item.id, campaignId }),
+      'Failed to delete quest. Please try again.'
+    );
 
   const handleCreateClick = () => {
     setSelectedId(undefined);
@@ -130,7 +129,7 @@ export function QuestsPanel({ onBack }: QuestsPanelProps) {
                 quest={quest}
                 onClick={handleClick}
                 onEdit={handleEdit}
-                onDelete={() => setPendingDelete(quest)}
+                onDelete={() => requestDelete(quest)}
               />
             ))}
           </div>
@@ -161,8 +160,9 @@ export function QuestsPanel({ onBack }: QuestsPanelProps) {
           confirmLabel="Delete"
           danger
           isLoading={isDeleting}
-          onConfirm={handleDeleteConfirm}
-          onCancel={() => setPendingDelete(undefined)}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

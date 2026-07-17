@@ -7,6 +7,7 @@ import { WikiFilterBar } from '~/components/wiki/shared/WikiFilterBar';
 import { EventCard } from './EventCard';
 import { EventModal } from './EventModal';
 import { useEvents, useDeleteEvent } from '~/hooks/useEvents';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import { useCalendar } from '~/hooks/useCalendar';
 import { useCampaign } from '~/hooks/useCampaigns';
 import { calendarConfigFromData } from '~/types/calendar';
@@ -27,8 +28,13 @@ export function EventsPanel({ onBack }: EventsPanelProps) {
   const [epicOnly, setEpicOnly] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState<string | undefined>();
-  const [pendingDelete, setPendingDelete] = useState<EventListItem | undefined>();
   const { remove: removeItem, isLoading: isDeleting } = useDeleteEvent();
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<EventListItem>(
+      (item) => removeItem({ id: item.id, campaignId }),
+      'Failed to delete event. Please try again.'
+    );
 
   const { calendar, isLoading: isLoadingCalendar } = useCalendar(campaignId);
   const cfg = calendar ? calendarConfigFromData(calendar) : null;
@@ -90,13 +96,6 @@ export function EventsPanel({ onBack }: EventsPanelProps) {
       </div>
     );
   }
-
-  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
-  const handleDeleteConfirm = async () => {
-    if (!pendingDelete) return;
-    await removeItem({ id: pendingDelete.id, campaignId });
-    setPendingDelete(undefined);
-  };
 
   return (
     <div className="flex flex-col h-full w-full bg-[#080A12]">
@@ -161,7 +160,7 @@ export function EventsPanel({ onBack }: EventsPanelProps) {
                 cfg={cfg!}
                 onClick={handleEventClick}
                 onEdit={handleEventClick}
-                onDelete={() => setPendingDelete(item)}
+                onDelete={() => requestDelete(item)}
               />
             ))}
           </div>
@@ -181,8 +180,9 @@ export function EventsPanel({ onBack }: EventsPanelProps) {
           confirmLabel="Delete"
           danger
           isLoading={isDeleting}
-          onConfirm={handleDeleteConfirm}
-          onCancel={() => setPendingDelete(undefined)}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

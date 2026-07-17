@@ -10,6 +10,8 @@ export interface ConfirmDialogProps {
   onConfirm: () => void | Promise<void>;
   onCancel: () => void;
   isLoading?: boolean;
+  /** Surfaced inside the dialog when the confirmed action failed. */
+  error?: string | null;
 }
 
 export function ConfirmDialog({
@@ -20,6 +22,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   isLoading = false,
+  error = null,
 }: ConfirmDialogProps) {
   const trapRef = useFocusTrap<HTMLDivElement>();
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -68,6 +71,12 @@ export function ConfirmDialog({
 
         <div className="p-4">
           <p className="font-sans text-xs text-slate-400 leading-relaxed">{message}</p>
+
+          {error && (
+            <p role="alert" className="mt-3 font-sans text-xs text-rose-400 leading-relaxed">
+              {error}
+            </p>
+          )}
 
           <div className="mt-4 flex justify-end gap-2">
             <button

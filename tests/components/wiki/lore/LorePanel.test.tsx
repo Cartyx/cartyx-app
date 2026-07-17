@@ -212,6 +212,28 @@ describe('LorePanel', () => {
     });
   });
 
+  it('GM sees a failure message and the confirm dialog stays open when the delete fails', async () => {
+    setupMocks({ isGM: true });
+    // useDeleteLore is built by createMutationHook: it swallows the server error
+    // and resolves to `null`. The panel must not treat that as a success.
+    mockRemoveLore.mockResolvedValue(null);
+    const user = userEvent.setup();
+    render(<LorePanel onBack={vi.fn()} />);
+
+    await user.click(await screen.findByLabelText('Lore actions'));
+    await user.click(screen.getByRole('menuitem', { name: /delete/i }));
+    await user.click(await screen.findByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      expect(mockRemoveLore).toHaveBeenCalled();
+    });
+
+    // The user is told it failed...
+    expect(await screen.findByText(/failed to delete lore/i)).toBeInTheDocument();
+    // ...and the dialog does NOT close as though the delete worked.
+    expect(screen.getByRole('alertdialog')).toBeInTheDocument();
+  });
+
   it('GM cancelling the delete confirm does not remove the lore', async () => {
     setupMocks({ isGM: true });
     const user = userEvent.setup();

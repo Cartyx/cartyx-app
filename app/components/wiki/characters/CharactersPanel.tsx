@@ -8,6 +8,7 @@ import { CharacterModal } from './CharacterModal';
 import { CharacterViewModal } from './CharacterViewModal';
 import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
 import { useCharacters, useDeleteCharacter } from '~/hooks/useCharacters';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import { useCampaign } from '~/hooks/useCampaigns';
 import type { CharacterListItem } from '~/types/character';
 
@@ -26,10 +27,15 @@ export function CharactersPanel({ onBack }: CharactersPanelProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedCharacterId, setSelectedCharacterId] = useState<string | undefined>();
   const [viewCharacterId, setViewCharacterId] = useState<string | undefined>();
-  const [pendingDelete, setPendingDelete] = useState<CharacterListItem | undefined>();
 
   const sessions = campaign?.sessions ?? [];
   const { remove: removeCharacter, isLoading: isDeleting } = useDeleteCharacter();
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<CharacterListItem>(
+      (item) => removeCharacter({ id: item.id, campaignId }),
+      'Failed to delete character. Please try again.'
+    );
 
   const { characters, isLoading, error } = useCharacters(campaignId, {
     search: search || undefined,
@@ -56,13 +62,6 @@ export function CharactersPanel({ onBack }: CharactersPanelProps) {
   const handleCharacterEdit = (character: CharacterListItem) => {
     setSelectedCharacterId(character.id);
     setIsModalOpen(true);
-  };
-
-  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
-  const handleDeleteConfirm = async () => {
-    if (!pendingDelete) return;
-    await removeCharacter({ id: pendingDelete.id, campaignId });
-    setPendingDelete(undefined);
   };
 
   const handleModalClose = () => {
@@ -120,7 +119,7 @@ export function CharactersPanel({ onBack }: CharactersPanelProps) {
                 character={character}
                 onClick={handleCharacterClick}
                 onEdit={handleCharacterEdit}
-                onDelete={() => setPendingDelete(character)}
+                onDelete={() => requestDelete(character)}
               />
             ))}
           </div>
@@ -149,8 +148,9 @@ export function CharactersPanel({ onBack }: CharactersPanelProps) {
           confirmLabel="Delete"
           danger
           isLoading={isDeleting}
-          onConfirm={handleDeleteConfirm}
-          onCancel={() => setPendingDelete(undefined)}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

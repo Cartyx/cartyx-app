@@ -6,6 +6,7 @@ import { WikiFilterBar } from '~/components/wiki/shared/WikiFilterBar';
 import { useCampaign } from '~/hooks/useCampaigns';
 import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
 import { useMonsters, useMonsterMutations } from '~/hooks/useMonsters';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import { MonsterCard } from './MonsterCard';
 import { MonsterModal } from './MonsterModal';
 import type { MonsterListItem } from '~/types/monster';
@@ -24,7 +25,6 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
   const [filterTags, setFilterTags] = useState<string[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<string | undefined>(undefined);
-  const [pendingDelete, setPendingDelete] = useState<MonsterListItem | undefined>();
 
   const {
     data: monsters = [],
@@ -37,6 +37,17 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
   });
   const { remove } = useMonsterMutations(campaignId);
 
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  // Unlike the other wiki delete hooks, useMonsterMutations exposes the raw
+  // mutation, whose mutateAsync *rejects* on failure rather than resolving to
+  // null. useDeleteConfirm treats both shapes as a failure, so the rejection
+  // surfaces to the user instead of silently closing the dialog.
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<MonsterListItem>(
+      (item) => remove.mutateAsync(item.id),
+      'Failed to delete monster. Please try again.'
+    );
+
   const handleCreate = () => {
     setEditId(undefined);
     setModalOpen(true);
@@ -45,20 +56,6 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
   const handleClick = (m: MonsterListItem) => {
     setEditId(m.id);
     setModalOpen(true);
-  };
-
-  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
-  // Unlike the other wiki delete hooks, useMonsterMutations exposes the raw
-  // mutation, whose mutateAsync rejects on failure — the hook's own onError
-  // already reports it, so swallow here rather than trip an unhandled rejection.
-  const handleDeleteConfirm = async () => {
-    if (!pendingDelete) return;
-    try {
-      await remove.mutateAsync(pendingDelete.id);
-    } catch {
-      // reported by useMonsterMutations' onError
-    }
-    setPendingDelete(undefined);
   };
 
   return (
@@ -114,7 +111,7 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
                 canEdit={isGM}
                 onClick={handleClick}
                 onEdit={handleClick}
-                onDelete={() => setPendingDelete(m)}
+                onDelete={() => requestDelete(m)}
               />
             ))}
           </div>
@@ -137,8 +134,9 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
           confirmLabel="Delete"
           danger
           isLoading={remove.isPending}
-          onConfirm={handleDeleteConfirm}
-          onCancel={() => setPendingDelete(undefined)}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

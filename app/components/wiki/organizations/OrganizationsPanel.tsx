@@ -8,6 +8,7 @@ import { OrganizationCard } from './OrganizationCard';
 import { OrganizationModal } from './OrganizationModal';
 import { OrganizationViewModal } from './OrganizationViewModal';
 import { useOrganizations, useDeleteOrganization } from '~/hooks/useOrganizations';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import { useLocations } from '~/hooks/useLocations';
 import type { OrganizationListItem } from '~/types/organization';
 
@@ -25,8 +26,13 @@ export function OrganizationsPanel({ onBack }: OrganizationsPanelProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | undefined>();
   const [viewId, setViewId] = useState<string | undefined>();
-  const [pendingDelete, setPendingDelete] = useState<OrganizationListItem | undefined>();
   const { remove: removeItem, isLoading: isDeleting } = useDeleteOrganization();
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<OrganizationListItem>(
+      (item) => removeItem({ id: item.id, campaignId }),
+      'Failed to delete organization. Please try again.'
+    );
 
   const { organizations, isLoading, error } = useOrganizations(campaignId, {
     search: search || undefined,
@@ -58,13 +64,6 @@ export function OrganizationsPanel({ onBack }: OrganizationsPanelProps) {
     setFilterLocationIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
-  };
-
-  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
-  const handleDeleteConfirm = async () => {
-    if (!pendingDelete) return;
-    await removeItem({ id: pendingDelete.id, campaignId });
-    setPendingDelete(undefined);
   };
 
   return (
@@ -131,7 +130,7 @@ export function OrganizationsPanel({ onBack }: OrganizationsPanelProps) {
                 organization={org}
                 onClick={handleClick}
                 onEdit={handleEdit}
-                onDelete={() => setPendingDelete(org)}
+                onDelete={() => requestDelete(org)}
               />
             ))}
           </div>
@@ -162,8 +161,9 @@ export function OrganizationsPanel({ onBack }: OrganizationsPanelProps) {
           confirmLabel="Delete"
           danger
           isLoading={isDeleting}
-          onConfirm={handleDeleteConfirm}
-          onCancel={() => setPendingDelete(undefined)}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

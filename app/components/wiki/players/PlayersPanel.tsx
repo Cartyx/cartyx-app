@@ -6,6 +6,7 @@ import { PlayerCard } from './PlayerCard';
 import { PlayerModal } from './PlayerModal';
 import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
 import { usePlayers, useDeletePlayer } from '~/hooks/usePlayers';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import type { PlayerListItem } from '~/types/player';
 
 interface PlayersPanelProps {
@@ -17,20 +18,18 @@ export function PlayersPanel({ onBack }: PlayersPanelProps) {
   const [search, setSearch] = useState('');
   const [selectedPlayerId, setSelectedPlayerId] = useState<string | null>(null);
 
-  const [pendingDelete, setPendingDelete] = useState<PlayerListItem | undefined>();
-
   const { players, isLoading, error } = usePlayers(campaignId, search || undefined);
   const { remove: removePlayer, isLoading: isDeleting } = useDeletePlayer();
 
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<PlayerListItem>(
+      (item) => removePlayer({ id: item.id, campaignId }),
+      'Failed to delete player. Please try again.'
+    );
+
   const handlePlayerClick = (playerId: string) => {
     setSelectedPlayerId(playerId);
-  };
-
-  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
-  const handleDeleteConfirm = async () => {
-    if (!pendingDelete) return;
-    await removePlayer({ id: pendingDelete.id, campaignId });
-    setPendingDelete(undefined);
   };
 
   return (
@@ -72,7 +71,7 @@ export function PlayersPanel({ onBack }: PlayersPanelProps) {
                 player={player}
                 onClick={() => handlePlayerClick(player.id)}
                 onEdit={() => handlePlayerClick(player.id)}
-                onDelete={() => setPendingDelete(player)}
+                onDelete={() => requestDelete(player)}
               />
             ))}
           </div>
@@ -92,8 +91,9 @@ export function PlayersPanel({ onBack }: PlayersPanelProps) {
           confirmLabel="Delete"
           danger
           isLoading={isDeleting}
-          onConfirm={handleDeleteConfirm}
-          onCancel={() => setPendingDelete(undefined)}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

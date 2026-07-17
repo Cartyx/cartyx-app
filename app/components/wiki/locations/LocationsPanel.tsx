@@ -9,6 +9,7 @@ import { LocationModal } from './LocationModal';
 import { LocationViewModal } from './LocationViewModal';
 import { LocationTypeManager } from './LocationTypeManager';
 import { useLocations, useDeleteLocation } from '~/hooks/useLocations';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import { useLocationTypes } from '~/hooks/useLocationTypes';
 import { useCampaign } from '~/hooks/useCampaigns';
 import type { LocationListItem } from '~/types/location';
@@ -30,8 +31,13 @@ export function LocationsPanel({ onBack }: LocationsPanelProps) {
   const [selectedLocationId, setSelectedLocationId] = useState<string | undefined>();
   const [viewLocationId, setViewLocationId] = useState<string | undefined>();
   const [showTypeManager, setShowTypeManager] = useState(false);
-  const [pendingDelete, setPendingDelete] = useState<LocationListItem | undefined>();
   const { remove: removeItem, isLoading: isDeleting } = useDeleteLocation();
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<LocationListItem>(
+      (item) => removeItem({ id: item.id, campaignId }),
+      'Failed to delete location. Please try again.'
+    );
 
   const { locationTypes } = useLocationTypes(campaignId);
 
@@ -71,13 +77,6 @@ export function LocationsPanel({ onBack }: LocationsPanelProps) {
 
   const handleViewModalClose = () => {
     setViewLocationId(undefined);
-  };
-
-  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
-  const handleDeleteConfirm = async () => {
-    if (!pendingDelete) return;
-    await removeItem({ id: pendingDelete.id, campaignId });
-    setPendingDelete(undefined);
   };
 
   return (
@@ -154,7 +153,7 @@ export function LocationsPanel({ onBack }: LocationsPanelProps) {
                 location={location}
                 onClick={handleLocationClick}
                 onEdit={handleLocationEdit}
-                onDelete={() => setPendingDelete(location)}
+                onDelete={() => requestDelete(location)}
               />
             ))}
           </div>
@@ -184,8 +183,9 @@ export function LocationsPanel({ onBack }: LocationsPanelProps) {
           confirmLabel="Delete"
           danger
           isLoading={isDeleting}
-          onConfirm={handleDeleteConfirm}
-          onCancel={() => setPendingDelete(undefined)}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>
