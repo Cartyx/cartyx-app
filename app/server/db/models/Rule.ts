@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 import { normalizeTags } from '~/server/utils/helpers';
 
 const ruleSchema = new mongoose.Schema({
@@ -72,4 +72,7 @@ if (typeof (ruleSchema as { index?: unknown }).index === 'function') {
   ruleSchema.index({ title: 'text', content: 'text' });
 }
 
-export const Rule = mongoose.models.Rule || mongoose.model('Rule', ruleSchema);
+export type IRule = InferSchemaType<typeof ruleSchema>;
+
+export const Rule: Model<IRule> =
+  (mongoose.models.Rule as Model<IRule>) || mongoose.model<IRule>('Rule', ruleSchema);
