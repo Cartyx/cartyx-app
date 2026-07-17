@@ -72,6 +72,21 @@ describe('OverflowMenu', () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
+  it('skips a disabled item when roving focus with the arrow keys', async () => {
+    const user = userEvent.setup();
+    const threeItems = [
+      { key: 'edit', label: 'Edit', onSelect: vi.fn() },
+      { key: 'show', label: 'Show on Tab', onSelect: vi.fn(), disabled: true },
+      { key: 'delete', label: 'Delete', onSelect: vi.fn(), danger: true },
+    ];
+    render(<OverflowMenu items={threeItems} label="Item actions" />);
+    await user.click(screen.getByRole('button', { name: 'Item actions' }));
+    await user.keyboard('{ArrowDown}');
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toHaveFocus();
+    await user.keyboard('{ArrowDown}');
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveFocus();
+  });
+
   it('renders nothing when there are no items', () => {
     const { container } = render(<OverflowMenu items={[]} label="Item actions" />);
     expect(container).toBeEmptyDOMElement();

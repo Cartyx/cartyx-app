@@ -52,10 +52,20 @@ export function OverflowMenu({ items, label }: OverflowMenuProps) {
 
   if (items.length === 0) return null;
 
-  const focusItemAt = (index: number) => {
+  // Browsers no-op .focus() on a disabled <button>, so a naive wrap-around
+  // index walk can get stuck (or land back where it started) whenever a
+  // disabled item sits between the current item and the next enabled one.
+  // Walk in the direction of travel, skipping disabled items, and bail out
+  // once every item has been checked so an all-disabled menu can't loop forever.
+  const focusItemAt = (index: number, direction: 1 | -1 = 1) => {
     const count = items.length;
-    const next = ((index % count) + count) % count;
-    itemRefs.current[next]?.focus();
+    for (let steps = 0; steps < count; steps++) {
+      const next = (((index + steps * direction) % count) + count) % count;
+      if (!items[next].disabled) {
+        itemRefs.current[next]?.focus();
+        return;
+      }
+    }
   };
 
   const currentIndex = () => itemRefs.current.findIndex((el) => el === document.activeElement);
@@ -63,11 +73,11 @@ export function OverflowMenu({ items, label }: OverflowMenuProps) {
   const onMenuKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      focusItemAt(currentIndex() + 1);
+      focusItemAt(currentIndex() + 1, 1);
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       const i = currentIndex();
-      focusItemAt(i === -1 ? items.length - 1 : i - 1);
+      focusItemAt(i === -1 ? items.length - 1 : i - 1, -1);
     }
   };
 
@@ -83,6 +93,9 @@ export function OverflowMenu({ items, label }: OverflowMenuProps) {
           e.stopPropagation();
           setOpen((v) => !v);
         }}
+        // Focus sits on the trigger after a click, and the role="menu" div below
+        // is a SIBLING, not an ancestor, so keydowns from the trigger never bubble
+        // through it — the trigger needs its own copy of the handler while open.
         onKeyDown={open ? onMenuKeyDown : undefined}
         className="flex h-7 w-7 items-center justify-center rounded bg-white/[0.03] text-slate-400 opacity-0 transition-opacity hover:bg-white/[0.07] hover:text-slate-200 focus-visible:opacity-100 group-hover:opacity-100"
       >
@@ -96,6 +109,10 @@ export function OverflowMenu({ items, label }: OverflowMenuProps) {
           <div
             role="menu"
             aria-label={label}
+            // jsx-a11y/interactive-supports-focus requires a role="menu" element to be
+            // focusable; roving focus actually lives on the menuitem buttons, so this
+            // keeps the container itself out of the normal Tab order (-1) while satisfying
+            // the lint rule.
             tabIndex={-1}
             onKeyDown={onMenuKeyDown}
             className="absolute right-0 top-8 z-20 w-48 overflow-hidden rounded border border-white/[0.07] bg-[#080A12] shadow-lg"
