@@ -173,10 +173,8 @@ describe('bootstrapDB', () => {
     await bootstrapDB(stagingPolicy);
 
     expect(isBootstrapped()).toBe(true);
-    const warnSpy = vi.mocked(console.warn);
-    // First call is structured warning line, subsequent calls are drift details.
-    expect(warnSpy.mock.calls[0]![0]).toContain('[bootstrap] warning env=staging action=verify');
-    expect(warnSpy.mock.calls[0]![0]).toContain('critical_drift=true');
+    // Structured-log content is covered by 'logs db.bootstrap.warning via
+    // log.warn on critical drift in staging' below.
   });
 
   // ── Timeout ─────────────────────────────────────────────────────────
@@ -196,9 +194,8 @@ describe('bootstrapDB', () => {
     await expect(bootstrapDB(policy)).rejects.toThrow('timed out');
     expect(isBootstrapped()).toBe(false);
 
-    // Timeout errors now flow through structured failure logging with action.
-    const errorSpy = vi.mocked(console.error);
-    expect(errorSpy.mock.calls.some((c) => c[0].includes('[bootstrap] failure'))).toBe(true);
+    // Structured-log content is covered by 'logs db.bootstrap.failure via
+    // log.error with the original error on timeout' below.
   });
 
   it('prevents overlapping bootstrap attempts after timeout', async () => {

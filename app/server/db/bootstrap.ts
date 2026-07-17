@@ -132,10 +132,6 @@ async function runBootstrap(policy: BootstrapPolicy): Promise<void> {
     // (including timeouts, which now flow through this catch block).
     if (!(error instanceof BootstrapError)) {
       const durationMs = Math.round(performance.now() - start);
-      console.error(
-        `[bootstrap] failure env=${env} action=${token.action ?? 'unknown'} duration_ms=${durationMs}` +
-          ` error=${error instanceof Error ? error.message : String(error)}`
-      );
       log.error(
         {
           bootstrap_env: env,
@@ -244,10 +240,6 @@ async function doBootstrapWork(
         `Run "npm run db:sync" to fix before deploying.\n` +
         details.map((d) => `  • ${d}`).join('\n');
       const err = new BootstrapError(message, env, details);
-      console.error(
-        `[bootstrap] failure env=${env} action=verify duration_ms=${durationMs}` +
-          ` missing=${totalMissing} mismatches=${totalMismatches} critical_drift=true`
-      );
       log.error(
         {
           bootstrap_env: env,
@@ -265,13 +257,6 @@ async function doBootstrapWork(
     }
 
     // Staging: warn but don't abort so preview deploys stay functional.
-    console.warn(
-      `[bootstrap] warning env=${env} action=verify duration_ms=${durationMs}` +
-        ` missing=${totalMissing} mismatches=${totalMismatches} critical_drift=true`
-    );
-    for (const d of details) {
-      console.warn(`[bootstrap] drift_detail ${d}`);
-    }
     log.warn(
       {
         bootstrap_env: env,

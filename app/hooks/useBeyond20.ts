@@ -183,7 +183,6 @@ export function useBeyond20(
 
   useEffect(() => {
     function handleLoaded() {
-      console.info('[Beyond20] Loaded');
       setIsConnected(true);
       captureEvent('party.beyond20_connected', {});
     }
@@ -198,14 +197,8 @@ export function useBeyond20(
       if (!raw) return;
 
       if (hasDiceResults(raw)) {
-        console.debug(
-          `[Beyond20] Routed to dice type=${raw.request?.type} character=${raw.character} title=${raw.title}`
-        );
         onDiceRollRef.current(parseDiceRoll(raw));
       } else {
-        console.debug(
-          `[Beyond20] Routed to chat type=${raw.request?.type} character=${raw.character} title=${raw.title}`
-        );
         onSpellCardRef.current(parseSpellCard(raw));
       }
     }
