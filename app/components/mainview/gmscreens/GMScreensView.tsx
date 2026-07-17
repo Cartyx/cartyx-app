@@ -113,6 +113,19 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
   // Whether the one-time restore from player state has already happened.
   const hasSeededRef = useRef(false);
 
+  // GMScreensView isn't remounted on a campaignId change (no `key` at the
+  // call site, and TanStack Router v1 doesn't remount on a path-param
+  // change), so hasSeededRef must be reset by hand when the campaign
+  // switches — otherwise campaign B's first pass sees hasSeededRef already
+  // true and falls back to screens[0] instead of restoring ITS persisted
+  // screen. Comparing-during-render (not in an effect) mirrors the ref
+  // writes above and ensures the reset lands before the seeding effect runs.
+  const prevCampaignIdRef = useRef(campaignId);
+  if (prevCampaignIdRef.current !== campaignId) {
+    prevCampaignIdRef.current = campaignId;
+    hasSeededRef.current = false;
+  }
+
   // Auto-select a screen once the list has settled (not while loading).
   // Uses screenIdsKey (primitive) so it only fires when the set of IDs
   // changes, and a functional update to avoid activeScreenId in deps.
