@@ -227,6 +227,30 @@ describe('useWikiCardActions', () => {
     }
   });
 
+  it('offers Push to Tabletop from the Dashboard when allowPushFromDashboard is set, but still hides Show on Tab', () => {
+    mockSearch.mockReturnValue({ tab: 'dashboard' });
+    const { result } = renderHook(() =>
+      useWikiCardActions({
+        collection: 'character',
+        documentId: 'd1',
+        allowPushFromDashboard: true,
+      })
+    );
+    expect(keys(result.current.menuItems)).toEqual(['push']);
+    result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
+    expect(openWindowMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ screenId: 'active', collection: 'character', documentId: 'd1' })
+    );
+  });
+
+  it('does not offer Push to Tabletop from the Dashboard without allowPushFromDashboard (default false)', () => {
+    mockSearch.mockReturnValue({ tab: 'dashboard' });
+    const { result } = renderHook(() =>
+      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    );
+    expect(keys(result.current.menuItems)).toEqual([]);
+  });
+
   it('returns no items when nothing qualifies', () => {
     mockSearch.mockReturnValue({ tab: 'dashboard' });
     mockCampaign.mockReturnValue({ campaign: { isGM: false } });

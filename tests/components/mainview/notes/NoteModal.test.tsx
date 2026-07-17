@@ -20,6 +20,20 @@ vi.mock('~/hooks/useTabletopScreens', () => ({
   }),
 }));
 
+// NoteModal's ShowOnTabletopButton now reads useWikiCardActions, which reads
+// the router and tabletop player state — stub that context so the modal
+// still renders standalone here (same pattern as LoreCard.test.tsx).
+vi.mock('@tanstack/react-router', () => ({
+  useParams: () => ({ campaignId: 'campaign-123' }),
+  useSearch: () => ({ tab: 'wiki' }),
+}));
+vi.mock('~/hooks/useTabletopPlayerState', () => ({
+  useTabletopPlayerState: () => ({
+    playerState: null,
+    addPrivateWindow: { mutate: vi.fn() },
+  }),
+}));
+
 // Mock CodeMirror (same approach as MarkdownEditor tests)
 let lastCmOnChange: ((value: string) => void) | undefined;
 let lastCmValue: string | undefined;

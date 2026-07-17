@@ -13,6 +13,15 @@ interface UseWikiCardActionsParams {
   canEdit?: boolean;
   onEdit?: () => void;
   onDelete?: () => void;
+  /**
+   * Offer "Push to Tabletop" even when there's no surface (e.g. the
+   * Dashboard tab). Push always targets the tabletop's active screen
+   * regardless of this flag — it only changes whether the item is offered
+   * outside the Tabletop/GM Screens tabs. "Show on Tab" is unaffected: it
+   * still requires a real surface, since there's nothing to "show here" on
+   * the Dashboard.
+   */
+  allowPushFromDashboard?: boolean;
 }
 
 /**
@@ -32,6 +41,7 @@ export function useWikiCardActions({
   canEdit,
   onEdit,
   onDelete,
+  allowPushFromDashboard = false,
 }: UseWikiCardActionsParams): { menuItems: MenuItem[] } {
   const { campaignId } = useParams({ from: '/campaigns/$campaignId/play' });
   const { tab } = useSearch({ from: '/campaigns/$campaignId/play' });
@@ -87,8 +97,9 @@ export function useWikiCardActions({
     });
   }
 
-  // Push is GM-only and ALWAYS targets the tabletop, even from GM Screens.
-  if (isGM && surface) {
+  // Push is GM-only and ALWAYS targets the tabletop, even from GM Screens
+  // (or the Dashboard, when the caller opts in via allowPushFromDashboard).
+  if (isGM && (surface || allowPushFromDashboard)) {
     const tabletopScreenId = playerState?.activeScreenId ?? screens[0]?.id ?? null;
     items.push({
       key: 'push',
