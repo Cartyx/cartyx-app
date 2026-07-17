@@ -23,6 +23,10 @@ vi.mock('~/hooks/useTabletopScreens', () => ({
   useTabletopScreenList: () => ({ screens: [{ id: 'first' }, { id: 'active' }] }),
   useTabletopMutations: () => ({ openWindow: { mutate: openWindowMutate, isPending: false } }),
 }));
+vi.mock('~/hooks/useGMScreens', () => ({
+  // gm-first is the fallback; gm1 is the "active" GM screen the beforeEach pins.
+  useGMScreenList: () => ({ screens: [{ id: 'gm-first' }, { id: 'gm1' }] }),
+}));
 
 const keys = (items: { key: string }[]) => items.map((i) => i.key);
 
@@ -258,5 +262,44 @@ describe('useWikiCardActions', () => {
       useWikiCardActions({ collection: 'character', documentId: 'd1', canEdit: false })
     );
     expect(result.current.menuItems).toEqual([]);
+  });
+
+  // Regression: on a fresh campaign the view auto-selects its only screen
+  // without persisting, so activeGMScreenId/activeScreenId is null on first
+  // visit. Show on Tab must still be enabled, falling back to the first screen.
+  it('Show on Tab on GM Screens falls back to the first GM screen when none is persisted', () => {
+    mockSearch.mockReturnValue({ tab: 'gmscreens' });
+    mockPlayerState.mockReturnValue({
+      playerState: { activeScreenId: null, activeGMScreenId: null, privateWindows: [] },
+      addPrivateWindow: { mutate: addPrivateWindowMutate },
+      removePrivateWindow: { mutate: vi.fn() },
+    });
+    const { result } = renderHook(() =>
+      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    );
+    const item = result.current.menuItems.find((i) => i.key === 'show-on-tab');
+    expect(item?.disabled).toBeFalsy();
+    item!.onSelect();
+    expect(addPrivateWindowMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ surface: 'gmscreen', screenId: 'gm-first' })
+    );
+  });
+
+  it('Show on Tab on the Tabletop falls back to the first screen when none is persisted', () => {
+    mockSearch.mockReturnValue({ tab: 'tabletop' });
+    mockPlayerState.mockReturnValue({
+      playerState: { activeScreenId: null, activeGMScreenId: null, privateWindows: [] },
+      addPrivateWindow: { mutate: addPrivateWindowMutate },
+      removePrivateWindow: { mutate: vi.fn() },
+    });
+    const { result } = renderHook(() =>
+      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    );
+    const item = result.current.menuItems.find((i) => i.key === 'show-on-tab');
+    expect(item?.disabled).toBeFalsy();
+    item!.onSelect();
+    expect(addPrivateWindowMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ surface: 'tabletop', screenId: 'first' })
+    );
   });
 });

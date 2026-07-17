@@ -5,6 +5,7 @@ import type { MenuItem } from '~/components/shared/OverflowMenu';
 import { useCampaign } from '~/hooks/useCampaigns';
 import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
 import { useTabletopScreenList, useTabletopMutations } from '~/hooks/useTabletopScreens';
+import { useGMScreenList } from '~/hooks/useGMScreens';
 
 interface UseWikiCardActionsParams {
   collection: string;
@@ -48,7 +49,8 @@ export function useWikiCardActions({
   const { campaign } = useCampaign(campaignId);
   const isGM = campaign?.isGM ?? false;
 
-  const { screens } = useTabletopScreenList(campaignId);
+  const { screens: tabletopScreens } = useTabletopScreenList(campaignId);
+  const { screens: gmScreens } = useGMScreenList(campaignId);
   const tabletopMutations = useTabletopMutations(campaignId);
   const { playerState, addPrivateWindow } = useTabletopPlayerState(campaignId);
 
@@ -68,8 +70,15 @@ export function useWikiCardActions({
   const surface = tab === 'tabletop' ? 'tabletop' : tab === 'gmscreens' ? 'gmscreen' : null;
 
   if (surface) {
+    // Prefer the persisted active screen, but fall back to the first screen when
+    // it isn't set yet — on a fresh campaign the view auto-selects its only
+    // screen without persisting, so activeScreenId/activeGMScreenId is null on
+    // first visit. Without this fallback "Show on Tab" renders disabled even
+    // though a screen is right there (this mirrors the push branch below).
     const screenId =
-      surface === 'tabletop' ? playerState?.activeScreenId : playerState?.activeGMScreenId;
+      surface === 'tabletop'
+        ? (playerState?.activeScreenId ?? tabletopScreens[0]?.id ?? null)
+        : (playerState?.activeGMScreenId ?? gmScreens[0]?.id ?? null);
 
     const alreadyPrivate = (playerState?.privateWindows ?? []).some(
       (pw) =>
@@ -100,7 +109,7 @@ export function useWikiCardActions({
   // Push is GM-only and ALWAYS targets the tabletop, even from GM Screens
   // (or the Dashboard, when the caller opts in via allowPushFromDashboard).
   if (isGM && (surface || allowPushFromDashboard)) {
-    const tabletopScreenId = playerState?.activeScreenId ?? screens[0]?.id ?? null;
+    const tabletopScreenId = playerState?.activeScreenId ?? tabletopScreens[0]?.id ?? null;
     items.push({
       key: 'push',
       label: 'Push to Tabletop',

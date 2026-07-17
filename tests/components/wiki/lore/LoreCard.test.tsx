@@ -25,6 +25,9 @@ vi.mock('~/hooks/useTabletopPlayerState', () => ({
     addPrivateWindow: { mutate: vi.fn() },
   }),
 }));
+vi.mock('~/hooks/useGMScreens', () => ({
+  useGMScreenList: () => ({ screens: [] }),
+}));
 vi.mock('~/hooks/useTabletopScreens', () => ({
   useTabletopScreenList: () => ({ screens: [] }),
   useTabletopMutations: () => ({ openWindow: { mutate: vi.fn(), isPending: false } }),

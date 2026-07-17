@@ -12,6 +12,9 @@ vi.mock('~/hooks/useCampaigns');
 vi.mock('~/hooks/useTags', () => ({
   useTags: () => ({ tags: [], isLoading: false, error: null }),
 }));
+vi.mock('~/hooks/useGMScreens', () => ({
+  useGMScreenList: () => ({ screens: [] }),
+}));
 vi.mock('~/hooks/useTabletopScreens', () => ({
   useTabletopScreenList: () => ({ screens: [], isLoading: false, error: null }),
   useTabletopMutations: () => ({
