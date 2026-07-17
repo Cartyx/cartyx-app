@@ -266,28 +266,55 @@ test.describe('wiki card overflow menu', () => {
       if (!campaign) throw new Error('Seeded campaign not found — run `npm run dev:seed`');
       gmUserId = String(campaign.gameMasterId);
 
-      // Find a player-member whose user account can actually hold a session
-      // (has a providerId). The other seeded players are label-only placeholders.
-      const playerMembers = (campaign.members ?? []).filter(
-        (m: { role?: string }) => m.role === 'player'
+      // Self-provision a real, non-GM player identity rather than depending on
+      // a seeded player having a providerId. The dev seed never sets providerId
+      // (only seed-gm.cjs does, for the GM), so in CI no seeded player can hold
+      // a session — this test used to pass locally only because a dev DB
+      // happens to accumulate providerIds from real logins. Upsert a dedicated
+      // e2e player user + campaign membership; idempotent across runs.
+      const PLAYER_PROVIDER_ID = 'e2e-overflow-player';
+      await db.collection('users').updateOne(
+        { providerId: PLAYER_PROVIDER_ID },
+        {
+          $set: {
+            providerId: PLAYER_PROVIDER_ID,
+            provider: 'test',
+            email: 'e2e-overflow-player@example.com',
+            firstName: 'E2E',
+            lastName: 'Player',
+            role: 'player',
+          },
+        },
+        { upsert: true }
       );
-      let playerUser: (SessionUserDoc & { _id: unknown }) | null = null;
-      for (const member of playerMembers) {
-        const userId = String((member as { userId: unknown }).userId);
-        const u = await db
-          .collection('users')
-          .findOne({ _id: new mongoose.Types.ObjectId(userId) });
-        if (u?.providerId) {
-          playerUser = u as SessionUserDoc & { _id: unknown };
-          break;
-        }
-      }
-      if (!playerUser) {
-        throw new Error(
-          'No player-member with a providerId found on the seeded campaign — cannot mint a real player session.'
-        );
-      }
+      const playerUser = (await db
+        .collection('users')
+        .findOne({ providerId: PLAYER_PROVIDER_ID })) as (SessionUserDoc & { _id: unknown }) | null;
+      if (!playerUser) throw new Error('Failed to provision the e2e player user');
       playerUserId = String(playerUser._id);
+
+      // Grant campaign access: membership is what getCampaign checks (by the
+      // caller's providerId → user → campaign.members). Add both the campaign
+      // member entry and the user's campaign ref, mirroring a real join. Both
+      // idempotent.
+      const alreadyMember = (campaign.members ?? []).some(
+        (m: { userId?: unknown }) => String(m.userId) === playerUserId
+      );
+      if (!alreadyMember) {
+        await db
+          .collection('campaigns')
+          .updateOne(
+            { _id: campaignId },
+            { $push: { members: { userId: playerUser._id, role: 'player', joinedAt: new Date() } } }
+          );
+      }
+      await db
+        .collection('users')
+        .updateOne(
+          { _id: playerUser._id, 'campaigns.campaignId': { $ne: campaignId } },
+          { $push: { campaigns: { campaignId, joinedAt: new Date(), status: 'active' } } }
+        );
+
       playerStorageState = await mintStorageState(playerUser, sessionSecret);
     } finally {
       await mongoose.disconnect();
