@@ -3,6 +3,7 @@ import { WebSocketServer } from 'ws';
 import { verifyConnectionToken, type PartyName } from './auth.js';
 import { RoomManager } from './rooms.js';
 import type { PartyHandler } from './parties/types.js';
+import { log } from './logger.js';
 
 export type RealtimeServerOptions = {
   sessionSecret: string;
@@ -27,10 +28,10 @@ function invokeSafely(label: string, fn: () => void | Promise<void>): void {
   try {
     const result = fn();
     if (result instanceof Promise) {
-      result.catch((err) => console.error(`[realtime] ${label} failed:`, err));
+      result.catch((err) => log.error({ label, err }, 'handler failed'));
     }
   } catch (err) {
-    console.error(`[realtime] ${label} failed:`, err);
+    log.error({ label, err }, 'handler failed');
   }
 }
 
@@ -83,7 +84,7 @@ export function createRealtimeServer(opts: RealtimeServerOptions): Server {
         res.writeHead(status, { 'content-type': 'text/plain' });
         res.end(body);
       } catch (err) {
-        console.error('[realtime] onRequest failed:', err);
+        log.error({ err }, 'onRequest failed');
         res.writeHead(500, { 'content-type': 'text/plain' });
         res.end('Internal error');
       } finally {
@@ -121,7 +122,7 @@ export function createRealtimeServer(opts: RealtimeServerOptions): Server {
       const peer = room.addPeer(ws, auth);
       const handler = opts.handlers[target.party];
       ws.on('error', (err) => {
-        console.error(`[realtime] socket error (peer ${peer.id}):`, err);
+        log.error({ peerId: peer.id, err }, 'socket error');
         try {
           ws.terminate();
         } catch {
