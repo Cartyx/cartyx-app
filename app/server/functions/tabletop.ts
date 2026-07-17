@@ -982,6 +982,9 @@ export const updatePlayerState = async ({
     if (data.activeScreenId !== undefined) {
       setFields.activeScreenId = data.activeScreenId;
     }
+    if (data.activeGMScreenId !== undefined) {
+      setFields.activeGMScreenId = data.activeGMScreenId;
+    }
 
     // Viewport upsert: replace the matching screenId entry or push new
     if (data.viewport) {
@@ -1087,7 +1090,7 @@ export const updatePlayerState = async ({
         );
       }
     } else if (Object.keys(setFields).length > 0) {
-      // Only activeScreenId update
+      // Scalar-only update (activeScreenId / activeGMScreenId)
       await TabletopPlayerState.updateOne(
         {
           campaignId: data.campaignId,

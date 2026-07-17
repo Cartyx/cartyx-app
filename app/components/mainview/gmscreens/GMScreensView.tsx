@@ -3,6 +3,7 @@ import { Plus, Layers, Loader2, AlertTriangle, Globe, Lock, ExternalLink } from 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useGMScreenList, useGMScreenDetail, useGMScreenMutations } from '~/hooks/useGMScreens';
+import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
 import {
   FloatingWindowManager,
   type ManagedWindow,
@@ -66,6 +67,14 @@ function toFloatingState(state: string): FloatingWindowState {
 export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
   const { screens, isLoading: listLoading, error: listError } = useGMScreenList(campaignId);
   const [activeScreenId, setActiveScreenId] = useState<string | null>(null);
+  // Local state stays the render source of truth (tab clicks must not wait on a
+  // round-trip); player state is only *seeded from* on mount and *synced to* on
+  // user-initiated changes. The wiki (a sibling subtree) reads it from there.
+  const {
+    playerState,
+    isLoading: playerStateLoading,
+    updateState,
+  } = useTabletopPlayerState(campaignId);
   const [dialog, setDialog] = useState<DialogState>({ type: 'none' });
   const mutations = useGMScreenMutations(campaignId);
   const [editingCharacterId, setEditingCharacterId] = useState<string | null>(null);
@@ -96,9 +105,20 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
   const screensRef = useRef(screens);
   screensRef.current = screens;
 
-  // Auto-select first screen once the list has settled (not while loading).
+  // Ref to the persisted screen id so the auto-select effect can read it
+  // without re-running every time our own persist call round-trips.
+  const restoredScreenIdRef = useRef<string | null>(null);
+  restoredScreenIdRef.current = playerState?.activeGMScreenId ?? null;
+
+  // Whether the one-time restore from player state has already happened.
+  const hasSeededRef = useRef(false);
+
+  // Auto-select a screen once the list has settled (not while loading).
   // Uses screenIdsKey (primitive) so it only fires when the set of IDs
   // changes, and a functional update to avoid activeScreenId in deps.
+  // On the FIRST pass it also waits for player state so it can restore the
+  // GM's last screen instead of flashing screens[0]; afterwards player state
+  // is ignored here and only written to.
   useEffect(() => {
     if (listLoading) return;
     const current = screensRef.current;
@@ -106,12 +126,19 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
       setActiveScreenId(null);
       return;
     }
+    // Only the initial seed waits on player state; later list changes must not.
+    if (!hasSeededRef.current && playerStateLoading) return;
+
     const idSet = new Set(current.map((s) => s.id));
-    setActiveScreenId((prev) => {
-      if (prev && idSet.has(prev)) return prev;
-      return current[0]!.id;
-    });
-  }, [screenIdsKey, listLoading]);
+    // Restore the GM's last screen. Falls back to the first screen on first
+    // visit (activeGMScreenId is null until they pick one) and when the
+    // persisted screen has since been deleted.
+    const restored = hasSeededRef.current ? null : restoredScreenIdRef.current;
+    hasSeededRef.current = true;
+    const fallback = restored && idSet.has(restored) ? restored : current[0]!.id;
+
+    setActiveScreenId((prev) => (prev && idSet.has(prev) ? prev : fallback));
+  }, [screenIdsKey, listLoading, playerStateLoading]);
 
   // Clear drag highlight when switching screens
   useEffect(() => {
@@ -148,6 +175,21 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     };
   }, [mutations]);
 
+  // --- Screen selection ---
+
+  const updateStateMutate = updateState.mutate;
+
+  // Persist on user-initiated selection only. Local state updates first so the
+  // tab switch is instant; the write is fire-and-forget. NOT called from the
+  // seeding effect above — that would write on every mount.
+  const handleSelectScreen = useCallback(
+    (id: string) => {
+      setActiveScreenId(id);
+      updateStateMutate({ activeGMScreenId: id });
+    },
+    [updateStateMutate]
+  );
+
   // --- Screen CRUD handlers ---
 
   const handleCreateScreen = useCallback(
@@ -155,13 +197,14 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
       const result = await mutations.createScreen.mutateAsync(name);
       if (result?.screen) {
         setActiveScreenId(result.screen.id);
+        updateStateMutate({ activeGMScreenId: result.screen.id });
       }
       // Invalidate list AFTER selection is set to prevent the auto-select
       // effect from briefly choosing a different screen during the refetch.
       mutations.invalidateList();
       setDialog({ type: 'none' });
     },
-    [mutations]
+    [mutations, updateStateMutate]
   );
 
   const handleRenameScreen = useCallback(
@@ -187,6 +230,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     const idx = currentScreens.findIndex((s) => s.id === deletingId);
     const nextScreen = currentScreens[idx + 1] ?? currentScreens[idx - 1] ?? null;
     setActiveScreenId(nextScreen?.id ?? null);
+    updateStateMutate({ activeGMScreenId: nextScreen?.id ?? null });
 
     // Clear any pending debounced window-update timers for the deleted screen's windows
     const windowIdSet = new Set(windowIds);
@@ -201,7 +245,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     // Invalidate list AFTER mutation + selection to avoid race
     mutations.invalidateList();
     setDialog({ type: 'none' });
-  }, [dialog, mutations, activeScreen]);
+  }, [dialog, mutations, activeScreen, updateStateMutate]);
 
   const handleReorder = useCallback(
     async (screenIds: string[]) => {
@@ -647,7 +691,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
       <ScreenBar
         screens={screens}
         activeScreenId={activeScreenId}
-        onSelectScreen={setActiveScreenId}
+        onSelectScreen={handleSelectScreen}
         onCreateScreen={() => setDialog({ type: 'create-screen' })}
         onRenameScreen={(id) => {
           const s = screens.find((s) => s.id === id);
