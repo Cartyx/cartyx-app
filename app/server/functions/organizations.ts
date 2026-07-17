@@ -90,10 +90,14 @@ async function resolveMemberLabel(
   campaignId: string
 ): Promise<string> {
   try {
-    const model = kind === 'character' ? Character : Player;
-    const doc = (await model
-      .findOne({ _id: id, campaignId }, 'firstName lastName')
-      .lean()) as AnyDoc | null;
+    // Two explicit branches rather than a shared `model` variable: unioning a
+    // typed Model with an untyped one collapses the query's filter type, so
+    // this keeps each call concretely typed instead of casting around it.
+    const doc = (
+      kind === 'character'
+        ? await Character.findOne({ _id: id, campaignId }, 'firstName lastName').lean()
+        : await Player.findOne({ _id: id, campaignId }, 'firstName lastName').lean()
+    ) as AnyDoc | null;
     if (doc) return fullName(doc);
   } catch {
     /* ignore */

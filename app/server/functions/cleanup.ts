@@ -81,11 +81,11 @@ async function collectInUseKeys(cdnUrl: string | null): Promise<Set<string>> {
   }
 
   // Characters / Players / Campaigns: only the public URL is stored.
-  const sources: Array<[ReturnType<typeof Character.find>, string]> = [
+  const sources = [
     [Character.find({}, 'picture').lean(), 'picture'],
     [Player.find({}, 'picture').lean(), 'picture'],
     [Campaign.find({}, 'imagePath').lean(), 'imagePath'],
-  ];
+  ] as const;
   for (const [query, field] of sources) {
     const cursor = query.cursor();
     for await (const doc of cursor) {

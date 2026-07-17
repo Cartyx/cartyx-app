@@ -61,10 +61,14 @@ async function resolveEntityLabel(
 ): Promise<string> {
   try {
     if (kind === 'character' || kind === 'player') {
-      const model = kind === 'character' ? Character : Player;
-      const doc = (await model
-        .findOne({ _id: id, campaignId }, 'firstName lastName')
-        .lean()) as AnyDoc | null;
+      // Two explicit branches rather than a shared `model` variable: unioning
+      // a typed Model with an untyped one collapses the query's filter type,
+      // so this keeps each call concretely typed instead of casting around it.
+      const doc = (
+        kind === 'character'
+          ? await Character.findOne({ _id: id, campaignId }, 'firstName lastName').lean()
+          : await Player.findOne({ _id: id, campaignId }, 'firstName lastName').lean()
+      ) as AnyDoc | null;
       return doc ? fullName(doc) : '';
     }
     if (kind === 'location') {
