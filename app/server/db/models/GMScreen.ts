@@ -1,6 +1,5 @@
-import mongoose from 'mongoose'
-import { WINDOW_STATES } from '~/types/gmscreen'
-
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
+import { WINDOW_STATES } from '~/types/gmscreen';
 
 // ---------------------------------------------------------------------------
 // Constants – practical guardrails for embedded arrays
@@ -9,7 +8,7 @@ export const GMSCREEN_LIMITS = {
   MAX_WINDOWS: 20,
   MAX_STACKS: 10,
   MAX_STACK_ITEMS: 50,
-} as const
+} as const;
 
 // ---------------------------------------------------------------------------
 // Sub-schemas
@@ -30,8 +29,8 @@ const windowSchema = new mongoose.Schema(
     height: { type: Number, default: null },
     zIndex: { type: Number, default: 0 },
   },
-  { _id: true },
-)
+  { _id: true }
+);
 
 const stackItemSchema = new mongoose.Schema(
   {
@@ -39,8 +38,8 @@ const stackItemSchema = new mongoose.Schema(
     documentId: { type: mongoose.Schema.Types.ObjectId, required: true },
     label: { type: String, default: '' },
   },
-  { _id: true },
-)
+  { _id: true }
+);
 
 const stackSchema = new mongoose.Schema(
   {
@@ -51,14 +50,13 @@ const stackSchema = new mongoose.Schema(
       type: [stackItemSchema],
       default: [],
       validate: {
-        validator: (v: unknown) =>
-          Array.isArray(v) && v.length <= GMSCREEN_LIMITS.MAX_STACK_ITEMS,
+        validator: (v: unknown) => Array.isArray(v) && v.length <= GMSCREEN_LIMITS.MAX_STACK_ITEMS,
         message: `A stack cannot contain more than ${GMSCREEN_LIMITS.MAX_STACK_ITEMS} items.`,
       },
     },
   },
-  { _id: true },
-)
+  { _id: true }
+);
 
 // ---------------------------------------------------------------------------
 // Main GMScreen schema
@@ -82,8 +80,7 @@ const gmScreenSchema = new mongoose.Schema(
       type: [windowSchema],
       default: [],
       validate: {
-        validator: (v: unknown) =>
-          Array.isArray(v) && v.length <= GMSCREEN_LIMITS.MAX_WINDOWS,
+        validator: (v: unknown) => Array.isArray(v) && v.length <= GMSCREEN_LIMITS.MAX_WINDOWS,
         message: `A screen cannot contain more than ${GMSCREEN_LIMITS.MAX_WINDOWS} windows.`,
       },
     },
@@ -91,16 +88,15 @@ const gmScreenSchema = new mongoose.Schema(
       type: [stackSchema],
       default: [],
       validate: {
-        validator: (v: unknown) =>
-          Array.isArray(v) && v.length <= GMSCREEN_LIMITS.MAX_STACKS,
+        validator: (v: unknown) => Array.isArray(v) && v.length <= GMSCREEN_LIMITS.MAX_STACKS,
         message: `A screen cannot contain more than ${GMSCREEN_LIMITS.MAX_STACKS} stacks.`,
       },
     },
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
   },
-  { collection: 'gmscreen' },
-)
+  { collection: 'gmscreen' }
+);
 
 // ---------------------------------------------------------------------------
 // Indexes
@@ -108,9 +104,12 @@ const gmScreenSchema = new mongoose.Schema(
 
 // istanbul ignore next
 if (typeof (gmScreenSchema as { index?: unknown }).index === 'function') {
-  gmScreenSchema.index({ campaignId: 1, tabOrder: 1 }, { unique: true })
-  gmScreenSchema.index({ campaignId: 1, name: 1 }, { unique: true })
+  gmScreenSchema.index({ campaignId: 1, tabOrder: 1 }, { unique: true });
+  gmScreenSchema.index({ campaignId: 1, name: 1 }, { unique: true });
 }
 
-export const GMScreen =
-  mongoose.models.GMScreen || mongoose.model('GMScreen', gmScreenSchema)
+export type IGMScreen = InferSchemaType<typeof gmScreenSchema>;
+
+export const GMScreen: Model<IGMScreen> =
+  (mongoose.models.GMScreen as Model<IGMScreen>) ||
+  mongoose.model<IGMScreen>('GMScreen', gmScreenSchema);

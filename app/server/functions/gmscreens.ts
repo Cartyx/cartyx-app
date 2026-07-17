@@ -889,7 +889,8 @@ export const openWindow = async ({ data }: { data: z.infer<typeof openWindowSche
     if (!screen) throw new Error('Screen not found');
 
     if (!screen.windows) {
-      screen.windows = [];
+      // Legacy screens may lack the field; `[]` alone infers as never[].
+      screen.windows = [] as unknown as typeof screen.windows;
     }
     const windows = screen.windows;
 
@@ -1006,7 +1007,7 @@ export const openWindow = async ({ data }: { data: z.infer<typeof openWindowSche
       campaignId: data.campaignId,
     });
     if (!refreshed) throw new Error('Screen not found');
-    if (!refreshed.windows) refreshed.windows = [];
+    if (!refreshed.windows) refreshed.windows = [] as unknown as typeof refreshed.windows;
     const race = refreshed.windows.find(
       (w: { collection?: string; documentId?: unknown }) =>
         w.collection === data.collection && String(w.documentId) === data.documentId
@@ -1194,7 +1195,8 @@ export const createStack = async ({ data }: { data: z.infer<typeof createStackSc
     if (!screen) throw new Error('Screen not found');
 
     if (!screen.stacks) {
-      screen.stacks = [];
+      // Legacy screens may lack the field; `[]` alone infers as never[].
+      screen.stacks = [] as unknown as typeof screen.stacks;
     }
 
     if (screen.stacks.length >= GMSCREEN_LIMITS.MAX_STACKS) {
@@ -1423,7 +1425,8 @@ export const addStackItem = async ({ data }: { data: z.infer<typeof addStackItem
     if (!screen) throw new Error('Screen not found');
 
     if (!screen.stacks) {
-      screen.stacks = [];
+      // Legacy screens may lack the field; `[]` alone infers as never[].
+      screen.stacks = [] as unknown as typeof screen.stacks;
     }
 
     const stack = screen.stacks.find((s: { _id: unknown }) => String(s._id) === data.stackId);
@@ -1431,7 +1434,8 @@ export const addStackItem = async ({ data }: { data: z.infer<typeof addStackItem
 
     // Ensure items is a real Mongoose subdocument array (legacy stacks may lack it)
     if (!stack.items) {
-      stack.items = [];
+      // Legacy stacks may lack the field; `[]` alone infers as never[].
+      stack.items = [] as unknown as typeof stack.items;
     }
 
     // Duplicate check — fast-path only. Like openWindow's `existing` check,
@@ -1546,12 +1550,12 @@ export const addStackItem = async ({ data }: { data: z.infer<typeof addStackItem
       campaignId: data.campaignId,
     });
     if (!refreshed) throw new Error('Screen not found');
-    if (!refreshed.stacks) refreshed.stacks = [];
+    if (!refreshed.stacks) refreshed.stacks = [] as unknown as typeof refreshed.stacks;
     const refreshedStack = refreshed.stacks.find(
       (s: { _id: unknown }) => String(s._id) === data.stackId
     );
     if (!refreshedStack) throw new Error('Stack not found');
-    if (!refreshedStack.items) refreshedStack.items = [];
+    if (!refreshedStack.items) refreshedStack.items = [] as unknown as typeof refreshedStack.items;
     const race = refreshedStack.items.find(
       (item: { collection?: string; documentId?: unknown }) =>
         item.collection === data.collection && String(item.documentId) === data.documentId
@@ -1607,7 +1611,8 @@ export const removeStackItem = async ({
     if (!screen) throw new Error('Screen not found');
 
     if (!screen.stacks) {
-      screen.stacks = [];
+      // Legacy screens may lack the field; `[]` alone infers as never[].
+      screen.stacks = [] as unknown as typeof screen.stacks;
     }
 
     const stack = screen.stacks.find((s: { _id: unknown }) => String(s._id) === data.stackId);
@@ -1615,7 +1620,8 @@ export const removeStackItem = async ({
 
     // Ensure items is a real Mongoose subdocument array (legacy stacks may lack it)
     if (!stack.items) {
-      stack.items = [];
+      // Legacy stacks may lack the field; `[]` alone infers as never[].
+      stack.items = [] as unknown as typeof stack.items;
     }
 
     const index = stack.items.findIndex(
