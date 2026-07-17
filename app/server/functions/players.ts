@@ -395,7 +395,12 @@ export const updatePlayerStatus = async ({
     if (!player) throw new Error('Player not found');
     if (String(player.campaignId) !== data.campaignId) throw new Error('Forbidden');
 
-    player.status = { value: data.value, changedAt: new Date(), changedBy: member.userId };
+    // Same string-id-vs-ObjectId compile-time boundary as Character's status update.
+    player.status = {
+      value: data.value,
+      changedAt: new Date(),
+      changedBy: member.userId,
+    } as unknown as typeof player.status;
     player.updatedAt = new Date();
     await player.save();
 

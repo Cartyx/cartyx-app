@@ -139,8 +139,12 @@ async function memberExistsInCampaign(
   id: string,
   campaignId: string
 ): Promise<boolean> {
-  const model = kind === 'character' ? Character : Player;
-  const exists = await model.exists({ _id: id, campaignId });
+  // Two explicit branches rather than a shared `model` variable — same union
+  // typing friction as resolveMemberLabel above.
+  const exists =
+    kind === 'character'
+      ? await Character.exists({ _id: id, campaignId })
+      : await Player.exists({ _id: id, campaignId });
   return !!exists;
 }
 
