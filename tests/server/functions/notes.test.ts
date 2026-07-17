@@ -110,7 +110,7 @@ const _getNote = getNote as unknown as (args: {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getSession).mockResolvedValue(mockSession);
-  vi.mocked(User.findOne).mockResolvedValue(mockDbUser);
+  vi.mocked(User.findOne).mockResolvedValue(mockDbUser as never);
   vi.mocked(Campaign.findById).mockResolvedValue(mockCampaign);
 });
 

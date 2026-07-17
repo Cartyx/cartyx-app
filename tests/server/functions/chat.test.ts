@@ -59,7 +59,7 @@ const mockCampaign = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getSession).mockResolvedValue(mockSession);
-  vi.mocked(User.findOne).mockResolvedValue(mockDbUser);
+  vi.mocked(User.findOne).mockResolvedValue(mockDbUser as never);
   vi.mocked(DbSession.findById).mockReturnValue({
     select: vi.fn().mockReturnValue({
       lean: vi.fn().mockResolvedValue(mockDbSession),

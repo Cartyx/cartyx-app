@@ -127,7 +127,7 @@ function mockMapBounds(imageWidth = 1000, imageHeight = 1000) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getSession).mockResolvedValue(mockSession);
-  vi.mocked(User.findOne).mockResolvedValue(mockDbUser);
+  vi.mocked(User.findOne).mockResolvedValue(mockDbUser as never);
   vi.mocked(Campaign.findById).mockResolvedValue(mockGMCampaign);
   mockUserFindById({ firstName: 'Ada', lastName: 'Lovelace' });
   mockMapBounds();
