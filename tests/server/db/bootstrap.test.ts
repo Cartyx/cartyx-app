@@ -8,10 +8,18 @@ const inspectMock = vi.hoisted(() => ({
   inspectIndexes: vi.fn().mockResolvedValue({ diffs: [], ok: true, hasCriticalDrift: false }),
 }));
 
+const logMock = vi.hoisted(() => ({
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+}));
+
 vi.mock('~/server/db/inspect', () => inspectMock);
 vi.mock('~/server/db/policy', () => ({
   getBootstrapPolicy: vi.fn(),
 }));
+vi.mock('~/server/utils/logger', () => ({ log: logMock }));
 
 import {
   bootstrapDB,
@@ -93,6 +101,10 @@ describe('bootstrapDB', () => {
     inspectMock.inspectIndexes
       .mockClear()
       .mockResolvedValue({ diffs: [], ok: true, hasCriticalDrift: false });
+    logMock.info.mockClear();
+    logMock.warn.mockClear();
+    logMock.error.mockClear();
+    logMock.debug.mockClear();
 
     // Silence console output during tests by default.
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -273,5 +285,104 @@ describe('bootstrapDB', () => {
       (c) => typeof c[0] === 'string' && c[0].includes('[bootstrap]')
     );
     expect(bootstrapLogs).toHaveLength(0);
+  });
+
+  it('logs db.bootstrap.start via the structured logger with policy fields, not Umami', async () => {
+    await bootstrapDB(devPolicy);
+
+    expect(logMock.info).toHaveBeenCalledWith(
+      {
+        bootstrap_env: 'development',
+        sync_indexes: true,
+        verify_critical: false,
+        timeout_ms: 30_000,
+      },
+      'db.bootstrap.start'
+    );
+  });
+
+  it('logs db.bootstrap.success via log.info on the sync path', async () => {
+    await bootstrapDB(devPolicy);
+
+    expect(logMock.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bootstrap_env: 'development',
+        action: 'sync',
+        duration_ms: expect.any(Number),
+      }),
+      'db.bootstrap.success'
+    );
+  });
+
+  it('logs db.bootstrap.success via log.info on the production verify path', async () => {
+    await bootstrapDB(prodPolicy);
+
+    expect(logMock.info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bootstrap_env: 'production',
+        action: 'verify',
+        duration_ms: expect.any(Number),
+        models_checked: 0,
+        indexes_ok: true,
+      }),
+      'db.bootstrap.success'
+    );
+  });
+
+  it('logs db.bootstrap.failure via log.error with the original error on critical drift in production', async () => {
+    inspectMock.inspectIndexes.mockResolvedValueOnce(criticalDriftResult);
+
+    await expect(bootstrapDB(prodPolicy)).rejects.toThrow(BootstrapError);
+
+    expect(logMock.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bootstrap_env: 'production',
+        action: 'verify',
+        missing_indexes: 1,
+        critical_drift: true,
+        err: expect.any(BootstrapError),
+      }),
+      'db.bootstrap.failure'
+    );
+  });
+
+  it('logs db.bootstrap.warning via log.warn on critical drift in staging', async () => {
+    inspectMock.inspectIndexes.mockResolvedValueOnce(criticalDriftResult);
+
+    await bootstrapDB(stagingPolicy);
+
+    expect(logMock.warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bootstrap_env: 'staging',
+        action: 'verify',
+        missing_indexes: 1,
+        critical_drift: true,
+      }),
+      'db.bootstrap.warning'
+    );
+  });
+
+  it('logs db.bootstrap.failure via log.error with the original error on timeout', async () => {
+    inspectMock.ensureCollections.mockImplementation(
+      () => new Promise((resolve) => setTimeout(resolve, 500))
+    );
+    const policy = makePolicy({
+      environment: 'production',
+      syncIndexes: false,
+      verifyCriticalIndexes: true,
+      failOnCriticalDrift: true,
+      timeoutMs: 50,
+    });
+
+    await expect(bootstrapDB(policy)).rejects.toThrow('timed out');
+
+    expect(logMock.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bootstrap_env: 'production',
+        action: 'ensure_collections',
+        err: expect.any(Error),
+      }),
+      'db.bootstrap.failure'
+    );
   });
 });

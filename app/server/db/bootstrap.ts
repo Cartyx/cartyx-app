@@ -1,7 +1,7 @@
 import type { BootstrapEnvironment, BootstrapPolicy } from './policy';
 import { getBootstrapPolicy } from './policy';
 import { ensureCollections, syncCollectionsAndIndexes, inspectIndexes } from './inspect';
-import { serverCaptureEvent } from '../utils/telemetry';
+import { log } from '../utils/logger';
 
 let bootstrapped = false;
 let bootstrapPromise: Promise<void> | null = null;
@@ -97,17 +97,20 @@ async function runBootstrap(policy: BootstrapPolicy): Promise<void> {
   // Also carries the current action for structured failure logging.
   const token = { cancelled: false, action: undefined as string | undefined };
 
-  // Bootstrap lifecycle is observed via PostHog events (db.bootstrap.start,
-  // db.bootstrap.success, etc.) when PostHog is configured. In environments
-  // without POSTHOG_KEY (e.g. common in local dev), these events are a no-op
-  // and only errors/warnings go to stderr via console.error/warn. We avoid
-  // console.log here to prevent noisy stdout logging in all environments.
-  serverCaptureEvent('server', 'db.bootstrap.start', {
-    bootstrap_env: env,
-    sync_indexes: policy.syncIndexes,
-    verify_critical: policy.verifyCriticalIndexes,
-    timeout_ms: policy.timeoutMs,
-  });
+  // Bootstrap lifecycle goes to structured logs (VictoriaLogs via stdout),
+  // not to Umami: Umami is product analytics, and ops lifecycle events there
+  // pollute funnel data and cannot be correlated with pod logs in Grafana.
+  // Log level is env-driven (silent in test, warn in local dev), which keeps
+  // local stdout quiet — the legitimate half of the original no-console rule.
+  log.info(
+    {
+      bootstrap_env: env,
+      sync_indexes: policy.syncIndexes,
+      verify_critical: policy.verifyCriticalIndexes,
+      timeout_ms: policy.timeoutMs,
+    },
+    'db.bootstrap.start'
+  );
 
   const work = doBootstrapWork(policy, token, start);
 
@@ -133,12 +136,15 @@ async function runBootstrap(policy: BootstrapPolicy): Promise<void> {
         `[bootstrap] failure env=${env} action=${token.action ?? 'unknown'} duration_ms=${durationMs}` +
           ` error=${error instanceof Error ? error.message : String(error)}`
       );
-      serverCaptureEvent('server', 'db.bootstrap.failure', {
-        bootstrap_env: env,
-        action: token.action ?? 'unknown',
-        duration_ms: durationMs,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      log.error(
+        {
+          bootstrap_env: env,
+          action: token.action ?? 'unknown',
+          duration_ms: durationMs,
+          err: error,
+        },
+        'db.bootstrap.failure'
+      );
     }
     throw error;
   }
@@ -162,11 +168,14 @@ async function doBootstrapWork(
     await syncCollectionsAndIndexes();
     if (token.cancelled) return;
     const durationMs = Math.round(performance.now() - start);
-    serverCaptureEvent('server', 'db.bootstrap.success', {
-      bootstrap_env: env,
-      action: 'sync',
-      duration_ms: durationMs,
-    });
+    log.info(
+      {
+        bootstrap_env: env,
+        action: 'sync',
+        duration_ms: durationMs,
+      },
+      'db.bootstrap.success'
+    );
     return;
   }
 
@@ -177,11 +186,14 @@ async function doBootstrapWork(
 
   if (!policy.verifyCriticalIndexes) {
     const durationMs = Math.round(performance.now() - start);
-    serverCaptureEvent('server', 'db.bootstrap.success', {
-      bootstrap_env: env,
-      action: 'ensure_collections',
-      duration_ms: durationMs,
-    });
+    log.info(
+      {
+        bootstrap_env: env,
+        action: 'ensure_collections',
+        duration_ms: durationMs,
+      },
+      'db.bootstrap.success'
+    );
     return;
   }
 
@@ -194,13 +206,16 @@ async function doBootstrapWork(
   const modelsChecked = result.diffs.length;
 
   if (result.ok) {
-    serverCaptureEvent('server', 'db.bootstrap.success', {
-      bootstrap_env: env,
-      action: 'verify',
-      duration_ms: durationMs,
-      models_checked: modelsChecked,
-      indexes_ok: true,
-    });
+    log.info(
+      {
+        bootstrap_env: env,
+        action: 'verify',
+        duration_ms: durationMs,
+        models_checked: modelsChecked,
+        indexes_ok: true,
+      },
+      'db.bootstrap.success'
+    );
     return;
   }
 
@@ -224,24 +239,29 @@ async function doBootstrapWork(
 
   if (result.hasCriticalDrift) {
     if (policy.failOnCriticalDrift) {
-      console.error(
-        `[bootstrap] failure env=${env} action=verify duration_ms=${durationMs}` +
-          ` missing=${totalMissing} mismatches=${totalMismatches} critical_drift=true`
-      );
-      serverCaptureEvent('server', 'db.bootstrap.failure', {
-        bootstrap_env: env,
-        action: 'verify',
-        duration_ms: durationMs,
-        missing_indexes: totalMissing,
-        option_mismatches: totalMismatches,
-        critical_drift: true,
-        details,
-      });
       const message =
         `Runtime bootstrap [${env}]: ${details.length} critical index problem(s) detected.\n` +
         `Run "npm run db:sync" to fix before deploying.\n` +
         details.map((d) => `  • ${d}`).join('\n');
-      throw new BootstrapError(message, env, details);
+      const err = new BootstrapError(message, env, details);
+      console.error(
+        `[bootstrap] failure env=${env} action=verify duration_ms=${durationMs}` +
+          ` missing=${totalMissing} mismatches=${totalMismatches} critical_drift=true`
+      );
+      log.error(
+        {
+          bootstrap_env: env,
+          action: 'verify',
+          duration_ms: durationMs,
+          missing_indexes: totalMissing,
+          option_mismatches: totalMismatches,
+          critical_drift: true,
+          details,
+          err,
+        },
+        'db.bootstrap.failure'
+      );
+      throw err;
     }
 
     // Staging: warn but don't abort so preview deploys stay functional.
@@ -252,27 +272,33 @@ async function doBootstrapWork(
     for (const d of details) {
       console.warn(`[bootstrap] drift_detail ${d}`);
     }
-    serverCaptureEvent('server', 'db.bootstrap.warning', {
-      bootstrap_env: env,
-      action: 'verify',
-      duration_ms: durationMs,
-      missing_indexes: totalMissing,
-      option_mismatches: totalMismatches,
-      critical_drift: true,
-      details,
-    });
+    log.warn(
+      {
+        bootstrap_env: env,
+        action: 'verify',
+        duration_ms: durationMs,
+        missing_indexes: totalMissing,
+        option_mismatches: totalMismatches,
+        critical_drift: true,
+        details,
+      },
+      'db.bootstrap.warning'
+    );
   } else {
-    // Optional drift only — PostHog event captures advisory details.
-    serverCaptureEvent('server', 'db.bootstrap.success', {
-      bootstrap_env: env,
-      action: 'verify',
-      duration_ms: durationMs,
-      models_checked: modelsChecked,
-      indexes_ok: false,
-      optional_drift: true,
-      missing_indexes: totalMissing,
-      option_mismatches: totalMismatches,
-    });
+    // Optional drift only — structured log captures advisory details.
+    log.info(
+      {
+        bootstrap_env: env,
+        action: 'verify',
+        duration_ms: durationMs,
+        models_checked: modelsChecked,
+        indexes_ok: false,
+        optional_drift: true,
+        missing_indexes: totalMissing,
+        option_mismatches: totalMismatches,
+      },
+      'db.bootstrap.success'
+    );
   }
 }
 
