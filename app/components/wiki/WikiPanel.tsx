@@ -33,17 +33,17 @@ import { useCampaign } from '~/hooks/useCampaigns';
 type WikiCategoryId =
   | 'characters'
   | 'players'
-  | 'races'
-  | 'rules'
-  | 'spells'
   | 'locations'
-  | 'lore'
   | 'organizations'
   | 'quests'
-  | 'maps'
-  | 'monsters'
   | 'calendar'
-  | 'events';
+  | 'events'
+  | 'lore'
+  | 'races'
+  | 'spells'
+  | 'rules'
+  | 'maps'
+  | 'monsters';
 
 interface WikiCategory {
   id: WikiCategoryId;
@@ -56,17 +56,17 @@ interface WikiCategory {
 const WIKI_CATEGORIES: WikiCategory[] = [
   { id: 'characters', label: 'Characters', icon: Users },
   { id: 'players', label: 'Players', icon: UserCircle },
-  { id: 'races', label: 'Races', icon: Dna },
-  { id: 'rules', label: 'Rules', icon: ScrollText },
-  { id: 'spells', label: 'Spells', icon: Sparkles },
   { id: 'locations', label: 'Locations', icon: MapPin },
-  { id: 'lore', label: 'Lore', icon: BookOpen },
   { id: 'organizations', label: 'Organizations', icon: Building2 },
   { id: 'quests', label: 'Quests', icon: Swords },
-  { id: 'maps', label: 'Maps', icon: MapIcon, gmOnly: true },
-  { id: 'monsters', label: 'Monsters', icon: Skull, gmOnly: true },
   { id: 'calendar', label: 'Calendar', icon: CalendarDays },
   { id: 'events', label: 'Events', icon: CalendarClock, gmOnly: true },
+  { id: 'lore', label: 'Lore', icon: BookOpen },
+  { id: 'races', label: 'Races', icon: Dna },
+  { id: 'spells', label: 'Spells', icon: Sparkles },
+  { id: 'rules', label: 'Rules', icon: ScrollText },
+  { id: 'maps', label: 'Maps', icon: MapIcon, gmOnly: true },
+  { id: 'monsters', label: 'Monsters', icon: Skull, gmOnly: true },
 ];
 
 export function WikiPanel() {
