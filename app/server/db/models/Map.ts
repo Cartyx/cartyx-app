@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 const scaleSchema = new mongoose.Schema(
   {
@@ -59,4 +59,7 @@ if (typeof (mapSchema as { index?: unknown }).index === 'function') {
   mapSchema.index({ campaignId: 1, name: 1 }, { unique: true });
 }
 
-export const Map = mongoose.models.Map || mongoose.model('Map', mapSchema);
+export type IMap = InferSchemaType<typeof mapSchema>;
+
+export const Map: Model<IMap> =
+  (mongoose.models.Map as Model<IMap>) || mongoose.model<IMap>('Map', mapSchema);
