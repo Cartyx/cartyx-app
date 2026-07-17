@@ -661,7 +661,8 @@ export const openTabletopWindow = async ({
     if (!screen) throw new Error('Screen not found');
 
     if (!screen.windows) {
-      screen.windows = [];
+      // Legacy screens may lack the field; `[]` alone infers as never[].
+      screen.windows = [] as unknown as typeof screen.windows;
     }
     const windows = screen.windows;
 
@@ -778,7 +779,7 @@ export const openTabletopWindow = async ({
       campaignId: data.campaignId,
     });
     if (!refreshed) throw new Error('Screen not found');
-    if (!refreshed.windows) refreshed.windows = [];
+    if (!refreshed.windows) refreshed.windows = [] as unknown as typeof refreshed.windows;
     const race = refreshed.windows.find(
       (w: { collection?: string; documentId?: unknown }) =>
         w.collection === data.collection && String(w.documentId) === data.documentId

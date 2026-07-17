@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 import { GRID_STYLES, TABLETOP_MODES } from '~/types/tabletop';
 
 export const TABLETOP_LIMITS = {
@@ -72,5 +72,8 @@ const tabletopScreenSchema = new mongoose.Schema(
 tabletopScreenSchema.index({ campaignId: 1, tabOrder: 1 }, { unique: true });
 tabletopScreenSchema.index({ campaignId: 1, name: 1 }, { unique: true });
 
-export const TabletopScreen =
-  mongoose.models.TabletopScreen || mongoose.model('TabletopScreen', tabletopScreenSchema);
+export type ITabletopScreen = InferSchemaType<typeof tabletopScreenSchema>;
+
+export const TabletopScreen: Model<ITabletopScreen> =
+  (mongoose.models.TabletopScreen as Model<ITabletopScreen>) ||
+  mongoose.model<ITabletopScreen>('TabletopScreen', tabletopScreenSchema);
