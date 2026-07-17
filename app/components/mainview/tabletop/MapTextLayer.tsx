@@ -2,7 +2,7 @@ import type { PointerEvent as ReactPointerEvent, RefObject } from 'react';
 import type { MapTextData } from '~/types/mapText';
 
 interface MapTextLayerProps {
-  /** Whether text is shown (per-viewer toggle + Spell FX / Drawing layer). */
+  /** Whether text is shown (per-viewer zoom-toolbar toggle). */
   visible: boolean;
   texts: MapTextData[];
   /** Text tool active → text is draggable/selectable/editable. */

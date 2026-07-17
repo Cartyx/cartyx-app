@@ -338,7 +338,7 @@ export function ActiveMapStage({
   );
 
   // --- Drawing tool -------------------------------------------------------
-  // Drawings (Spell FX / Drawing layer) are a GM-only feature: the drawing tool
+  // Drawings are a GM-only feature: the drawing tool
   // is hidden from players, the server returns no drawings to non-GMs, and every
   // drawing mutation is GM-only. So only a GM may modify any drawing. Kept as a
   // per-drawing predicate to match the MapDrawingLayer `canModify` prop shape.
@@ -1525,16 +1525,10 @@ export function ActiveMapStage({
             ? 'cursor-text'
             : 'cursor-default';
 
-  // Text + drawings both live on the Spell FX / Drawing layer, so each is
-  // visible only when its own per-viewer zoom-toolbar toggle is on AND the GM
-  // hasn't hidden that layer in the Layers panel (same `hiddenLayers` mechanism
-  // as the map image + token layers).
-  const spellFxHidden = hiddenLayers.has('spell-fx');
-  // Drawings are GM-only, so the whole drawing layer is gated on isGM as well as
-  // the per-viewer toggle + the Layers-panel layer visibility. Text is shared,
-  // so it only depends on its own toggle + the layer visibility.
-  const drawingsVisible = isGM && showDrawings && !spellFxHidden;
-  const textVisible = showText && !spellFxHidden;
+  // Drawings are GM-only, so they're gated on isGM as well as the per-viewer
+  // zoom-toolbar toggle. Text is shared, so it only depends on its own toggle.
+  const drawingsVisible = isGM && showDrawings;
+  const textVisible = showText;
 
   return (
     <div
@@ -1606,7 +1600,7 @@ export function ActiveMapStage({
       {/* Spell AoE templates (shared) — one SVG overlay above the map/grid but
           BENEATH drawings/tokens, so the tint reads as a floor effect. */}
       <MapAoELayer
-        visible={!spellFxHidden && showSpellEffects}
+        visible={showSpellEffects}
         aoes={aoes}
         preview={aoe.preview}
         effectiveScale={effectiveScale}
