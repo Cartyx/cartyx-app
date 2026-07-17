@@ -87,12 +87,17 @@ describe('useWikiCardActions', () => {
     expect(keys(result.current.menuItems)).toEqual(['edit', 'delete']);
   });
 
-  it('still offers Push to Tabletop from the GM Screens tab', () => {
+  it('still offers Push to Tabletop from the GM Screens tab, and it targets the tabletop, not the GM screen', () => {
     mockSearch.mockReturnValue({ tab: 'gmscreens' });
     const { result } = renderHook(() =>
       useWikiCardActions({ collection: 'character', documentId: 'd1' })
     );
     expect(keys(result.current.menuItems)).toContain('push');
+    result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
+    expect(openWindowMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ screenId: 'active', collection: 'character', documentId: 'd1' })
+    );
+    expect(openWindowMutate).not.toHaveBeenCalledWith(expect.objectContaining({ screenId: 'gm1' }));
   });
 
   it('targets the ACTIVE screen, not screens[0]', () => {
@@ -152,6 +157,74 @@ describe('useWikiCardActions', () => {
     );
     result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
     expect(addPrivateWindowMutate).not.toHaveBeenCalled();
+  });
+
+  it('does add a private window when the existing one is for a different document', () => {
+    mockPlayerState.mockReturnValue({
+      playerState: {
+        activeScreenId: 'active',
+        activeGMScreenId: 'gm1',
+        privateWindows: [
+          {
+            id: 'pw1',
+            surface: 'tabletop',
+            screenId: 'active',
+            collection: 'character',
+            // Same surface/screen/collection as the card below, but a
+            // different documentId — this must NOT count as a match.
+            documentId: 'some-other-doc',
+          },
+        ],
+      },
+      addPrivateWindow: { mutate: addPrivateWindowMutate },
+      removePrivateWindow: { mutate: vi.fn() },
+    });
+    const { result } = renderHook(() =>
+      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    );
+    result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
+    expect(addPrivateWindowMutate).toHaveBeenCalledWith({
+      surface: 'tabletop',
+      screenId: 'active',
+      collection: 'character',
+      documentId: 'd1',
+    });
+  });
+
+  it('dispatches cartyx:focus-window instead of re-adding when a duplicate is suppressed', () => {
+    mockPlayerState.mockReturnValue({
+      playerState: {
+        activeScreenId: 'active',
+        activeGMScreenId: 'gm1',
+        privateWindows: [
+          {
+            id: 'pw1',
+            surface: 'tabletop',
+            screenId: 'active',
+            collection: 'character',
+            documentId: 'd1',
+          },
+        ],
+      },
+      addPrivateWindow: { mutate: addPrivateWindowMutate },
+      removePrivateWindow: { mutate: vi.fn() },
+    });
+    const focusSpy = vi.fn();
+    window.addEventListener('cartyx:focus-window', focusSpy);
+    try {
+      const { result } = renderHook(() =>
+        useWikiCardActions({ collection: 'character', documentId: 'd1' })
+      );
+      result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+      expect(focusSpy.mock.calls[0][0].detail).toEqual({
+        surface: 'tabletop',
+        collection: 'character',
+        documentId: 'd1',
+      });
+    } finally {
+      window.removeEventListener('cartyx:focus-window', focusSpy);
+    }
   });
 
   it('returns no items when nothing qualifies', () => {

@@ -128,7 +128,11 @@ export function useWikiCardActions({
  * GMScreensView without shared state — the same bridge pattern the dice roller
  * uses (see app/utils/diceRollerBridge.ts).
  */
-function focusExistingWindow(surface: string, collection: string, documentId: string) {
+function focusExistingWindow(
+  surface: 'tabletop' | 'gmscreen',
+  collection: string,
+  documentId: string
+) {
   window.dispatchEvent(
     new CustomEvent('cartyx:focus-window', { detail: { surface, collection, documentId } })
   );
