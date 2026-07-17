@@ -143,9 +143,16 @@ export const listCampaigns = async () => {
     > = {};
 
     if (campaignIds.length > 0) {
+      // Player has no characterName/avatar/userId fields — this used to
+      // select them anyway and silently get `undefined` back (masked by the
+      // pre-typing `any`). Select the real fields: firstName/lastName/picture
+      // for display (matching the fullName() convention used for the same
+      // purpose in organizations.ts / quests.ts), and createdBy as the owning
+      // user ref (the only owner-like field on Player, same convention as
+      // Character.createdBy).
       const allPlayers = await Player.find(
         { campaignId: { $in: campaignIds } },
-        '_id campaignId userId characterName characterClass avatar'
+        '_id campaignId createdBy firstName lastName characterClass picture'
       ).lean();
       playersByCampaignId = allPlayers.reduce(
         (acc, p) => {
@@ -153,10 +160,10 @@ export const listCampaigns = async () => {
           if (!acc[key]) acc[key] = [];
           acc[key].push({
             id: String(p._id),
-            characterName: p.characterName as string,
+            characterName: `${p.firstName ?? ''} ${p.lastName ?? ''}`.trim(),
             characterClass: p.characterClass as string,
-            avatar: (p.avatar as string | undefined) ?? null,
-            userId: String(p.userId),
+            avatar: p.picture || null,
+            userId: String(p.createdBy),
           });
           return acc;
         },
@@ -211,7 +218,7 @@ export const getCampaign = async ({ data }: { data: z.infer<typeof getCampaignSc
     // Only members can see campaigns; treat gameMasterId as implicit member for legacy campaigns
     const members = c.members ?? [];
     const isMember = userId
-      ? members.some((m: { userId: unknown }) => String(m.userId) === userId) ||
+      ? members.some((m) => String(m.userId) === userId) ||
         (members.length === 0 && c.gameMasterId != null && String(c.gameMasterId) === userId)
       : false;
     if (!isMember) return null;
@@ -221,39 +228,38 @@ export const getCampaign = async ({ data }: { data: z.infer<typeof getCampaignSc
     // Load players and sessions in parallel; GM also gets gmscreen docs.
     // The active session's summary is fetched separately to avoid including
     // potentially large catch-up markdown in every session row.
-    const queries: [
-      ReturnType<typeof Player.find>,
-      ReturnType<typeof Session.find>,
-      ReturnType<typeof GMScreen.find> | null,
-      ReturnType<typeof Session.findOne>,
-    ] = [
+    // Player has no characterName/avatar/userId fields — see the same fix in
+    // listCampaigns above (firstName/lastName/picture for display, createdBy
+    // as the owning user ref).
+    const queries = [
       Player.find(
         { campaignId: c._id },
-        '_id campaignId userId characterName characterClass avatar'
+        '_id campaignId createdBy firstName lastName characterClass picture'
       ).lean(),
       Session.find({ campaignId: c._id }, '_id name number startDate endDate status')
         .sort({ number: 1 })
         .lean(),
       isOwner ? GMScreen.find({ campaignId: c._id }, '_id name').lean() : null,
       Session.findOne({ campaignId: c._id, status: 'active' }, '_id summary').lean(),
-    ];
+    ] as const;
 
     const [playerDocs, sessionDocs, gmScreenDocs, activeSessionDoc] = await Promise.all(queries);
 
     const partyMembers = (
       playerDocs as Array<{
         _id: unknown;
-        characterName: unknown;
+        firstName?: unknown;
+        lastName?: unknown;
         characterClass: unknown;
-        avatar: unknown;
-        userId: unknown;
+        picture?: unknown;
+        createdBy: unknown;
       }>
     ).map((p) => ({
       id: String(p._id),
-      characterName: p.characterName as string,
+      characterName: `${(p.firstName as string) ?? ''} ${(p.lastName as string) ?? ''}`.trim(),
       characterClass: p.characterClass as string,
-      avatar: (p.avatar as string | undefined) ?? null,
-      userId: String(p.userId),
+      avatar: (p.picture as string | undefined) || null,
+      userId: String(p.createdBy),
     }));
 
     const activeDoc = activeSessionDoc as { _id: unknown; summary?: string } | null;
@@ -547,7 +553,11 @@ export const updateCampaign = async ({
       time: schedTime ?? null,
       timezone: schedTz ?? null,
     };
-    campaign.links = links ?? [];
+    // Mongoose casts a plain array into a DocumentArray on assignment at
+    // runtime, and unit tests mock `campaign` as a plain object (no `.set`),
+    // so this must stay a plain assignment. The DocumentArray type is a
+    // compile-time-only distinction here; this narrow cast is the boundary.
+    campaign.links = (links ?? []) as unknown as typeof campaign.links;
     campaign.maxPlayers = parseMaxPlayers(maxPlayers);
     campaign.updatedAt = new Date();
 
@@ -602,9 +612,8 @@ export const joinCampaign = async ({ data }: { data: z.infer<typeof joinCampaign
 
     // Treat GM as implicit member (consistent with getCampaign)
     const alreadyMember =
-      (campaign.members ?? []).some(
-        (m: { userId: unknown }) => String(m.userId) === String(dbUser._id)
-      ) || String(campaign.gameMasterId) === String(dbUser._id);
+      (campaign.members ?? []).some((m) => String(m.userId) === String(dbUser._id)) ||
+      String(campaign.gameMasterId) === String(dbUser._id);
     if (alreadyMember) throw new Error('Already a member of this campaign');
 
     const now = new Date();

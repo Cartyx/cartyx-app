@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 const monthSchema = new mongoose.Schema(
   {
@@ -56,4 +56,8 @@ calendarSchema.pre('save', function () {
   this.updatedAt = new Date();
 });
 
-export const Calendar = mongoose.models.Calendar || mongoose.model('Calendar', calendarSchema);
+export type ICalendar = InferSchemaType<typeof calendarSchema>;
+
+export const Calendar: Model<ICalendar> =
+  (mongoose.models.Calendar as Model<ICalendar>) ||
+  mongoose.model<ICalendar>('Calendar', calendarSchema);

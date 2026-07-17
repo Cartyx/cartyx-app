@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Widget } from '~/components/mainview/Widget';
 import { getTimelineEvents, type TimelineEvent } from '~/services/mocks/timelineService';
+import { captureException } from '~/utils/telemetry-client';
 
 export type { TimelineEvent };
 
@@ -64,7 +65,7 @@ export function CampaignTimelineWidget({ events, className = '' }: CampaignTimel
         }
       })
       .catch((error) => {
-        console.error(error);
+        captureException(error, { source: 'CampaignTimelineWidget.load' });
         if (isMounted) {
           setError('Unable to load timeline.');
           setResolvedEvents([]);

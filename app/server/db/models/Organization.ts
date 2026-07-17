@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 import { normalizeTags } from '~/server/utils/helpers';
 
 const locationLinkSchema = new mongoose.Schema(
@@ -61,5 +61,8 @@ if (typeof (organizationSchema as { index?: unknown }).index === 'function') {
   organizationSchema.index({ name: 'text', publicInfo: 'text' });
 }
 
-export const Organization =
-  mongoose.models.Organization || mongoose.model('Organization', organizationSchema);
+export type IOrganization = InferSchemaType<typeof organizationSchema>;
+
+export const Organization: Model<IOrganization> =
+  (mongoose.models.Organization as Model<IOrganization>) ||
+  mongoose.model<IOrganization>('Organization', organizationSchema);

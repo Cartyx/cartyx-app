@@ -9,8 +9,8 @@ data, Cloudflare R2 + CDN for images, self-hosted observability
 
 - `npm test` — unit suite (`vitest run --project unit`). NEVER run bare
   `npx vitest run`: the storybook project crashes outside CI.
-- `npm run typecheck` / `npm run lint` — both must be clean (0 lint errors;
-  ~24 pre-existing warnings are the baseline).
+- `npm run typecheck` / `npm run lint` — both must be clean (0 errors, 0
+  warnings; `lint` runs with `--max-warnings 0`, so any new warning fails CI).
 - `bash deploy/charts/cartyx/tests/render-tests.sh` — Helm chart assertions;
   REQUIRED whenever anything under `deploy/charts/` changes (also a CI job).
 - `npm run e2e` — Playwright; all inspector tabs (Chat/Dice/Wiki/Notes/Settings)

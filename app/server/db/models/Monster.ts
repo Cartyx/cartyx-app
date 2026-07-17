@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 // Picture crop reused from Character/Player — same shape.
 const pictureCropSchema = new mongoose.Schema(
@@ -188,4 +188,8 @@ if (typeof (monsterSchema as { index?: unknown }).index === 'function') {
   monsterSchema.index({ name: 'text', 'features.description': 'text' });
 }
 
-export const Monster = mongoose.models.Monster || mongoose.model('Monster', monsterSchema);
+export type IMonster = InferSchemaType<typeof monsterSchema>;
+
+export const Monster: Model<IMonster> =
+  (mongoose.models.Monster as Model<IMonster>) ||
+  mongoose.model<IMonster>('Monster', monsterSchema);

@@ -33,15 +33,8 @@ function retryDelayMs(attempt: number): number {
 function exhaust(
   context: RetryContext,
   err: unknown,
-  onExhausted: OnRetriesExhausted | undefined,
-  attemptsMade: number
+  onExhausted: OnRetriesExhausted | undefined
 ): null {
-  const label =
-    attemptsMade === 0
-      ? `Failed before any attempt (breaker wait exceeded ${BREAKER_WAIT_MAX_MS}ms)`
-      : `Failed after ${attemptsMade} attempt${attemptsMade === 1 ? '' : 's'}`;
-  console.error(`[Save] ${label}`, context.messageType, context.messageId, err);
-
   captureEvent('party.mongo_save_failed', {
     sessionId: context.sessionId,
     campaignId: context.campaignId,
@@ -83,7 +76,6 @@ export async function withRetry<T>(
   context: RetryContext,
   onExhausted?: OnRetriesExhausted
 ): Promise<T | null> {
-  let attemptsMade = 0;
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     // While the circuit breaker is open, sending the request is pointless —
     // wait for recovery instead of burning an attempt against a dead backend.
@@ -95,12 +87,10 @@ export async function withRetry<T>(
         return exhaust(
           context,
           new Error(`Backend still unavailable after ${BREAKER_WAIT_MAX_MS}ms; giving up`),
-          onExhausted,
-          attemptsMade
+          onExhausted
         );
       }
     }
-    attemptsMade++;
     try {
       return await fn();
     } catch (err) {
@@ -110,19 +100,14 @@ export async function withRetry<T>(
       // retry — burning the backoff schedule on them only delays the
       // inevitable failure. Go straight to the exhaustion path.
       if (!isInfrastructureFailure(err)) {
-        return exhaust(context, err, onExhausted, attemptsMade);
+        return exhaust(context, err, onExhausted);
       }
 
       if (attempt === MAX_RETRIES) {
-        return exhaust(context, err, onExhausted, attemptsMade);
+        return exhaust(context, err, onExhausted);
       }
 
       const delay = retryDelayMs(attempt);
-      console.warn(
-        `[Save] Attempt ${attempt + 1} failed, retrying in ${delay}ms`,
-        context.messageType,
-        context.messageId
-      );
 
       await new Promise((r) => setTimeout(r, delay));
     }

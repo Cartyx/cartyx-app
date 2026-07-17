@@ -270,12 +270,13 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     [activeScreenId, activeScreen, mutations]
   );
 
+  const openWindow = mutations.openWindow.mutate;
   const handleOpenItem = useCallback(
     (collection: string, documentId: string) => {
       if (!activeScreenId) return;
-      mutations.openWindow.mutate({ screenId: activeScreenId, collection, documentId });
+      openWindow({ screenId: activeScreenId, collection, documentId });
     },
-    [activeScreenId, mutations.openWindow]
+    [activeScreenId, openWindow]
   );
 
   const handleDragOver = useCallback(
@@ -604,7 +605,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
 
       return merged;
     });
-  }, [activeScreen, activeScreenId, flashWindowId, campaignId, isGM]);
+  }, [activeScreen, activeScreenId, flashWindowId, campaignId, isGM, handleOpenItem]);
 
   // --- Render ---
 

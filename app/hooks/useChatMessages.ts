@@ -70,7 +70,6 @@ export function useChatMessages(sessionId: string, campaignId: string, isActiveS
           ...(m as unknown as ChatMessage),
           type: (m.type === 'CHAT' ? 'chat' : 'spell-card') as ChatMessage['type'],
         }));
-      console.debug(`[Realtime] HISTORY received chatCount=${chatMessages.length}`);
       setLiveMessages(chatMessages);
     } else if (msgType === 'CHAT' || msgType === 'SPELL_CARD') {
       const chatMsg = parsed as unknown as ChatMessage;
@@ -121,7 +120,6 @@ export function useChatMessages(sessionId: string, campaignId: string, isActiveS
       const wsMessage = { ...message, type: 'CHAT' as const };
       pendingSaves.current.add(message.id);
       socket.send(JSON.stringify(wsMessage));
-      console.debug(`[Realtime] Message sent type=CHAT id=${message.id}`);
     },
     [sessionId, campaignId]
   );
@@ -165,7 +163,6 @@ export function useChatMessages(sessionId: string, campaignId: string, isActiveS
       };
       pendingSaves.current.add(message.id);
       socket.send(JSON.stringify(wsMessage));
-      console.debug(`[Realtime] Message sent type=SPELL_CARD id=${message.id}`);
     },
     [sessionId, campaignId]
   );
@@ -173,12 +170,7 @@ export function useChatMessages(sessionId: string, campaignId: string, isActiveS
   const messages = useMemo(() => {
     const mongo = (mongoMessages ?? []) as ChatMessage[];
     if (!isActiveSession) return mongo;
-
-    const count = mergeMessages(mongo, liveMessages);
-    console.debug(
-      `[Merge] Dedup stats mongoCount=${mongo.length} partyCount=${liveMessages.length} finalCount=${count.length}`
-    );
-    return count;
+    return mergeMessages(mongo, liveMessages);
   }, [mongoMessages, liveMessages, isActiveSession]);
 
   return {

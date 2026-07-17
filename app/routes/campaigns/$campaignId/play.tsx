@@ -54,9 +54,7 @@ const getTabletopPartyTokenFn = createServerFn({ method: 'GET' })
       !!campaign &&
       !!userId &&
       (String(campaign.gameMasterId) === userId ||
-        (campaign.members ?? []).some(
-          (m: { userId: unknown; role?: string }) => String(m.userId) === userId && m.role === 'gm'
-        ));
+        (campaign.members ?? []).some((m) => String(m.userId) === userId && m.role === 'gm'));
 
     const { createPartyToken } = await import('~/server/session');
     return createPartyToken(user.id, data.campaignId, isGM ? 'gm' : 'player');

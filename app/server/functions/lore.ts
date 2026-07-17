@@ -161,7 +161,7 @@ export const createLore = async ({ data }: { data: z.infer<typeof createLoreSche
       tags: data.tags,
       campaignId: data.campaignId,
       createdBy: member.userId,
-    })) as AnyDoc;
+    })) as unknown as AnyDoc;
     return {
       success: true,
       lore: {

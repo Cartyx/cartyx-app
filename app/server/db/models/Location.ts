@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 const locationSchema = new mongoose.Schema(
   {
@@ -59,4 +59,8 @@ if (typeof (locationSchema as { index?: unknown }).index === 'function') {
   locationSchema.index({ name: 'text', description: 'text' });
 }
 
-export const Location = mongoose.models.Location || mongoose.model('Location', locationSchema);
+export type ILocation = InferSchemaType<typeof locationSchema>;
+
+export const Location: Model<ILocation> =
+  (mongoose.models.Location as Model<ILocation>) ||
+  mongoose.model<ILocation>('Location', locationSchema);

@@ -163,18 +163,17 @@ committing.
 
 **File:** `app/components/mainview/tabletop/TabletopView.tsx`.
 
-There are **four** `_`-prefixed bindings that are declared but unused (confirmed
+There are **two** `_`-prefixed bindings that are declared but unused (confirmed
 2026-06-15):
 
 - `_toWindowState` — module-level helper function (line ~59).
 - `_sessionId` — destructured but unread (line ~90).
-- `_pings` — `const [_pings, setPings] = useState<PingData[]>([])` (line ~107);
-  only the setter is used.
-- `_handlePingExpired` — `useCallback` that is never wired up (line ~159).
 
-Decide per binding: delete if truly dead, or wire up if a feature (ping display)
-was left half-finished. Do this alongside item 2's extraction so the file shrinks
-in one pass.
+(The other two, `_pings`/`_handlePingExpired`, were the stranded ping feature —
+deleted outright, not wired up; see the "delete stranded ping code" task.)
+
+Decide per remaining binding: delete if truly dead, or wire up if half-finished.
+Do this alongside item 2's extraction so the file shrinks in one pass.
 
 ---
 

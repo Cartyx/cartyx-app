@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 import { normalizeTags } from '~/server/utils/helpers';
 
 const raceSchema = new mongoose.Schema({
@@ -70,4 +70,7 @@ if (typeof (raceSchema as { index?: unknown }).index === 'function') {
   raceSchema.index({ title: 'text', content: 'text' });
 }
 
-export const Race = mongoose.models.Race || mongoose.model('Race', raceSchema);
+export type IRace = InferSchemaType<typeof raceSchema>;
+
+export const Race: Model<IRace> =
+  (mongoose.models.Race as Model<IRace>) || mongoose.model<IRace>('Race', raceSchema);

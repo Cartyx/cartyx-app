@@ -5,11 +5,12 @@ import { createSessionHandler } from './parties/session.js';
 import { tabletopHandler } from './parties/tabletop.js';
 import { createTabletopMapHandler } from './parties/tabletopMap.js';
 import { createRealtimeServer } from './server.js';
+import { log } from './logger.js';
 
 const PORT = Number(process.env.PORT ?? 1999);
 const SESSION_SECRET = process.env.SESSION_SECRET;
 if (!SESSION_SECRET || SESSION_SECRET.trim() === '') {
-  console.error('[realtime] SESSION_SECRET is required');
+  log.error('SESSION_SECRET is required');
   process.exit(1);
 }
 
@@ -21,10 +22,10 @@ if (process.env.MONGODB_URI) {
   const mongoStore = new MongoHistoryStore(mongo.db());
   await mongoStore.ensureIndexes();
   store = mongoStore;
-  console.info('[realtime] chat history persisted to MongoDB');
+  log.info('chat history persisted to MongoDB');
 } else {
   store = new MemoryHistoryStore();
-  console.warn('[realtime] MONGODB_URI not set — chat history is in-memory only');
+  log.warn('MONGODB_URI not set — chat history is in-memory only');
 }
 
 const server = createRealtimeServer({
@@ -38,11 +39,11 @@ const server = createRealtimeServer({
   },
 });
 
-server.listen(PORT, () => console.info(`[realtime] listening on :${PORT}`));
+server.listen(PORT, () => log.info({ port: PORT }, 'listening'));
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
-    console.info(`[realtime] ${signal} — shutting down`);
+    log.info({ signal }, 'shutting down');
     server.close(() => {
       void (mongo ? mongo.close() : Promise.resolve()).finally(() => process.exit(0));
     });
@@ -51,8 +52,8 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
 }
 
 process.on('uncaughtException', (err) => {
-  console.error('[realtime] uncaughtException:', err);
+  log.error({ err }, 'uncaughtException');
 });
 process.on('unhandledRejection', (reason) => {
-  console.error('[realtime] unhandledRejection:', reason);
+  log.error({ err: reason }, 'unhandledRejection');
 });

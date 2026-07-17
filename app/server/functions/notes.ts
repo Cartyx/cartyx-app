@@ -20,7 +20,7 @@ import {
 function serializeNote(n: {
   _id: unknown;
   campaignId: unknown;
-  sessionId: unknown;
+  sessionId?: unknown;
   createdBy: unknown;
   title?: string;
   note?: string;
@@ -89,8 +89,7 @@ async function requireCampaignMember(
   const userId = String(dbUser._id);
   const members = campaign.members ?? [];
   const isMember =
-    members.some((m: { userId: unknown }) => String(m.userId) === userId) ||
-    String(campaign.gameMasterId) === userId;
+    members.some((m) => String(m.userId) === userId) || String(campaign.gameMasterId) === userId;
   if (!isMember) throw new Error('Forbidden');
 
   return { userId, sessionUserId: user.id };
@@ -164,8 +163,9 @@ export const updateNote = async ({ data }: { data: z.infer<typeof updateNoteSche
     if (existing.isReadOnly) throw new Error('Note is read-only');
 
     const finalTags = normalizeTags(data.tags ?? []);
-    existing.sessionId =
-      data.sessionId && data.sessionId !== '__none__' ? data.sessionId : undefined;
+    existing.sessionId = (data.sessionId && data.sessionId !== '__none__'
+      ? data.sessionId
+      : undefined) as unknown as typeof existing.sessionId;
     existing.title = data.title.trim();
     existing.note = data.note.trim();
     existing.tags = finalTags;

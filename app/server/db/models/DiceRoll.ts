@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 const diceRollSchema = new mongoose.Schema({
   id: { type: String, required: true },
@@ -63,4 +63,8 @@ if (typeof (diceRollSchema as { index?: unknown }).index === 'function') {
   diceRollSchema.index({ id: 1 }, { unique: true });
 }
 
-export const DiceRoll = mongoose.models.DiceRoll || mongoose.model('DiceRoll', diceRollSchema);
+export type IDiceRoll = InferSchemaType<typeof diceRollSchema>;
+
+export const DiceRoll: Model<IDiceRoll> =
+  (mongoose.models.DiceRoll as Model<IDiceRoll>) ||
+  mongoose.model<IDiceRoll>('DiceRoll', diceRollSchema);

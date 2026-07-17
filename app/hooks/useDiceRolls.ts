@@ -78,7 +78,6 @@ export function useDiceRolls(sessionId: string, campaignId: string, isActiveSess
       const diceMessages = allMessages.filter(
         (m) => m.type === 'DICE'
       ) as unknown as DiceRollMessage[];
-      console.debug(`[Realtime] HISTORY received diceCount=${diceMessages.length}`);
       setLiveRolls(diceMessages);
     } else if (msgType === 'DICE') {
       const diceMsg = parsed as unknown as DiceRollMessage;
@@ -125,7 +124,6 @@ export function useDiceRolls(sessionId: string, campaignId: string, isActiveSess
       const wsMessage = { ...message, type: 'DICE' as const };
       pendingSaves.current.add(message.id);
       socket.send(JSON.stringify(wsMessage));
-      console.debug(`[Realtime] Message sent type=DICE id=${message.id}`);
     },
     [sessionId, campaignId]
   );
@@ -133,12 +131,7 @@ export function useDiceRolls(sessionId: string, campaignId: string, isActiveSess
   const rolls = useMemo(() => {
     const mongo = (mongoRolls ?? []) as DiceRollMessage[];
     if (!isActiveSession) return mongo;
-
-    const merged = mergeRolls(mongo, liveRolls);
-    console.debug(
-      `[Merge] Dedup stats mongoCount=${mongo.length} partyCount=${liveRolls.length} finalCount=${merged.length}`
-    );
-    return merged;
+    return mergeRolls(mongo, liveRolls);
   }, [mongoRolls, liveRolls, isActiveSession]);
 
   return {

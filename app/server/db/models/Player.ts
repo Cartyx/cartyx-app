@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 const pictureCropSchema = new mongoose.Schema(
   {
@@ -103,4 +103,7 @@ if (typeof (playerSchema as { index?: unknown }).index === 'function') {
   });
 }
 
-export const Player = mongoose.models.Player || mongoose.model('Player', playerSchema);
+export type IPlayer = InferSchemaType<typeof playerSchema>;
+
+export const Player: Model<IPlayer> =
+  (mongoose.models.Player as Model<IPlayer>) || mongoose.model<IPlayer>('Player', playerSchema);

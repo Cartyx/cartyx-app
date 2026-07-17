@@ -25,12 +25,12 @@ inside the same container `<div>`. Only one renderer is active per screen.
 
 ## 6-Layer Compositing Stack
 
-Layers are rendered bottom-to-top. Phase 1 implements the base and UI layers;
-the rest are scaffolded for later phases.
+Layers are rendered bottom-to-top. Phase 1 implements the base layer; the
+rest are scaffolded for later phases.
 
 ```
   +---------------------------------------------+
-  |  6. UI Layer          (pings, cursors)       |  <- PingOverlay (Konva Layer)
+  |  6. UI Layer          (pings, cursors)       |  <- Phase 3
   +---------------------------------------------+
   |  5. Token Layer       (character tokens)     |  <- Phase 3
   +---------------------------------------------+
@@ -64,13 +64,8 @@ available: `dark`, `parchment`, `hex`, `whiteboard`.
   |           +-- Line[]        Grid lines (vertical + horizontal)
   |
   +-- FloatingWindowManager     Manages draggable/resizable windows
-  |   |-- FloatingWindow[]      One per open wiki ref
-  |   +-- FloatingWindowTray    Minimized window strip
-  |
-  +-- PingOverlay (Phase 1)     Ephemeral ping animations (Konva Layer)
-      |-- Circle (ring)
-      |-- Circle (dot)
-      +-- Text (user name)
+      |-- FloatingWindow[]      One per open wiki ref
+      +-- FloatingWindowTray    Minimized window strip
 ```
 
 ## Permissions Model
@@ -84,7 +79,6 @@ available: `dark`, `parchment`, `hex`, `whiteboard`.
 | Close window on tabletop     | Y   | N      |
 | Switch active tab            | Y   | Y      |
 | Pan / zoom viewport          | Y   | Y      |
-| Send ping                    | Y   | Y      |
 | See notification badges      | Y   | Y      |
 | Override window position     | Y   | Y      |
 
@@ -119,7 +113,6 @@ app/
       TabletopTabBar.tsx         Tab strip with badges
       TabletopCanvas.tsx         Container + renderer selector
       DefaultGrid.tsx            Konva grid renderer
-      PingOverlay.tsx            Ephemeral ping animations
     mainview/
       FloatingWindowManager.tsx  Window lifecycle manager
       FloatingWindow.tsx         Single draggable/resizable window

@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 import { normalizeTags } from '~/server/utils/helpers';
 
 const linkSchema = new mongoose.Schema(
@@ -58,4 +58,7 @@ loreSchema.pre('save', function () {
   this.updatedAt = new Date();
 });
 
-export const Lore = mongoose.models.Lore || mongoose.model('Lore', loreSchema);
+export type ILore = InferSchemaType<typeof loreSchema>;
+
+export const Lore: Model<ILore> =
+  (mongoose.models.Lore as Model<ILore>) || mongoose.model<ILore>('Lore', loreSchema);

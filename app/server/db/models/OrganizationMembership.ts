@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 const organizationMembershipSchema = new mongoose.Schema({
   organizationId: { type: mongoose.Schema.Types.ObjectId, ref: 'Organization', required: true },
@@ -27,6 +27,8 @@ if (typeof (organizationMembershipSchema as { index?: unknown }).index === 'func
   organizationMembershipSchema.index({ organizationId: 1 });
 }
 
-export const OrganizationMembership =
-  mongoose.models.OrganizationMembership ||
-  mongoose.model('OrganizationMembership', organizationMembershipSchema);
+export type IOrganizationMembership = InferSchemaType<typeof organizationMembershipSchema>;
+
+export const OrganizationMembership: Model<IOrganizationMembership> =
+  (mongoose.models.OrganizationMembership as Model<IOrganizationMembership>) ||
+  mongoose.model<IOrganizationMembership>('OrganizationMembership', organizationMembershipSchema);

@@ -48,9 +48,13 @@ Layers are Konva `<Layer>` components stacked inside the `<Stage>`.
      <FogOfWarLayer /> {/* 3. reveal/hide regions */}
      <DrawingLayer /> {/* 4. freehand, shapes */}
      <TokenLayer /> {/* 5. character tokens */}
-     <PingOverlay /> {/* 6. ephemeral UI */}
    </Stage>
    ```
+
+   For a worked example of a real, rendered layer-style component, see
+   `MapDrawingLayer.tsx` (freehand/shape drawing) or `MapToken.tsx` (a single
+   positioned token), both under `app/components/mainview/tabletop/` and
+   rendered from `ActiveMapStage.tsx`.
 
 3. **Control visibility** per role. GM-only layers check the `isGM` prop and
    skip rendering for players.

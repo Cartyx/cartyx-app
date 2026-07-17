@@ -1,5 +1,6 @@
 import usePartySocket from 'partysocket/react';
 import { useCallback, useRef } from 'react';
+import { captureException } from '~/utils/telemetry-client';
 
 const REALTIME_HOST = import.meta.env.VITE_PUBLIC_PARTYKIT_HOST ?? 'localhost:1999';
 
@@ -16,7 +17,7 @@ export function usePartySession(
       const data = JSON.parse(event.data);
       onMessageRef.current(data);
     } catch (err) {
-      console.error('[Realtime] Failed to parse message', err);
+      captureException(err, { source: 'usePartySession.parse' });
     }
   }, []);
 
@@ -25,15 +26,12 @@ export function usePartySession(
     room: sessionId ?? '__disabled__',
     party: 'main',
     query: sessionId ? async () => ({ token: await getToken() }) : () => ({ token: '' }),
-    onOpen() {
-      console.info(`[Realtime] Connected to room sessionId=${sessionId}`);
-    },
     onClose(event) {
-      // Suppress warnings for disabled socket (no session) and normal closures
       if (sessionId && event.code !== 1000) {
-        console.warn(
-          `[Realtime] Disconnected sessionId=${sessionId} code=${event.code} reason=${event.reason}`
-        );
+        captureException(new Error(`Realtime disconnected code=${event.code}`), {
+          source: 'usePartySession.close',
+          code: event.code,
+        });
       }
     },
     onMessage: stableOnMessage,

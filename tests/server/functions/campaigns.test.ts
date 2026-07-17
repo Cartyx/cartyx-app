@@ -311,10 +311,11 @@ describe('listCampaigns', () => {
         {
           _id: 'p-1',
           campaignId: 'camp-1',
-          userId: 'dbuser-2',
-          characterName: 'Aragorn',
+          createdBy: 'dbuser-2',
+          firstName: 'Aragorn',
+          lastName: '',
           characterClass: 'Ranger',
-          avatar: null,
+          picture: null,
         },
       ]),
     } as never);
@@ -400,10 +401,11 @@ describe('getCampaign', () => {
         {
           _id: 'p-1',
           campaignId: 'camp-1',
-          userId: 'dbuser-2',
-          characterName: 'Gandalf',
+          createdBy: 'dbuser-2',
+          firstName: 'Gandalf',
+          lastName: '',
           characterClass: 'Wizard',
-          avatar: null,
+          picture: null,
         },
       ]),
     } as never);

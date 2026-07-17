@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 // Freeform drawing placed on a map by a player or GM (pencil stroke, rectangle,
 // or ellipse). Any member can create a drawing; modification (resize/delete) is
@@ -50,5 +50,8 @@ if (typeof (mapDrawingSchema as { index?: unknown }).index === 'function') {
   mapDrawingSchema.index({ mapId: 1, campaignId: 1 });
 }
 
-export const MapDrawing =
-  mongoose.models.MapDrawing || mongoose.model('MapDrawing', mapDrawingSchema);
+export type IMapDrawing = InferSchemaType<typeof mapDrawingSchema>;
+
+export const MapDrawing: Model<IMapDrawing> =
+  (mongoose.models.MapDrawing as Model<IMapDrawing>) ||
+  mongoose.model<IMapDrawing>('MapDrawing', mapDrawingSchema);

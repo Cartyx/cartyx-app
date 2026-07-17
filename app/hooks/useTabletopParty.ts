@@ -1,6 +1,7 @@
 import usePartySocket from 'partysocket/react';
 import { useCallback, useRef } from 'react';
 import type { TabletopMessage } from '~/types/tabletop';
+import { captureException } from '~/utils/telemetry-client';
 
 const REALTIME_HOST = import.meta.env.VITE_PUBLIC_PARTYKIT_HOST ?? 'localhost:1999';
 
@@ -17,7 +18,7 @@ export function useTabletopParty(
       const data = JSON.parse(event.data) as TabletopMessage;
       onMessageRef.current(data);
     } catch (err) {
-      console.error('[TabletopParty] Failed to parse message', err);
+      captureException(err, { source: 'useTabletopParty.parse' });
     }
   }, []);
 
@@ -28,12 +29,12 @@ export function useTabletopParty(
     room: roomId,
     party: 'tabletop',
     query: campaignId ? async () => ({ token: await getToken() }) : () => ({ token: '' }),
-    onOpen() {
-      console.info(`[TabletopParty] Connected to room ${roomId}`);
-    },
     onClose(event) {
       if (campaignId && event.code !== 1000) {
-        console.warn(`[TabletopParty] Disconnected code=${event.code}`);
+        captureException(new Error(`TabletopParty disconnected code=${event.code}`), {
+          source: 'useTabletopParty.close',
+          code: event.code,
+        });
       }
     },
     onMessage: stableOnMessage,

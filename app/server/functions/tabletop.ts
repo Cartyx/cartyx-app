@@ -184,14 +184,12 @@ async function requireCampaignMember(
   // GM access: user is the gameMasterId OR has role 'gm' in members
   const isGM =
     String(campaign.gameMasterId) === userId ||
-    members.some(
-      (m: { userId: unknown; role?: string }) => String(m.userId) === userId && m.role === 'gm'
-    );
+    members.some((m) => String(m.userId) === userId && m.role === 'gm');
 
   if (isGM) return { userId, role: 'gm', sessionUserId: user.id };
 
   // Player access: user is in the members list
-  const isMember = members.some((m: { userId: unknown }) => String(m.userId) === userId);
+  const isMember = members.some((m) => String(m.userId) === userId);
   if (isMember) return { userId, role: 'player', sessionUserId: user.id };
 
   throw new Error('Forbidden');
@@ -663,7 +661,8 @@ export const openTabletopWindow = async ({
     if (!screen) throw new Error('Screen not found');
 
     if (!screen.windows) {
-      screen.windows = [];
+      // Legacy screens may lack the field; `[]` alone infers as never[].
+      screen.windows = [] as unknown as typeof screen.windows;
     }
     const windows = screen.windows;
 
@@ -780,7 +779,7 @@ export const openTabletopWindow = async ({
       campaignId: data.campaignId,
     });
     if (!refreshed) throw new Error('Screen not found');
-    if (!refreshed.windows) refreshed.windows = [];
+    if (!refreshed.windows) refreshed.windows = [] as unknown as typeof refreshed.windows;
     const race = refreshed.windows.find(
       (w: { collection?: string; documentId?: unknown }) =>
         w.collection === data.collection && String(w.documentId) === data.documentId

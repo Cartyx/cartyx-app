@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 import { normalizeTags } from '~/server/utils/helpers';
 
 const linkSchema = new mongoose.Schema(
@@ -67,4 +67,7 @@ eventSchema.pre('save', function () {
   this.updatedAt = new Date();
 });
 
-export const Event = mongoose.models.Event || mongoose.model('Event', eventSchema);
+export type IEvent = InferSchemaType<typeof eventSchema>;
+
+export const Event: Model<IEvent> =
+  (mongoose.models.Event as Model<IEvent>) || mongoose.model<IEvent>('Event', eventSchema);

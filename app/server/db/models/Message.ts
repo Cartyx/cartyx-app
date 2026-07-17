@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 const messageSchema = new mongoose.Schema({
   id: { type: String, required: true },
@@ -42,4 +42,8 @@ if (typeof (messageSchema as { index?: unknown }).index === 'function') {
   messageSchema.index({ id: 1 }, { unique: true });
 }
 
-export const Message = mongoose.models.Message || mongoose.model('Message', messageSchema);
+export type IMessage = InferSchemaType<typeof messageSchema>;
+
+export const Message: Model<IMessage> =
+  (mongoose.models.Message as Model<IMessage>) ||
+  mongoose.model<IMessage>('Message', messageSchema);

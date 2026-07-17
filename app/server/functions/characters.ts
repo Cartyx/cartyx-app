@@ -229,8 +229,13 @@ export const updateCharacter = async ({
     if (String(existing.createdBy) !== userId && !member.isGM) throw new Error('Forbidden');
 
     const finalTags = normalizeTags(data.tags ?? []);
-    existing.sessionId =
-      data.sessionId && data.sessionId !== '__none__' ? data.sessionId : undefined;
+    // Mongoose casts a string id to ObjectId on assignment at runtime; the
+    // inferred field type only accepts ObjectId by assignment. Narrow casts
+    // below keep that compile-time-only boundary explicit (input is always a
+    // string here — it comes off the wire via zod).
+    existing.sessionId = (data.sessionId && data.sessionId !== '__none__'
+      ? data.sessionId
+      : undefined) as unknown as typeof existing.sessionId;
     existing.firstName = data.firstName.trim();
     existing.lastName = data.lastName.trim();
     existing.race = (data.race ?? '').trim();
@@ -243,7 +248,7 @@ export const updateCharacter = async ({
     existing.notes = (data.notes ?? '').trim();
     existing.gmNotes = (data.gmNotes ?? '').trim();
     existing.tags = finalTags;
-    existing.sessions = data.sessions ?? [];
+    existing.sessions = (data.sessions ?? []) as unknown as typeof existing.sessions;
     if (data.isPublic !== undefined) {
       existing.isPublic = data.isPublic;
     }
@@ -527,7 +532,12 @@ export const updateCharacterStatus = async ({
     if (String(character.campaignId) !== data.campaignId) throw new Error('Forbidden');
     if (String(character.createdBy) !== userId && !member.isGM) throw new Error('Forbidden');
 
-    character.status = { value: data.value, changedAt: new Date(), changedBy: userId };
+    // Same string-id-vs-ObjectId compile-time boundary as above.
+    character.status = {
+      value: data.value,
+      changedAt: new Date(),
+      changedBy: userId,
+    } as unknown as typeof character.status;
     character.updatedAt = new Date();
     await character.save();
 
