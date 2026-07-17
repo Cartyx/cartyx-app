@@ -35,6 +35,10 @@ import {
   MonsterWindowWrapper,
   EditMonsterModalWrapper,
 } from '~/components/wiki/monsters/MonsterWindowWrapper';
+import {
+  SpellWindowWrapper,
+  EditSpellModalWrapper,
+} from '~/components/wiki/spells/SpellWindowWrapper';
 import { GMScreenDialogs, type DialogState } from './GMScreenDialogs';
 import { ScreenBar } from './ScreenBar';
 import { StackCard } from './StackCard';
@@ -73,6 +77,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
   const [editingLoreId, setEditingLoreId] = useState<string | null>(null);
   const [editingOrganizationId, setEditingOrganizationId] = useState<string | null>(null);
   const [editingQuestId, setEditingQuestId] = useState<string | null>(null);
+  const [editingSpellId, setEditingSpellId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [flashWindowId, setFlashWindowId] = useState<string | null>(null);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -499,6 +504,14 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
               onEdit={() => setEditingQuestId(w.documentId)}
             />
           );
+        } else if (w.collection === 'spell') {
+          windowContent = (
+            <SpellWindowWrapper
+              spellId={w.documentId}
+              campaignId={campaignId}
+              onEdit={() => setEditingSpellId(w.documentId)}
+            />
+          );
         } else if (w.collection === 'events') {
           windowContent = <EventWindowWrapper eventId={w.documentId} campaignId={campaignId} />;
         } else {
@@ -825,6 +838,13 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
           campaignId={campaignId}
           questId={editingQuestId}
           onClose={() => setEditingQuestId(null)}
+        />
+      )}
+      {editingSpellId !== null && (
+        <EditSpellModalWrapper
+          campaignId={campaignId}
+          spellId={editingSpellId}
+          onClose={() => setEditingSpellId(null)}
         />
       )}
     </div>

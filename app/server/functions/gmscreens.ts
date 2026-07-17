@@ -318,6 +318,20 @@ const COLLECTION_REGISTRY: Record<string, CollectionFetcher> = {
         ) as Promise<Array<{ _id: unknown; title?: string; content?: string; isPublic?: boolean }>>;
     },
   },
+  spell: {
+    async fetch(ids: string[], campaignId: string) {
+      const { Spell } = await import('../db/models/Spell');
+      return Spell.find({ _id: { $in: ids }, campaignId }, '_id name description')
+        .lean()
+        .then((docs) =>
+          docs.map((d) => ({
+            _id: d._id,
+            title: (d as { name?: string }).name,
+            content: (d as { description?: string }).description,
+          }))
+        ) as Promise<Array<{ _id: unknown; title?: string; content?: string }>>;
+    },
+  },
 };
 
 /**

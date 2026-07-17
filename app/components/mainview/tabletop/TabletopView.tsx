@@ -55,6 +55,10 @@ import {
   MonsterWindowWrapper,
   EditMonsterModalWrapper,
 } from '~/components/wiki/monsters/MonsterWindowWrapper';
+import {
+  SpellWindowWrapper,
+  EditSpellModalWrapper,
+} from '~/components/wiki/spells/SpellWindowWrapper';
 import type { TabletopMessage } from '~/types/tabletop';
 import type { ToolType } from '~/components/mainview/ToolBar';
 import { ToolWindow } from './ToolWindow';
@@ -139,6 +143,7 @@ export function TabletopView({
   const [editingLoreId, setEditingLoreId] = useState<string | null>(null);
   const [editingOrganizationId, setEditingOrganizationId] = useState<string | null>(null);
   const [editingQuestId, setEditingQuestId] = useState<string | null>(null);
+  const [editingSpellId, setEditingSpellId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [localWindows, setLocalWindows] = useState<ManagedWindow[]>([]);
   const localScreenIdRef = useRef<string | null>(null);
@@ -390,6 +395,14 @@ export function TabletopView({
               questId={w.documentId}
               campaignId={campaignId}
               onEdit={() => setEditingQuestId(w.documentId)}
+            />
+          );
+        } else if (w.collection === 'spell') {
+          windowContent = (
+            <SpellWindowWrapper
+              spellId={w.documentId}
+              campaignId={campaignId}
+              onEdit={() => setEditingSpellId(w.documentId)}
             />
           );
         } else if (w.collection === 'events') {
@@ -741,6 +754,13 @@ export function TabletopView({
           campaignId={campaignId}
           questId={editingQuestId}
           onClose={() => setEditingQuestId(null)}
+        />
+      )}
+      {editingSpellId !== null && (
+        <EditSpellModalWrapper
+          campaignId={campaignId}
+          spellId={editingSpellId}
+          onClose={() => setEditingSpellId(null)}
         />
       )}
     </div>

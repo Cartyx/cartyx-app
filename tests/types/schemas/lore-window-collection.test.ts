@@ -116,3 +116,32 @@ describe('quest is an accepted tabletop/GM-screen window collection', () => {
     expect(result.success).toBe(true);
   });
 });
+
+/**
+ * Regression guard: `'spell'` must be an accepted window collection. SpellCard
+ * has always set `collection: 'spell'` in its drag payload, but the value was
+ * missing from both allowlists, so every spell drop was rejected server-side.
+ */
+describe('spell is an accepted tabletop/GM-screen window collection', () => {
+  it('openTabletopWindowSchema accepts collection "spell"', () => {
+    const result = openTabletopWindowSchema.safeParse({
+      screenId: 's1',
+      campaignId: 'c1',
+      collection: 'spell',
+      documentId: 'sp1',
+      x: 0,
+      y: 0,
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('gmscreens openWindowSchema accepts collection "spell"', () => {
+    const result = openWindowSchema.safeParse({
+      screenId: 's1',
+      campaignId: 'c1',
+      collection: 'spell',
+      documentId: 'sp1',
+    });
+    expect(result.success).toBe(true);
+  });
+});

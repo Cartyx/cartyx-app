@@ -162,7 +162,7 @@ describe('tabletop schemas', () => {
       const result = openTabletopWindowSchema.safeParse({
         screenId: 'screen-1',
         campaignId: 'abc123',
-        collection: 'spell',
+        collection: 'not-a-real-collection',
         documentId: 'doc-1',
       });
       expect(result.success).toBe(false);
