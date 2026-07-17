@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 import { TOKEN_SOURCES } from '~/types/schemas/mapTokens';
 
 const mapTokenSchema = new mongoose.Schema(
@@ -67,4 +67,8 @@ if (typeof (mapTokenSchema as { index?: unknown }).index === 'function') {
   );
 }
 
-export const MapToken = mongoose.models.MapToken || mongoose.model('MapToken', mapTokenSchema);
+export type IMapToken = InferSchemaType<typeof mapTokenSchema>;
+
+export const MapToken: Model<IMapToken> =
+  (mongoose.models.MapToken as Model<IMapToken>) ||
+  mongoose.model<IMapToken>('MapToken', mapTokenSchema);
