@@ -9,6 +9,8 @@ interface WikiCardMenuProps {
   canEdit?: boolean;
   onEdit?: () => void;
   onDelete?: () => void;
+  /** Override the delete gate (default GM-only). Notes pass creator-only here. */
+  canDelete?: boolean;
 }
 
 /**

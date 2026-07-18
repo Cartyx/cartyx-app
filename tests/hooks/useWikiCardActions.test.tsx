@@ -86,6 +86,44 @@ describe('useWikiCardActions', () => {
     expect(keys(result.current.menuItems)).toEqual(['show-on-tab']);
   });
 
+  it('canDelete overrides the GM-only default: a non-GM creator gets Delete', () => {
+    // Notes are creator-only for delete; a non-GM who created the item passes
+    // canDelete: true and must see Delete even though isGM is false.
+    mockCampaign.mockReturnValue({ campaign: { isGM: false } });
+    const { result } = renderHook(() =>
+      useWikiCardActions({
+        collection: 'note',
+        documentId: 'd1',
+        canEdit: true,
+        canDelete: true,
+        onEdit: vi.fn(),
+        onDelete: vi.fn(),
+      })
+    );
+    expect(keys(result.current.menuItems)).toContain('delete');
+    expect(keys(result.current.menuItems)).toContain('edit');
+    // Push stays GM-only regardless.
+    expect(keys(result.current.menuItems)).not.toContain('push');
+  });
+
+  it('canDelete: false hides Delete even for a GM', () => {
+    // A GM viewing someone else's note: canDelete is false, so no Delete.
+    mockCampaign.mockReturnValue({ campaign: { isGM: true } });
+    const { result } = renderHook(() =>
+      useWikiCardActions({
+        collection: 'note',
+        documentId: 'd1',
+        canEdit: false,
+        canDelete: false,
+        onEdit: vi.fn(),
+        onDelete: vi.fn(),
+      })
+    );
+    expect(keys(result.current.menuItems)).not.toContain('delete');
+    // But a GM can still push and show it.
+    expect(keys(result.current.menuItems)).toContain('push');
+  });
+
   it('hides both display actions on the Dashboard', () => {
     mockSearch.mockReturnValue({ tab: 'dashboard' });
     const { result } = renderHook(() =>

@@ -19,6 +19,13 @@ interface UseWikiCardActionsParams {
   onEdit?: () => void;
   onDelete?: () => void;
   /**
+   * Who may delete this item. Omit for the wiki default (GM-only delete). Pass
+   * an explicit value for collections with a different rule — e.g. notes are
+   * creator-only for delete (a GM has no rights on someone else's note), so the
+   * notes panel passes `canDelete={note.canEdit}`.
+   */
+  canDelete?: boolean;
+  /**
    * Offer "Push to Tabletop" even when there's no surface (e.g. the
    * Dashboard tab). Push always targets the tabletop's active screen
    * regardless of this flag — it only changes whether the item is offered
@@ -46,6 +53,7 @@ export function useWikiCardActions({
   canEdit,
   onEdit,
   onDelete,
+  canDelete,
   allowPushFromDashboard = false,
 }: UseWikiCardActionsParams): { menuItems: MenuItem[] } {
   const { campaignId } = useParams({ from: '/campaigns/$campaignId/play' });
@@ -161,7 +169,9 @@ export function useWikiCardActions({
     });
   }
 
-  if (isGM && onDelete) {
+  // Delete defaults to GM-only (the wiki rule); a caller can override with an
+  // explicit canDelete for collections with a different rule (e.g. notes).
+  if ((canDelete ?? isGM) && onDelete) {
     items.push({
       key: 'delete',
       label: 'Delete',

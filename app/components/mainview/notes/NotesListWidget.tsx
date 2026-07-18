@@ -1,17 +1,20 @@
-import React, { useMemo } from 'react'
-import type { NoteListItem } from '~/types/note'
-import type { CampaignData } from '~/types/campaign'
-import { fromNow } from '~/utils/date'
-import { Calendar, Tag, Lock, Globe } from 'lucide-react'
+import React, { useMemo } from 'react';
+import type { NoteListItem } from '~/types/note';
+import type { CampaignData } from '~/types/campaign';
+import { fromNow } from '~/utils/date';
+import { Calendar, Tag, Lock, Globe } from 'lucide-react';
+import { WikiCardMenu } from '~/components/wiki/shared/WikiCardMenu';
 
-type Session = CampaignData['sessions'][number]
+type Session = CampaignData['sessions'][number];
 
 interface NotesListWidgetProps {
-  notes: NoteListItem[]
-  sessions: CampaignData['sessions']
-  isLoading: boolean
-  error: string | null
-  onNoteClick: (note: NoteListItem) => void
+  notes: NoteListItem[];
+  sessions: CampaignData['sessions'];
+  isLoading: boolean;
+  error: string | null;
+  onNoteClick: (note: NoteListItem) => void;
+  /** Delete a note (owner only). Absent → the card menu omits Delete. */
+  onNoteDelete?: (note: NoteListItem) => void;
 }
 
 export function NotesListWidget({
@@ -20,13 +23,17 @@ export function NotesListWidget({
   isLoading,
   error,
   onNoteClick,
+  onNoteDelete,
 }: NotesListWidgetProps) {
   const sessionMap = useMemo(() => {
-    return sessions.reduce((acc, s) => {
-      acc[s.id] = s
-      return acc
-    }, {} as Record<string, Session>)
-  }, [sessions])
+    return sessions.reduce(
+      (acc, s) => {
+        acc[s.id] = s;
+        return acc;
+      },
+      {} as Record<string, Session>
+    );
+  }, [sessions]);
 
   if (isLoading) {
     return (
@@ -35,17 +42,15 @@ export function NotesListWidget({
           Loading notes...
         </p>
       </div>
-    )
+    );
   }
 
   if (error) {
     return (
       <div className="flex flex-1 items-center justify-center p-8 text-center">
-        <p className="font-sans font-semibold text-xs text-rose-400">
-          {error}
-        </p>
+        <p className="font-sans font-semibold text-xs text-rose-400">{error}</p>
       </div>
-    )
+    );
   }
 
   if (notes.length === 0) {
@@ -58,14 +63,14 @@ export function NotesListWidget({
           No notes found matching your filters.
         </p>
       </div>
-    )
+    );
   }
 
   return (
     <div className="flex-1 overflow-y-auto min-h-0">
       <div className="flex flex-col">
         {notes.map((note) => {
-          const session = note.sessionId ? sessionMap[note.sessionId] : undefined
+          const session = note.sessionId ? sessionMap[note.sessionId] : undefined;
           return (
             <div
               key={note.id}
@@ -79,24 +84,45 @@ export function NotesListWidget({
                     collection: 'note',
                     documentId: note.id,
                     title: note.title,
-                  }),
-                )
-                e.dataTransfer.effectAllowed = 'copy'
-                e.currentTarget.style.opacity = '0.4'
+                  })
+                );
+                e.dataTransfer.effectAllowed = 'copy';
+                e.currentTarget.style.opacity = '0.4';
               }}
               onDragEnd={(e) => {
-                e.currentTarget.style.opacity = ''
+                e.currentTarget.style.opacity = '';
               }}
               onClick={() => onNoteClick(note)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault()
-                  onNoteClick(note)
+                  e.preventDefault();
+                  onNoteClick(note);
                 }
               }}
-              className="flex flex-col gap-2 p-4 text-left border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
+              className="relative flex flex-col gap-2 p-4 text-left border-b border-white/[0.05] hover:bg-white/[0.03] transition-colors group cursor-grab active:cursor-grabbing"
             >
-              <div className="flex items-start justify-between gap-3">
+              {/* Overflow menu. Not draggable, and swallows its own clicks so
+                  interacting with it never opens or drags the note. */}
+              <div
+                className="absolute right-2 top-2"
+                draggable={false}
+                onDragStart={(e) => e.preventDefault()}
+                onClick={(e) => e.stopPropagation()}
+                onKeyDown={(e) => e.stopPropagation()}
+                role="presentation"
+              >
+                <WikiCardMenu
+                  collection="note"
+                  documentId={note.id}
+                  label="Note actions"
+                  canEdit={note.canEdit}
+                  canDelete={note.canEdit}
+                  onEdit={() => onNoteClick(note)}
+                  onDelete={onNoteDelete ? () => onNoteDelete(note) : undefined}
+                />
+              </div>
+
+              <div className="flex items-start justify-between gap-3 pr-7">
                 <h3 className="font-sans font-bold text-sm text-slate-200 group-hover:text-blue-400 transition-colors line-clamp-1">
                   {note.title}
                 </h3>
@@ -134,9 +160,9 @@ export function NotesListWidget({
                 </div>
               )}
             </div>
-          )
+          );
         })}
       </div>
     </div>
-  )
+  );
 }

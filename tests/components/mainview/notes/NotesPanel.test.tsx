@@ -62,11 +62,14 @@ const mockNotes = [
     title: 'Note 1',
     tags: ['lore', 'secret'],
     isPublic: true,
+    canEdit: true,
     updatedAt: new Date().toISOString(),
     createdAt: new Date().toISOString(),
     createdBy: 'user-1',
   },
 ];
+
+const removeNoteMock = vi.fn();
 
 describe('NotesPanel', () => {
   beforeEach(() => {
@@ -96,8 +99,10 @@ describe('NotesPanel', () => {
       isLoading: false,
       error: null,
     });
+    removeNoteMock.mockReset();
+    removeNoteMock.mockResolvedValue({ success: true });
     (useDeleteNote as any).mockReturnValue({
-      remove: vi.fn(),
+      remove: removeNoteMock,
       isLoading: false,
       error: null,
     });
@@ -115,6 +120,37 @@ describe('NotesPanel', () => {
       expect(screen.getByText('#lore')).toBeInTheDocument();
       expect(screen.getByText('#secret')).toBeInTheDocument();
     });
+  });
+
+  it('deletes a note via the card overflow menu (owner only)', async () => {
+    const user = userEvent.setup();
+    render(<NotesPanel />);
+
+    await waitFor(() => expect(screen.getByText('Note 1')).toBeInTheDocument());
+
+    // Open the note's overflow menu and choose Delete.
+    await user.click(screen.getByRole('button', { name: 'Note actions' }));
+    await user.click(screen.getByTestId('overflow-item-delete'));
+
+    // Confirm dialog appears; confirming removes the note.
+    expect(screen.getByText(/Delete "Note 1"\?/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(removeNoteMock).toHaveBeenCalledWith({ id: 'note-1', campaignId: 'campaign-123' });
+  });
+
+  it('offers no Edit/Delete menu on a note the caller cannot edit', async () => {
+    (useNotes as any).mockReturnValue({
+      notes: [{ ...mockNotes[0], canEdit: false }],
+      isLoading: false,
+      error: null,
+    });
+    render(<NotesPanel />);
+
+    await waitFor(() => expect(screen.getByText('Note 1')).toBeInTheDocument());
+    // On the wiki tab (no tabletop/GM surface) a non-owner has no qualifying
+    // actions, so the overflow menu does not render at all — no Edit, no Delete.
+    expect(screen.queryByRole('button', { name: 'Note actions' })).not.toBeInTheDocument();
   });
 
   it('updates filters when search input changes', async () => {
