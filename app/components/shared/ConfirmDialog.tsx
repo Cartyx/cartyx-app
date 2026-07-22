@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useId, useRef } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useFocusTrap } from '~/hooks/useFocusTrap';
 
@@ -27,6 +27,7 @@ export function ConfirmDialog({
   const trapRef = useFocusTrap<HTMLDivElement>();
   const cancelRef = useRef<HTMLButtonElement>(null);
   const submittingRef = useRef(false);
+  const messageId = useId();
 
   // Auto-focus the cancel button for safety (destructive dialogs especially)
   useEffect(() => {
@@ -35,11 +36,11 @@ export function ConfirmDialog({
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
+      if (e.key === 'Escape' && !isLoading) onCancel();
     };
     document.addEventListener('keydown', handleEscape);
     return () => document.removeEventListener('keydown', handleEscape);
-  }, [onCancel]);
+  }, [onCancel, isLoading]);
 
   const handleConfirm = useCallback(() => {
     if (submittingRef.current) return;
@@ -55,7 +56,7 @@ export function ConfirmDialog({
       role="presentation"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
       onClick={(e) => {
-        if (e.target === e.currentTarget) onCancel();
+        if (e.target === e.currentTarget && !isLoading) onCancel();
       }}
     >
       <div
@@ -63,6 +64,7 @@ export function ConfirmDialog({
         role="alertdialog"
         aria-modal="true"
         aria-label={title}
+        aria-describedby={messageId}
         className="w-full max-w-sm rounded-lg border border-white/[0.07] bg-[#0D1117] shadow-2xl shadow-black/60"
       >
         <div className="px-4 py-3 border-b border-white/[0.07]">
@@ -70,7 +72,9 @@ export function ConfirmDialog({
         </div>
 
         <div className="p-4">
-          <p className="font-sans text-xs text-slate-400 leading-relaxed">{message}</p>
+          <p id={messageId} className="font-sans text-xs text-slate-400 leading-relaxed">
+            {message}
+          </p>
 
           {error && (
             <p role="alert" className="mt-3 font-sans text-xs text-rose-400 leading-relaxed">

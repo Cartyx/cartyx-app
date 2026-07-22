@@ -6,6 +6,10 @@ const FOCUSABLE_SELECTOR =
 /**
  * Traps keyboard focus within the referenced container while it is mounted.
  * Returns a ref to attach to the container element.
+ *
+ * Also captures whatever element had focus just before mount, and restores
+ * focus to it on unmount (guarded so it never focuses a detached node) — so
+ * closing a dialog returns keyboard users to where they were.
  */
 export function useFocusTrap<T extends HTMLElement = HTMLElement>() {
   const containerRef = useRef<T>(null);
@@ -13,6 +17,8 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>() {
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
+    const previouslyFocused = document.activeElement;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Tab') return;
@@ -37,7 +43,12 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>() {
     };
 
     container.addEventListener('keydown', handleKeyDown);
-    return () => container.removeEventListener('keydown', handleKeyDown);
+    return () => {
+      container.removeEventListener('keydown', handleKeyDown);
+      if (previouslyFocused instanceof HTMLElement && previouslyFocused.isConnected) {
+        previouslyFocused.focus();
+      }
+    };
   }, []);
 
   return containerRef;
