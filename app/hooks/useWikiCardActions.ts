@@ -67,18 +67,42 @@ export function useWikiCardActions({
   const { playerState, addPrivateWindow } = useTabletopPlayerState(campaignId);
 
   // Hoist the target screen ids so the detail hooks can run unconditionally
-  // (hooks can't live inside the branches below). Both mirror the persisted
-  // active screen with a first-screen fallback for a fresh campaign, exactly
-  // as the display-action branches do.
-  const tabletopScreenId = playerState?.activeScreenId ?? tabletopScreens[0]?.id ?? null;
-  const gmScreenId = playerState?.activeGMScreenId ?? gmScreens[0]?.id ?? null;
+  // (hooks can't live inside the branches below). Each uses the PERSISTED
+  // active screen ONLY if it still exists in the current list — a deleted id
+  // is non-null, so a bare `??` would let it through and target a phantom
+  // screen. Otherwise fall back to the first screen (the fresh-campaign
+  // first-visit case, where nothing is persisted yet). Mirrors GMScreensView.
+  const tabletopScreenId =
+    playerState?.activeScreenId && tabletopScreens.some((s) => s.id === playerState.activeScreenId)
+      ? playerState.activeScreenId
+      : (tabletopScreens[0]?.id ?? null);
+  const gmScreenId =
+    playerState?.activeGMScreenId && gmScreens.some((s) => s.id === playerState.activeGMScreenId)
+      ? playerState.activeGMScreenId
+      : (gmScreens[0]?.id ?? null);
+
+  // Which surface is the user looking at? Dashboard has no surface, so both
+  // display actions are hidden there. Computed BEFORE the detail hooks so we
+  // can gate which detail is actually fetched.
+  const surface = tab === 'tabletop' ? 'tabletop' : tab === 'gmscreens' ? 'gmscreen' : null;
 
   // The SHARED window lists for each surface (everyone-visible windows). Needed
   // so a display action dedups across BOTH the caller's private windows AND the
   // shared windows — opening the same item twice (in either form) must instead
-  // focus the one that's already there.
-  const { screen: tabletopScreen } = useTabletopScreenDetail(campaignId, tabletopScreenId);
-  const { screen: gmScreen } = useGMScreenDetail(campaignId, gmScreenId);
+  // focus the one that's already there. Fetch a surface's detail ONLY when its
+  // shared list will actually be read, else pass null so the query's
+  // `enabled: !!screenId` short-circuits (nothing renders it on Dashboard/Maps):
+  //  - tabletop: read for show-on-tab dedup (surface === 'tabletop') AND by the
+  //    Push branch, which is offered exactly when `isGM && (surface ||
+  //    allowPushFromDashboard)` and always reads `tabletopScreen?.windows`.
+  //  - gm: read only for show-on-tab dedup on the GM surface.
+  const tabletopDetailId =
+    surface === 'tabletop' || (isGM && (surface !== null || allowPushFromDashboard))
+      ? tabletopScreenId
+      : null;
+  const gmDetailId = surface === 'gmscreen' ? gmScreenId : null;
+  const { screen: tabletopScreen } = useTabletopScreenDetail(campaignId, tabletopDetailId);
+  const { screen: gmScreen } = useGMScreenDetail(campaignId, gmDetailId);
 
   // Is this exact item (collection + documentId) already open on a given
   // surface+screen, in EITHER the caller's private list OR the shared list?
@@ -108,10 +132,6 @@ export function useWikiCardActions({
     });
   }
 
-  // Which surface is the user looking at? Dashboard has no surface, so both
-  // display actions are hidden there.
-  const surface = tab === 'tabletop' ? 'tabletop' : tab === 'gmscreens' ? 'gmscreen' : null;
-
   if (surface) {
     // The target screen for this surface (already hoisted above with the
     // first-screen fallback for a fresh campaign — see tabletopScreenId).
@@ -131,7 +151,7 @@ export function useWikiCardActions({
         // Already open on this tab in EITHER form (your private window OR a
         // shared one): the surface focuses + flashes it; nothing to add.
         if (isAlreadyOpen(surface, screenId, sharedWindows)) {
-          focusExistingWindow(surface, collection, documentId);
+          focusExistingWindow(campaignId, surface, collection, documentId);
           return;
         }
         addPrivateWindow.mutate({ surface, screenId, collection, documentId });
@@ -157,7 +177,7 @@ export function useWikiCardActions({
         // existing one and DON'T open a second. No promotion — a private window
         // stays private.
         if (isAlreadyOpen('tabletop', tabletopScreenId, tabletopScreen?.windows ?? [])) {
-          focusExistingWindow('tabletop', collection, documentId);
+          focusExistingWindow(campaignId, 'tabletop', collection, documentId);
           return;
         }
         tabletopMutations.openWindow.mutate({
@@ -191,11 +211,14 @@ export function useWikiCardActions({
  * uses (see app/utils/diceRollerBridge.ts).
  */
 function focusExistingWindow(
+  campaignId: string,
   surface: 'tabletop' | 'gmscreen',
   collection: string,
   documentId: string
 ) {
   window.dispatchEvent(
-    new CustomEvent('cartyx:focus-window', { detail: { surface, collection, documentId } })
+    new CustomEvent('cartyx:focus-window', {
+      detail: { surface, collection, documentId, campaignId },
+    })
   );
 }

@@ -272,6 +272,7 @@ describe('useWikiCardActions', () => {
         surface: 'tabletop',
         collection: 'character',
         documentId: 'd1',
+        campaignId: 'c1',
       });
     } finally {
       window.removeEventListener('cartyx:focus-window', focusSpy);
@@ -311,6 +312,7 @@ describe('useWikiCardActions', () => {
         surface: 'tabletop',
         collection: 'character',
         documentId: 'd1',
+        campaignId: 'c1',
       });
     } finally {
       window.removeEventListener('cartyx:focus-window', focusSpy);
@@ -362,6 +364,7 @@ describe('useWikiCardActions', () => {
         surface: 'tabletop',
         collection: 'character',
         documentId: 'd1',
+        campaignId: 'c1',
       });
     } finally {
       window.removeEventListener('cartyx:focus-window', focusSpy);
@@ -432,6 +435,80 @@ describe('useWikiCardActions', () => {
     expect(addPrivateWindowMutate).toHaveBeenCalledWith(
       expect.objectContaining({ surface: 'gmscreen', screenId: 'gm-first' })
     );
+  });
+
+  it('falls back to the first screen when the persisted activeScreenId no longer exists (deleted)', () => {
+    // 'ghost' is a persisted-but-non-null id that is NOT in the mocked screen
+    // list ([first, active]); the '??' operator would let it through, but the
+    // existence check must fall back to the first screen for Push targeting.
+    mockPlayerState.mockReturnValue({
+      playerState: { activeScreenId: 'ghost', activeGMScreenId: 'gm-ghost', privateWindows: [] },
+      addPrivateWindow: { mutate: addPrivateWindowMutate },
+      removePrivateWindow: { mutate: vi.fn() },
+    });
+    const { result } = renderHook(() =>
+      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    );
+    // Push targets the tabletop; the deleted id must not leak through.
+    result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
+    expect(openWindowMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ screenId: 'first', collection: 'character', documentId: 'd1' })
+    );
+    expect(openWindowMutate).not.toHaveBeenCalledWith(
+      expect.objectContaining({ screenId: 'ghost' })
+    );
+  });
+
+  it('Show on Tab falls back to the first GM screen when the persisted GM id was deleted', () => {
+    mockSearch.mockReturnValue({ tab: 'gmscreens' });
+    mockPlayerState.mockReturnValue({
+      playerState: { activeScreenId: 'active', activeGMScreenId: 'gm-ghost', privateWindows: [] },
+      addPrivateWindow: { mutate: addPrivateWindowMutate },
+      removePrivateWindow: { mutate: vi.fn() },
+    });
+    const { result } = renderHook(() =>
+      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    );
+    result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
+    expect(addPrivateWindowMutate).toHaveBeenCalledWith(
+      expect.objectContaining({ surface: 'gmscreen', screenId: 'gm-first' })
+    );
+  });
+
+  it('tags the focus-window event with the current campaignId', () => {
+    mockPlayerState.mockReturnValue({
+      playerState: {
+        activeScreenId: 'active',
+        activeGMScreenId: 'gm1',
+        privateWindows: [
+          {
+            id: 'pw1',
+            surface: 'tabletop',
+            screenId: 'active',
+            collection: 'character',
+            documentId: 'd1',
+          },
+        ],
+      },
+      addPrivateWindow: { mutate: addPrivateWindowMutate },
+      removePrivateWindow: { mutate: vi.fn() },
+    });
+    const focusSpy = vi.fn();
+    window.addEventListener('cartyx:focus-window', focusSpy);
+    try {
+      const { result } = renderHook(() =>
+        useWikiCardActions({ collection: 'character', documentId: 'd1' })
+      );
+      result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
+      expect(focusSpy.mock.calls[0][0].detail).toEqual({
+        surface: 'tabletop',
+        collection: 'character',
+        documentId: 'd1',
+        campaignId: 'c1',
+      });
+    } finally {
+      window.removeEventListener('cartyx:focus-window', focusSpy);
+    }
   });
 
   it('Show on Tab on the Tabletop falls back to the first screen when none is persisted', () => {
