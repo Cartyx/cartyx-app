@@ -50,7 +50,8 @@ describe('OverflowMenu', () => {
     const user = userEvent.setup();
     render(<OverflowMenu items={items} label="Item actions" />);
     await user.click(screen.getByRole('button', { name: 'Item actions' }));
-    await user.keyboard('{ArrowDown}');
+    // Opening the menu already focuses the first item (see the dedicated
+    // focus-on-open test below), so roving starts from there.
     expect(screen.getByRole('menuitem', { name: 'Edit' })).toHaveFocus();
     await user.keyboard('{ArrowDown}');
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveFocus();
@@ -81,7 +82,6 @@ describe('OverflowMenu', () => {
     ];
     render(<OverflowMenu items={threeItems} label="Item actions" />);
     await user.click(screen.getByRole('button', { name: 'Item actions' }));
-    await user.keyboard('{ArrowDown}');
     expect(screen.getByRole('menuitem', { name: 'Edit' })).toHaveFocus();
     await user.keyboard('{ArrowDown}');
     expect(screen.getByRole('menuitem', { name: 'Delete' })).toHaveFocus();
@@ -90,5 +90,48 @@ describe('OverflowMenu', () => {
   it('renders nothing when there are no items', () => {
     const { container } = render(<OverflowMenu items={[]} label="Item actions" />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('focuses the first enabled item when the menu opens', async () => {
+    const user = userEvent.setup();
+    const withDisabledFirst = [
+      { key: 'push', label: 'Push', onSelect: vi.fn(), disabled: true },
+      { key: 'edit', label: 'Edit', onSelect: vi.fn() },
+      { key: 'delete', label: 'Delete', onSelect: vi.fn(), danger: true },
+    ];
+    render(<OverflowMenu items={withDisabledFirst} label="Item actions" />);
+    await user.click(screen.getByRole('button', { name: 'Item actions' }));
+    // The first item is disabled, so focus should skip it and land on 'Edit'.
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toHaveFocus();
+  });
+
+  it('closes when focus leaves the menu, but stays open when focus moves between items', async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <OverflowMenu items={items} label="Item actions" />
+        <button type="button">Outside</button>
+      </>
+    );
+    await user.click(screen.getByRole('button', { name: 'Item actions' }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+
+    // Roving between items (focus stays inside the menu container) must not close it.
+    await user.keyboard('{ArrowDown}');
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+
+    // Tabbing to an element outside the menu moves focus out entirely, and should close it.
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Outside' })).toHaveFocus();
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
+  it('keeps the trigger reachable on touch devices via an always-visible class', () => {
+    render(<OverflowMenu items={items} label="Item actions" />);
+    const trigger = screen.getByRole('button', { name: 'Item actions' });
+    // jsdom has no real media queries, so assert the Tailwind arbitrary variant
+    // class is present rather than asserting computed opacity.
+    expect(trigger.className).toContain('[@media(hover:none)]:opacity-100');
+    expect(trigger.className).toContain('focus:opacity-100');
   });
 });

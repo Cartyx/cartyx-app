@@ -50,6 +50,19 @@ export function OverflowMenu({ items, label }: OverflowMenuProps) {
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [open, close]);
 
+  // WAI-ARIA menu-button pattern: opening the menu moves focus straight to the
+  // first enabled item, so keyboard/touch users don't need an extra ArrowDown
+  // press just to get into the menu. Only fires on the closed→open transition
+  // (guarded by wasOpenRef) so it doesn't fight the user's own roving once open.
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (open && !wasOpenRef.current) {
+      const firstEnabled = items.findIndex((item) => !item.disabled);
+      if (firstEnabled !== -1) itemRefs.current[firstEnabled]?.focus();
+    }
+    wasOpenRef.current = open;
+  }, [open, items]);
+
   if (items.length === 0) return null;
 
   // Browsers no-op .focus() on a disabled <button>, so a naive wrap-around
@@ -81,8 +94,20 @@ export function OverflowMenu({ items, label }: OverflowMenuProps) {
     }
   };
 
+  // Closes the menu when focus leaves it entirely (Tab-away, or focus jumping
+  // to some unrelated part of the page) but NOT when focus merely moves between
+  // items inside the menu (arrow roving, or the auto-focus-on-open above) — the
+  // new focus target is checked against this container on every focusout.
+  const onContainerBlur = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (!open) return;
+    const next = e.relatedTarget as Node | null;
+    if (!next || !e.currentTarget.contains(next)) {
+      close(false);
+    }
+  };
+
   return (
-    <div className="relative">
+    <div className="relative" onBlur={onContainerBlur}>
       <button
         ref={triggerRef}
         type="button"
@@ -97,7 +122,11 @@ export function OverflowMenu({ items, label }: OverflowMenuProps) {
         // is a SIBLING, not an ancestor, so keydowns from the trigger never bubble
         // through it — the trigger needs its own copy of the handler while open.
         onKeyDown={open ? onMenuKeyDown : undefined}
-        className="flex h-7 w-7 items-center justify-center rounded bg-white/[0.03] text-slate-400 opacity-0 transition-opacity hover:bg-white/[0.07] hover:text-slate-200 focus-visible:opacity-100 group-hover:opacity-100"
+        // Hover reveals the trigger for mouse users (unchanged desktop look).
+        // Touch devices have no hover, so `[@media(hover:none)]` keeps it always
+        // visible there; `focus:` (not just `focus-visible:`) covers the plain
+        // `:focus` a tap produces, so a keyboard OR touch user can always find it.
+        className="flex h-7 w-7 items-center justify-center rounded bg-white/[0.03] text-slate-400 opacity-0 transition-opacity hover:bg-white/[0.07] hover:text-slate-200 focus:opacity-100 focus-visible:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-100"
       >
         <MoreVertical className="h-3.5 w-3.5" />
       </button>
