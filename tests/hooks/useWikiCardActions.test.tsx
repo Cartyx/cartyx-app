@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { useWikiCardActions } from '~/hooks/useWikiCardActions';
+import { WikiCardActionsTestWrapper } from '../support/renderWithWikiCardActions';
 
 const mockSearch = vi.fn();
 const mockCampaign = vi.fn();
@@ -52,36 +53,41 @@ beforeEach(() => {
 
 describe('useWikiCardActions', () => {
   it('gives a GM on the Tabletop all four actions', () => {
-    const { result } = renderHook(() =>
-      useWikiCardActions({
-        collection: 'character',
-        documentId: 'd1',
-        canEdit: true,
-        onEdit: vi.fn(),
-        onDelete: vi.fn(),
-      })
+    const { result } = renderHook(
+      () =>
+        useWikiCardActions({
+          collection: 'character',
+          documentId: 'd1',
+          canEdit: true,
+          onEdit: vi.fn(),
+          onDelete: vi.fn(),
+        }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     expect(keys(result.current.menuItems)).toEqual(['edit', 'show-on-tab', 'push', 'delete']);
   });
 
   it('gives a player Show on Tab and Edit only when canEdit', () => {
     mockCampaign.mockReturnValue({ campaign: { isGM: false } });
-    const { result } = renderHook(() =>
-      useWikiCardActions({
-        collection: 'character',
-        documentId: 'd1',
-        canEdit: true,
-        onEdit: vi.fn(),
-        onDelete: vi.fn(),
-      })
+    const { result } = renderHook(
+      () =>
+        useWikiCardActions({
+          collection: 'character',
+          documentId: 'd1',
+          canEdit: true,
+          onEdit: vi.fn(),
+          onDelete: vi.fn(),
+        }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     expect(keys(result.current.menuItems)).toEqual(['edit', 'show-on-tab']);
   });
 
   it('never gives a player push or delete, even without canEdit', () => {
     mockCampaign.mockReturnValue({ campaign: { isGM: false } });
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1', canEdit: false })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1', canEdit: false }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     expect(keys(result.current.menuItems)).toEqual(['show-on-tab']);
   });
@@ -90,15 +96,17 @@ describe('useWikiCardActions', () => {
     // Notes are creator-only for delete; a non-GM who created the item passes
     // canDelete: true and must see Delete even though isGM is false.
     mockCampaign.mockReturnValue({ campaign: { isGM: false } });
-    const { result } = renderHook(() =>
-      useWikiCardActions({
-        collection: 'note',
-        documentId: 'd1',
-        canEdit: true,
-        canDelete: true,
-        onEdit: vi.fn(),
-        onDelete: vi.fn(),
-      })
+    const { result } = renderHook(
+      () =>
+        useWikiCardActions({
+          collection: 'note',
+          documentId: 'd1',
+          canEdit: true,
+          canDelete: true,
+          onEdit: vi.fn(),
+          onDelete: vi.fn(),
+        }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     expect(keys(result.current.menuItems)).toContain('delete');
     expect(keys(result.current.menuItems)).toContain('edit');
@@ -109,15 +117,17 @@ describe('useWikiCardActions', () => {
   it('canDelete: false hides Delete even for a GM', () => {
     // A GM viewing someone else's note: canDelete is false, so no Delete.
     mockCampaign.mockReturnValue({ campaign: { isGM: true } });
-    const { result } = renderHook(() =>
-      useWikiCardActions({
-        collection: 'note',
-        documentId: 'd1',
-        canEdit: false,
-        canDelete: false,
-        onEdit: vi.fn(),
-        onDelete: vi.fn(),
-      })
+    const { result } = renderHook(
+      () =>
+        useWikiCardActions({
+          collection: 'note',
+          documentId: 'd1',
+          canEdit: false,
+          canDelete: false,
+          onEdit: vi.fn(),
+          onDelete: vi.fn(),
+        }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     expect(keys(result.current.menuItems)).not.toContain('delete');
     // But a GM can still push and show it.
@@ -126,22 +136,25 @@ describe('useWikiCardActions', () => {
 
   it('hides both display actions on the Dashboard', () => {
     mockSearch.mockReturnValue({ tab: 'dashboard' });
-    const { result } = renderHook(() =>
-      useWikiCardActions({
-        collection: 'character',
-        documentId: 'd1',
-        canEdit: true,
-        onEdit: vi.fn(),
-        onDelete: vi.fn(),
-      })
+    const { result } = renderHook(
+      () =>
+        useWikiCardActions({
+          collection: 'character',
+          documentId: 'd1',
+          canEdit: true,
+          onEdit: vi.fn(),
+          onDelete: vi.fn(),
+        }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     expect(keys(result.current.menuItems)).toEqual(['edit', 'delete']);
   });
 
   it('still offers Push to Tabletop from the GM Screens tab, and it targets the tabletop, not the GM screen', () => {
     mockSearch.mockReturnValue({ tab: 'gmscreens' });
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     expect(keys(result.current.menuItems)).toContain('push');
     result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
@@ -152,8 +165,9 @@ describe('useWikiCardActions', () => {
   });
 
   it('targets the ACTIVE screen, not screens[0]', () => {
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
     expect(openWindowMutate).toHaveBeenCalledWith(
@@ -162,8 +176,9 @@ describe('useWikiCardActions', () => {
   });
 
   it('Show on Tab writes a private window for the current surface', () => {
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
     expect(addPrivateWindowMutate).toHaveBeenCalledWith({
@@ -176,8 +191,9 @@ describe('useWikiCardActions', () => {
 
   it('Show on Tab targets the GM screen when on the GM Screens tab', () => {
     mockSearch.mockReturnValue({ tab: 'gmscreens' });
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
     expect(addPrivateWindowMutate).toHaveBeenCalledWith(
@@ -203,8 +219,9 @@ describe('useWikiCardActions', () => {
       addPrivateWindow: { mutate: addPrivateWindowMutate },
       removePrivateWindow: { mutate: vi.fn() },
     });
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
     expect(addPrivateWindowMutate).not.toHaveBeenCalled();
@@ -230,8 +247,9 @@ describe('useWikiCardActions', () => {
       addPrivateWindow: { mutate: addPrivateWindowMutate },
       removePrivateWindow: { mutate: vi.fn() },
     });
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
     expect(addPrivateWindowMutate).toHaveBeenCalledWith({
@@ -263,8 +281,9 @@ describe('useWikiCardActions', () => {
     const focusSpy = vi.fn();
     window.addEventListener('cartyx:focus-window', focusSpy);
     try {
-      const { result } = renderHook(() =>
-        useWikiCardActions({ collection: 'character', documentId: 'd1' })
+      const { result } = renderHook(
+        () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+        { wrapper: WikiCardActionsTestWrapper }
       );
       result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
       expect(focusSpy).toHaveBeenCalledTimes(1);
@@ -302,8 +321,9 @@ describe('useWikiCardActions', () => {
     const focusSpy = vi.fn();
     window.addEventListener('cartyx:focus-window', focusSpy);
     try {
-      const { result } = renderHook(() =>
-        useWikiCardActions({ collection: 'character', documentId: 'd1' })
+      const { result } = renderHook(
+        () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+        { wrapper: WikiCardActionsTestWrapper }
       );
       result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
       expect(openWindowMutate).not.toHaveBeenCalled();
@@ -326,8 +346,9 @@ describe('useWikiCardActions', () => {
     const focusSpy = vi.fn();
     window.addEventListener('cartyx:focus-window', focusSpy);
     try {
-      const { result } = renderHook(() =>
-        useWikiCardActions({ collection: 'character', documentId: 'd1' })
+      const { result } = renderHook(
+        () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+        { wrapper: WikiCardActionsTestWrapper }
       );
       result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
       expect(openWindowMutate).not.toHaveBeenCalled();
@@ -338,8 +359,9 @@ describe('useWikiCardActions', () => {
   });
 
   it('Push DOES open a window when nothing is already open (regression)', () => {
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
     expect(openWindowMutate).toHaveBeenCalledWith(
@@ -354,8 +376,9 @@ describe('useWikiCardActions', () => {
     const focusSpy = vi.fn();
     window.addEventListener('cartyx:focus-window', focusSpy);
     try {
-      const { result } = renderHook(() =>
-        useWikiCardActions({ collection: 'character', documentId: 'd1' })
+      const { result } = renderHook(
+        () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+        { wrapper: WikiCardActionsTestWrapper }
       );
       result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
       expect(addPrivateWindowMutate).not.toHaveBeenCalled();
@@ -376,8 +399,9 @@ describe('useWikiCardActions', () => {
     mockGMDetail.mockReturnValue({
       screen: { windows: [{ id: 'w1', collection: 'character', documentId: 'd1' }] },
     });
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
     expect(addPrivateWindowMutate).not.toHaveBeenCalled();
@@ -385,12 +409,14 @@ describe('useWikiCardActions', () => {
 
   it('offers Push to Tabletop from the Dashboard when allowPushFromDashboard is set, but still hides Show on Tab', () => {
     mockSearch.mockReturnValue({ tab: 'dashboard' });
-    const { result } = renderHook(() =>
-      useWikiCardActions({
-        collection: 'character',
-        documentId: 'd1',
-        allowPushFromDashboard: true,
-      })
+    const { result } = renderHook(
+      () =>
+        useWikiCardActions({
+          collection: 'character',
+          documentId: 'd1',
+          allowPushFromDashboard: true,
+        }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     expect(keys(result.current.menuItems)).toEqual(['push']);
     result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
@@ -401,8 +427,9 @@ describe('useWikiCardActions', () => {
 
   it('does not offer Push to Tabletop from the Dashboard without allowPushFromDashboard (default false)', () => {
     mockSearch.mockReturnValue({ tab: 'dashboard' });
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     expect(keys(result.current.menuItems)).toEqual([]);
   });
@@ -410,8 +437,9 @@ describe('useWikiCardActions', () => {
   it('returns no items when nothing qualifies', () => {
     mockSearch.mockReturnValue({ tab: 'dashboard' });
     mockCampaign.mockReturnValue({ campaign: { isGM: false } });
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1', canEdit: false })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1', canEdit: false }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     expect(result.current.menuItems).toEqual([]);
   });
@@ -426,8 +454,9 @@ describe('useWikiCardActions', () => {
       addPrivateWindow: { mutate: addPrivateWindowMutate },
       removePrivateWindow: { mutate: vi.fn() },
     });
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     const item = result.current.menuItems.find((i) => i.key === 'show-on-tab');
     expect(item?.disabled).toBeFalsy();
@@ -446,8 +475,9 @@ describe('useWikiCardActions', () => {
       addPrivateWindow: { mutate: addPrivateWindowMutate },
       removePrivateWindow: { mutate: vi.fn() },
     });
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     // Push targets the tabletop; the deleted id must not leak through.
     result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
@@ -466,8 +496,9 @@ describe('useWikiCardActions', () => {
       addPrivateWindow: { mutate: addPrivateWindowMutate },
       removePrivateWindow: { mutate: vi.fn() },
     });
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
     expect(addPrivateWindowMutate).toHaveBeenCalledWith(
@@ -496,8 +527,9 @@ describe('useWikiCardActions', () => {
     const focusSpy = vi.fn();
     window.addEventListener('cartyx:focus-window', focusSpy);
     try {
-      const { result } = renderHook(() =>
-        useWikiCardActions({ collection: 'character', documentId: 'd1' })
+      const { result } = renderHook(
+        () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+        { wrapper: WikiCardActionsTestWrapper }
       );
       result.current.menuItems.find((i) => i.key === 'show-on-tab')!.onSelect();
       expect(focusSpy.mock.calls[0][0].detail).toEqual({
@@ -518,8 +550,9 @@ describe('useWikiCardActions', () => {
       addPrivateWindow: { mutate: addPrivateWindowMutate },
       removePrivateWindow: { mutate: vi.fn() },
     });
-    const { result } = renderHook(() =>
-      useWikiCardActions({ collection: 'character', documentId: 'd1' })
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
+      { wrapper: WikiCardActionsTestWrapper }
     );
     const item = result.current.menuItems.find((i) => i.key === 'show-on-tab');
     expect(item?.disabled).toBeFalsy();

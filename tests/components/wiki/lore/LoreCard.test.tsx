@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { LoreCard } from '~/components/wiki/lore/LoreCard';
+import { WikiCardActionsTestWrapper } from '../../../support/renderWithWikiCardActions';
 
 // setTokenDragImage uses document.createElement / document.body.appendChild
 // and e.dataTransfer.setDragImage — stub it to avoid happy-dom canvas issues.
@@ -52,7 +53,9 @@ const lore = {
 
 describe('LoreCard', () => {
   it('sets the drag payload with collection lore', () => {
-    render(<LoreCard lore={lore as never} onClick={vi.fn()} />);
+    render(<LoreCard lore={lore as never} onClick={vi.fn()} />, {
+      wrapper: WikiCardActionsTestWrapper,
+    });
     const card = screen.getByTestId('lore-card');
     const setData = vi.fn();
     fireEvent.dragStart(card, {
@@ -69,44 +72,58 @@ describe('LoreCard', () => {
   });
 
   it('renders the title', () => {
-    render(<LoreCard lore={lore as never} onClick={vi.fn()} />);
+    render(<LoreCard lore={lore as never} onClick={vi.fn()} />, {
+      wrapper: WikiCardActionsTestWrapper,
+    });
     expect(screen.getByText('The Fall of Phandalin')).toBeInTheDocument();
   });
 
   it('shows public icon when isPublic=true', () => {
-    render(<LoreCard lore={lore as never} onClick={vi.fn()} />);
+    render(<LoreCard lore={lore as never} onClick={vi.fn()} />, {
+      wrapper: WikiCardActionsTestWrapper,
+    });
     expect(screen.getByLabelText('Public')).toBeInTheDocument();
   });
 
   it('shows private icon when isPublic=false', () => {
-    render(<LoreCard lore={{ ...lore, isPublic: false } as never} onClick={vi.fn()} />);
+    render(<LoreCard lore={{ ...lore, isPublic: false } as never} onClick={vi.fn()} />, {
+      wrapper: WikiCardActionsTestWrapper,
+    });
     expect(screen.getByLabelText('Private')).toBeInTheDocument();
   });
 
   it('fires onClick when clicked', () => {
     const onClick = vi.fn();
-    render(<LoreCard lore={lore as never} onClick={onClick} />);
+    render(<LoreCard lore={lore as never} onClick={onClick} />, {
+      wrapper: WikiCardActionsTestWrapper,
+    });
     fireEvent.click(screen.getByTestId('lore-card'));
     expect(onClick).toHaveBeenCalledWith(lore);
   });
 
   it('fires onClick on Enter key', () => {
     const onClick = vi.fn();
-    render(<LoreCard lore={lore as never} onClick={onClick} />);
+    render(<LoreCard lore={lore as never} onClick={onClick} />, {
+      wrapper: WikiCardActionsTestWrapper,
+    });
     fireEvent.keyDown(screen.getByTestId('lore-card'), { key: 'Enter' });
     expect(onClick).toHaveBeenCalledWith(lore);
   });
 
   it('fires onClick on Space key', () => {
     const onClick = vi.fn();
-    render(<LoreCard lore={lore as never} onClick={onClick} />);
+    render(<LoreCard lore={lore as never} onClick={onClick} />, {
+      wrapper: WikiCardActionsTestWrapper,
+    });
     fireEvent.keyDown(screen.getByTestId('lore-card'), { key: ' ' });
     expect(onClick).toHaveBeenCalledWith(lore);
   });
 
   it('renders tags', () => {
     const loreWithTags = { ...lore, tags: ['history', 'magic'] };
-    render(<LoreCard lore={loreWithTags as never} onClick={vi.fn()} />);
+    render(<LoreCard lore={loreWithTags as never} onClick={vi.fn()} />, {
+      wrapper: WikiCardActionsTestWrapper,
+    });
     expect(screen.getByText('#history')).toBeInTheDocument();
     expect(screen.getByText('#magic')).toBeInTheDocument();
   });
@@ -119,7 +136,9 @@ describe('LoreCard', () => {
   // body (no stopPropagation wrapper), Escape reaches the document listener and
   // closes the menu.
   it('closes the overflow menu on Escape', () => {
-    render(<LoreCard lore={lore as never} onClick={vi.fn()} onEdit={vi.fn()} />);
+    render(<LoreCard lore={lore as never} onClick={vi.fn()} onEdit={vi.fn()} />, {
+      wrapper: WikiCardActionsTestWrapper,
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Lore actions' }));
     expect(screen.getByRole('menu')).toBeInTheDocument();
     fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
@@ -134,7 +153,9 @@ describe('LoreCard', () => {
         { kind: 'location', id: 'loc1', label: 'Town' },
       ],
     };
-    render(<LoreCard lore={loreWithLinks as never} onClick={vi.fn()} />);
+    render(<LoreCard lore={loreWithLinks as never} onClick={vi.fn()} />, {
+      wrapper: WikiCardActionsTestWrapper,
+    });
     expect(screen.getByText('2 links')).toBeInTheDocument();
   });
 });

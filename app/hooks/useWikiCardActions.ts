@@ -1,15 +1,7 @@
-import { useParams, useSearch } from '@tanstack/react-router';
 import { Edit2, Monitor, Trash2, Radio } from 'lucide-react';
 import { createElement } from 'react';
 import type { MenuItem } from '~/components/shared/OverflowMenu';
-import { useCampaign } from '~/hooks/useCampaigns';
-import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
-import {
-  useTabletopScreenList,
-  useTabletopScreenDetail,
-  useTabletopMutations,
-} from '~/hooks/useTabletopScreens';
-import { useGMScreenList, useGMScreenDetail } from '~/hooks/useGMScreens';
+import { useWikiCardActionsContext } from '~/components/wiki/shared/WikiCardActionsProvider';
 
 interface UseWikiCardActionsParams {
   collection: string;
@@ -43,9 +35,11 @@ interface UseWikiCardActionsParams {
  *  - "Show on Tab"      — private to the caller, any member, current tab.
  *  - "Push to Tabletop" — shared with everyone, GM only, ALWAYS the tabletop.
  *
- * Reads the main-view tab from the router rather than taking it as a prop: the
- * prop chain from play.tsx dead-ends at MainView, and the panels already reach
- * for the router directly (see WikiPanel/MapsPanel).
+ * The SHARED inputs (surface, screen ids, window lists, mutations) come from
+ * WikiCardActionsProvider via context — computed ONCE for the whole Inspector
+ * subtree — so the ~50 cards and ~15 ShowOnTabletopButton modals no longer each
+ * subscribe to the campaign's hot React Query caches or register their own
+ * mutation observers. This hook only applies the per-card gating on top.
  */
 export function useWikiCardActions({
   collection,
@@ -56,53 +50,18 @@ export function useWikiCardActions({
   canDelete,
   allowPushFromDashboard = false,
 }: UseWikiCardActionsParams): { menuItems: MenuItem[] } {
-  const { campaignId } = useParams({ from: '/campaigns/$campaignId/play' });
-  const { tab } = useSearch({ from: '/campaigns/$campaignId/play' });
-  const { campaign } = useCampaign(campaignId);
-  const isGM = campaign?.isGM ?? false;
-
-  const { screens: tabletopScreens } = useTabletopScreenList(campaignId);
-  const { screens: gmScreens } = useGMScreenList(campaignId);
-  const tabletopMutations = useTabletopMutations(campaignId);
-  const { playerState, addPrivateWindow } = useTabletopPlayerState(campaignId);
-
-  // Hoist the target screen ids so the detail hooks can run unconditionally
-  // (hooks can't live inside the branches below). Each uses the PERSISTED
-  // active screen ONLY if it still exists in the current list — a deleted id
-  // is non-null, so a bare `??` would let it through and target a phantom
-  // screen. Otherwise fall back to the first screen (the fresh-campaign
-  // first-visit case, where nothing is persisted yet). Mirrors GMScreensView.
-  const tabletopScreenId =
-    playerState?.activeScreenId && tabletopScreens.some((s) => s.id === playerState.activeScreenId)
-      ? playerState.activeScreenId
-      : (tabletopScreens[0]?.id ?? null);
-  const gmScreenId =
-    playerState?.activeGMScreenId && gmScreens.some((s) => s.id === playerState.activeGMScreenId)
-      ? playerState.activeGMScreenId
-      : (gmScreens[0]?.id ?? null);
-
-  // Which surface is the user looking at? Dashboard has no surface, so both
-  // display actions are hidden there. Computed BEFORE the detail hooks so we
-  // can gate which detail is actually fetched.
-  const surface = tab === 'tabletop' ? 'tabletop' : tab === 'gmscreens' ? 'gmscreen' : null;
-
-  // The SHARED window lists for each surface (everyone-visible windows). Needed
-  // so a display action dedups across BOTH the caller's private windows AND the
-  // shared windows — opening the same item twice (in either form) must instead
-  // focus the one that's already there. Fetch a surface's detail ONLY when its
-  // shared list will actually be read, else pass null so the query's
-  // `enabled: !!screenId` short-circuits (nothing renders it on Dashboard/Maps):
-  //  - tabletop: read for show-on-tab dedup (surface === 'tabletop') AND by the
-  //    Push branch, which is offered exactly when `isGM && (surface ||
-  //    allowPushFromDashboard)` and always reads `tabletopScreen?.windows`.
-  //  - gm: read only for show-on-tab dedup on the GM surface.
-  const tabletopDetailId =
-    surface === 'tabletop' || (isGM && (surface !== null || allowPushFromDashboard))
-      ? tabletopScreenId
-      : null;
-  const gmDetailId = surface === 'gmscreen' ? gmScreenId : null;
-  const { screen: tabletopScreen } = useTabletopScreenDetail(campaignId, tabletopDetailId);
-  const { screen: gmScreen } = useGMScreenDetail(campaignId, gmDetailId);
+  const {
+    isGM,
+    surface,
+    tabletopScreenId,
+    gmScreenId,
+    privateWindows,
+    tabletopSharedWindows,
+    gmSharedWindows,
+    openWindowMutate,
+    addPrivateWindowMutate,
+    focusExistingWindow,
+  } = useWikiCardActionsContext();
 
   // Is this exact item (collection + documentId) already open on a given
   // surface+screen, in EITHER the caller's private list OR the shared list?
@@ -112,7 +71,7 @@ export function useWikiCardActions({
     sharedWindows: Array<{ collection: string; documentId: string }>
   ) =>
     !!sid &&
-    ((playerState?.privateWindows ?? []).some(
+    (privateWindows.some(
       (pw) =>
         pw.surface === surf &&
         pw.screenId === sid &&
@@ -133,12 +92,11 @@ export function useWikiCardActions({
   }
 
   if (surface) {
-    // The target screen for this surface (already hoisted above with the
-    // first-screen fallback for a fresh campaign — see tabletopScreenId).
+    // The target screen for this surface (existence-checked in the provider,
+    // with the first-screen fallback for a fresh campaign).
     const screenId = surface === 'tabletop' ? tabletopScreenId : gmScreenId;
     // The shared window list for the surface we're looking at.
-    const sharedWindows =
-      (surface === 'tabletop' ? tabletopScreen?.windows : gmScreen?.windows) ?? [];
+    const sharedWindows = surface === 'tabletop' ? tabletopSharedWindows : gmSharedWindows;
 
     items.push({
       key: 'show-on-tab',
@@ -151,10 +109,10 @@ export function useWikiCardActions({
         // Already open on this tab in EITHER form (your private window OR a
         // shared one): the surface focuses + flashes it; nothing to add.
         if (isAlreadyOpen(surface, screenId, sharedWindows)) {
-          focusExistingWindow(campaignId, surface, collection, documentId);
+          focusExistingWindow(surface, collection, documentId);
           return;
         }
-        addPrivateWindow.mutate({ surface, screenId, collection, documentId });
+        addPrivateWindowMutate({ surface, screenId, collection, documentId });
       },
     });
   }
@@ -176,11 +134,11 @@ export function useWikiCardActions({
         // would dedup anyway, OR your own private window it wouldn't): focus the
         // existing one and DON'T open a second. No promotion — a private window
         // stays private.
-        if (isAlreadyOpen('tabletop', tabletopScreenId, tabletopScreen?.windows ?? [])) {
-          focusExistingWindow(campaignId, 'tabletop', collection, documentId);
+        if (isAlreadyOpen('tabletop', tabletopScreenId, tabletopSharedWindows)) {
+          focusExistingWindow('tabletop', collection, documentId);
           return;
         }
-        tabletopMutations.openWindow.mutate({
+        openWindowMutate({
           screenId: tabletopScreenId,
           collection,
           documentId,
@@ -202,23 +160,4 @@ export function useWikiCardActions({
   }
 
   return { menuItems: items };
-}
-
-/**
- * Ask the active surface to bring an already-open window forward. Implemented
- * as a window event so the wiki (Inspector subtree) can reach TabletopView /
- * GMScreensView without shared state — the same bridge pattern the dice roller
- * uses (see app/utils/diceRollerBridge.ts).
- */
-function focusExistingWindow(
-  campaignId: string,
-  surface: 'tabletop' | 'gmscreen',
-  collection: string,
-  documentId: string
-) {
-  window.dispatchEvent(
-    new CustomEvent('cartyx:focus-window', {
-      detail: { surface, collection, documentId, campaignId },
-    })
-  );
 }

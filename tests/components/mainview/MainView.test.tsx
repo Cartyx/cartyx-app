@@ -38,6 +38,12 @@ vi.mock('~/hooks/useBeyond20', () => ({
 vi.mock('~/components/wiki/WikiPanel', () => ({
   WikiPanel: () => <div data-testid="wiki-panel" />,
 }));
+// InspectorSidebar wraps its panels in WikiCardActionsProvider, which reaches
+// for router + campaign/tabletop query context. The real wiki/note consumers
+// are stubbed above, so pass the provider through — nothing here reads it.
+vi.mock('~/components/wiki/shared/WikiCardActionsProvider', () => ({
+  WikiCardActionsProvider: ({ children }: { children: React.ReactNode }) => children,
+}));
 vi.mock('~/components/mainview/NotesPanel', () => ({
   NotesPanel: () => <div data-testid="notes-panel" />,
 }));

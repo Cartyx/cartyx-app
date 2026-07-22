@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { MonstersPanel } from '~/components/wiki/monsters/MonstersPanel';
 import { useMonsters, useMonsterMutations } from '~/hooks/useMonsters';
 import { useCampaign } from '~/hooks/useCampaigns';
+import { WikiCardActionsTestWrapper } from '../../../support/renderWithWikiCardActions';
 
 // Stub the modal to avoid portal / query-client complexity.
 vi.mock('~/components/wiki/monsters/MonsterModal', () => ({
@@ -95,7 +96,7 @@ describe('MonstersPanel', () => {
     // wiki hooks (which resolve to null), this mutateAsync REJECTS on failure.
     mockRemoveAsync.mockRejectedValue(new Error('server said no'));
     const user = userEvent.setup();
-    render(<MonstersPanel onBack={vi.fn()} />);
+    render(<MonstersPanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
 
     await user.click(await screen.findByLabelText('Monster actions'));
     await user.click(screen.getByRole('menuitem', { name: /delete/i }));
@@ -114,7 +115,7 @@ describe('MonstersPanel', () => {
   it('GM confirming a successful delete removes the monster and closes the dialog', async () => {
     setupMocks();
     const user = userEvent.setup();
-    render(<MonstersPanel onBack={vi.fn()} />);
+    render(<MonstersPanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
 
     await user.click(await screen.findByLabelText('Monster actions'));
     await user.click(screen.getByRole('menuitem', { name: /delete/i }));

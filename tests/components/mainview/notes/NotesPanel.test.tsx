@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { NotesPanel } from '~/components/mainview/notes/NotesPanel';
 import { useNotes, useNote, useCreateNote, useUpdateNote, useDeleteNote } from '~/hooks/useNotes';
 import { useCampaign } from '~/hooks/useCampaigns';
+import { WikiCardActionsTestWrapper } from '../../../support/renderWithWikiCardActions';
 
 // Mock the hooks
 vi.mock('~/hooks/useNotes');
@@ -109,7 +110,7 @@ describe('NotesPanel', () => {
   });
 
   it('renders filters and notes list', async () => {
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     expect(screen.getByPlaceholderText('Search notes...')).toBeInTheDocument();
     expect(screen.getByLabelText('Create new note')).toBeInTheDocument();
@@ -124,7 +125,7 @@ describe('NotesPanel', () => {
 
   it('deletes a note via the card overflow menu (owner only)', async () => {
     const user = userEvent.setup();
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     await waitFor(() => expect(screen.getByText('Note 1')).toBeInTheDocument());
 
@@ -145,7 +146,7 @@ describe('NotesPanel', () => {
       isLoading: false,
       error: null,
     });
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     await waitFor(() => expect(screen.getByText('Note 1')).toBeInTheDocument());
     // On the wiki tab (no tabletop/GM surface) a non-owner has no qualifying
@@ -155,7 +156,7 @@ describe('NotesPanel', () => {
 
   it('updates filters when search input changes', async () => {
     const user = userEvent.setup();
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     const searchInput = screen.getByPlaceholderText('Search notes...');
     await user.type(searchInput, 'test search');
@@ -170,7 +171,7 @@ describe('NotesPanel', () => {
 
   it('updates filters when session select changes', async () => {
     const user = userEvent.setup();
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     await waitFor(() => {
       expect(screen.getByText('Session 1: First Session')).toBeInTheDocument();
@@ -189,7 +190,7 @@ describe('NotesPanel', () => {
 
   it('updates filters when visibility select changes', async () => {
     const user = userEvent.setup();
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     const visibilitySelect = screen.getByLabelText('Filter by visibility');
     await user.selectOptions(visibilitySelect, 'public');
@@ -204,7 +205,7 @@ describe('NotesPanel', () => {
 
   it('opens create modal when + button is clicked', async () => {
     const user = userEvent.setup();
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     const createButton = screen.getByLabelText('Create new note');
     await user.click(createButton);
@@ -215,7 +216,7 @@ describe('NotesPanel', () => {
 
   it('opens edit modal when a note is clicked', async () => {
     const user = userEvent.setup();
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     await waitFor(() => {
       expect(screen.getByText('Note 1')).toBeInTheDocument();
@@ -234,7 +235,7 @@ describe('NotesPanel', () => {
       error: null,
     });
 
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
     expect(screen.getByText('Loading notes...')).toBeInTheDocument();
   });
 
@@ -245,7 +246,7 @@ describe('NotesPanel', () => {
       error: null,
     });
 
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
     expect(screen.getByText('No notes found matching your filters.')).toBeInTheDocument();
   });
 
@@ -256,7 +257,7 @@ describe('NotesPanel', () => {
       error: 'Failed to fetch',
     });
 
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
     expect(screen.getByText('Failed to fetch')).toBeInTheDocument();
   });
 });

@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { LorePanel } from '~/components/wiki/lore/LorePanel';
 import { useLore, useDeleteLore } from '~/hooks/useLore';
 import { useCampaign } from '~/hooks/useCampaigns';
+import { WikiCardActionsTestWrapper } from '../../../support/renderWithWikiCardActions';
 
 // Stub the modal components to avoid portal / query-client complexity.
 vi.mock('~/components/wiki/lore/LoreModal', () => ({
@@ -94,25 +95,25 @@ describe('LorePanel', () => {
 
   it('renders the "Lore" header', () => {
     setupMocks();
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
     expect(screen.getByText('Lore')).toBeInTheDocument();
   });
 
   it('shows the create button for GM', () => {
     setupMocks({ isGM: true });
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
     expect(screen.getByTestId('lore-create-button')).toBeInTheDocument();
   });
 
   it('shows the create button for non-GM members', () => {
     setupMocks({ isGM: false });
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
     expect(screen.getByTestId('lore-create-button')).toBeInTheDocument();
   });
 
   it('renders a lore card for each item', async () => {
     setupMocks();
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
     await waitFor(() => {
       expect(screen.getByText('The Ancient Prophecy')).toBeInTheDocument();
     });
@@ -121,7 +122,7 @@ describe('LorePanel', () => {
   it('GM clicking create button opens LoreModal', async () => {
     setupMocks({ isGM: true });
     const user = userEvent.setup();
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
     await user.click(screen.getByTestId('lore-create-button'));
     expect(screen.getByRole('dialog', { name: 'lore-modal' })).toBeInTheDocument();
   });
@@ -129,7 +130,7 @@ describe('LorePanel', () => {
   it('clicking a canEdit lore card opens LoreModal (edit)', async () => {
     setupMocks({ isGM: true });
     const user = userEvent.setup();
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
     await waitFor(() => {
       expect(screen.getByText('The Ancient Prophecy')).toBeInTheDocument();
     });
@@ -140,7 +141,7 @@ describe('LorePanel', () => {
   it('non-GM clicking a canEdit lore card opens LoreModal (edit)', async () => {
     setupMocks({ isGM: false, lore: [{ ...mockLore[0]!, canEdit: true }] });
     const user = userEvent.setup();
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
     await waitFor(() => {
       expect(screen.getByText('The Ancient Prophecy')).toBeInTheDocument();
     });
@@ -154,7 +155,7 @@ describe('LorePanel', () => {
       lore: [{ ...mockLore[0]!, canEdit: false }],
     });
     const user = userEvent.setup();
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
     await waitFor(() => {
       expect(screen.getByText('The Ancient Prophecy')).toBeInTheDocument();
     });
@@ -169,13 +170,13 @@ describe('LorePanel', () => {
       isLoading: true,
       error: null,
     });
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
     expect(screen.getByText('Loading lore...')).toBeInTheDocument();
   });
 
   it('shows empty state when no lore found', () => {
     setupMocks({ lore: [] });
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
     expect(screen.getByText('No lore found matching your filters.')).toBeInTheDocument();
   });
 
@@ -186,14 +187,14 @@ describe('LorePanel', () => {
       isLoading: false,
       error: 'Failed to fetch lore',
     });
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
     expect(screen.getByText('Failed to fetch lore')).toBeInTheDocument();
   });
 
   it('GM choosing Delete opens the confirm dialog and confirming removes the lore', async () => {
     setupMocks({ isGM: true });
     const user = userEvent.setup();
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
 
     await user.click(await screen.findByLabelText('Lore actions'));
     await user.click(screen.getByRole('menuitem', { name: /delete/i }));
@@ -223,7 +224,7 @@ describe('LorePanel', () => {
     // and resolves to `null`. The panel must not treat that as a success.
     mockRemoveLore.mockResolvedValue(null);
     const user = userEvent.setup();
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
 
     await user.click(await screen.findByLabelText('Lore actions'));
     await user.click(screen.getByRole('menuitem', { name: /delete/i }));
@@ -242,7 +243,7 @@ describe('LorePanel', () => {
   it('GM cancelling the delete confirm does not remove the lore', async () => {
     setupMocks({ isGM: true });
     const user = userEvent.setup();
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
 
     await user.click(await screen.findByLabelText('Lore actions'));
     await user.click(screen.getByRole('menuitem', { name: /delete/i }));
@@ -255,7 +256,7 @@ describe('LorePanel', () => {
   it('non-GM never sees a Delete action, even on lore they can edit', async () => {
     setupMocks({ isGM: false, lore: [{ ...mockLore[0]!, canEdit: true }] });
     const user = userEvent.setup();
-    render(<LorePanel onBack={vi.fn()} />);
+    render(<LorePanel onBack={vi.fn()} />, { wrapper: WikiCardActionsTestWrapper });
 
     await user.click(await screen.findByLabelText('Lore actions'));
     expect(screen.queryByRole('menuitem', { name: /delete/i })).not.toBeInTheDocument();
@@ -265,7 +266,7 @@ describe('LorePanel', () => {
     setupMocks();
     const onBack = vi.fn();
     const user = userEvent.setup();
-    render(<LorePanel onBack={onBack} />);
+    render(<LorePanel onBack={onBack} />, { wrapper: WikiCardActionsTestWrapper });
     await user.click(screen.getByLabelText('Back'));
     expect(onBack).toHaveBeenCalled();
   });

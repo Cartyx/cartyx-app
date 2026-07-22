@@ -4,6 +4,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NoteModal } from '~/components/mainview/notes/NoteModal';
 import { useCreateNote, useUpdateNote, useDeleteNote, useNote } from '~/hooks/useNotes';
+import { WikiCardActionsTestWrapper } from '../../../support/renderWithWikiCardActions';
 
 // Mock hooks
 vi.mock('~/hooks/useNotes');
@@ -168,7 +169,7 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof NoteModal>> 
     sessions: mockSessions,
     ...overrides,
   };
-  const result = render(<NoteModal {...props} />);
+  const result = render(<NoteModal {...props} />, { wrapper: WikiCardActionsTestWrapper });
   return { ...result, props };
 }
 

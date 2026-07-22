@@ -4,6 +4,7 @@ import { ChatPanel } from './ChatPanel';
 import { NotesPanel } from './NotesPanel';
 import { SettingsPanel } from './SettingsPanel';
 import { WikiPanel } from '~/components/wiki/WikiPanel';
+import { WikiCardActionsProvider } from '~/components/wiki/shared/WikiCardActionsProvider';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faMessage, faBook, faNoteSticky, faGear, faDice } from '@fortawesome/pro-solid-svg-icons';
 import { DicePanel } from './DicePanel';
@@ -226,57 +227,64 @@ export function InspectorSidebar({
         )}
       </div>
 
-      {/* Tab panels — one per tab, only active is visible */}
-      {tabs.map((tab) => {
-        const isActive = tab.id === activeTab;
-        return (
-          <div
-            key={tab.id}
-            id={panelId(tab.id)}
-            data-testid={isActive ? 'inspector-panel' : undefined}
-            role="tabpanel"
-            aria-labelledby={tabId(tab.id)}
-            hidden={!isActive}
-            className="flex flex-1 min-h-0 w-full"
-          >
-            {tab.id === 'chat' ? (
-              <ChatPanel
-                messages={messages}
-                onSendMessage={(text, channel) =>
-                  sendMessage(text, channel, user?.id ?? '', user?.name ?? '', socket)
-                }
-                sessions={sessionList}
-                activeSessionId={viewingSessionId}
-                onSessionChange={setViewingSessionId}
-                saveError={chatSaveError}
-                onDismissError={() => setChatSaveError(null)}
-              />
-            ) : tab.id === 'dice' ? (
-              <DicePanel
-                rolls={rolls}
-                isConnected={isConnected}
-                sessions={sessionList}
-                activeSessionId={viewingSessionId}
-                onSessionChange={setViewingSessionId}
-                saveError={diceSaveError}
-                onDismissError={() => setDiceSaveError(null)}
-              />
-            ) : tab.id === 'wiki' ? (
-              <WikiPanel />
-            ) : tab.id === 'notes' ? (
-              <NotesPanel />
-            ) : tab.id === 'settings' ? (
-              <SettingsPanel />
-            ) : (
-              <div className="flex flex-1 items-center justify-center">
-                <span className="font-sans font-semibold text-xs text-slate-600">
-                  {tab.label} — Coming Soon
-                </span>
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {/* Tab panels — one per tab, only active is visible. Wrapped in the
+          WikiCardActionsProvider so every wiki card (WikiPanel), note card
+          (NotesPanel), and the ShowOnTabletopButton modals those panels render
+          read shared card-action data from one subscription instead of each
+          hitting the campaign's hot React Query caches. Context crosses the
+          modals' portals by React tree, so portalled modals are covered too. */}
+      <WikiCardActionsProvider>
+        {tabs.map((tab) => {
+          const isActive = tab.id === activeTab;
+          return (
+            <div
+              key={tab.id}
+              id={panelId(tab.id)}
+              data-testid={isActive ? 'inspector-panel' : undefined}
+              role="tabpanel"
+              aria-labelledby={tabId(tab.id)}
+              hidden={!isActive}
+              className="flex flex-1 min-h-0 w-full"
+            >
+              {tab.id === 'chat' ? (
+                <ChatPanel
+                  messages={messages}
+                  onSendMessage={(text, channel) =>
+                    sendMessage(text, channel, user?.id ?? '', user?.name ?? '', socket)
+                  }
+                  sessions={sessionList}
+                  activeSessionId={viewingSessionId}
+                  onSessionChange={setViewingSessionId}
+                  saveError={chatSaveError}
+                  onDismissError={() => setChatSaveError(null)}
+                />
+              ) : tab.id === 'dice' ? (
+                <DicePanel
+                  rolls={rolls}
+                  isConnected={isConnected}
+                  sessions={sessionList}
+                  activeSessionId={viewingSessionId}
+                  onSessionChange={setViewingSessionId}
+                  saveError={diceSaveError}
+                  onDismissError={() => setDiceSaveError(null)}
+                />
+              ) : tab.id === 'wiki' ? (
+                <WikiPanel />
+              ) : tab.id === 'notes' ? (
+                <NotesPanel />
+              ) : tab.id === 'settings' ? (
+                <SettingsPanel />
+              ) : (
+                <div className="flex flex-1 items-center justify-center">
+                  <span className="font-sans font-semibold text-xs text-slate-600">
+                    {tab.label} — Coming Soon
+                  </span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </WikiCardActionsProvider>
     </div>
   );
 }
