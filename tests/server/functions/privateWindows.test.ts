@@ -297,6 +297,28 @@ describe('addPrivateWindow', () => {
     expect(createPartyBroadcastToken).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });
+
+  it('does not duplicate an identical private window (double-click race)', async () => {
+    // Arrange: the caller's doc already has a private window with the exact
+    // same (surface, screenId, collection, documentId) — as if a first
+    // double-click's addPrivateWindow already landed before a second,
+    // identical call reads player-state. This must be caught server-side:
+    // useWikiCardActions' `isAlreadyOpen` client check reads player-state
+    // that hasn't refetched yet, so it cannot prevent the second call.
+    const dupe = makePrivateWindow();
+    vi.mocked(TabletopPlayerState.findOne).mockReturnValueOnce(
+      leanResult(makeStateDoc([dupe])) as never
+    );
+
+    // Act
+    const result = await _addPrivateWindow({ data: { ...validAddPayload } });
+
+    // Assert: idempotent — no second write is issued, and the caller gets
+    // back the existing (unchanged) state rather than a duplicated window.
+    expect(TabletopPlayerState.updateOne).not.toHaveBeenCalled();
+    expect(result.privateWindows).toHaveLength(1);
+    expect(result.privateWindows[0]).toMatchObject({ id: 'pw-1' });
+  });
 });
 
 // ---------------------------------------------------------------------------

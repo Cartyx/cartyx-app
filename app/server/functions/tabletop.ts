@@ -1252,6 +1252,25 @@ export const addPrivateWindow = async ({
 
     const existing = await findOwnPlayerState(data.campaignId, member.userId);
 
+    // Dedup by document, mirroring how openTabletopWindow dedups shared
+    // windows: if the caller already has a private window open for this
+    // exact (surface, screenId, collection, documentId), don't add a second.
+    // This is the server-side backstop for the client's `isAlreadyOpen` check
+    // in useWikiCardActions, which reads not-yet-refetched player-state and
+    // so cannot itself prevent a double-click from firing this twice.
+    if (existing) {
+      const duplicate = (existing.privateWindows ?? []).find(
+        (pw) =>
+          pw.surface === data.surface &&
+          String(pw.screenId) === data.screenId &&
+          pw.collection === data.collection &&
+          String(pw.documentId) === data.documentId
+      );
+      if (duplicate) {
+        return serializePlayerState(existing);
+      }
+    }
+
     const onThisScreen = (existing?.privateWindows ?? []).filter(
       (pw) => pw.surface === data.surface && String(pw.screenId) === data.screenId
     );
