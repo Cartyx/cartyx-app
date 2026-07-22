@@ -37,51 +37,90 @@ export function MonsterCard({ monster, canEdit, onClick, onEdit, onDelete }: Mon
 
   return (
     <div
-      role="button"
-      tabIndex={0}
-      draggable="true"
-      onDragStart={(e) => {
-        e.dataTransfer.setData(
-          'application/x-cartyx-document',
-          JSON.stringify({
-            collection: 'monster',
-            documentId: monster.id,
-            title: monster.name,
-          })
-        );
-        e.dataTransfer.effectAllowed = 'copy';
-        setTokenDragImage(e, {
-          pictureUrl: monster.picture,
-          initial,
-          color: monster.color,
-        });
-        e.currentTarget.style.opacity = '0.4';
-      }}
-      onDragEnd={(e) => {
-        e.currentTarget.style.opacity = '';
-      }}
-      onClick={() => onClick(monster)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onClick(monster);
-        }
-      }}
-      className="group relative flex w-full cursor-grab items-center gap-3 border-b border-white/[0.05] px-4 py-3 text-left transition-colors hover:bg-white/[0.03] active:cursor-grabbing"
+      className="group relative w-full border-b border-white/[0.05] transition-colors hover:bg-white/[0.03]"
       style={{ borderLeftWidth: 4, borderLeftStyle: 'solid', borderLeftColor: monster.color }}
-      title="Drag onto the map to place a token · hold Shift while dropping to place several"
-      data-testid="monster-card"
     >
-      {/* Overflow menu. Stops propagation so opening it never fires the card's
-          own click/keyboard activation, and is not itself draggable. */}
       <div
-        role="presentation"
-        className="absolute right-2 top-2"
-        draggable={false}
-        onDragStart={(e) => e.preventDefault()}
-        onClick={(e) => e.stopPropagation()}
-        onKeyDown={(e) => e.stopPropagation()}
+        role="button"
+        tabIndex={0}
+        draggable="true"
+        onDragStart={(e) => {
+          e.dataTransfer.setData(
+            'application/x-cartyx-document',
+            JSON.stringify({
+              collection: 'monster',
+              documentId: monster.id,
+              title: monster.name,
+            })
+          );
+          e.dataTransfer.effectAllowed = 'copy';
+          setTokenDragImage(e, {
+            pictureUrl: monster.picture,
+            initial,
+            color: monster.color,
+          });
+          e.currentTarget.style.opacity = '0.4';
+        }}
+        onDragEnd={(e) => {
+          e.currentTarget.style.opacity = '';
+        }}
+        onClick={() => onClick(monster)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onClick(monster);
+          }
+        }}
+        className="flex w-full cursor-grab items-center gap-3 px-4 py-3 text-left active:cursor-grabbing"
+        title="Drag onto the map to place a token · hold Shift while dropping to place several"
+        data-testid="monster-card"
       >
+        {/* Avatar */}
+        <div
+          className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-full"
+          style={monster.picture ? undefined : { backgroundColor: monster.color }}
+        >
+          {monster.picture ? (
+            <img
+              src={monster.picture}
+              alt={monster.name}
+              loading="lazy"
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <Skull className="h-5 w-5 text-white" />
+          )}
+        </div>
+
+        {/* Name + meta */}
+        <div className="min-w-0 flex-1">
+          <div className="mb-0.5 flex items-center gap-2">
+            <span className="font-sans truncate text-sm font-semibold text-slate-200">
+              {monster.name}
+            </span>
+            <span
+              className="rounded bg-white/[0.05] px-1.5 py-0.5 font-sans text-[10px] font-semibold uppercase tracking-wide text-slate-400"
+              title="Creature size"
+            >
+              {SIZE_LABELS[monster.size]}
+            </span>
+            <span
+              className="rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-300"
+              title="Challenge Rating"
+            >
+              CR {formatCR(monster.cr.value)}
+            </span>
+          </div>
+          {typeText && (
+            <p className="font-sans truncate text-xs text-slate-500">
+              {typeText}
+              {monster.alignment ? ` · ${monster.alignment}` : ''}
+            </p>
+          )}
+        </div>
+      </div>
+
+      <div className="absolute right-2 top-2">
         <WikiCardMenu
           collection="monster"
           documentId={monster.id}
@@ -90,50 +129,6 @@ export function MonsterCard({ monster, canEdit, onClick, onEdit, onDelete }: Mon
           onEdit={onEdit ? () => onEdit(monster) : undefined}
           onDelete={onDelete ? () => onDelete(monster) : undefined}
         />
-      </div>
-
-      {/* Avatar */}
-      <div
-        className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-full"
-        style={monster.picture ? undefined : { backgroundColor: monster.color }}
-      >
-        {monster.picture ? (
-          <img
-            src={monster.picture}
-            alt={monster.name}
-            loading="lazy"
-            className="h-full w-full object-cover"
-          />
-        ) : (
-          <Skull className="h-5 w-5 text-white" />
-        )}
-      </div>
-
-      {/* Name + meta */}
-      <div className="min-w-0 flex-1">
-        <div className="mb-0.5 flex items-center gap-2">
-          <span className="font-sans truncate text-sm font-semibold text-slate-200">
-            {monster.name}
-          </span>
-          <span
-            className="rounded bg-white/[0.05] px-1.5 py-0.5 font-sans text-[10px] font-semibold uppercase tracking-wide text-slate-400"
-            title="Creature size"
-          >
-            {SIZE_LABELS[monster.size]}
-          </span>
-          <span
-            className="rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-amber-300"
-            title="Challenge Rating"
-          >
-            CR {formatCR(monster.cr.value)}
-          </span>
-        </div>
-        {typeText && (
-          <p className="font-sans truncate text-xs text-slate-500">
-            {typeText}
-            {monster.alignment ? ` · ${monster.alignment}` : ''}
-          </p>
-        )}
       </div>
     </div>
   );

@@ -111,6 +111,21 @@ describe('LoreCard', () => {
     expect(screen.getByText('#magic')).toBeInTheDocument();
   });
 
+  // Regression: the overflow menu must close on Escape. When the menu was nested
+  // inside the card's role="button" (wrapped in a div that stopPropagation'd
+  // keydown), the wrapper stopped the native event at React's root container
+  // before OverflowMenu's document-level Escape listener could see it, so Escape
+  // was dead on every card menu. With the menu now a DOM sibling of the clickable
+  // body (no stopPropagation wrapper), Escape reaches the document listener and
+  // closes the menu.
+  it('closes the overflow menu on Escape', () => {
+    render(<LoreCard lore={lore as never} onClick={vi.fn()} onEdit={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Lore actions' }));
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole('menu'), { key: 'Escape' });
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+  });
+
   it('renders link count when links are present', () => {
     const loreWithLinks = {
       ...lore,
