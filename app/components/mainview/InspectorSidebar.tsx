@@ -4,7 +4,6 @@ import { ChatPanel } from './ChatPanel';
 import { NotesPanel } from './NotesPanel';
 import { SettingsPanel } from './SettingsPanel';
 import { WikiPanel } from '~/components/wiki/WikiPanel';
-import { WikiCardActionsProvider } from '~/components/wiki/shared/WikiCardActionsProvider';
 import { FontAwesomeIcon } from '@fortawesome/react-fontawesome';
 import { faMessage, faBook, faNoteSticky, faGear, faDice } from '@fortawesome/pro-solid-svg-icons';
 import { DicePanel } from './DicePanel';
@@ -227,13 +226,15 @@ export function InspectorSidebar({
         )}
       </div>
 
-      {/* Tab panels — one per tab, only active is visible. Wrapped in the
-          WikiCardActionsProvider so every wiki card (WikiPanel), note card
-          (NotesPanel), and the ShowOnTabletopButton modals those panels render
-          read shared card-action data from one subscription instead of each
-          hitting the campaign's hot React Query caches. Context crosses the
-          modals' portals by React tree, so portalled modals are covered too. */}
-      <WikiCardActionsProvider>
+      {/* Tab panels — one per tab, only active is visible. Every wiki card
+          (WikiPanel), note card (NotesPanel), and ShowOnTabletopButton modal
+          those panels render reads shared card-action data from the single
+          WikiCardActionsProvider mounted ABOVE this whole subtree in the play
+          route (wrapping both MainView's center column and this inspector), so
+          the Dashboard-widget consumers are covered by the same instance.
+          Context crosses the modals' portals by React tree, so portalled modals
+          are covered too. */}
+      <>
         {tabs.map((tab) => {
           const isActive = tab.id === activeTab;
           return (
@@ -284,7 +285,7 @@ export function InspectorSidebar({
             </div>
           );
         })}
-      </WikiCardActionsProvider>
+      </>
     </div>
   );
 }

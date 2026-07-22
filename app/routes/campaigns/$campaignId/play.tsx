@@ -30,6 +30,7 @@ import { KeyAlliesWidget } from '~/components/mainview/widgets/KeyAlliesWidget';
 import { PartyMembersWidget } from '~/components/mainview/widgets/PartyMembersWidget';
 import { SessionsListWidget } from '~/components/mainview/widgets/SessionsListWidget';
 import { ActivePlayerProvider } from '~/providers/ActivePlayerProvider';
+import { WikiCardActionsProvider } from '~/components/wiki/shared/WikiCardActionsProvider';
 
 const getTabletopPartyTokenFn = createServerFn({ method: 'GET' })
   .inputValidator(z.object({ campaignId: z.string().min(1) }))
@@ -139,84 +140,95 @@ function PlayPageContent() {
         activeTab={effectiveTab}
         onTabChange={handleTabChange}
       />
+      {/* WikiCardActionsProvider wraps the ENTIRE MainView so it covers BOTH the
+          center column ({children}: Dashboard/Tabletop/GM Screens) AND the
+          InspectorSidebar, which MainView renders as siblings. Every
+          useWikiCardActions consumer — wiki/note cards in the inspector AND the
+          ShowOnTabletopButton reached from Dashboard widgets (PartyMembersWidget /
+          KeyAlliesWidget view-modals) — is a descendant of this single provider.
+          It lives here (inside the /campaigns/$campaignId/play route) because it
+          reads useParams/useSearch/useCampaign + tabletop/gm hooks that need the
+          route. One instance = one subscription set; do not add a second. */}
       <div className="flex-1 overflow-hidden">
-        <MainView
-          showToolbar={effectiveTab === 'tabletop'}
-          campaignId={campaignId}
-          sessions={campaign?.sessions}
-          activeTool={toolUi.activeTool}
-          onToolChange={handleToolClick}
-          openToolWindows={toolUi.openWindows}
-          isGM={campaign?.isGM ?? false}
-        >
-          {needsNewPlayer && (
-            <div className="mx-4 mt-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center gap-3">
-              <div className="flex-1">
-                <p className="text-sm text-amber-200 font-medium">
-                  Your player character needs to be created
-                </p>
-                <p className="text-xs text-amber-200/60 mt-1">
-                  Create a player character to fully participate in this campaign.
-                </p>
+        <WikiCardActionsProvider>
+          <MainView
+            showToolbar={effectiveTab === 'tabletop'}
+            campaignId={campaignId}
+            sessions={campaign?.sessions}
+            activeTool={toolUi.activeTool}
+            onToolChange={handleToolClick}
+            openToolWindows={toolUi.openWindows}
+            isGM={campaign?.isGM ?? false}
+          >
+            {needsNewPlayer && (
+              <div className="mx-4 mt-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center gap-3">
+                <div className="flex-1">
+                  <p className="text-sm text-amber-200 font-medium">
+                    Your player character needs to be created
+                  </p>
+                  <p className="text-xs text-amber-200/60 mt-1">
+                    Create a player character to fully participate in this campaign.
+                  </p>
+                </div>
+                <Link
+                  to="/campaign/join"
+                  search={{ step: 2, campaignId }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 text-amber-200 text-xs font-medium hover:bg-amber-500/30 transition-colors"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Create Character
+                </Link>
               </div>
-              <Link
-                to="/campaign/join"
-                search={{ step: 2, campaignId }}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500/20 text-amber-200 text-xs font-medium hover:bg-amber-500/30 transition-colors"
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Create Character
-              </Link>
+            )}
+            <div
+              className="h-full overflow-y-auto"
+              role="tabpanel"
+              id="tab-panel-dashboard"
+              aria-labelledby="tab-dashboard"
+              hidden={effectiveTab !== 'dashboard'}
+            >
+              <DashboardView>
+                <CatchUpWidget
+                  catchUp={isCampaignLoading ? undefined : (activeSession?.catchUp ?? null)}
+                />
+                <PartyMembersWidget campaignId={campaignId} />
+                <KeyAlliesWidget campaignId={campaignId} />
+                <SessionsListWidget campaignId={campaignId} className="col-span-full" />
+                <CampaignTimelineWidget events={timelineEvents} className="xl:col-span-2" />
+              </DashboardView>
             </div>
-          )}
-          <div
-            className="h-full overflow-y-auto"
-            role="tabpanel"
-            id="tab-panel-dashboard"
-            aria-labelledby="tab-dashboard"
-            hidden={effectiveTab !== 'dashboard'}
-          >
-            <DashboardView>
-              <CatchUpWidget
-                catchUp={isCampaignLoading ? undefined : (activeSession?.catchUp ?? null)}
-              />
-              <PartyMembersWidget campaignId={campaignId} />
-              <KeyAlliesWidget campaignId={campaignId} />
-              <SessionsListWidget campaignId={campaignId} className="col-span-full" />
-              <CampaignTimelineWidget events={timelineEvents} className="xl:col-span-2" />
-            </DashboardView>
-          </div>
-          <div
-            className="h-full"
-            role="tabpanel"
-            id="tab-panel-tabletop"
-            aria-labelledby="tab-tabletop"
-            hidden={effectiveTab !== 'tabletop'}
-          >
-            <TabletopView
-              campaignId={campaignId}
-              isGM={campaign?.isGM ?? false}
-              currentUserId={campaign?.currentUserId ?? null}
-              getToken={getTabletopToken}
-              sessionId={activeSession?.id ?? null}
-              activeTool={toolUi.activeTool}
-              onToolChange={handleToolClick}
-              openToolWindows={toolUi.openWindows}
-              onCloseToolWindow={handleToolWindowClose}
-            />
-          </div>
-          {campaign?.isGM && (
             <div
               className="h-full"
               role="tabpanel"
-              id="tab-panel-gmscreens"
-              aria-labelledby="tab-gmscreens"
-              hidden={effectiveTab !== 'gmscreens'}
+              id="tab-panel-tabletop"
+              aria-labelledby="tab-tabletop"
+              hidden={effectiveTab !== 'tabletop'}
             >
-              <GMScreensView campaignId={campaignId} isGM={campaign?.isGM} />
+              <TabletopView
+                campaignId={campaignId}
+                isGM={campaign?.isGM ?? false}
+                currentUserId={campaign?.currentUserId ?? null}
+                getToken={getTabletopToken}
+                sessionId={activeSession?.id ?? null}
+                activeTool={toolUi.activeTool}
+                onToolChange={handleToolClick}
+                openToolWindows={toolUi.openWindows}
+                onCloseToolWindow={handleToolWindowClose}
+              />
             </div>
-          )}
-        </MainView>
+            {campaign?.isGM && (
+              <div
+                className="h-full"
+                role="tabpanel"
+                id="tab-panel-gmscreens"
+                aria-labelledby="tab-gmscreens"
+                hidden={effectiveTab !== 'gmscreens'}
+              >
+                <GMScreensView campaignId={campaignId} isGM={campaign?.isGM} />
+              </div>
+            )}
+          </MainView>
+        </WikiCardActionsProvider>
       </div>
       <Toast />
     </div>

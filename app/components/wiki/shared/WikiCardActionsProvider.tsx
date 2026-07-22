@@ -90,9 +90,13 @@ export function WikiCardActionsProvider({ children }: { children: ReactNode }) {
   // pass null so `enabled: !!screenId` short-circuits the query. A provider can't
   // see a per-consumer `allowPushFromDashboard`, so tabletop detail is fetched
   // whenever it can be read from a surface tab (show-on-tab dedup on Tabletop, or
-  // the GM-only Push branch on any surface). The Dashboard `allowPushFromDashboard`
-  // modals only ever open on surface tabs, and the server dedups Push regardless,
-  // so nothing regresses versus the old per-card gating.
+  // the GM-only Push branch on any surface). The `allowPushFromDashboard` modals
+  // (PartyMembersWidget/KeyAlliesWidget) DO open on the Dashboard, where surface
+  // is null and this detail isn't fetched — but that's harmless: the server
+  // dedups Push, so the only thing skipped is the CLIENT-side "already open"
+  // check that would focus/flash an existing window, which only matters when the
+  // user is actually on the tabletop looking at it. Nothing regresses versus the
+  // old per-card gating.
   const tabletopDetailId =
     surface === 'tabletop' || (isGM && surface !== null) ? tabletopScreenId : null;
   const gmDetailId = surface === 'gmscreen' ? gmScreenId : null;
