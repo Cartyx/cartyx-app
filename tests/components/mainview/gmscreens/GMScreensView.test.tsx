@@ -552,7 +552,12 @@ describe('GMScreensView — private windows', () => {
     await waitFor(() => {
       window.dispatchEvent(
         new CustomEvent('cartyx:focus-window', {
-          detail: { surface: 'gmscreen', collection: 'lore', documentId: 'doc-1' },
+          detail: {
+            campaignId: 'c1',
+            surface: 'gmscreen',
+            collection: 'lore',
+            documentId: 'doc-1',
+          },
         })
       );
       expect(screen.getByTestId('fwm-window-pw-1')).toHaveClass('animate-flash-border');
@@ -578,6 +583,31 @@ describe('GMScreensView — private windows', () => {
     expect(screen.getByTestId('fwm-window-pw-1')).not.toHaveClass('animate-flash-border');
   });
 
+  it('ignores focus events whose campaignId does not match this view', async () => {
+    // Defense against a stale/cross-campaign event: surface matches but the
+    // campaignId does not, so the window must NOT flash. Asserted synchronously
+    // (the flash self-clears after 700ms — a retrying waitFor would go green
+    // even with the guard removed).
+    withPrivateWindows([makePrivateWindow()]);
+    render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
+    await waitFor(() => expect(screen.getByTestId('fwm-window-pw-1')).toBeInTheDocument());
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent('cartyx:focus-window', {
+          detail: {
+            campaignId: 'other-campaign',
+            surface: 'gmscreen',
+            collection: 'lore',
+            documentId: 'doc-1',
+          },
+        })
+      );
+    });
+
+    expect(screen.getByTestId('fwm-window-pw-1')).not.toHaveClass('animate-flash-border');
+  });
+
   it('focusing a private window never persists it through the GM-screens updateWindow', async () => {
     // updateWindow addresses GMScreen.windows by id; a private window is not in
     // that array, so the mutation would be a no-op at best.
@@ -587,7 +617,7 @@ describe('GMScreensView — private windows', () => {
 
     window.dispatchEvent(
       new CustomEvent('cartyx:focus-window', {
-        detail: { surface: 'gmscreen', collection: 'lore', documentId: 'doc-1' },
+        detail: { campaignId: 'c1', surface: 'gmscreen', collection: 'lore', documentId: 'doc-1' },
       })
     );
 
@@ -622,7 +652,12 @@ describe('GMScreensView — private windows', () => {
 
     window.dispatchEvent(
       new CustomEvent('cartyx:focus-window', {
-        detail: { surface: 'gmscreen', collection: 'lore', documentId: 'doc-shared' },
+        detail: {
+          campaignId: 'c1',
+          surface: 'gmscreen',
+          collection: 'lore',
+          documentId: 'doc-shared',
+        },
       })
     );
 
@@ -677,7 +712,12 @@ describe('GMScreensView — flash lifecycle', () => {
     await waitFor(() => {
       window.dispatchEvent(
         new CustomEvent('cartyx:focus-window', {
-          detail: { surface: 'gmscreen', collection: 'lore', documentId: 'doc-1' },
+          detail: {
+            campaignId: 'c1',
+            surface: 'gmscreen',
+            collection: 'lore',
+            documentId: 'doc-1',
+          },
         })
       );
       expect(screen.getByTestId('fwm-window-pw-1')).toHaveClass('animate-flash-border');

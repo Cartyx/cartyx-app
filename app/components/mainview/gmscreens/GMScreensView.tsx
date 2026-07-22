@@ -187,7 +187,20 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     Map<string, Parameters<typeof mutations.updateWindow.mutate>[0]>
   >(new Map());
 
-  // Flush pending updates on unmount instead of discarding them
+  // Ref kept current to the (referentially-stable, but not statically provable)
+  // updateWindow mutate fn so the unmount-only flush below can call the latest
+  // one without listing `mutations` as a dependency.
+  const updateWindowMutateRef = useRef(mutations.updateWindow.mutate);
+  updateWindowMutateRef.current = mutations.updateWindow.mutate;
+
+  // Flush pending updates on unmount instead of discarding them. This is
+  // deliberately an unmount-only ([]) effect: useGMScreenMutations returns a
+  // FRESH object every render, so a [mutations] dep would run this cleanup on
+  // EVERY render — clearing the debounce timer set moments earlier by
+  // handleWindowsChange AND firing updateWindow for every pending payload. That
+  // turned the 500ms debounce into a POST on essentially every drag/resize
+  // frame. Reading the mutate fn through updateWindowMutateRef keeps the flush
+  // correct without depending on `mutations`.
   useEffect(() => {
     const timers = updateTimersRef.current;
     const pending = pendingUpdatesRef.current;
@@ -195,11 +208,11 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
       for (const timer of timers.values()) clearTimeout(timer);
       timers.clear();
       for (const payload of pending.values()) {
-        mutations.updateWindow.mutate(payload);
+        updateWindowMutateRef.current(payload);
       }
       pending.clear();
     };
-  }, [mutations]);
+  }, []);
 
   // Flash timer cleanup is deliberately its OWN unmount-only effect. It used to
   // live in the flush effect above, whose deps are [mutations] — and
@@ -435,11 +448,14 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
   useEffect(() => {
     const onFocus = (e: Event) => {
       const detail = (e as CustomEvent).detail as {
+        campaignId?: string;
         surface?: string;
         collection?: string;
         documentId?: string;
       } | null;
-      if (!detail || detail.surface !== 'gmscreen') return;
+      // Guard on campaign too — a stale/cross-campaign event must not focus a
+      // window in this view.
+      if (!detail || detail.surface !== 'gmscreen' || detail.campaignId !== campaignId) return;
 
       const match =
         privateWindows.find(
@@ -454,7 +470,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
 
     window.addEventListener('cartyx:focus-window', onFocus);
     return () => window.removeEventListener('cartyx:focus-window', onFocus);
-  }, [privateWindows, activeScreen, focusWindow]);
+  }, [privateWindows, activeScreen, focusWindow, campaignId]);
 
   const handleDragOver = useCallback(
     (e: DragEvent<HTMLDivElement>) => {

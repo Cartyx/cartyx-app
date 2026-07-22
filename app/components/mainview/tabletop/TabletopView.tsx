@@ -122,7 +122,12 @@ export function TabletopView({
   const { screens, isLoading } = useTabletopScreenList(campaignId);
   const mutations = useTabletopMutations(campaignId);
   const openWindow = mutations.openWindow.mutate;
-  const { playerState, updateState, removePrivateWindow } = useTabletopPlayerState(campaignId);
+  const {
+    playerState,
+    isLoading: playerStateLoading,
+    updateState,
+    removePrivateWindow,
+  } = useTabletopPlayerState(campaignId);
   const removePrivateWindowMutate = removePrivateWindow.mutate;
   const [activeScreenId, setActiveScreenId] = useState<string | null>(null);
   // Active map is per-tab — render the active map of the tab being viewed.
@@ -201,15 +206,64 @@ export function TabletopView({
   // Ref guard to prevent double auto-creation of default screen
   const autoCreatedRef = useRef(false);
 
-  // Initialize active screen from player state or first screen
+  // Collision-safe primitive key that tracks the *set* of screen IDs. Sorted so
+  // harmless order changes (reorder, refetch jitter) don't trigger re-runs —
+  // only actual additions/removals change this value.
+  const screenIdsKey = useMemo(
+    () => JSON.stringify([...screens.map((s) => s.id)].sort()),
+    [screens]
+  );
+
+  // Ref to current ordered screens so the seeding effect can pick the first
+  // screen by tab-order without adding `screens` to its dep array.
+  const screensRef = useRef(screens);
+  screensRef.current = screens;
+
+  // Ref to the persisted screen id so the seeding effect can read it without
+  // re-running every time our own persist call round-trips.
+  const restoredScreenIdRef = useRef<string | null>(null);
+  restoredScreenIdRef.current = playerState?.activeScreenId ?? null;
+
+  // Whether the one-time restore from player state has already happened.
+  const hasSeededRef = useRef(false);
+
+  // TabletopView isn't remounted on a campaignId change (no `key` at the call
+  // site, and TanStack Router v1 doesn't remount on a path-param change), so
+  // hasSeededRef must be reset by hand when the campaign switches — otherwise
+  // campaign B's first pass sees hasSeededRef already true and falls back to
+  // screens[0] instead of restoring ITS persisted screen. Comparing-during-
+  // render (not in an effect) ensures the reset lands before the seeding effect.
+  const prevCampaignIdRef = useRef(campaignId);
+  if (prevCampaignIdRef.current !== campaignId) {
+    prevCampaignIdRef.current = campaignId;
+    hasSeededRef.current = false;
+  }
+
+  // Initialize active screen from player state or first screen. Fires only when
+  // the SET of ids changes (screenIdsKey is primitive), and uses a functional
+  // update so a persisted-but-DELETED id can never strand the view on a dead
+  // screen. Only the first pass reads player state (to restore the last tab);
+  // afterwards player state is ignored here and only written to on user action.
   useEffect(() => {
-    if (activeScreenId) return;
-    if (playerState?.activeScreenId) {
-      setActiveScreenId(playerState.activeScreenId);
-    } else if (screens.length > 0) {
-      setActiveScreenId(screens[0].id);
+    if (isLoading) return;
+    const current = screensRef.current;
+    if (current.length === 0) {
+      setActiveScreenId(null);
+      return;
     }
-  }, [screens, playerState, activeScreenId]);
+    // Only the initial seed waits on player state; later list changes must not.
+    if (!hasSeededRef.current && playerStateLoading) return;
+
+    const idSet = new Set(current.map((s) => s.id));
+    // Restore the last screen. Falls back to the first screen on first visit
+    // (activeScreenId is null until picked) and when the persisted screen has
+    // since been deleted (not present in idSet).
+    const restored = hasSeededRef.current ? null : restoredScreenIdRef.current;
+    hasSeededRef.current = true;
+    const fallback = restored && idSet.has(restored) ? restored : current[0]!.id;
+
+    setActiveScreenId((prev) => (prev && idSet.has(prev) ? prev : fallback));
+  }, [screenIdsKey, isLoading, playerStateLoading]);
 
   // Auto-create default screen when list is empty and user is GM
   useEffect(() => {
@@ -316,6 +370,10 @@ export function TabletopView({
     const idx = screens.findIndex((s) => s.id === deletingId);
     const nextScreen = screens[idx + 1] ?? screens[idx - 1] ?? null;
     setActiveScreenId(nextScreen?.id ?? null);
+    // Persist the new selection so the wiki's card Push / Show-on-Tab and the
+    // Maps panel (which read the SAVED activeScreenId, not this local state)
+    // stop pointing at the just-deleted screen.
+    updateState.mutate({ activeScreenId: nextScreen?.id ?? null });
 
     await mutations.deleteScreen.mutateAsync(deletingId);
     mutations.invalidateList();
@@ -608,11 +666,14 @@ export function TabletopView({
   useEffect(() => {
     const onFocus = (e: Event) => {
       const detail = (e as CustomEvent).detail as {
+        campaignId?: string;
         surface?: string;
         collection?: string;
         documentId?: string;
       } | null;
-      if (!detail || detail.surface !== 'tabletop') return;
+      // Guard on campaign too — a stale/cross-campaign event must not focus a
+      // window in this view.
+      if (!detail || detail.surface !== 'tabletop' || detail.campaignId !== campaignId) return;
 
       const match =
         privateWindows.find(
@@ -627,7 +688,7 @@ export function TabletopView({
 
     window.addEventListener('cartyx:focus-window', onFocus);
     return () => window.removeEventListener('cartyx:focus-window', onFocus);
-  }, [privateWindows, activeScreen, focusWindow]);
+  }, [privateWindows, activeScreen, focusWindow, campaignId]);
 
   // --- Drag-and-drop handlers ---
   const handleDragOver = useCallback(

@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type {
@@ -182,6 +182,143 @@ describe('TabletopView', () => {
 
     await waitFor(() =>
       expect(mockUpdateStateMutate).toHaveBeenCalledWith({ activeScreenId: 'ts-new' })
+    );
+  });
+
+  it('persists the new selection when the active tab is deleted', async () => {
+    // Deleting the active tab must PERSIST the fallback selection, not just set
+    // local state: useWikiCardActions and the Maps panel read the SAVED
+    // activeScreenId, so a missing persist leaves them pointed at a dead tab.
+    const user = userEvent.setup();
+    const twoScreens: TabletopScreenData[] = [
+      mockScreens[0]!,
+      { ...mockScreens[0]!, id: 'ts-2', name: 'Second', tabOrder: 1 },
+    ];
+    listResult = { screens: twoScreens, isLoading: false, error: null };
+
+    render(
+      <TabletopView
+        campaignId="c1"
+        isGM={true}
+        currentUserId={null}
+        getToken={mockGetToken}
+        sessionId={null}
+        openToolWindows={[]}
+        onCloseToolWindow={vi.fn()}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    // Active seeds to the first tab.
+    await waitFor(() =>
+      expect(screen.getByTestId('tabletop-tab-ts-1')).toHaveAttribute('aria-selected', 'true')
+    );
+
+    await user.click(screen.getByTestId('tabletop-settings-trigger'));
+    await user.click(screen.getByRole('menuitem', { name: /delete tab/i }));
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() =>
+      expect(mockUpdateStateMutate).toHaveBeenCalledWith({ activeScreenId: 'ts-2' })
+    );
+  });
+
+  it('falls back to the first tab when the persisted activeScreenId is not in the list', async () => {
+    // A persisted-but-deleted id must not strand the view: the seeding effect's
+    // existence check falls back to screens[0] instead of locking onto a dead id.
+    playerStateResult = {
+      id: 'ps-1',
+      campaignId: 'c1',
+      userId: 'u1',
+      activeScreenId: 'ts-deleted',
+      activeGMScreenId: null,
+      viewports: [],
+      windowOverrides: [],
+      privateWindows: [],
+      hydrated: {},
+    };
+
+    render(
+      <TabletopView
+        campaignId="c1"
+        isGM={true}
+        currentUserId={null}
+        getToken={mockGetToken}
+        sessionId={null}
+        openToolWindows={[]}
+        onCloseToolWindow={vi.fn()}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('tabletop-tab-ts-1')).toHaveAttribute('aria-selected', 'true')
+    );
+  });
+
+  it('re-seeds the active tab when the campaignId changes without a remount', async () => {
+    // TanStack Router v1 doesn't remount on a path-param change, so the seed
+    // guard must reset on a campaign switch and restore campaign B's own tab.
+    playerStateResult = {
+      id: 'ps-1',
+      campaignId: 'c1',
+      userId: 'u1',
+      activeScreenId: 'ts-1',
+      activeGMScreenId: null,
+      viewports: [],
+      windowOverrides: [],
+      privateWindows: [],
+      hydrated: {},
+    };
+
+    const { rerender } = render(
+      <TabletopView
+        campaignId="c1"
+        isGM={true}
+        currentUserId={null}
+        getToken={mockGetToken}
+        sessionId={null}
+        openToolWindows={[]}
+        onCloseToolWindow={vi.fn()}
+      />,
+      { wrapper: Wrapper }
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('tabletop-tab-ts-1')).toHaveAttribute('aria-selected', 'true')
+    );
+
+    // Switch campaigns in place: new screen set, new persisted selection.
+    listResult = {
+      screens: [{ ...mockScreens[0]!, id: 'ts-x', campaignId: 'c2', name: 'Xray' }],
+      isLoading: false,
+      error: null,
+    };
+    playerStateResult = {
+      id: 'ps-2',
+      campaignId: 'c2',
+      userId: 'u1',
+      activeScreenId: 'ts-x',
+      activeGMScreenId: null,
+      viewports: [],
+      windowOverrides: [],
+      privateWindows: [],
+      hydrated: {},
+    };
+    rerender(
+      <TabletopView
+        campaignId="c2"
+        isGM={true}
+        currentUserId={null}
+        getToken={mockGetToken}
+        sessionId={null}
+        openToolWindows={[]}
+        onCloseToolWindow={vi.fn()}
+      />
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId('tabletop-tab-ts-x')).toHaveAttribute('aria-selected', 'true')
     );
   });
 
@@ -420,7 +557,12 @@ describe('TabletopView', () => {
       await waitFor(() => {
         window.dispatchEvent(
           new CustomEvent('cartyx:focus-window', {
-            detail: { surface: 'tabletop', collection: 'lore', documentId: 'doc-1' },
+            detail: {
+              campaignId: 'c1',
+              surface: 'tabletop',
+              collection: 'lore',
+              documentId: 'doc-1',
+            },
           })
         );
         expect(screen.getByTestId('fwm-window-pw-1')).toHaveClass('animate-flash-border');
@@ -441,6 +583,31 @@ describe('TabletopView', () => {
       await waitFor(() =>
         expect(screen.getByTestId('fwm-window-pw-1')).not.toHaveClass('animate-flash-border')
       );
+    });
+
+    it('ignores focus events whose campaignId does not match this view', async () => {
+      // Defense against a stale/cross-campaign event: the surface matches but the
+      // campaignId does not, so the matching window must NOT flash. Asserted
+      // synchronously after dispatch (the flash self-clears after 700ms, so a
+      // retrying waitFor would go green even if the guard were removed).
+      playerStateResult = makePlayerState([makePrivateWindow()]);
+      renderView();
+      await waitFor(() => expect(screen.getByTestId('fwm-window-pw-1')).toBeInTheDocument());
+
+      act(() => {
+        window.dispatchEvent(
+          new CustomEvent('cartyx:focus-window', {
+            detail: {
+              campaignId: 'other-campaign',
+              surface: 'tabletop',
+              collection: 'lore',
+              documentId: 'doc-1',
+            },
+          })
+        );
+      });
+
+      expect(screen.getByTestId('fwm-window-pw-1')).not.toHaveClass('animate-flash-border');
     });
   });
 
