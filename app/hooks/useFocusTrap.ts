@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 const FOCUSABLE_SELECTOR =
   'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -14,11 +14,17 @@ const FOCUSABLE_SELECTOR =
 export function useFocusTrap<T extends HTMLElement = HTMLElement>() {
   const containerRef = useRef<T>(null);
 
+  // Captured during render — via a lazy initializer that runs exactly once,
+  // on the first render — so it reflects the true opener. Child `autoFocus`
+  // is applied during the commit phase, which happens before any passive
+  // `useEffect`; capturing here (not in the effect body) beats that race.
+  const [opener] = useState<Element | null>(() =>
+    typeof document !== 'undefined' ? document.activeElement : null
+  );
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-
-    const previouslyFocused = document.activeElement;
 
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Tab') return;
@@ -45,11 +51,11 @@ export function useFocusTrap<T extends HTMLElement = HTMLElement>() {
     container.addEventListener('keydown', handleKeyDown);
     return () => {
       container.removeEventListener('keydown', handleKeyDown);
-      if (previouslyFocused instanceof HTMLElement && previouslyFocused.isConnected) {
-        previouslyFocused.focus();
+      if (opener instanceof HTMLElement && opener.isConnected) {
+        opener.focus();
       }
     };
-  }, []);
+  }, [opener]);
 
   return containerRef;
 }
