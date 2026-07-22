@@ -26,14 +26,25 @@ vi.mock('~/hooks/useTabletopScreens', () => ({
   // screens[0] is deliberately NOT the active screen, so a test that expects
   // 'active' fails loudly if the old screens[0] targeting ever comes back.
   useTabletopScreenList: () => ({ screens: [{ id: 'first' }, { id: 'active' }] }),
-  useTabletopScreenDetail: () => mockTabletopDetail(),
+  // Pass the id through so the mock can mirror the real hook's `enabled:
+  // !!screenId` gating (see detailReturning): a null id yields a null screen.
+  useTabletopScreenDetail: (_c: string, id: string | null) => mockTabletopDetail(id),
   useTabletopMutations: () => ({ openWindow: { mutate: openWindowMutate, isPending: false } }),
 }));
 vi.mock('~/hooks/useGMScreens', () => ({
   // gm-first is the fallback; gm1 is the "active" GM screen the beforeEach pins.
   useGMScreenList: () => ({ screens: [{ id: 'gm-first' }, { id: 'gm1' }] }),
-  useGMScreenDetail: () => mockGMDetail(),
+  useGMScreenDetail: (_c: string, id: string | null) => mockGMDetail(id),
 }));
+
+// Mirrors the real detail hooks: a screen is only fetched (and its shared
+// windows only visible) when the provider passes a non-null id. When the
+// provider gates the fetch off (null id — e.g. a surface-less Dashboard tab),
+// the hook is `enabled: false` and returns a null screen. A fixed mockReturnValue
+// would wrongly surface shared windows even when the fetch was gated off.
+const detailReturning =
+  (screen: { windows: { id: string; collection: string; documentId: string }[] } | null) =>
+  (id: string | null) => ({ screen: id ? screen : null });
 
 const keys = (items: { key: string }[]) => items.map((i) => i.key);
 
@@ -340,9 +351,9 @@ describe('useWikiCardActions', () => {
   });
 
   it('Push does NOT open a second window when the item is already a shared window', () => {
-    mockTabletopDetail.mockReturnValue({
-      screen: { windows: [{ id: 'w1', collection: 'character', documentId: 'd1' }] },
-    });
+    mockTabletopDetail.mockImplementation(
+      detailReturning({ windows: [{ id: 'w1', collection: 'character', documentId: 'd1' }] })
+    );
     const focusSpy = vi.fn();
     window.addEventListener('cartyx:focus-window', focusSpy);
     try {
@@ -370,9 +381,9 @@ describe('useWikiCardActions', () => {
   });
 
   it('Show on Tab does NOT add a private window when the item is already a shared window', () => {
-    mockTabletopDetail.mockReturnValue({
-      screen: { windows: [{ id: 'w1', collection: 'character', documentId: 'd1' }] },
-    });
+    mockTabletopDetail.mockImplementation(
+      detailReturning({ windows: [{ id: 'w1', collection: 'character', documentId: 'd1' }] })
+    );
     const focusSpy = vi.fn();
     window.addEventListener('cartyx:focus-window', focusSpy);
     try {
@@ -396,9 +407,9 @@ describe('useWikiCardActions', () => {
 
   it('Show on Tab on GM Screens dedups against the GM screen SHARED windows', () => {
     mockSearch.mockReturnValue({ tab: 'gmscreens' });
-    mockGMDetail.mockReturnValue({
-      screen: { windows: [{ id: 'w1', collection: 'character', documentId: 'd1' }] },
-    });
+    mockGMDetail.mockImplementation(
+      detailReturning({ windows: [{ id: 'w1', collection: 'character', documentId: 'd1' }] })
+    );
     const { result } = renderHook(
       () => useWikiCardActions({ collection: 'character', documentId: 'd1' }),
       { wrapper: WikiCardActionsTestWrapper }
@@ -423,6 +434,37 @@ describe('useWikiCardActions', () => {
     expect(openWindowMutate).toHaveBeenCalledWith(
       expect.objectContaining({ screenId: 'active', collection: 'character', documentId: 'd1' })
     );
+  });
+
+  // The provider gates the tabletop detail fetch off on a surface-less tab, so a
+  // Dashboard Push can't see the tabletop's shared windows and won't client-side
+  // dedup — it fires the mutate and the server dedups (see WikiCardActionsProvider
+  // lines ~89-99). Guards the id-gating the detail mock now mirrors.
+  it('Push from the Dashboard fires even when the item is already a shared window on the tabletop', () => {
+    mockSearch.mockReturnValue({ tab: 'dashboard' });
+    mockTabletopDetail.mockImplementation(
+      detailReturning({ windows: [{ id: 'w1', collection: 'character', documentId: 'd1' }] })
+    );
+    const focusSpy = vi.fn();
+    window.addEventListener('cartyx:focus-window', focusSpy);
+    try {
+      const { result } = renderHook(
+        () =>
+          useWikiCardActions({
+            collection: 'character',
+            documentId: 'd1',
+            allowPushFromDashboard: true,
+          }),
+        { wrapper: WikiCardActionsTestWrapper }
+      );
+      result.current.menuItems.find((i) => i.key === 'push')!.onSelect();
+      expect(openWindowMutate).toHaveBeenCalledWith(
+        expect.objectContaining({ screenId: 'active', collection: 'character', documentId: 'd1' })
+      );
+      expect(focusSpy).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener('cartyx:focus-window', focusSpy);
+    }
   });
 
   it('does not offer Push to Tabletop from the Dashboard without allowPushFromDashboard (default false)', () => {
