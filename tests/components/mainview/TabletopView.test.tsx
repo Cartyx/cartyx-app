@@ -616,6 +616,57 @@ describe('TabletopView', () => {
       expect(mockRemovePrivateWindowMutate).not.toHaveBeenCalled();
     });
 
+    it('closing the SHARED window does not delete a suppressed private window', async () => {
+      // The dangerous interaction. A suppressed private window is never
+      // rendered, so it is never in `nextWindows` — meaning any close-detection
+      // pass that reads the UNFILTERED private list would see it as "closed"
+      // and destroy it the moment the user closes the shared window that was
+      // suppressing it. The row must survive so it reappears afterwards.
+      const user = userEvent.setup();
+      detailResult = {
+        screen: {
+          ...mockDetail,
+          windows: [
+            {
+              id: 'w-shared',
+              collection: 'lore',
+              documentId: 'doc-1',
+              state: 'open',
+              x: 0,
+              y: 0,
+              width: null,
+              height: null,
+              zIndex: 1,
+            },
+          ],
+          hydrated: {
+            'lore:doc-1': {
+              id: 'doc-1',
+              collection: 'lore',
+              title: 'The Sunken Crown',
+              content: '',
+            },
+          },
+        },
+        isLoading: false,
+        error: null,
+      };
+      playerStateResult = makePlayerState([makePrivateWindow()]);
+      renderView();
+
+      await waitFor(() => expect(screen.getByTestId('fwm-close-w-shared')).toBeInTheDocument());
+      // Precondition: the private duplicate really is suppressed.
+      expect(screen.queryByTestId('fwm-window-pw-1')).not.toBeInTheDocument();
+
+      await user.click(screen.getByTestId('fwm-close-w-shared'));
+
+      expect(mockCloseWindowMutate).toHaveBeenCalledWith({
+        screenId: 'ts-1',
+        windowId: 'w-shared',
+      });
+      expect(mockRemovePrivateWindowMutate).not.toHaveBeenCalled();
+    });
+
     it('persists a private window layout change through updatePrivateWindow', async () => {
       const user = userEvent.setup();
       playerStateResult = makePlayerState([makePrivateWindow()]);

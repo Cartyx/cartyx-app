@@ -548,6 +548,40 @@ describe('GMScreensView — private windows', () => {
     expect(mockRemovePrivateWindowMutate).not.toHaveBeenCalled();
   });
 
+  it('suppresses a private window duplicated by a shared one, without deleting it', async () => {
+    // A co-GM can open an item this viewer already showed themselves — the
+    // client's isAlreadyOpen check only prevents the reverse order — and both
+    // would otherwise render as two identical windows.
+    //
+    // The dangerous part is the close path: a suppressed window is never
+    // rendered, so it is never in `nextWindows`. Close-detection reading the
+    // UNFILTERED private list would treat it as closed and destroy it the
+    // moment the shared window is closed. The row must survive so the private
+    // window reappears afterwards.
+    const user = userEvent.setup();
+    detailResult = {
+      screen: {
+        ...mockDetail,
+        // Same collection+documentId as makePrivateWindow().
+        windows: [{ ...sharedWindow, documentId: 'doc-1' }],
+        hydrated: {
+          'lore:doc-1': { id: 'doc-1', collection: 'lore', title: 'Shared Lore', content: '' },
+        },
+      },
+      isLoading: false,
+      error: null,
+    };
+    withPrivateWindows([makePrivateWindow()]);
+    render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
+
+    await waitFor(() => expect(screen.getByTestId('fwm-close-w-shared')).toBeInTheDocument());
+    expect(screen.queryByTestId('fwm-window-pw-1')).not.toBeInTheDocument();
+
+    await user.click(screen.getByTestId('fwm-close-w-shared'));
+
+    expect(mockRemovePrivateWindowMutate).not.toHaveBeenCalled();
+  });
+
   it('flashes a matching private window on a cartyx:focus-window event', async () => {
     withPrivateWindows([makePrivateWindow()]);
     render(<GMScreensView campaignId="c1" />, { wrapper: Wrapper });
