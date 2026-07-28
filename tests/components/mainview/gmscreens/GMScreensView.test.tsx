@@ -113,6 +113,7 @@ vi.mock('~/hooks/useGMScreens', () => ({
 // settles the query to an error quickly — an incidental pass, not a real one).
 const mockUpdateStateMutate = vi.fn();
 const mockRemovePrivateWindowMutate = vi.fn();
+const mockUpdatePrivateWindowMutate = vi.fn();
 
 type MockPlayerState = {
   activeGMScreenId: string | null;
@@ -125,11 +126,13 @@ let playerStateResult: {
   isLoading: boolean;
   updateState: { mutate: typeof mockUpdateStateMutate };
   removePrivateWindow: { mutate: typeof mockRemovePrivateWindowMutate };
+  updatePrivateWindow: { mutate: typeof mockUpdatePrivateWindowMutate };
 } = {
   playerState: null,
   isLoading: false,
   updateState: { mutate: mockUpdateStateMutate },
   removePrivateWindow: { mutate: mockRemovePrivateWindowMutate },
+  updatePrivateWindow: { mutate: mockUpdatePrivateWindowMutate },
 };
 
 function makePlayerState(overrides: Partial<MockPlayerState> = {}): typeof playerStateResult {
@@ -138,6 +141,7 @@ function makePlayerState(overrides: Partial<MockPlayerState> = {}): typeof playe
     isLoading: false,
     updateState: { mutate: mockUpdateStateMutate },
     removePrivateWindow: { mutate: mockRemovePrivateWindowMutate },
+    updatePrivateWindow: { mutate: mockUpdatePrivateWindowMutate },
   };
 }
 

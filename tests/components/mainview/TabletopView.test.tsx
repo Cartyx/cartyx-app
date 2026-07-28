@@ -52,6 +52,7 @@ const mockCreateScreenAsync = vi.fn().mockResolvedValue({});
 const mockUpdateStateMutate = vi.fn();
 const mockCloseWindowMutate = vi.fn();
 const mockRemovePrivateWindowMutate = vi.fn();
+const mockUpdatePrivateWindowMutate = vi.fn();
 
 let playerStateResult: TabletopPlayerStateData | null = null;
 
@@ -89,6 +90,7 @@ vi.mock('~/hooks/useTabletopPlayerState', () => ({
     updateState: { ...noopMutation, mutate: mockUpdateStateMutate },
     addPrivateWindow: { ...noopMutation },
     removePrivateWindow: { ...noopMutation, mutate: mockRemovePrivateWindowMutate },
+    updatePrivateWindow: { ...noopMutation, mutate: mockUpdatePrivateWindowMutate },
   }),
 }));
 
@@ -105,7 +107,15 @@ vi.mock('~/components/mainview/tabletop/TabletopCanvas', () => ({
 // Stands in for the real manager: renders each window and exposes a close
 // button that calls onWindowsChange with the window removed — exactly what the
 // real FloatingWindowManager.handleClose does.
-type MockWindow = { id: string; title: string; className?: string };
+type MockWindow = {
+  id: string;
+  title: string;
+  className?: string;
+  position?: { x: number; y: number };
+  size?: { width: number; height: number };
+  state?: string;
+  zIndex?: number;
+};
 vi.mock('~/components/mainview/FloatingWindowManager', () => ({
   FloatingWindowManager: ({
     windows,
@@ -123,6 +133,18 @@ vi.mock('~/components/mainview/FloatingWindowManager', () => ({
             onClick={() => onWindowsChange(windows.filter((x) => x.id !== w.id))}
           >
             close
+          </button>
+          {/* Mirrors handleLayoutChange: the real manager re-emits the WHOLE
+              list on any drag/resize, including windows that did not move. */}
+          <button
+            data-testid={`fwm-move-${w.id}`}
+            onClick={() =>
+              onWindowsChange(
+                windows.map((x) => (x.id === w.id ? { ...x, position: { x: 999, y: 888 } } : x))
+              )
+            }
+          >
+            move
           </button>
         </div>
       ))}
@@ -547,6 +569,138 @@ describe('TabletopView', () => {
         windowId: 'w-shared',
       });
       expect(mockRemovePrivateWindowMutate).not.toHaveBeenCalled();
+    });
+
+    it('suppresses a private window whose document is also open as a shared window', async () => {
+      // The client's own `isAlreadyOpen` check only prevents opening a private
+      // window for something already shared. The reverse order is entirely
+      // reachable: the viewer shows themselves lore doc-1, then the GM pushes
+      // doc-1 to everyone. Rendering both produces two identical windows.
+      detailResult = {
+        screen: {
+          ...mockDetail,
+          windows: [
+            {
+              id: 'w-shared',
+              collection: 'lore',
+              documentId: 'doc-1',
+              state: 'open',
+              x: 0,
+              y: 0,
+              width: null,
+              height: null,
+              zIndex: 1,
+            },
+          ],
+          hydrated: {
+            'lore:doc-1': {
+              id: 'doc-1',
+              collection: 'lore',
+              title: 'The Sunken Crown',
+              content: '',
+            },
+          },
+        },
+        isLoading: false,
+        error: null,
+      };
+      playerStateResult = makePlayerState([makePrivateWindow()]);
+      renderView();
+
+      await waitFor(() => expect(screen.getByTestId('fwm-window-w-shared')).toBeInTheDocument());
+      expect(screen.queryByTestId('fwm-window-pw-1')).not.toBeInTheDocument();
+
+      // Crucially, suppressed is NOT deleted: the row stays so the private
+      // window returns if the shared one is closed. A close-detection pass over
+      // the UNFILTERED list would treat it as closed and destroy it.
+      expect(mockRemovePrivateWindowMutate).not.toHaveBeenCalled();
+    });
+
+    it('persists a private window layout change through updatePrivateWindow', async () => {
+      const user = userEvent.setup();
+      playerStateResult = makePlayerState([makePrivateWindow()]);
+      renderView();
+
+      await waitFor(() => expect(screen.getByTestId('fwm-move-pw-1')).toBeInTheDocument());
+      await user.click(screen.getByTestId('fwm-move-pw-1'));
+
+      // Debounced — the write lands after the timer, not on the gesture.
+      await waitFor(
+        () =>
+          expect(mockUpdatePrivateWindowMutate).toHaveBeenCalledWith(
+            expect.objectContaining({ privateWindowId: 'pw-1' })
+          ),
+        { timeout: 2000 }
+      );
+    });
+
+    it('does not write for private windows that did not move', async () => {
+      // FloatingWindowManager re-emits the WHOLE list on any interaction. Since
+      // updatePrivateWindow deliberately does not invalidate player state, a
+      // naive "changed vs the server copy" check would mark every already-moved
+      // window as dirty on every re-emit — so dragging one window would POST for
+      // all of them.
+      const user = userEvent.setup();
+      playerStateResult = makePlayerState([
+        makePrivateWindow(),
+        makePrivateWindow({ id: 'pw-2', documentId: 'doc-1' }),
+      ]);
+      renderView();
+
+      await waitFor(() => expect(screen.getByTestId('fwm-move-pw-1')).toBeInTheDocument());
+
+      // Move pw-1 twice; pw-2 is re-emitted both times but never moves.
+      await user.click(screen.getByTestId('fwm-move-pw-1'));
+      await waitFor(() => expect(mockUpdatePrivateWindowMutate).toHaveBeenCalled(), {
+        timeout: 2000,
+      });
+      await user.click(screen.getByTestId('fwm-move-pw-1'));
+      await new Promise((r) => setTimeout(r, 700));
+
+      const touched = mockUpdatePrivateWindowMutate.mock.calls.map(
+        (c) => (c[0] as { privateWindowId: string }).privateWindowId
+      );
+      expect(touched).not.toContain('pw-2');
+    });
+
+    it('does not persist layout for a SHARED window through updatePrivateWindow', async () => {
+      const user = userEvent.setup();
+      detailResult = {
+        screen: {
+          ...mockDetail,
+          windows: [
+            {
+              id: 'w-shared',
+              collection: 'lore',
+              documentId: 'doc-shared',
+              state: 'open',
+              x: 0,
+              y: 0,
+              width: null,
+              height: null,
+              zIndex: 1,
+            },
+          ],
+          hydrated: {
+            'lore:doc-shared': {
+              id: 'doc-shared',
+              collection: 'lore',
+              title: 'Shared Lore',
+              content: '',
+            },
+          },
+        },
+        isLoading: false,
+        error: null,
+      };
+      playerStateResult = makePlayerState([]);
+      renderView();
+
+      await waitFor(() => expect(screen.getByTestId('fwm-move-w-shared')).toBeInTheDocument());
+      await user.click(screen.getByTestId('fwm-move-w-shared'));
+
+      await new Promise((r) => setTimeout(r, 700));
+      expect(mockUpdatePrivateWindowMutate).not.toHaveBeenCalled();
     });
 
     it('flashes a matching private window on a cartyx:focus-window event', async () => {

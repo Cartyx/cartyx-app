@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useGMScreenList, useGMScreenDetail, useGMScreenMutations } from '~/hooks/useGMScreens';
 import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
+import { usePrivateWindowLayout } from '~/hooks/usePrivateWindowLayout';
 import {
   FloatingWindowManager,
   type ManagedWindow,
@@ -77,6 +78,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     removePrivateWindow,
   } = useTabletopPlayerState(campaignId);
   const removePrivateWindowMutate = removePrivateWindow.mutate;
+  const { schedulePrivateLayout, cancelPrivateLayout } = usePrivateWindowLayout(campaignId);
   const [dialog, setDialog] = useState<DialogState>({ type: 'none' });
   const mutations = useGMScreenMutations(campaignId);
   const [editingCharacterId, setEditingCharacterId] = useState<string | null>(null);
@@ -167,16 +169,37 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     error: detailError,
   } = useGMScreenDetail(campaignId, activeScreenId);
 
+  /** `collection:documentId` of every SHARED window on this screen. */
+  const sharedRefKeys = useMemo(
+    () => new Set((activeScreen?.windows ?? []).map((w) => `${w.collection}:${w.documentId}`)),
+    [activeScreen]
+  );
+
   // The caller's own private windows for this GM screen. GM screens are
   // campaign-scoped and shared between co-GMs, so "private" still means
   // something here: these live on player state, are only ever returned to their
   // owner, and no other GM sees them.
+  //
+  // A private window for a document that is ALSO open as a shared window is
+  // suppressed: a co-GM can open an item this viewer already showed themselves
+  // (the client's own `isAlreadyOpen` check only prevents the reverse order),
+  // and rendering both produces two identical windows. The row is kept in the
+  // database, not deleted — if the shared window is later closed, the viewer's
+  // private one comes back.
+  //
+  // IMPORTANT: this filtered list is what `handleWindowsChange` uses to detect
+  // closes. It has to be, since a suppressed window is never rendered and so is
+  // never in `nextWindows` — reading the unfiltered list there would treat every
+  // suppressed window as "closed" and delete it.
   const privateWindows = useMemo(
     () =>
       (playerState?.privateWindows ?? []).filter(
-        (pw) => pw.surface === 'gmscreen' && pw.screenId === activeScreenId
+        (pw) =>
+          pw.surface === 'gmscreen' &&
+          pw.screenId === activeScreenId &&
+          !sharedRefKeys.has(`${pw.collection}:${pw.documentId}`)
       ),
-    [playerState, activeScreenId]
+    [playerState, activeScreenId, sharedRefKeys]
   );
 
   // --- Debounced persistence refs ---
@@ -321,15 +344,27 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
       // window from GMScreen.windows for every GM of the campaign.
       for (const pw of privateWindows) {
         if (!nextIds.has(pw.id)) {
+          // Drop any in-flight layout write first — persisting geometry for a
+          // window that is being deleted is pointless and races the $pull.
+          cancelPrivateLayout(pw.id);
           removePrivateWindowMutate({ privateWindowId: pw.id });
         }
+      }
+
+      // Private windows persist their own layout, on the caller's player state
+      // rather than the shared screen — same debounce, different mutation.
+      for (const nw of nextWindows) {
+        const pw = privateWindows.find((p) => p.id === nw.id);
+        if (!pw) continue;
+        schedulePrivateLayout(nw, pw);
       }
 
       if (!activeScreenId || !activeScreen) return;
 
       // Persist layout changes debounced — one timer per window. Private
-      // windows have no `orig` here and are skipped: updateWindow addresses
-      // GMScreen.windows by id and has nothing to write for them.
+      // windows have no `orig` here and are handled by the loop above:
+      // updateWindow addresses GMScreen.windows by id and has nothing to
+      // write for them.
       for (const nw of nextWindows) {
         const orig = activeScreen.windows.find((w) => w.id === nw.id);
         if (!orig) continue;
@@ -380,7 +415,15 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
         }
       }
     },
-    [activeScreenId, activeScreen, mutations, privateWindows, removePrivateWindowMutate]
+    [
+      activeScreenId,
+      activeScreen,
+      mutations,
+      privateWindows,
+      removePrivateWindowMutate,
+      schedulePrivateLayout,
+      cancelPrivateLayout,
+    ]
   );
 
   const openWindow = mutations.openWindow.mutate;

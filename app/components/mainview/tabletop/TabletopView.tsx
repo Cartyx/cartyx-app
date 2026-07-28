@@ -8,6 +8,7 @@ import {
   useTabletopMutations,
 } from '~/hooks/useTabletopScreens';
 import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
+import { usePrivateWindowLayout } from '~/hooks/usePrivateWindowLayout';
 import { useTabletopParty } from '~/hooks/useTabletopParty';
 import { useActiveMap } from '~/hooks/useMaps';
 import { useTabletopMapSync } from '~/hooks/useTabletopMapSync';
@@ -129,6 +130,7 @@ export function TabletopView({
     removePrivateWindow,
   } = useTabletopPlayerState(campaignId);
   const removePrivateWindowMutate = removePrivateWindow.mutate;
+  const { schedulePrivateLayout, cancelPrivateLayout } = usePrivateWindowLayout(campaignId);
   const [activeScreenId, setActiveScreenId] = useState<string | null>(null);
   // Active map is per-tab — render the active map of the tab being viewed.
   const { data: activeMap } = useActiveMap(campaignId, activeScreenId);
@@ -157,20 +159,14 @@ export function TabletopView({
   const localScreenIdRef = useRef<string | null>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
 
-  // The caller's own private windows for this tab. These live on player state,
-  // are never broadcast, and only ever render for their owner.
-  const privateWindows = useMemo(
-    () =>
-      (playerState?.privateWindows ?? []).filter(
-        (pw) => pw.surface === 'tabletop' && pw.screenId === activeScreenId
-      ),
-    [playerState, activeScreenId]
-  );
+  // (privateWindows is derived below, once activeScreen is in scope — it has to
+  // subtract anything already open as a SHARED window.)
 
   // Focus + flash an already-open window (shared or private). Mirrors the
   // GM-screens flash (flag the id, clear it after 700ms), but raises z-index
-  // locally: unlike gmscreens, tabletop has no updateWindow mutation, and a
-  // private window's layout is the owner's own business anyway.
+  // only locally: the tabletop has no updateWindow mutation for SHARED windows,
+  // and a focus bump is not worth a write for private ones either (their drag /
+  // resize / minimize DO persist, via handleWindowsChange).
   const focusWindow = useCallback((windowId: string) => {
     setLocalWindows((prev) => {
       const target = prev.find((w) => w.id === windowId);
@@ -292,6 +288,37 @@ export function TabletopView({
 
   // Fetch detail for active screen
   const { screen: activeScreen } = useTabletopScreenDetail(campaignId, activeScreenId);
+
+  /** `collection:documentId` of every SHARED window on this screen. */
+  const sharedRefKeys = useMemo(
+    () => new Set((activeScreen?.windows ?? []).map((w) => `${w.collection}:${w.documentId}`)),
+    [activeScreen]
+  );
+
+  // The caller's own private windows for this tab. These live on player state,
+  // are never broadcast, and only ever render for their owner.
+  //
+  // A private window for a document that is ALSO open as a shared window is
+  // suppressed: the GM can push an item the viewer already showed themselves
+  // (the client's own `isAlreadyOpen` check only prevents the reverse order),
+  // and rendering both produces two identical windows. The row is kept in the
+  // database, not deleted — if the GM later closes the shared window, the
+  // viewer's private one comes back.
+  //
+  // IMPORTANT: this filtered list is what `handleWindowsChange` uses to detect
+  // closes. It has to be, since a suppressed window is never rendered and so is
+  // never in `nextWindows` — reading the unfiltered list there would treat every
+  // suppressed window as "closed" and delete it.
+  const privateWindows = useMemo(
+    () =>
+      (playerState?.privateWindows ?? []).filter(
+        (pw) =>
+          pw.surface === 'tabletop' &&
+          pw.screenId === activeScreenId &&
+          !sharedRefKeys.has(`${pw.collection}:${pw.documentId}`)
+      ),
+    [playerState, activeScreenId, sharedRefKeys]
+  );
 
   // Realtime message handler
   const handleMessage = useCallback(
@@ -646,8 +673,19 @@ export function TabletopView({
       // for the whole campaign.
       for (const pw of privateWindows) {
         if (!nextIds.has(pw.id)) {
+          // Drop any in-flight layout write first — persisting geometry for a
+          // window that is being deleted is pointless and races the $pull.
+          cancelPrivateLayout(pw.id);
           removePrivateWindowMutate({ privateWindowId: pw.id });
         }
+      }
+
+      // Private windows persist their own geometry on the caller's player
+      // state. Shared tabletop windows still do not (pre-existing: the tabletop
+      // has no updateWindow mutation, unlike GM screens).
+      for (const nw of nextWindows) {
+        const pw = privateWindows.find((p) => p.id === nw.id);
+        if (pw) schedulePrivateLayout(nw, pw);
       }
 
       if (!activeScreenId || !activeScreen) return;
@@ -657,7 +695,15 @@ export function TabletopView({
         }
       }
     },
-    [activeScreenId, activeScreen, mutations, privateWindows, removePrivateWindowMutate]
+    [
+      activeScreenId,
+      activeScreen,
+      mutations,
+      privateWindows,
+      removePrivateWindowMutate,
+      schedulePrivateLayout,
+      cancelPrivateLayout,
+    ]
   );
 
   // --- Focus requests from the wiki ("Show on Tab" on an already-open item) ---
