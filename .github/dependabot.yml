@@ -104,6 +104,40 @@ updates:
       - dependency-name: 'typescript'
         versions: ['>=7.0.0']
 
+  # --- realtime service (own package.json + lockfile) ---
+  # Without an entry here dependabot never ran *version* updates on /realtime,
+  # and its *security* updates fell back to the repository default branch —
+  # `main`, the one branch we never open PRs against (see CLAUDE.md). PR #534
+  # (esbuild 0.27.7 -> 0.28.1) landed on main that way and could not be merged.
+  # Pointing this directory at `dev` keeps realtime on the normal flow.
+  - package-ecosystem: 'npm'
+    directory: '/realtime'
+    target-branch: 'dev'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 5
+    labels:
+      - 'dependencies'
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      realtime-minor-and-patch:
+        applies-to: version-updates
+        update-types: ['minor', 'patch']
+    cooldown:
+      default-days: 10
+    ignore:
+      # The same major boundaries the root package holds, for the same reasons.
+      # Runtime is pinned to Node 22 (engines + the k3s image), so @types/node
+      # majors would type-check against APIs the runtime doesn't have.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'typescript'
+        versions: ['>=7.0.0']
+      - dependency-name: 'vitest'
+        versions: ['>=5.0.0']
+
   - package-ecosystem: 'github-actions'
     directory: '/'
     target-branch: 'dev'
