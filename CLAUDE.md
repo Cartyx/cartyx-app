@@ -7,8 +7,12 @@ data, Cloudflare R2 + CDN for images, self-hosted observability
 
 ## Commands
 
-- `npm test` — unit suite (`vitest run --project unit`). NEVER run bare
-  `npx vitest run`: the storybook project crashes outside CI.
+- `npm test` — unit suite (`vitest run --project unit`).
+- `npm run test:storybook` — story tests in a real browser; needs
+  `npx playwright install chromium` once. Also a CI job, alongside
+  `build-storybook`. (This used to crash on any invocation — the app's
+  nitro/tanstackStart plugins leaked into the Storybook vite config; fixed
+  2026-07-28, see `docs/tech-debt.md` item 12.)
 - `npm run typecheck` / `npm run lint` — both must be clean (0 errors, 0
   warnings; `lint` runs with `--max-warnings 0`, so any new warning fails CI).
 - `bash deploy/charts/cartyx/tests/render-tests.sh` — Helm chart assertions;

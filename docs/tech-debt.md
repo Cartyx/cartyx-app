@@ -238,6 +238,84 @@ other three modals. Verify the location wiki e2e flow afterward.
 
 ---
 
+## 11. Exact-pinned transitive `overrides` need manual review (LOW, recurring)
+
+- **Status:** OPEN
+- **Last-verified:** 2026-07-28
+
+**File:** `package.json` → `overrides`.
+
+Two transitive dependencies are pinned to an **exact** version to clear
+`npm audit --audit-level=high --omit=dev`, which is a blocking CI step:
+
+| Package   | Pin      | Advisory it clears                | Dependent's declared range               |
+| --------- | -------- | --------------------------------- | ---------------------------------------- |
+| `js-yaml` | `4.3.0`  | GHSA-52cp-r559-cp3m (≤ 4.2.0)     | `^4.1.1` (xmlbuilder2, @eslint/eslintrc) |
+| `postcss` | `8.5.19` | PostCSS path traversal (≤ 8.5.17) | vite                                     |
+
+They are exact rather than `^` on purpose: a caret would float the lockfile onto
+whatever released most recently, which regularly lands inside the **10-day
+cooldown** that `npm run check:deps-age` enforces (both had a patch published
+within 4 days at the time of pinning).
+
+**The catch:** Dependabot does not update `overrides`, and neither package is a
+direct dep, so nothing will ever propose a bump. When the next advisory lands on
+either one, `npm audit` fails in CI with no PR explaining why. Fix by hand:
+choose the lowest patched version that is **≥ 10 days old** and still satisfies
+the dependent's range, then re-run `npm audit --audit-level=high --omit=dev` and
+`npm run check:deps-age`. Drop the override entirely once the dependent's own
+floor moves past the advisory.
+
+---
+
+## 12. Storybook was broken end-to-end — RESOLVED (2026-07-28)
+
+- **Status:** RESOLVED
+- **Last-verified:** 2026-07-28
+
+Storybook could not build **or** run, and nothing in CI noticed because
+`test:ci` is `--project unit` only. Four distinct faults, fixed together:
+
+1. **The preview build inherited the app's server plugins.** Storybook's
+   react-vite builder auto-loads the root `vite.config.ts`, which includes
+   `nitro()` and `tanstackStart()`. `main.ts` tried to strip them by plugin-name
+   prefix, but both factories return **nested arrays** and the filter only
+   checked top-level entries — so it matched nothing. Failure was
+   `[tanstack-start:start-manifest-capture-client-build] multiple entries
+detected`. Fixed by giving Storybook its own `.storybook/vite.config.ts`
+   (react + tailwind + tsconfig paths) wired via `framework.options.builder.viteConfigPath`,
+   instead of blocklisting names — which silently stops working whenever an
+   upstream plugin is renamed.
+2. **Server code was pulled into the browser bundle.** Without the Start plugin
+   stripping server-fn bodies, the `await import('~/server/…')` inside every
+   hook dragged mongoose, the MongoDB driver and `@sentry/node-core` in.
+   `~/server/**` is now aliased to `.storybook/mocks/serverFunctions.ts`, and
+   `@tanstack/react-start` (which reaches `node:async_hooks`) to
+   `.storybook/mocks/react-start.ts`.
+3. **`useParams` threw in every play-route panel.** `WikiPanel`, `NotesPanel`,
+   `SettingsPanel` and `ChatPanel` all call
+   `useParams({ from: '/campaigns/$campaignId/play' })`, which needs a
+   RouterProvider — taking `InspectorSidebar` and `MainView` down with them
+   (both mount every tab panel at once). `.storybook/mocks/router.tsx` now
+   overrides `useParams`/`useSearch`/`useNavigate` alongside the existing `Link`
+   override.
+4. **Stories missing required props.** `ChatPanel` (rendered with no args at
+   all), `TabletopView` (`currentUserId`/`openToolWindows`/`onCloseToolWindow`),
+   `NotesFilterWidget` (`campaignId`/`filterTags`/`onFilterTagsChange`) — all
+   props added to components without updating their fixtures.
+
+Result: **167 stories across 48 files pass**, and `build-storybook` succeeds. A
+**Storybook CI job** now runs `test:storybook` plus `build-storybook`, so this
+cannot rot silently again.
+
+Related: `WikiCardActionsStubProvider` supplies the wiki-card-actions context to
+stories whose components reach `useWikiCardActions` (the real provider cannot
+mount outside `/play`), and
+`tests/components/wiki/shared/WikiCardActionsStubProvider.test.tsx` guards that
+class of breakage from the unit project too.
+
+---
+
 ## Resolved
 
 Items closed on the `update-tech-debt` branch (on top of `origin/dev`) and
