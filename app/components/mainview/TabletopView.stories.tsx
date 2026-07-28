@@ -13,6 +13,11 @@ const meta: Meta<typeof TabletopView> = {
     isGM: true,
     getToken: () => Promise.resolve('story-token'),
     sessionId: null,
+    // These three are required but were never supplied, so the tool-window
+    // effect threw on `openWindows.filter`.
+    currentUserId: 'story-user-1',
+    openToolWindows: [],
+    onCloseToolWindow: () => {},
   },
   decorators: [
     (Story) => (

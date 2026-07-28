@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { NotesListWidget } from './NotesListWidget';
 import { mockSessions } from '~/services/mocks/sessionsService';
+import { WikiCardActionsStubProvider } from '~/components/wiki/shared/WikiCardActionsStubProvider';
 import type { NoteListItem } from '~/types/note';
 
 const mockNotes: NoteListItem[] = [
@@ -59,10 +60,14 @@ const meta: Meta<typeof NotesListWidget> = {
   component: NotesListWidget,
   tags: ['autodocs'],
   decorators: [
+    // Each note card renders a WikiCardMenu, whose hook throws without a
+    // provider — and the real one can't mount outside the /play route.
     (Story) => (
-      <div className="max-w-sm h-[500px] flex flex-col bg-[#080A12]">
-        <Story />
-      </div>
+      <WikiCardActionsStubProvider>
+        <div className="max-w-sm h-[500px] flex flex-col bg-[#080A12]">
+          <Story />
+        </div>
+      </WikiCardActionsStubProvider>
     ),
   ],
 };
