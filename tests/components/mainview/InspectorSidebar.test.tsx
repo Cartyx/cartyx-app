@@ -14,6 +14,10 @@ vi.mock('~/components/wiki/WikiPanel', () => ({
   WikiPanel: () => <div data-testid="wiki-panel" />,
 }));
 
+// The WikiCardActionsProvider is now mounted ABOVE MainView in the play route,
+// not inside InspectorSidebar, so this component no longer imports it and the
+// stubbed wiki/note panels below have no card-action consumers to satisfy.
+
 vi.mock('~/components/mainview/NotesPanel', () => ({
   NotesPanel: () => (
     <div data-testid="notes-panel">

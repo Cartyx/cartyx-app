@@ -3,6 +3,8 @@ import { Plus, Layers, Loader2, AlertTriangle, Globe, Lock, ExternalLink } from 
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { useGMScreenList, useGMScreenDetail, useGMScreenMutations } from '~/hooks/useGMScreens';
+import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
+import { usePrivateWindowLayout } from '~/hooks/usePrivateWindowLayout';
 import {
   FloatingWindowManager,
   type ManagedWindow,
@@ -35,6 +37,10 @@ import {
   MonsterWindowWrapper,
   EditMonsterModalWrapper,
 } from '~/components/wiki/monsters/MonsterWindowWrapper';
+import {
+  SpellWindowWrapper,
+  EditSpellModalWrapper,
+} from '~/components/wiki/spells/SpellWindowWrapper';
 import { GMScreenDialogs, type DialogState } from './GMScreenDialogs';
 import { ScreenBar } from './ScreenBar';
 import { StackCard } from './StackCard';
@@ -62,6 +68,17 @@ function toFloatingState(state: string): FloatingWindowState {
 export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
   const { screens, isLoading: listLoading, error: listError } = useGMScreenList(campaignId);
   const [activeScreenId, setActiveScreenId] = useState<string | null>(null);
+  // Local state stays the render source of truth (tab clicks must not wait on a
+  // round-trip); player state is only *seeded from* on mount and *synced to* on
+  // user-initiated changes. The wiki (a sibling subtree) reads it from there.
+  const {
+    playerState,
+    isLoading: playerStateLoading,
+    updateState,
+    removePrivateWindow,
+  } = useTabletopPlayerState(campaignId);
+  const removePrivateWindowMutate = removePrivateWindow.mutate;
+  const { schedulePrivateLayout, cancelPrivateLayout } = usePrivateWindowLayout(campaignId);
   const [dialog, setDialog] = useState<DialogState>({ type: 'none' });
   const mutations = useGMScreenMutations(campaignId);
   const [editingCharacterId, setEditingCharacterId] = useState<string | null>(null);
@@ -73,6 +90,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
   const [editingLoreId, setEditingLoreId] = useState<string | null>(null);
   const [editingOrganizationId, setEditingOrganizationId] = useState<string | null>(null);
   const [editingQuestId, setEditingQuestId] = useState<string | null>(null);
+  const [editingSpellId, setEditingSpellId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [flashWindowId, setFlashWindowId] = useState<string | null>(null);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -91,9 +109,33 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
   const screensRef = useRef(screens);
   screensRef.current = screens;
 
-  // Auto-select first screen once the list has settled (not while loading).
+  // Ref to the persisted screen id so the auto-select effect can read it
+  // without re-running every time our own persist call round-trips.
+  const restoredScreenIdRef = useRef<string | null>(null);
+  restoredScreenIdRef.current = playerState?.activeGMScreenId ?? null;
+
+  // Whether the one-time restore from player state has already happened.
+  const hasSeededRef = useRef(false);
+
+  // GMScreensView isn't remounted on a campaignId change (no `key` at the
+  // call site, and TanStack Router v1 doesn't remount on a path-param
+  // change), so hasSeededRef must be reset by hand when the campaign
+  // switches — otherwise campaign B's first pass sees hasSeededRef already
+  // true and falls back to screens[0] instead of restoring ITS persisted
+  // screen. Comparing-during-render (not in an effect) mirrors the ref
+  // writes above and ensures the reset lands before the seeding effect runs.
+  const prevCampaignIdRef = useRef(campaignId);
+  if (prevCampaignIdRef.current !== campaignId) {
+    prevCampaignIdRef.current = campaignId;
+    hasSeededRef.current = false;
+  }
+
+  // Auto-select a screen once the list has settled (not while loading).
   // Uses screenIdsKey (primitive) so it only fires when the set of IDs
   // changes, and a functional update to avoid activeScreenId in deps.
+  // On the FIRST pass it also waits for player state so it can restore the
+  // GM's last screen instead of flashing screens[0]; afterwards player state
+  // is ignored here and only written to.
   useEffect(() => {
     if (listLoading) return;
     const current = screensRef.current;
@@ -101,12 +143,19 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
       setActiveScreenId(null);
       return;
     }
+    // Only the initial seed waits on player state; later list changes must not.
+    if (!hasSeededRef.current && playerStateLoading) return;
+
     const idSet = new Set(current.map((s) => s.id));
-    setActiveScreenId((prev) => {
-      if (prev && idSet.has(prev)) return prev;
-      return current[0]!.id;
-    });
-  }, [screenIdsKey, listLoading]);
+    // Restore the GM's last screen. Falls back to the first screen on first
+    // visit (activeGMScreenId is null until they pick one) and when the
+    // persisted screen has since been deleted.
+    const restored = hasSeededRef.current ? null : restoredScreenIdRef.current;
+    hasSeededRef.current = true;
+    const fallback = restored && idSet.has(restored) ? restored : current[0]!.id;
+
+    setActiveScreenId((prev) => (prev && idSet.has(prev) ? prev : fallback));
+  }, [screenIdsKey, listLoading, playerStateLoading]);
 
   // Clear drag highlight when switching screens
   useEffect(() => {
@@ -120,6 +169,39 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     error: detailError,
   } = useGMScreenDetail(campaignId, activeScreenId);
 
+  /** `collection:documentId` of every SHARED window on this screen. */
+  const sharedRefKeys = useMemo(
+    () => new Set((activeScreen?.windows ?? []).map((w) => `${w.collection}:${w.documentId}`)),
+    [activeScreen]
+  );
+
+  // The caller's own private windows for this GM screen. GM screens are
+  // campaign-scoped and shared between co-GMs, so "private" still means
+  // something here: these live on player state, are only ever returned to their
+  // owner, and no other GM sees them.
+  //
+  // A private window for a document that is ALSO open as a shared window is
+  // suppressed: a co-GM can open an item this viewer already showed themselves
+  // (the client's own `isAlreadyOpen` check only prevents the reverse order),
+  // and rendering both produces two identical windows. The row is kept in the
+  // database, not deleted — if the shared window is later closed, the viewer's
+  // private one comes back.
+  //
+  // IMPORTANT: this filtered list is what `handleWindowsChange` uses to detect
+  // closes. It has to be, since a suppressed window is never rendered and so is
+  // never in `nextWindows` — reading the unfiltered list there would treat every
+  // suppressed window as "closed" and delete it.
+  const privateWindows = useMemo(
+    () =>
+      (playerState?.privateWindows ?? []).filter(
+        (pw) =>
+          pw.surface === 'gmscreen' &&
+          pw.screenId === activeScreenId &&
+          !sharedRefKeys.has(`${pw.collection}:${pw.documentId}`)
+      ),
+    [playerState, activeScreenId, sharedRefKeys]
+  );
+
   // --- Debounced persistence refs ---
   // Per-window timers so multi-window updates don't clobber each other
   const updateTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
@@ -128,7 +210,20 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     Map<string, Parameters<typeof mutations.updateWindow.mutate>[0]>
   >(new Map());
 
-  // Flush pending updates on unmount instead of discarding them
+  // Ref kept current to the (referentially-stable, but not statically provable)
+  // updateWindow mutate fn so the unmount-only flush below can call the latest
+  // one without listing `mutations` as a dependency.
+  const updateWindowMutateRef = useRef(mutations.updateWindow.mutate);
+  updateWindowMutateRef.current = mutations.updateWindow.mutate;
+
+  // Flush pending updates on unmount instead of discarding them. This is
+  // deliberately an unmount-only ([]) effect: useGMScreenMutations returns a
+  // FRESH object every render, so a [mutations] dep would run this cleanup on
+  // EVERY render — clearing the debounce timer set moments earlier by
+  // handleWindowsChange AND firing updateWindow for every pending payload. That
+  // turned the 500ms debounce into a POST on essentially every drag/resize
+  // frame. Reading the mutate fn through updateWindowMutateRef keeps the flush
+  // correct without depending on `mutations`.
   useEffect(() => {
     const timers = updateTimersRef.current;
     const pending = pendingUpdatesRef.current;
@@ -136,12 +231,38 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
       for (const timer of timers.values()) clearTimeout(timer);
       timers.clear();
       for (const payload of pending.values()) {
-        mutations.updateWindow.mutate(payload);
+        updateWindowMutateRef.current(payload);
       }
       pending.clear();
+    };
+  }, []);
+
+  // Flash timer cleanup is deliberately its OWN unmount-only effect. It used to
+  // live in the flush effect above, whose deps are [mutations] — and
+  // useGMScreenMutations returns a fresh object every render, so that cleanup
+  // runs on every render, not just unmount. It therefore cleared the 700ms
+  // timer immediately after setFlashWindowId re-rendered, and the flash class
+  // stuck on the window forever instead of fading.
+  useEffect(() => {
+    return () => {
       if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
     };
-  }, [mutations]);
+  }, []);
+
+  // --- Screen selection ---
+
+  const updateStateMutate = updateState.mutate;
+
+  // Persist on user-initiated selection only. Local state updates first so the
+  // tab switch is instant; the write is fire-and-forget. NOT called from the
+  // seeding effect above — that would write on every mount.
+  const handleSelectScreen = useCallback(
+    (id: string) => {
+      setActiveScreenId(id);
+      updateStateMutate({ activeGMScreenId: id });
+    },
+    [updateStateMutate]
+  );
 
   // --- Screen CRUD handlers ---
 
@@ -150,13 +271,14 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
       const result = await mutations.createScreen.mutateAsync(name);
       if (result?.screen) {
         setActiveScreenId(result.screen.id);
+        updateStateMutate({ activeGMScreenId: result.screen.id });
       }
       // Invalidate list AFTER selection is set to prevent the auto-select
       // effect from briefly choosing a different screen during the refetch.
       mutations.invalidateList();
       setDialog({ type: 'none' });
     },
-    [mutations]
+    [mutations, updateStateMutate]
   );
 
   const handleRenameScreen = useCallback(
@@ -182,6 +304,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     const idx = currentScreens.findIndex((s) => s.id === deletingId);
     const nextScreen = currentScreens[idx + 1] ?? currentScreens[idx - 1] ?? null;
     setActiveScreenId(nextScreen?.id ?? null);
+    updateStateMutate({ activeGMScreenId: nextScreen?.id ?? null });
 
     // Clear any pending debounced window-update timers for the deleted screen's windows
     const windowIdSet = new Set(windowIds);
@@ -196,7 +319,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     // Invalidate list AFTER mutation + selection to avoid race
     mutations.invalidateList();
     setDialog({ type: 'none' });
-  }, [dialog, mutations, activeScreen]);
+  }, [dialog, mutations, activeScreen, updateStateMutate]);
 
   const handleReorder = useCallback(
     async (screenIds: string[]) => {
@@ -213,9 +336,35 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
       // Optimistically update local state immediately
       setLocalWindows(nextWindows);
 
+      const nextIds = new Set(nextWindows.map((w) => w.id));
+
+      // Route each disappeared window by the list it came from, NOT by a tag
+      // riding on the ManagedWindow (which could go stale). A private window
+      // must never go through closeWindow: that mutation removes the SHARED
+      // window from GMScreen.windows for every GM of the campaign.
+      for (const pw of privateWindows) {
+        if (!nextIds.has(pw.id)) {
+          // Drop any in-flight layout write first — persisting geometry for a
+          // window that is being deleted is pointless and races the $pull.
+          cancelPrivateLayout(pw.id);
+          removePrivateWindowMutate({ privateWindowId: pw.id });
+        }
+      }
+
+      // Private windows persist their own layout, on the caller's player state
+      // rather than the shared screen — same debounce, different mutation.
+      for (const nw of nextWindows) {
+        const pw = privateWindows.find((p) => p.id === nw.id);
+        if (!pw) continue;
+        schedulePrivateLayout(nw, pw);
+      }
+
       if (!activeScreenId || !activeScreen) return;
 
-      // Persist changes debounced — one timer per window
+      // Persist layout changes debounced — one timer per window. Private
+      // windows have no `orig` here and are handled by the loop above:
+      // updateWindow addresses GMScreen.windows by id and has nothing to
+      // write for them.
       for (const nw of nextWindows) {
         const orig = activeScreen.windows.find((w) => w.id === nw.id);
         if (!orig) continue;
@@ -254,8 +403,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
         }
       }
 
-      // Handle closes — clear pending timers before firing the close mutation
-      const nextIds = new Set(nextWindows.map((w) => w.id));
+      // Handle shared closes — clear pending timers before firing the mutation
       for (const w of activeScreen.windows) {
         if (!nextIds.has(w.id)) {
           const pending = updateTimersRef.current.get(w.id);
@@ -267,7 +415,15 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
         }
       }
     },
-    [activeScreenId, activeScreen, mutations]
+    [
+      activeScreenId,
+      activeScreen,
+      mutations,
+      privateWindows,
+      removePrivateWindowMutate,
+      schedulePrivateLayout,
+      cancelPrivateLayout,
+    ]
   );
 
   const openWindow = mutations.openWindow.mutate;
@@ -278,6 +434,86 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     },
     [activeScreenId, openWindow]
   );
+
+  // Focus + flash an already-open window (shared or private) — the single flash
+  // path for both the drop handler and wiki focus requests.
+  //
+  // A SHARED window's z-index is campaign-wide layout, so it persists through
+  // updateWindow (unchanged from the drop handler's original behaviour). A
+  // PRIVATE window has no such mutation — updateWindow addresses
+  // GMScreen.windows and would not find it — and its stacking is the owner's
+  // own business, so it is raised in local state only.
+  const focusWindow = useCallback(
+    (windowId: string) => {
+      const shared = activeScreen?.windows.find((w) => w.id === windowId);
+
+      if (shared && activeScreenId) {
+        // Max across BOTH kinds: raising above only the shared windows could
+        // still leave the target underneath one of the caller's own private
+        // windows.
+        const maxZ = [...(activeScreen?.windows ?? []), ...privateWindows].reduce(
+          (max, w) => Math.max(max, w.zIndex),
+          0
+        );
+        mutations.updateWindow.mutate({
+          screenId: activeScreenId,
+          windowId,
+          zIndex: maxZ + 1,
+          state: 'open',
+        });
+      } else {
+        setLocalWindows((prev) => {
+          const target = prev.find((w) => w.id === windowId);
+          if (!target) return prev;
+          const maxZ = prev.reduce((max, w) => Math.max(max, w.zIndex), 0);
+          if (target.zIndex === maxZ && target.state !== 'minimized') return prev;
+          return prev.map((w) =>
+            w.id === windowId
+              ? { ...w, zIndex: maxZ + 1, state: w.state === 'minimized' ? 'normal' : w.state }
+              : w
+          );
+        });
+      }
+
+      setFlashWindowId(windowId);
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = setTimeout(() => {
+        flashTimerRef.current = null;
+        setFlashWindowId(null);
+      }, 700);
+    },
+    [activeScreen, activeScreenId, mutations, privateWindows]
+  );
+
+  // --- Focus requests from the wiki ("Show on Screen" on an already-open item) ---
+  // The event detail carries no screenId, so match on collection+documentId
+  // within the active screen, across both shared and private windows.
+  useEffect(() => {
+    const onFocus = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        campaignId?: string;
+        surface?: string;
+        collection?: string;
+        documentId?: string;
+      } | null;
+      // Guard on campaign too — a stale/cross-campaign event must not focus a
+      // window in this view.
+      if (!detail || detail.surface !== 'gmscreen' || detail.campaignId !== campaignId) return;
+
+      const match =
+        privateWindows.find(
+          (pw) => pw.collection === detail.collection && pw.documentId === detail.documentId
+        ) ??
+        activeScreen?.windows.find(
+          (w) => w.collection === detail.collection && w.documentId === detail.documentId
+        );
+      if (!match) return;
+      focusWindow(match.id);
+    };
+
+    window.addEventListener('cartyx:focus-window', onFocus);
+    return () => window.removeEventListener('cartyx:focus-window', onFocus);
+  }, [privateWindows, activeScreen, focusWindow, campaignId]);
 
   const handleDragOver = useCallback(
     (e: DragEvent<HTMLDivElement>) => {
@@ -320,19 +556,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
 
       if (existing) {
         // Focus + flash the existing window
-        const maxZ = activeScreen.windows.reduce((max, w) => Math.max(max, w.zIndex), 0);
-        mutations.updateWindow.mutate({
-          screenId: activeScreenId,
-          windowId: existing.id,
-          zIndex: maxZ + 1,
-          state: 'open',
-        });
-        setFlashWindowId(existing.id);
-        if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
-        flashTimerRef.current = setTimeout(() => {
-          flashTimerRef.current = null;
-          setFlashWindowId(null);
-        }, 700);
+        focusWindow(existing.id);
         return;
       }
 
@@ -349,7 +573,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
         y,
       });
     },
-    [activeScreenId, activeScreen, mutations]
+    [activeScreenId, activeScreen, mutations, focusWindow]
   );
 
   // --- Stack handlers ---
@@ -409,15 +633,27 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
     const isScreenSwitch = localScreenIdRef.current !== activeScreenId;
     localScreenIdRef.current = activeScreenId;
 
+    // Shared windows (GMScreen.windows — every GM of the campaign sees them)
+    // and the caller's own private windows render through the SAME branch chain
+    // below; only their close route and hydration source differ. Close routing
+    // keys off which list an id came from (see handleWindowsChange), so the
+    // merged entries need no private/shared tag of their own.
+    const sources = [...activeScreen.windows, ...privateWindows];
+
+    // Both maps are keyed `collection:documentId`. Private-window docs are
+    // hydrated by getPlayerState (which also enforces the per-collection
+    // security filter); shared ones come from the screen-detail query.
+    const hydratedDocs = { ...activeScreen.hydrated, ...(playerState?.hydrated ?? {}) };
+
     setLocalWindows((prev) => {
       const prevById = isScreenSwitch
         ? new Map<string, ManagedWindow>()
         : new Map(prev.map((w) => [w.id, w]));
-      const serverIds = new Set(activeScreen.windows.map((w) => w.id));
+      const sourceIds = new Set(sources.map((w) => w.id));
 
-      const merged = activeScreen.windows.map((w) => {
+      const merged = sources.map((w) => {
         const key = `${w.collection}:${w.documentId}`;
-        const doc = activeScreen.hydrated[key];
+        const doc = hydratedDocs[key];
         const title = doc?.title || key;
         const markdownContent = doc?.content || '';
 
@@ -497,6 +733,14 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
               questId={w.documentId}
               campaignId={campaignId}
               onEdit={() => setEditingQuestId(w.documentId)}
+            />
+          );
+        } else if (w.collection === 'spell') {
+          windowContent = (
+            <SpellWindowWrapper
+              spellId={w.documentId}
+              campaignId={campaignId}
+              onEdit={() => setEditingSpellId(w.documentId)}
             />
           );
         } else if (w.collection === 'events') {
@@ -598,14 +842,23 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
             p.iconKey === merged[i]!.iconKey &&
             p.className === merged[i]!.className
         ) &&
-        serverIds.size === prev.length
+        sourceIds.size === prev.length
       ) {
         return prev;
       }
 
       return merged;
     });
-  }, [activeScreen, activeScreenId, flashWindowId, campaignId, isGM, handleOpenItem]);
+  }, [
+    activeScreen,
+    activeScreenId,
+    flashWindowId,
+    campaignId,
+    isGM,
+    handleOpenItem,
+    privateWindows,
+    playerState,
+  ]);
 
   // --- Render ---
 
@@ -634,7 +887,7 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
       <ScreenBar
         screens={screens}
         activeScreenId={activeScreenId}
-        onSelectScreen={setActiveScreenId}
+        onSelectScreen={handleSelectScreen}
         onCreateScreen={() => setDialog({ type: 'create-screen' })}
         onRenameScreen={(id) => {
           const s = screens.find((s) => s.id === id);
@@ -825,6 +1078,13 @@ export function GMScreensView({ campaignId, isGM = true }: GMScreensViewProps) {
           campaignId={campaignId}
           questId={editingQuestId}
           onClose={() => setEditingQuestId(null)}
+        />
+      )}
+      {editingSpellId !== null && (
+        <EditSpellModalWrapper
+          campaignId={campaignId}
+          spellId={editingSpellId}
+          onClose={() => setEditingSpellId(null)}
         />
       )}
     </div>

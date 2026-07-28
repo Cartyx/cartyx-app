@@ -2,97 +2,101 @@
 
 This guide covers the common extension patterns for the tabletop system.
 
-## Adding a New Drawing Tool
+## Adding a New Map Tool
 
-Drawing tools will be implemented in Phase 3. The pattern will be:
+Drawing, text, ruler and spell-AoE tools are all shipped — copy one rather than
+starting from scratch. The drawing tool is the fullest example. The pattern:
 
-1. **Define the tool** in `app/types/tabletop.ts`:
+1. **Register the tool** in `app/components/mainview/ToolBar.tsx` (`ToolType`,
+   plus `gmOnly: true` if it is GM-restricted) and, if it opens a panel, in
+   `toolWindowState.ts` (`ToolWindowId` + `TOOL_WINDOW_META`). Tools in
+   `MODAL_TOOLS` also become a map mode; those in `WINDOW_ONLY_TOOLS` are just
+   window toggles.
 
-   ```typescript
-   export const DRAWING_TOOLS = ['pen', 'line', 'rect', 'circle', 'eraser'] as const;
-   export type DrawingTool = (typeof DRAWING_TOOLS)[number];
-   ```
+2. **Write the interaction hook** next to `ActiveMapStage` — see `useAoeTool.ts`
+   or `useRulerTool.ts`. It takes DOM pointer events (not Konva: the map surface
+   is plain DOM), converts through `domToImage`, and calls `onCommit` with
+   map-local coordinates.
 
-2. **Create the tool component** in `app/components/mainview/tabletop/tools/`:
-   - Accept canvas coordinates from Konva pointer events.
-   - Render preview shapes on a dedicated drawing `<Layer>`.
-   - On completion, emit the final shape data.
+3. **Render the overlay** as an SVG layer, modelled on `MapDrawingLayer.tsx` or
+   `MapAoELayer.tsx`, and place it in the compositing order inside
+   `ActiveMapStage.tsx`. Give it a per-viewer visibility toggle in the zoom
+   toolbar unless it genuinely belongs on a Layers-panel layer.
 
-3. **Add a PartyKit message** (see "Adding a New Message Type" below) to broadcast
-   the drawn shape to other clients.
+4. **Persist it** as its own collection keyed by `mapId` — see
+   `app/server/db/models/MapDrawing.ts` and `app/server/functions/mapDrawings.ts`
+   with a Zod schema under `app/types/schemas/`. Do **not** add a subdocument
+   array to `TabletopScreen`; map contents are not screen contents.
 
-4. **Persist on the server** by adding a `drawings[]` subdocument array to the
-   `TabletopScreen` model (similar to how `windows[]` works).
-
-5. **Add the toolbar** in `TabletopCanvas` to switch between tools.
+5. **Broadcast it** on the `tabletop_map` party (see below).
 
 ## Adding a New Layer
 
-Layers are Konva `<Layer>` components stacked inside the `<Stage>`.
+Layers-panel layers live in `MAP_LAYERS` (`app/types/mapLayer.ts`), ordered
+highest → lowest. Adding one means:
 
-1. **Create the layer component** in `app/components/mainview/tabletop/`:
+1. **Add the entry** to `MAP_LAYERS`. `MapLayerId` derives from the array, so the
+   type follows automatically. Mark `placeholder: true` if the authoring tools
+   don't exist yet (this is what Fog of War does).
 
-   ```
-   FogOfWarLayer.tsx
-   TokenLayer.tsx
-   DrawingLayer.tsx
-   ```
+2. **Gate rendering** on `!hiddenLayers.has('<id>')` in `ActiveMapStage.tsx`, at
+   the right point in the compositing order.
 
-2. **Insert it in the Stage** at the correct position in `TabletopCanvas`. The
-   render order determines the visual stacking (first = bottom):
+3. **Derive membership where possible.** Token layers compute `gm-private` vs
+   `public` from `hiddenFromPlayers` via `tokenLayerId()` rather than storing a
+   parallel `layer` field — prefer that over a new persisted column.
 
-   ```tsx
-   <Stage width={w} height={h}>
-     <BaseLayer /> {/* 1. grid/map */}
-     <GMHiddenLayer /> {/* 2. GM-only annotations */}
-     <FogOfWarLayer /> {/* 3. reveal/hide regions */}
-     <DrawingLayer /> {/* 4. freehand, shapes */}
-     <TokenLayer /> {/* 5. character tokens */}
-   </Stage>
-   ```
+Note the Layers panel is GM-only, and `hiddenLayers` is local, per-viewer state:
+hiding a layer changes what the GM sees, not what players see. If what you want
+is a per-viewer show/hide for everyone, add a zoom-toolbar toggle instead — that
+is what spell effects, drawings and text do.
 
-   For a worked example of a real, rendered layer-style component, see
-   `MapDrawingLayer.tsx` (freehand/shape drawing) or `MapToken.tsx` (a single
-   positioned token), both under `app/components/mainview/tabletop/` and
-   rendered from `ActiveMapStage.tsx`.
+For worked examples see `MapDrawingLayer.tsx` (freehand/shape drawing) or
+`MapToken.tsx` (a single positioned token), both rendered from
+`ActiveMapStage.tsx`.
 
-3. **Control visibility** per role. GM-only layers check the `isGM` prop and
-   skip rendering for players.
+## Adding a New Realtime Message Type
 
-4. **Wire data** from the screen detail. If the layer needs persisted data, add
-   the corresponding subdocument array to `TabletopScreen` and update the
-   hydration logic.
+First pick the party — the three behave differently (see
+[real-time-sync.md](./real-time-sync.md)):
 
-## Adding a New PartyKit Message Type
+- **`tabletop`** — tabs and windows. Union: `TabletopMessage` in
+  `app/types/tabletop.ts`.
+- **`tabletop_map`** — map contents (tokens, drawings, text, AoE). Union in
+  `app/hooks/useTabletopMapParty.ts`.
+- **`main`** — chat, dice, spell cards. Validated and persisted.
 
-1. **Extend the union** in `app/types/tabletop.ts`:
+1. **Extend the union** for that party:
 
    ```typescript
    export type TabletopMessage = {
-     type: 'token:move';
+     type: 'tab:pin';
      screenId: string;
-     tokenId: string;
-     x: number;
-     y: number;
    };
    // ... existing types
    ```
 
-2. **Handle on receive** in `TabletopView.handleMessage`:
+2. **Handle on receive** — `TabletopView.handleMessage` for `tabletop`;
+   `useTabletopMapSync` / `ActiveMapStage` for `tabletop_map`.
 
    ```typescript
-   case 'token:move':
+   case 'tab:pin':
      // Update local state or invalidate a query
      break;
    ```
 
-3. **Send from the UI** using the `send()` function returned by `useTabletopParty`:
+3. **Send from the UI** using the `send()` returned by the party's hook:
 
    ```typescript
-   send({ type: 'token:move', screenId, tokenId, x: newX, y: newY });
+   send({ type: 'tab:pin', screenId });
    ```
 
-4. **No server changes needed** -- the PartyKit server is a transparent relay.
+4. **Update the server if the type is restricted.** The relay is not a
+   transparent pipe. A GM-only type must be added to `GM_ONLY_MESSAGE_TYPES` in
+   `realtime/src/parties/tabletop.ts` or `tabletopMap.ts`, or any player can
+   forge it. A `main`-party type must be added to `VALID_TYPES` plus its
+   validation in `realtime/src/parties/session.ts`. Only genuinely unrestricted
+   types need no server change.
 
 ## Adding a New Server Function
 
@@ -208,7 +212,8 @@ For any new tabletop feature, verify:
 - [ ] **Error tracking:** `serverCaptureException` called in catch blocks
 - [ ] **Hook:** RPC wrapper uses `await import()` for server-only code
 - [ ] **Query invalidation:** Mutations invalidate the correct query keys
-- [ ] **Real-time:** PartyKit message type added if other clients need updates
+- [ ] **Real-time:** message type added to the right party if other clients need updates
 - [ ] **Permissions:** UI hides GM-only controls when `isGM` is false
 - [ ] **Permissions:** Server enforces `requireCampaignGM` for GM-only mutations
+- [ ] **Permissions:** GM-only message types added to the party's `GM_ONLY_MESSAGE_TYPES`
 - [ ] **E2E test:** Playwright test covers the happy path in `e2e/tabletop/`

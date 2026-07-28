@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { Building2 } from 'lucide-react';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
 import { WikiCategoryHeader } from '~/components/wiki/shared/WikiCategoryHeader';
 import { WikiFilterBar } from '~/components/wiki/shared/WikiFilterBar';
 import { OrganizationCard } from './OrganizationCard';
 import { OrganizationModal } from './OrganizationModal';
 import { OrganizationViewModal } from './OrganizationViewModal';
-import { useOrganizations } from '~/hooks/useOrganizations';
+import { useOrganizations, useDeleteOrganization } from '~/hooks/useOrganizations';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import { useLocations } from '~/hooks/useLocations';
 import type { OrganizationListItem } from '~/types/organization';
 
@@ -24,6 +26,13 @@ export function OrganizationsPanel({ onBack }: OrganizationsPanelProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | undefined>();
   const [viewId, setViewId] = useState<string | undefined>();
+  const { remove: removeItem, isLoading: isDeleting } = useDeleteOrganization();
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<OrganizationListItem>(
+      (item) => removeItem({ id: item.id, campaignId }),
+      'Failed to delete organization. Please try again.'
+    );
 
   const { organizations, isLoading, error } = useOrganizations(campaignId, {
     search: search || undefined,
@@ -43,6 +52,12 @@ export function OrganizationsPanel({ onBack }: OrganizationsPanelProps) {
     } else {
       setViewId(org.id);
     }
+  };
+
+  // The menu's Edit only renders when canEdit, so this always goes to the editor.
+  const handleEdit = (org: OrganizationListItem) => {
+    setSelectedId(org.id);
+    setIsModalOpen(true);
   };
 
   const toggleLocation = (id: string) => {
@@ -110,7 +125,13 @@ export function OrganizationsPanel({ onBack }: OrganizationsPanelProps) {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="flex flex-col">
             {organizations.map((org) => (
-              <OrganizationCard key={org.id} organization={org} onClick={handleClick} />
+              <OrganizationCard
+                key={org.id}
+                organization={org}
+                onClick={handleClick}
+                onEdit={handleEdit}
+                onDelete={() => requestDelete(org)}
+              />
             ))}
           </div>
         </div>
@@ -131,6 +152,18 @@ export function OrganizationsPanel({ onBack }: OrganizationsPanelProps) {
           onClose={() => setViewId(undefined)}
           organizationId={viewId}
           campaignId={campaignId}
+        />
+      )}
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete organization"
+          message={`Delete "${pendingDelete.name}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={isDeleting}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

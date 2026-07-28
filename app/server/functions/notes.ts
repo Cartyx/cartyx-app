@@ -43,17 +43,20 @@ function serializeNote(n: {
   };
 }
 
-function serializeNoteListItem(n: {
-  _id: unknown;
-  campaignId: unknown;
-  sessionId: unknown;
-  createdBy: unknown;
-  title?: string;
-  tags?: string[];
-  isPublic?: boolean;
-  createdAt?: Date;
-  updatedAt?: Date;
-}): NoteListItem {
+function serializeNoteListItem(
+  n: {
+    _id: unknown;
+    campaignId: unknown;
+    sessionId: unknown;
+    createdBy: unknown;
+    title?: string;
+    tags?: string[];
+    isPublic?: boolean;
+    createdAt?: Date;
+    updatedAt?: Date;
+  },
+  callerUserId: string
+): NoteListItem {
   return {
     id: String(n._id),
     campaignId: String(n.campaignId),
@@ -62,6 +65,9 @@ function serializeNoteListItem(n: {
     title: n.title ?? '',
     tags: n.tags ?? [],
     isPublic: n.isPublic ?? false,
+    // Notes are creator-only for edit and delete (see updateNote/deleteNote —
+    // no GM bypass), so canEdit is a plain creator check.
+    canEdit: String(n.createdBy) === callerUserId,
     createdAt: n.createdAt instanceof Date ? n.createdAt.toISOString() : '',
     updatedAt: n.updatedAt instanceof Date ? n.updatedAt.toISOString() : '',
   };
@@ -295,7 +301,7 @@ export const listNotes = async ({ data }: { data: z.infer<typeof listNotesSchema
         createdAt?: Date;
         updatedAt?: Date;
       }>
-    ).map(serializeNoteListItem);
+    ).map((n) => serializeNoteListItem(n, userId));
   } catch (e) {
     serverCaptureException(e, sessionUserId, {
       action: 'listNotes',

@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { NotesPanel } from '~/components/mainview/notes/NotesPanel';
 import { useNotes, useNote, useCreateNote, useUpdateNote, useDeleteNote } from '~/hooks/useNotes';
 import { useCampaign } from '~/hooks/useCampaigns';
+import { WikiCardActionsTestWrapper } from '../../../support/renderWithWikiCardActions';
 
 // Mock the hooks
 vi.mock('~/hooks/useNotes');
@@ -12,7 +13,12 @@ vi.mock('~/hooks/useCampaigns');
 vi.mock('~/hooks/useTags', () => ({
   useTags: () => ({ tags: [], isLoading: false, error: null }),
 }));
+vi.mock('~/hooks/useGMScreens', () => ({
+  useGMScreenDetail: () => ({ screen: null }),
+  useGMScreenList: () => ({ screens: [] }),
+}));
 vi.mock('~/hooks/useTabletopScreens', () => ({
+  useTabletopScreenDetail: () => ({ screen: null }),
   useTabletopScreenList: () => ({ screens: [], isLoading: false, error: null }),
   useTabletopMutations: () => ({
     openWindow: { mutate: vi.fn(), isPending: false },
@@ -20,6 +26,16 @@ vi.mock('~/hooks/useTabletopScreens', () => ({
 }));
 vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ campaignId: 'campaign-123' }),
+  useSearch: () => ({ tab: 'wiki' }),
+}));
+// NoteModal's ShowOnTabletopButton reads useWikiCardActions, which also reads
+// tabletop player state — stub it so the panel's edit modal still renders
+// standalone here (same pattern as LoreCard.test.tsx).
+vi.mock('~/hooks/useTabletopPlayerState', () => ({
+  useTabletopPlayerState: () => ({
+    playerState: null,
+    addPrivateWindow: { mutate: vi.fn() },
+  }),
 }));
 
 const mockSessions = [
@@ -47,11 +63,14 @@ const mockNotes = [
     title: 'Note 1',
     tags: ['lore', 'secret'],
     isPublic: true,
+    canEdit: true,
     updatedAt: new Date().toISOString(),
     createdAt: new Date().toISOString(),
     createdBy: 'user-1',
   },
 ];
+
+const removeNoteMock = vi.fn();
 
 describe('NotesPanel', () => {
   beforeEach(() => {
@@ -81,15 +100,17 @@ describe('NotesPanel', () => {
       isLoading: false,
       error: null,
     });
+    removeNoteMock.mockReset();
+    removeNoteMock.mockResolvedValue({ success: true });
     (useDeleteNote as any).mockReturnValue({
-      remove: vi.fn(),
+      remove: removeNoteMock,
       isLoading: false,
       error: null,
     });
   });
 
   it('renders filters and notes list', async () => {
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     expect(screen.getByPlaceholderText('Search notes...')).toBeInTheDocument();
     expect(screen.getByLabelText('Create new note')).toBeInTheDocument();
@@ -102,9 +123,40 @@ describe('NotesPanel', () => {
     });
   });
 
+  it('deletes a note via the card overflow menu (owner only)', async () => {
+    const user = userEvent.setup();
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
+
+    await waitFor(() => expect(screen.getByText('Note 1')).toBeInTheDocument());
+
+    // Open the note's overflow menu and choose Delete.
+    await user.click(screen.getByRole('button', { name: 'Note actions' }));
+    await user.click(screen.getByTestId('overflow-item-delete'));
+
+    // Confirm dialog appears; confirming removes the note.
+    expect(screen.getByText(/Delete "Note 1"\?/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete' }));
+
+    expect(removeNoteMock).toHaveBeenCalledWith({ id: 'note-1', campaignId: 'campaign-123' });
+  });
+
+  it('offers no Edit/Delete menu on a note the caller cannot edit', async () => {
+    (useNotes as any).mockReturnValue({
+      notes: [{ ...mockNotes[0], canEdit: false }],
+      isLoading: false,
+      error: null,
+    });
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
+
+    await waitFor(() => expect(screen.getByText('Note 1')).toBeInTheDocument());
+    // On the wiki tab (no tabletop/GM surface) a non-owner has no qualifying
+    // actions, so the overflow menu does not render at all — no Edit, no Delete.
+    expect(screen.queryByRole('button', { name: 'Note actions' })).not.toBeInTheDocument();
+  });
+
   it('updates filters when search input changes', async () => {
     const user = userEvent.setup();
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     const searchInput = screen.getByPlaceholderText('Search notes...');
     await user.type(searchInput, 'test search');
@@ -119,7 +171,7 @@ describe('NotesPanel', () => {
 
   it('updates filters when session select changes', async () => {
     const user = userEvent.setup();
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     await waitFor(() => {
       expect(screen.getByText('Session 1: First Session')).toBeInTheDocument();
@@ -138,7 +190,7 @@ describe('NotesPanel', () => {
 
   it('updates filters when visibility select changes', async () => {
     const user = userEvent.setup();
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     const visibilitySelect = screen.getByLabelText('Filter by visibility');
     await user.selectOptions(visibilitySelect, 'public');
@@ -153,7 +205,7 @@ describe('NotesPanel', () => {
 
   it('opens create modal when + button is clicked', async () => {
     const user = userEvent.setup();
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     const createButton = screen.getByLabelText('Create new note');
     await user.click(createButton);
@@ -164,7 +216,7 @@ describe('NotesPanel', () => {
 
   it('opens edit modal when a note is clicked', async () => {
     const user = userEvent.setup();
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
 
     await waitFor(() => {
       expect(screen.getByText('Note 1')).toBeInTheDocument();
@@ -183,7 +235,7 @@ describe('NotesPanel', () => {
       error: null,
     });
 
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
     expect(screen.getByText('Loading notes...')).toBeInTheDocument();
   });
 
@@ -194,7 +246,7 @@ describe('NotesPanel', () => {
       error: null,
     });
 
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
     expect(screen.getByText('No notes found matching your filters.')).toBeInTheDocument();
   });
 
@@ -205,7 +257,7 @@ describe('NotesPanel', () => {
       error: 'Failed to fetch',
     });
 
-    render(<NotesPanel />);
+    render(<NotesPanel />, { wrapper: WikiCardActionsTestWrapper });
     expect(screen.getByText('Failed to fetch')).toBeInTheDocument();
   });
 });

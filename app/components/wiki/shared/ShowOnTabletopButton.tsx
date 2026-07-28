@@ -1,6 +1,5 @@
-import type { MouseEvent } from 'react';
 import { Monitor } from 'lucide-react';
-import { useTabletopScreenList, useTabletopMutations } from '~/hooks/useTabletopScreens';
+import { useWikiCardActions } from '~/hooks/useWikiCardActions';
 
 interface ShowOnTabletopButtonProps {
   campaignId: string;
@@ -11,44 +10,41 @@ interface ShowOnTabletopButtonProps {
 }
 
 /**
- * GM-only button that opens a wiki item as a window on the first available
- * tabletop screen. Designed to be dropped into any wiki view-modal header or
- * card action area.
+ * GM-only button that opens a wiki item as a window on the tabletop's active
+ * screen (falling back to the first screen only on first visit, before any
+ * screen has been made active). Designed to be dropped into any wiki
+ * view-modal header or card action area.
  *
- * Phase 1: targets the first screen in the list. A screen-picker can be added
- * in a later phase if the GM has multiple screens.
+ * Delegates to useWikiCardActions' `push` action so this button and the
+ * wiki-card overflow menu share one implementation. `allowPushFromDashboard`
+ * is set because this button is also reachable from Dashboard widgets
+ * (PartyMembersWidget/KeyAlliesWidget view-modals), not just the
+ * Tabletop/GM Screens tabs the menu normally gates on.
  */
 export function ShowOnTabletopButton({
-  campaignId,
+  campaignId: _campaignId,
   collection,
   documentId,
   isGM,
 }: ShowOnTabletopButtonProps) {
-  const { screens } = useTabletopScreenList(campaignId);
-  const mutations = useTabletopMutations(campaignId);
+  const { menuItems } = useWikiCardActions({
+    collection,
+    documentId,
+    allowPushFromDashboard: true,
+  });
+  const push = menuItems.find((item) => item.key === 'push');
 
-  if (!isGM) return null;
-
-  // Phase 1: use the first screen. If there are no screens yet the button is
-  // rendered but disabled so the GM can see the affordance.
-  const targetScreenId = screens[0]?.id ?? null;
-
-  const handleClick = (e: MouseEvent<HTMLButtonElement>) => {
-    e.stopPropagation(); // prevent bubbling to parent click handlers
-    if (!targetScreenId) return;
-    mutations.openWindow.mutate({
-      screenId: targetScreenId,
-      collection,
-      documentId,
-    });
-  };
+  if (!isGM || !push) return null;
 
   return (
     <button
       type="button"
-      onClick={handleClick}
-      disabled={!targetScreenId || mutations.openWindow.isPending}
-      title={targetScreenId ? 'Show on Tabletop' : 'No tabletop screen available'}
+      onClick={(e) => {
+        e.stopPropagation(); // prevent bubbling to parent click handlers
+        push.onSelect();
+      }}
+      disabled={push.disabled}
+      title={push.title}
       aria-label="Show on Tabletop"
       className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-semibold text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-teal-400 disabled:opacity-40 disabled:cursor-not-allowed"
     >

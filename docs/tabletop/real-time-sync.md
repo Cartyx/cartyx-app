@@ -1,49 +1,107 @@
 # Real-Time Sync
 
-## PartyKit Setup
+## The Realtime Service
 
-The tabletop uses a dedicated PartyKit party named `tabletop`, separate from the
-main session chat/dice party in `party/index.ts`.
-
-```
-party/tabletop.ts     TabletopParty server class
-party/index.ts        SessionRoom server class (chat, dice, spell cards)
-partykit.json         { "name": "cartyx-party", "main": "party/index.ts" }
-```
-
-### Room ID Convention
-
-Each campaign gets one tabletop room:
+Realtime is a standalone Node + `ws` service in `realtime/`, self-hosted
+alongside the web app. It exposes three **parties** (independent message
+surfaces), named on the wire in `realtime/src/auth.ts`:
 
 ```
-Room ID = "tabletop-{campaignId}"
+realtime/src/
+  index.ts                Entrypoint (reads env, starts the server)
+  server.ts               HTTP + WS server, routing, heartbeat
+  rooms.ts                In-process Room/RoomManager + broadcast
+  auth.ts                 JWT verification + room binding
+  history.ts              Memory/Mongo message history stores
+  parties/
+    tabletop.ts           Tab + window relay (this doc)
+    tabletopMap.ts        Map contents: tokens, drawings, text, AoE
+    session.ts            Chat / dice / spell cards (stateful, with history)
 ```
 
-The client connects via `useTabletopParty(campaignId, getToken, onMessage)` which
-uses `partysocket/react`'s `usePartySocket` hook with:
+Run it locally with `npm run realtime:dev`. Env: `PORT` (default `1999`),
+`SESSION_SECRET` (**required** — the process exits without it), `MONGODB_URI`
+(optional; absent means in-memory history).
 
-- `host`: `VITE_PUBLIC_PARTYKIT_HOST` (defaults to `localhost:1999`)
-- `party`: `"tabletop"`
-- `room`: `"tabletop-{campaignId}"`
-- `query`: `{ token: await getToken() }` for authentication
+> Historical note: this was previously a PartyKit app in a `party/` directory
+> with a `partykit.json`. Both are gone — see the self-host migration. Two
+> legacy names survive deliberately and are **not** stale: the client env var
+> `VITE_PUBLIC_PARTYKIT_HOST`, and the `tabletop_map` party's underscore on the
+> wire (its room ids use hyphens).
 
-### Server Behaviour
+### Routing and Room IDs
 
-The `TabletopParty` server is a simple relay:
+`server.ts` routes on `/parties/<party>/<room>`. Each party binds its room id to
+the token's `sessionId` claim, so a peer cannot join another campaign's room:
+
+| Party          | Room ID                     |
+| -------------- | --------------------------- |
+| `main`         | `<sessionId>`               |
+| `tabletop`     | `tabletop-<campaignId>`     |
+| `tabletop_map` | `tabletop-map-<campaignId>` |
+
+Rooms live in process, keyed `party/roomId`, and are destroyed when the last peer
+leaves. The server also runs a 30s heartbeat and terminates dead sockets.
+
+### Authentication
+
+**The relay authenticates; it is not an open pipe.** Two token paths:
+
+- **Socket upgrade** — requires `?token=<JWT>`, verified HS256 against
+  `SESSION_SECRET`. `sub` becomes the peer's `userId`; the `role` claim (`gm` or
+  `player`, defaulting to `player`) is what the GM-only gates below check. A bad
+  token or a room-binding mismatch fails the upgrade with `401`. Minted by
+  `createPartyToken` in `app/server/session.ts`.
+- **Server broadcast** — `POST /parties/<party>/<room>` with
+  `Authorization: Bearer <JWT>` carrying scope `tabletop-broadcast`. Only
+  `tabletop_map` implements this, for `map:active-changed`.
+
+`GET /healthz` is also served.
+
+### Per-Party Behaviour
+
+The three parties behave **differently** — do not assume "dumb relay":
+
+| Party          | Validates? | Persists?      | Role checks?                                            |
+| -------------- | ---------- | -------------- | ------------------------------------------------------- |
+| `tabletop`     | type only  | no             | yes — GM-only types (below)                             |
+| `tabletop_map` | JSON parse | no             | yes — GM-only types; POST-only for `map:active-changed` |
+| `main`         | per-type   | yes (+ replay) | yes — gm-channel fan-out                                |
+
+`tabletop` (this doc's party) parses each frame, drops GM-only types from
+non-GM peers, and otherwise rebroadcasts verbatim to everyone but the sender:
 
 ```typescript
-onMessage(message: string, sender: Party.Connection) {
-  this.room.broadcast(message, [sender.id]);  // send to all EXCEPT sender
+onMessage(raw, sender, room) {
+  // ...parse, read `type`...
+  if (sender.role !== 'gm' && GM_ONLY_MESSAGE_TYPES.has(type)) return;
+  room.broadcast(raw, sender.id); // all EXCEPT sender
 }
 ```
 
-No validation, no storage, no message history. The server trusts the client
-payload and rebroadcasts it. All business logic lives on the client and in the
+GM-only types: `tab:create`, `tab:rename`, `tab:delete`, `tab:focus-all`,
+`window:show`, `window:close`, `grid:style-change`. Everything else (e.g.
+`tab:content-added`) relays from any authenticated peer. Beyond that gate the
+party stores nothing and has no history; durable state lives in MongoDB via the
 TanStack Start server functions.
+
+### Client
+
+`useTabletopParty(campaignId, getToken, onMessage)` wraps `partysocket/react`'s
+`usePartySocket`:
+
+- `host`: `VITE_PUBLIC_PARTYKIT_HOST` (defaults to `localhost:1999`)
+- `party`: `"tabletop"`
+- `room`: `"tabletop-{campaignId}"`, or the `"__disabled__"` sentinel when there
+  is no campaign (the socket starts closed and does not retry)
+- `query`: `{ token: await getToken() }`
+
+The sibling `tabletop_map` party has its own hook (`useTabletopMapParty`) and a
+much larger message union covering tokens, drawings, text, and AoE.
 
 ## Message Types
 
-All messages conform to the `TabletopMessage` discriminated union defined in
+All `tabletop` messages conform to the `TabletopMessage` discriminated union in
 `app/types/tabletop.ts`:
 
 ### Tab Messages
@@ -104,7 +162,7 @@ The sender performs the action locally and on the server, then broadcasts
 to inform other clients:
 
 ```
-  Client A (sender)                Server (PartyKit)            Client B (receiver)
+  Client A (sender)                Realtime service             Client B (receiver)
   +-----------------------+        +------------------+         +-------------------+
   | 1. Execute action     |        |                  |         |                   |
   |    (optimistic UI +   |------->| 2. Broadcast to  |-------->| 3. Handle message |
@@ -113,8 +171,12 @@ to inform other clients:
   +-----------------------+        +------------------+         +-------------------+
 ```
 
-The sender does NOT receive its own message back (PartyKit's `broadcast` excludes
-the sender connection ID).
+The sender does NOT receive its own message back — `Room.broadcast` in
+`realtime/src/rooms.ts` skips the sender's peer id.
+
+Note `tab:focus-all` is the one message with **no** server function behind it: it
+is pure relay, which is why the party's role gate is the only thing restricting
+it to GMs.
 
 ## Conflict Resolution
 

@@ -135,7 +135,15 @@ const removeStackItemFn = createServerFn({ method: 'POST' })
 // List screens for a campaign
 // ---------------------------------------------------------------------------
 
-export function useGMScreenList(campaignId: string) {
+/**
+ * `enabled` exists because `listGMScreens` is `requireCampaignGM`: for a player
+ * it can only ever throw `Forbidden`, and each attempt costs a
+ * serverCaptureException in GlitchTip. Callers that render for every member
+ * (WikiCardActionsProvider) must pass `enabled: isGM`; the GM-only views can
+ * leave it defaulted.
+ */
+export function useGMScreenList(campaignId: string, options: { enabled?: boolean } = {}) {
+  const { enabled = true } = options;
   const {
     data: screens = [],
     isLoading,
@@ -143,7 +151,7 @@ export function useGMScreenList(campaignId: string) {
   } = useQuery({
     queryKey: queryKeys.gmscreens.list(campaignId),
     queryFn: () => listGMScreensFn({ data: { campaignId } }),
-    enabled: !!campaignId,
+    enabled: !!campaignId && enabled,
   });
   return {
     screens,

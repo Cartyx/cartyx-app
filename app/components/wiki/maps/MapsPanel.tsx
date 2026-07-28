@@ -8,6 +8,8 @@ import { useMapsList, useActiveMap, useMapsMutations } from '~/hooks/useMaps';
 import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
 import { MapCard } from './MapCard';
 import { MapUploadModal } from './MapUploadModal';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import type { MapListItem } from '~/types/map';
 
 interface MapsPanelProps {
@@ -45,10 +47,21 @@ export function MapsPanel({ onBack }: MapsPanelProps) {
     setActiveMap.mutate({ screenId: currentScreenId, mapId: next });
   };
 
-  const handleDelete = (m: MapListItem) => {
-    if (!confirm(`Delete map "${m.name}"? This cannot be undone.`)) return;
-    deleteMap.mutate(m.id);
-  };
+  // Every other wiki panel confirms deletes through the shared ConfirmDialog.
+  // This one used the native `window.confirm()`, which is unstyled, blocking,
+  // and gives no way to surface a failed delete — the mutation's error was
+  // simply swallowed. mutateAsync rejects on failure, which useDeleteConfirm
+  // turns into an in-dialog message instead of a silently-still-there card.
+  const {
+    pendingDelete: pendingDeleteMap,
+    deleteError: deleteMapError,
+    requestDelete: requestDeleteMap,
+    cancelDelete: cancelDeleteMap,
+    confirmDelete: confirmDeleteMap,
+  } = useDeleteConfirm<MapListItem>(
+    (m) => deleteMap.mutateAsync(m.id),
+    'Failed to delete map. Please try again.'
+  );
 
   return (
     <div className="flex h-full w-full flex-col bg-[#080A12]">
@@ -117,7 +130,7 @@ export function MapsPanel({ onBack }: MapsPanelProps) {
                 onEdit={() => {
                   // Phase 1: edit modal deferred. Stub to no-op so menu still works.
                 }}
-                onDelete={handleDelete}
+                onDelete={requestDeleteMap}
                 onPreview={() => {
                   // Phase 1: preview deferred — clicking a card is a no-op for non-GMs;
                   // GMs use the menu.
@@ -133,6 +146,19 @@ export function MapsPanel({ onBack }: MapsPanelProps) {
           isOpen={uploadOpen}
           onClose={() => setUploadOpen(false)}
           campaignId={campaignId}
+        />
+      )}
+
+      {pendingDeleteMap && (
+        <ConfirmDialog
+          title="Delete map"
+          message={`Delete map "${pendingDeleteMap.name}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={deleteMap.isPending}
+          error={deleteMapError}
+          onConfirm={confirmDeleteMap}
+          onCancel={cancelDeleteMap}
         />
       )}
     </div>

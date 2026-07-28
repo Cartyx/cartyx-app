@@ -396,6 +396,24 @@ describe('listNotes', () => {
     expect(filter).not.toHaveProperty('createdBy');
   });
 
+  it('sets canEdit true only for notes the caller created', async () => {
+    // Caller resolves to 'dbuser-1' (see makeNote default + the $or filter).
+    const notes = [
+      makeNote({ _id: 'mine', createdBy: 'dbuser-1' }),
+      makeNote({ _id: 'theirs', createdBy: 'someone-else', isPublic: true }),
+    ];
+    vi.mocked(Note.find).mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(notes) }),
+      }),
+    } as never);
+
+    const result = await _listNotes({ data: { campaignId: 'camp-1' } });
+
+    expect(result.find((n) => n.id === 'mine')?.canEdit).toBe(true);
+    expect(result.find((n) => n.id === 'theirs')?.canEdit).toBe(false);
+  });
+
   it('list responses omit note body field', async () => {
     const notes = [makeNote()];
     vi.mocked(Note.find).mockReturnValue({

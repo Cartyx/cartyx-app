@@ -6,7 +6,9 @@ import { WikiFilterBar } from '~/components/wiki/shared/WikiFilterBar';
 import { QuestCard } from './QuestCard';
 import { QuestModal } from './QuestModal';
 import { QuestViewModal } from './QuestViewModal';
-import { useQuests } from '~/hooks/useQuests';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
+import { useQuests, useDeleteQuest } from '~/hooks/useQuests';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import type { QuestListItem, QuestStatus } from '~/types/quest';
 
 interface QuestsPanelProps {
@@ -37,6 +39,13 @@ export function QuestsPanel({ onBack }: QuestsPanelProps) {
     tags: filterTags.length > 0 ? filterTags : undefined,
     status: statusFilter === 'all' ? undefined : statusFilter,
   });
+  const { remove: removeQuest, isLoading: isDeleting } = useDeleteQuest();
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<QuestListItem>(
+      (item) => removeQuest({ id: item.id, campaignId }),
+      'Failed to delete quest. Please try again.'
+    );
 
   const handleCreateClick = () => {
     setSelectedId(undefined);
@@ -50,6 +59,12 @@ export function QuestsPanel({ onBack }: QuestsPanelProps) {
     } else {
       setViewId(quest.id);
     }
+  };
+
+  // The menu's Edit only renders when canEdit, so this always goes to the editor.
+  const handleEdit = (quest: QuestListItem) => {
+    setSelectedId(quest.id);
+    setIsModalOpen(true);
   };
 
   return (
@@ -109,7 +124,13 @@ export function QuestsPanel({ onBack }: QuestsPanelProps) {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="flex flex-col">
             {quests.map((quest) => (
-              <QuestCard key={quest.id} quest={quest} onClick={handleClick} />
+              <QuestCard
+                key={quest.id}
+                quest={quest}
+                onClick={handleClick}
+                onEdit={handleEdit}
+                onDelete={() => requestDelete(quest)}
+              />
             ))}
           </div>
         </div>
@@ -130,6 +151,18 @@ export function QuestsPanel({ onBack }: QuestsPanelProps) {
           onClose={() => setViewId(undefined)}
           questId={viewId}
           campaignId={campaignId}
+        />
+      )}
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete quest"
+          message={`Delete "${pendingDelete.name}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={isDeleting}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

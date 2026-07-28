@@ -4,13 +4,11 @@
  *    selected by default
  *  - clicking the map with the sphere shape commits a template immediately —
  *    it renders as a `map-aoe` circle and persists
- *  - the Layers panel's Spell FX eye toggle hides and shows the AoE layer
- *    (a per-viewer visibility toggle, not a delete)
  *
  * The AoE tool is available to every campaign member (not GM-gated); the
- * harness only has a GM session, so placement is exercised as the GM. The
- * `spell-fx` layer toggle itself lives in the GM-only Layers panel, matching
- * the pattern already covered for drawings in tabletop-drawing.spec.ts.
+ * harness only has a GM session, so placement is exercised as the GM. AoE
+ * visibility is a per-viewer zoom-toolbar toggle, covered in
+ * tabletop-zoom-toolbar coverage rather than here.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -215,37 +213,6 @@ test('clicking the map with the sphere shape places a template that renders and 
   const doc = await aoes().findOne({ mapId: new ObjectId(provisioned.mapId), shape: 'sphere' });
   expect((doc as { sizePx?: number } | null)?.sizePx).toBe(200);
   expect((doc as { rotation?: number } | null)?.rotation).toBe(0);
-});
-
-test('the Layers panel eye toggle hides and shows the AoE layer', async ({ page }) => {
-  await gotoTabletop(page);
-  await selectAoeTool(page);
-
-  const box = await stageBox(page);
-  await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * 0.5);
-  await expect(page.getByTestId('map-aoe')).toHaveCount(1);
-  await expect.poll(() => countAoes()).toBe(1);
-
-  // Open the GM Layers panel and hide the Spell FX layer via its eye.
-  await page.getByTestId('tool-layer').click();
-  const panel = page.getByTestId('layers-panel');
-  await expect(panel).toBeVisible();
-  const eye = panel.getByTestId('layer-visibility-spell-fx');
-  await expect(eye).toHaveAttribute('aria-pressed', 'true'); // currently visible
-  await eye.click();
-  await expect(eye).toHaveAttribute('aria-pressed', 'false'); // now hidden
-
-  // The whole AoE layer disappears — but nothing is deleted: it's a
-  // per-viewer visibility toggle.
-  await expect(page.getByTestId('map-aoe')).toHaveCount(0);
-  await expect(page.getByTestId('map-aoe-layer')).toHaveCount(0);
-  await expect.poll(() => countAoes()).toBe(1);
-
-  // Toggling the eye back shows the layer + template again.
-  await eye.click();
-  await expect(eye).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('map-aoe-layer')).toHaveCount(1);
-  await expect(page.getByTestId('map-aoe')).toHaveCount(1);
 });
 
 test('a placed template shows the placer name and an optional label', async ({ page }) => {

@@ -1,5 +1,5 @@
-import { useState, type ReactNode } from 'react';
-import { MoreVertical, MapPin, Eye, Trash2, Edit2 } from 'lucide-react';
+import { MapPin, Eye, Trash2, Edit2 } from 'lucide-react';
+import { OverflowMenu, type MenuItem } from '~/components/shared/OverflowMenu';
 import type { MapListItem } from '~/types/map';
 
 interface MapCardProps {
@@ -21,7 +21,27 @@ export function MapCard({
   onDelete,
   onPreview,
 }: MapCardProps) {
-  const [menuOpen, setMenuOpen] = useState(false);
+  const mapMenuItems: MenuItem[] = [
+    {
+      key: 'set-active',
+      label: isActive ? 'Clear Active' : 'Set Active',
+      icon: <Eye className="h-3.5 w-3.5" />,
+      onSelect: () => onSetActive(map),
+    },
+    {
+      key: 'edit',
+      label: 'Edit',
+      icon: <Edit2 className="h-3.5 w-3.5" />,
+      onSelect: () => onEdit(map),
+    },
+    {
+      key: 'delete',
+      label: 'Delete',
+      icon: <Trash2 className="h-3.5 w-3.5" />,
+      danger: true,
+      onSelect: () => onDelete(map),
+    },
+  ];
 
   return (
     <div
@@ -69,81 +89,9 @@ export function MapCard({
 
       {isGM && (
         <div className="absolute right-2 top-2">
-          <button
-            type="button"
-            aria-label="Map actions"
-            onClick={(e) => {
-              e.stopPropagation();
-              setMenuOpen((v) => !v);
-            }}
-            className="flex h-7 w-7 items-center justify-center rounded bg-white/[0.03] text-slate-400 opacity-0 transition-opacity hover:bg-white/[0.07] hover:text-slate-200 group-hover:opacity-100"
-          >
-            <MoreVertical className="h-3.5 w-3.5" />
-          </button>
-          {menuOpen && (
-            <>
-              <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} aria-hidden />
-              <div
-                role="menu"
-                className="absolute right-0 top-8 z-20 w-40 overflow-hidden rounded border border-white/[0.07] bg-[#080A12] shadow-lg"
-              >
-                <MenuItem
-                  icon={<Eye className="h-3.5 w-3.5" />}
-                  label={isActive ? 'Clear Active' : 'Set Active'}
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onSetActive(map);
-                  }}
-                />
-                <MenuItem
-                  icon={<Edit2 className="h-3.5 w-3.5" />}
-                  label="Edit"
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onEdit(map);
-                  }}
-                />
-                <MenuItem
-                  icon={<Trash2 className="h-3.5 w-3.5" />}
-                  label="Delete"
-                  danger
-                  onClick={() => {
-                    setMenuOpen(false);
-                    onDelete(map);
-                  }}
-                />
-              </div>
-            </>
-          )}
+          <OverflowMenu label="Map actions" items={mapMenuItems} />
         </div>
       )}
     </div>
-  );
-}
-
-function MenuItem({
-  icon,
-  label,
-  danger,
-  onClick,
-}: {
-  icon: ReactNode;
-  label: string;
-  danger?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="menuitem"
-      onClick={onClick}
-      className={[
-        'flex w-full items-center gap-2 px-3 py-2 text-left font-sans text-xs transition-colors hover:bg-white/[0.05]',
-        danger ? 'text-rose-300 hover:text-rose-200' : 'text-slate-300',
-      ].join(' ')}
-    >
-      {icon}
-      {label}
-    </button>
   );
 }

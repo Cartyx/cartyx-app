@@ -30,7 +30,7 @@ export interface ToolBarProps {
 const tools: { id: ToolType; icon: React.ElementType; label: string; gmOnly?: boolean }[] = [
   { id: 'pointer', icon: MousePointer2, label: 'Pointer' },
   { id: 'hand', icon: Hand, label: 'Hand' },
-  // Drawings are GM-only annotations (Spell FX / Drawing layer).
+  // Drawings are GM-only annotations.
   { id: 'drawing', icon: Pencil, label: 'Drawing', gmOnly: true },
   { id: 'text', icon: Type, label: 'Text' },
   { id: 'ruler', icon: Ruler, label: 'Ruler' },

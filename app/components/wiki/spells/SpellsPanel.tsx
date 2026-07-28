@@ -1,12 +1,14 @@
 import { useState } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { Sparkles } from 'lucide-react';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
 import { WikiCategoryHeader } from '~/components/wiki/shared/WikiCategoryHeader';
 import { SpellsFilterBar } from './SpellsFilterBar';
 import { SpellCard } from './SpellCard';
 import { SpellModal } from './SpellModal';
 import { SpellViewModal } from './SpellViewModal';
-import { useSpells } from '~/hooks/useSpells';
+import { useSpells, useDeleteSpell } from '~/hooks/useSpells';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import { useCampaign } from '~/hooks/useCampaigns';
 import type { SpellListItem, SpellSchool } from '~/types/spell';
 
@@ -26,6 +28,13 @@ export function SpellsPanel({ onBack }: SpellsPanelProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedSpellId, setSelectedSpellId] = useState<string | undefined>();
   const [viewSpellId, setViewSpellId] = useState<string | undefined>();
+  const { remove: removeItem, isLoading: isDeleting } = useDeleteSpell();
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<SpellListItem>(
+      (item) => removeItem({ id: item.id, campaignId }),
+      'Failed to delete spell. Please try again.'
+    );
 
   const { spells, isLoading, error } = useSpells(campaignId, {
     search: search || undefined,
@@ -48,6 +57,13 @@ export function SpellsPanel({ onBack }: SpellsPanelProps) {
     } else {
       setViewSpellId(spell.id);
     }
+  };
+
+  // The menu's Edit only renders when spell.canEdit (isGM && homebrew), which
+  // implies isGM, so this always reaches the editor.
+  const handleSpellEdit = (spell: SpellListItem) => {
+    setSelectedSpellId(spell.id);
+    setIsModalOpen(true);
   };
 
   return (
@@ -89,7 +105,13 @@ export function SpellsPanel({ onBack }: SpellsPanelProps) {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="flex flex-col">
             {spells.map((spell) => (
-              <SpellCard key={spell.id} spell={spell} onClick={handleSpellClick} />
+              <SpellCard
+                key={spell.id}
+                spell={spell}
+                onClick={handleSpellClick}
+                onEdit={handleSpellEdit}
+                onDelete={() => requestDelete(spell)}
+              />
             ))}
           </div>
         </div>
@@ -112,6 +134,18 @@ export function SpellsPanel({ onBack }: SpellsPanelProps) {
           onClose={() => setViewSpellId(undefined)}
           spellId={viewSpellId}
           campaignId={campaignId}
+        />
+      )}
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete spell"
+          message={`Delete "${pendingDelete.name}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={isDeleting}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

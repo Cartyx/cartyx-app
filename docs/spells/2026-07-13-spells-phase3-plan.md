@@ -695,7 +695,7 @@ export function useAoeTool(o: Options) {
 
 - [ ] **Step 2:** Short-circuit pointer handlers **before** pan/ruler, mirroring the ruler wiring (`ActiveMapStage.tsx` ~`:628-643`, `:971-974`, `:1307-1313`): when `aoePlacing`, route `onPanPointerDown`→`aoe.onPointerDown`, `onPointerMove`→`aoe.onPointerMove`, and `onDoubleClick`→`aoe.reset()`. Ensure ruler and AoE placement are mutually exclusive (only one tool armed).
 
-- [ ] **Step 3:** Render `<MapAoELayer visible={!hiddenLayers.has('spell-fx')} aoes={aoes} preview={aoe.preview} effectiveScale={effectiveScale} imageOffsetX={imageOffsetX} imageOffsetY={imageOffsetY} currentUserId={currentUserId} isGM={isGM} selectedId={selectedAoeId} onSelect={setSelectedAoeId} canModify={(a) => isGM || a.createdBy === currentUserId} />` in the compositing order **just above the grid, below `MapDrawingLayer`** (per the spec).
+- [ ] **Step 3:** Render `<MapAoELayer visible={showSpellEffects} aoes={aoes} preview={aoe.preview} effectiveScale={effectiveScale} imageOffsetX={imageOffsetX} imageOffsetY={imageOffsetY} currentUserId={currentUserId} isGM={isGM} selectedId={selectedAoeId} onSelect={setSelectedAoeId} canModify={(a) => isGM || a.createdBy === currentUserId} />` in the compositing order **just above the grid, below `MapDrawingLayer`** (per the spec).
 
 - [ ] **Step 4:** Delete + clear: a keydown handler removes `selectedAoeId` when set (calling `aoeMutations.remove` + `applyAoeRemoveFromCache` + `onBroadcast({type:'aoe:removed', ...})`) — only when `canModify`. Wire the panel's `onClearAll` (GM) to `aoeMutations.clear` + `applyAoeClearToCache` + `onBroadcast({type:'aoe:cleared', mapId})`.
 
@@ -711,7 +711,7 @@ export function useAoeTool(o: Options) {
 
 - Create: `e2e/spell-aoe.spec.ts` (follow existing tabletop e2e patterns/fixtures)
 
-- [ ] **Step 1:** e2e (adapt to the real harness): as a GM in a seeded campaign, open the tabletop → open the **Spell AoE** tool → pick **sphere**, size 20 → click the map → assert a `[data-testid="map-aoe"]` circle appears. Toggle the `spell-fx` layer off → it disappears. (Selectors/fixtures per the repo's tabletop e2e.)
+- [ ] **Step 1:** e2e (adapt to the real harness): as a GM in a seeded campaign, open the tabletop → open the **Spell AoE** tool → pick **sphere**, size 20 → click the map → assert a `[data-testid="map-aoe"]` circle appears. Toggle the zoom toolbar's spell-effects control off → it disappears. (Selectors/fixtures per the repo's tabletop e2e.)
 
 - [ ] **Step 2: Full gates:** `npm test`, `npm run typecheck`, `npm run lint` all clean.
 

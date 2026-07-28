@@ -42,7 +42,7 @@ The tabletop has two categories of persisted state:
       v
   Local State (React)        <-- optimistic update for instant feedback
       |
-      +---> PartyKit send()  <-- broadcast to other clients
+      +---> socket send()    <-- broadcast to other clients via realtime/
       |
       +---> Server Function  <-- TanStack Start RPC (Zod-validated)
                 |
@@ -99,8 +99,14 @@ On page load (or reconnect), the full state is loaded from MongoDB:
 5. `useTabletopParty` reconnects the WebSocket (partysocket handles automatic
    reconnection with exponential backoff).
 
-There is no message replay from PartyKit. Any events that occurred while
-disconnected are picked up by the MongoDB queries on reconnect.
+The `tabletop` and `tabletop_map` parties keep no history, so there is no message
+replay on reconnect: any events that occurred while disconnected are picked up by
+the MongoDB queries above. Map state likewise re-syncs through React Query, not
+the socket.
+
+The `main` party is the exception — it replays the last 50 messages as a
+`{ type: 'HISTORY', messages }` frame on every connect, which is how chat and
+dice recover their backlog. See [real-time-sync.md](./real-time-sync.md).
 
 ## Query Keys
 

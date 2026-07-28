@@ -56,6 +56,7 @@ const TABLETOP_COLLECTIONS: [string, ...string[]] = [
   'events',
   'organization',
   'quest',
+  'spell',
 ];
 
 export const openTabletopWindowSchema = z.object({
@@ -84,6 +85,7 @@ export const getPlayerStateSchema = z.object({
 export const updatePlayerStateSchema = z.object({
   campaignId: z.string().trim().min(1),
   activeScreenId: z.string().nullable().optional(),
+  activeGMScreenId: z.string().nullable().optional(),
   viewport: z
     .object({
       screenId: z.string().trim().min(1),
@@ -102,6 +104,38 @@ export const updatePlayerStateSchema = z.object({
       state: z.enum(['open', 'minimized', 'hidden']),
     })
     .optional(),
+});
+
+export const addPrivateWindowSchema = z.object({
+  campaignId: z.string().trim().min(1),
+  surface: z.enum(['tabletop', 'gmscreen']),
+  screenId: z.string().trim().min(1),
+  collection: z.enum(TABLETOP_COLLECTIONS),
+  documentId: z.string().trim().min(1),
+  x: z.number().optional(),
+  y: z.number().optional(),
+});
+
+export const removePrivateWindowSchema = z.object({
+  campaignId: z.string().trim().min(1),
+  privateWindowId: z.string().trim().min(1),
+});
+
+/**
+ * Layout-only update for one of the caller's own private windows. Deliberately
+ * carries no `collection`/`documentId`/`screenId`: moving a window must never be
+ * able to re-point it at another document, which would bypass the visibility
+ * check `addPrivateWindow` runs at creation.
+ */
+export const updatePrivateWindowSchema = z.object({
+  campaignId: z.string().trim().min(1),
+  privateWindowId: z.string().trim().min(1),
+  x: z.number().nullable().optional(),
+  y: z.number().nullable().optional(),
+  width: z.number().nullable().optional(),
+  height: z.number().nullable().optional(),
+  zIndex: z.number().optional(),
+  state: z.enum(['open', 'minimized', 'hidden']).optional(),
 });
 
 // ---------------------------------------------------------------------------

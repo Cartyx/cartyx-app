@@ -26,4 +26,71 @@ describe('tabletop relay', () => {
     ws1.close();
     ws2.close();
   });
+
+  it('drops GM-only messages from a player but relays them from a GM', async () => {
+    server = createRealtimeServer({
+      sessionSecret: TEST_SECRET,
+      handlers: { main: tabletopHandler, tabletop: tabletopHandler, tabletop_map: tabletopHandler },
+    });
+    const port = await listen(server);
+    const token = (sub: string, role: string) => makeToken({ sub, sessionId: 'camp-1', role });
+    const player = await connect(port, 'tabletop', 'tabletop-camp-1', await token('p', 'player'));
+    const gm = await connect(port, 'tabletop', 'tabletop-camp-1', await token('g', 'gm'));
+    const watcher = await connect(port, 'tabletop', 'tabletop-camp-1', await token('w', 'player'));
+
+    // A player forging tab:focus-all must not reach anyone.
+    player.send('{"type":"tab:focus-all","screenId":"s1"}');
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The GM's own focus-all is relayed — and is the FIRST frame the watcher
+    // sees, which proves the player's frame was dropped rather than merely slow.
+    gm.send('{"type":"tab:focus-all","screenId":"s2"}');
+    expect(await nextMessage(watcher)).toBe('{"type":"tab:focus-all","screenId":"s2"}');
+
+    player.close();
+    gm.close();
+    watcher.close();
+  });
+
+  it('still relays non-GM-only messages from a player', async () => {
+    server = createRealtimeServer({
+      sessionSecret: TEST_SECRET,
+      handlers: { main: tabletopHandler, tabletop: tabletopHandler, tabletop_map: tabletopHandler },
+    });
+    const port = await listen(server);
+    const token = (sub: string) => makeToken({ sub, sessionId: 'camp-1', role: 'player' });
+    const ws1 = await connect(port, 'tabletop', 'tabletop-camp-1', await token('a'));
+    const ws2 = await connect(port, 'tabletop', 'tabletop-camp-1', await token('b'));
+    ws1.send('{"type":"cursor:moved","x":1}');
+    expect(await nextMessage(ws2)).toBe('{"type":"cursor:moved","x":1}');
+    ws1.close();
+    ws2.close();
+  });
+
+  it('drops a forged tab:content-added from a player', async () => {
+    // Nothing in the app currently SENDS this type, which is exactly why it was
+    // easy to miss: an ungated type is forgeable whether or not the app emits
+    // it, and TabletopView acts on it by badging the named tab.
+    server = createRealtimeServer({
+      sessionSecret: TEST_SECRET,
+      handlers: { main: tabletopHandler, tabletop: tabletopHandler, tabletop_map: tabletopHandler },
+    });
+    const port = await listen(server);
+    const token = (sub: string, role: string) => makeToken({ sub, sessionId: 'camp-1', role });
+    const player = await connect(port, 'tabletop', 'tabletop-camp-1', await token('p', 'player'));
+    const gm = await connect(port, 'tabletop', 'tabletop-camp-1', await token('g', 'gm'));
+    const watcher = await connect(port, 'tabletop', 'tabletop-camp-1', await token('w', 'player'));
+
+    player.send('{"type":"tab:content-added","screenId":"forged"}');
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The GM's is relayed, and is the FIRST frame the watcher sees — which
+    // proves the player's was dropped rather than merely slow.
+    gm.send('{"type":"tab:content-added","screenId":"real"}');
+    expect(await nextMessage(watcher)).toBe('{"type":"tab:content-added","screenId":"real"}');
+
+    player.close();
+    gm.close();
+    watcher.close();
+  });
 });
