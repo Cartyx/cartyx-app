@@ -113,7 +113,7 @@
     "eslint-plugin-react-hooks": "^5.1.0",
     "eslint-plugin-storybook": "^10.5.2",
     "globals": "^17.5.0",
-    "happy-dom": "^20.10.6",
+    "happy-dom": "^20.11.0",
     "lefthook": "^2.1.10",
     "playwright": "^1.61.1",
     "prettier": "^3.9.5",
