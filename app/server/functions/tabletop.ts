@@ -33,6 +33,7 @@ import {
   updatePlayerStateSchema,
   addPrivateWindowSchema,
   removePrivateWindowSchema,
+  updatePrivateWindowSchema,
 } from '~/types/schemas/tabletop';
 
 // ---------------------------------------------------------------------------
@@ -971,7 +972,7 @@ export const getPlayerState = async ({ data }: { data: z.infer<typeof getPlayerS
         documentId: pw.documentId,
       })),
       data.campaignId,
-      { isGM }
+      { isGM, userId: member.userId }
     );
 
     // Drop denied windows outright rather than returning them unhydrated —
@@ -1205,7 +1206,7 @@ export const updatePlayerState = async ({
 //
 // They also must never broadcast: private means private.
 
-export { addPrivateWindowSchema, removePrivateWindowSchema };
+export { addPrivateWindowSchema, removePrivateWindowSchema, updatePrivateWindowSchema };
 
 /** Per surface+screen. Mirrors TABLETOP_LIMITS.MAX_WINDOWS. */
 export const MAX_PRIVATE_WINDOWS = 20;
@@ -1227,6 +1228,38 @@ async function findOwnPlayerState(
   }).lean()) as PlayerStateLean | null;
 }
 
+/**
+ * Throws unless `screenId` names a real screen of `surface` in this campaign.
+ *
+ * Without this the private-window cap is meaningless: it is enforced per
+ * surface+screen, and `screenId` is only validated as a non-empty string, so a
+ * caller could park MAX_PRIVATE_WINDOWS rows against each of an unbounded
+ * number of invented screen ids and grow their own player-state document until
+ * it hits Mongo's 16MB ceiling — at which point every write to it fails and
+ * getPlayerState fans out a hydration query per row.
+ *
+ * A screen the caller cannot see is indistinguishable from one that does not
+ * exist, so this leaks nothing: it only ever confirms ids within their own
+ * campaign, which they can already enumerate.
+ */
+async function assertPrivateWindowScreenExists(
+  surface: 'tabletop' | 'gmscreen',
+  screenId: string,
+  campaignId: string
+): Promise<void> {
+  if (!mongoose.Types.ObjectId.isValid(screenId)) throw new Error('Screen not found');
+
+  if (surface === 'tabletop') {
+    const screen = await TabletopScreen.findOne({ _id: screenId, campaignId }, '_id').lean();
+    if (!screen) throw new Error('Screen not found');
+    return;
+  }
+
+  const { GMScreen } = await import('../db/models/GMScreen');
+  const screen = await GMScreen.findOne({ _id: screenId, campaignId }, '_id').lean();
+  if (!screen) throw new Error('Screen not found');
+}
+
 export const addPrivateWindow = async ({
   data,
 }: {
@@ -1238,48 +1271,95 @@ export const addPrivateWindow = async ({
     // document and cannot affect what anyone else sees.
     const member = await requireCampaignMember(data.campaignId);
     sessionUserId = member.sessionUserId;
+    const isGM = member.role === 'gm';
 
-    // Defense in depth. getPlayerState's hydration filter is the load-bearing
-    // guard — it also covers rows written before this check existed — but
-    // there is no legitimate reason for a player to store a window their own
-    // hydration would just filter back out. Reject exactly what
-    // canHydratePrivately would deny, so the write- and read-side checks can
-    // never drift apart again (that drift is what let a player accumulate
-    // invisible `note` windows that still counted against MAX_PRIVATE_WINDOWS).
-    if (!canHydratePrivately(data.collection, member.role === 'gm')) {
+    // --- Authorization -----------------------------------------------------
+    // The write side must reject EXACTLY what the read side would filter out.
+    // Anything it lets through that getPlayerState then drops becomes a row the
+    // owner can neither see nor delete (it has no id on the client) while it
+    // still counts against MAX_PRIVATE_WINDOWS.
+    //
+    // Cheap collection-level check first, for a clear error...
+    if (!canHydratePrivately(data.collection, isGM)) {
       throw new Error('Not authorized to open this collection');
     }
-
-    const existing = await findOwnPlayerState(data.campaignId, member.userId);
-
-    // Dedup by document, mirroring how openTabletopWindow dedups shared
-    // windows: if the caller already has a private window open for this
-    // exact (surface, screenId, collection, documentId), don't add a second.
-    // This is the server-side backstop for the client's `isAlreadyOpen` check
-    // in useWikiCardActions, which reads not-yet-refetched player-state and
-    // so cannot itself prevent a double-click from firing this twice.
-    if (existing) {
-      const duplicate = (existing.privateWindows ?? []).find(
-        (pw) =>
-          pw.surface === data.surface &&
-          String(pw.screenId) === data.screenId &&
-          pw.collection === data.collection &&
-          String(pw.documentId) === data.documentId
-      );
-      if (duplicate) {
-        return serializePlayerState(existing);
-      }
-    }
-
-    const onThisScreen = (existing?.privateWindows ?? []).filter(
-      (pw) => pw.surface === data.surface && String(pw.screenId) === data.screenId
+    // ...then the document-level one, routed through the very function
+    // getPlayerState hydrates with, so the two can never drift apart. This also
+    // rejects a documentId that doesn't exist or belongs to another campaign.
+    const visible = await hydratePrivateWindowRefs(
+      [{ collection: data.collection, documentId: data.documentId }],
+      data.campaignId,
+      { isGM, userId: member.userId }
     );
-    if (onThisScreen.length >= MAX_PRIVATE_WINDOWS) {
-      throw new Error(`Private window limit reached (${MAX_PRIVATE_WINDOWS} per screen)`);
+    if (visible[`${data.collection}:${data.documentId}`] === undefined) {
+      throw new Error('Not authorized to open this document');
     }
 
+    // The screen must exist and belong to this campaign — otherwise a caller
+    // can park rows against unlimited invented screen ids, and since the cap is
+    // PER surface+screen, the array grows without bound. Mirrors the
+    // `Screen not found` check openTabletopWindow does for the shared path.
+    await assertPrivateWindowScreenExists(data.surface, data.screenId, data.campaignId);
+
+    // --- Write -------------------------------------------------------------
+    // Ensure the caller's document exists, so the conditional push below can
+    // run WITHOUT upsert. A guarded filter plus upsert would try to INSERT
+    // whenever the guard rejects (duplicate or cap), which trips the unique
+    // {campaignId, userId} index instead of failing cleanly.
     await TabletopPlayerState.updateOne(
       { campaignId: data.campaignId, userId: member.userId },
+      { $setOnInsert: { campaignId: data.campaignId, userId: member.userId } },
+      { upsert: true }
+    );
+
+    // Atomic conditional push — the same shape openTabletopWindow uses for
+    // shared windows, and for the same reason: a read-then-push cannot dedup or
+    // cap correctly, because two concurrent calls both read the array before
+    // either write lands. Mongo re-evaluates this filter against the current
+    // document at write time.
+    //   $nor  — rejects the push when this exact ref is already open (dedup),
+    //           which is what actually makes a double-click idempotent.
+    //   $expr — rejects it when this surface+screen is already at the cap.
+    // $expr is a raw aggregation expression and is NOT cast by mongoose, so the
+    // screenId has to be compared as a real ObjectId.
+    const screenObjectId = new mongoose.Types.ObjectId(data.screenId);
+    const pushResult = await TabletopPlayerState.updateOne(
+      {
+        campaignId: data.campaignId,
+        userId: member.userId,
+        $nor: [
+          {
+            privateWindows: {
+              $elemMatch: {
+                surface: data.surface,
+                screenId: data.screenId,
+                collection: data.collection,
+                documentId: data.documentId,
+              },
+            },
+          },
+        ],
+        $expr: {
+          $lt: [
+            {
+              $size: {
+                $filter: {
+                  // $ifNull guards documents that predate the field — $size on
+                  // a missing field errors inside $expr instead of not matching.
+                  input: { $ifNull: ['$privateWindows', []] },
+                  cond: {
+                    $and: [
+                      { $eq: ['$$this.surface', data.surface] },
+                      { $eq: ['$$this.screenId', screenObjectId] },
+                    ],
+                  },
+                },
+              },
+            },
+            MAX_PRIVATE_WINDOWS,
+          ],
+        },
+      },
       {
         $push: {
           privateWindows: {
@@ -1293,17 +1373,82 @@ export const addPrivateWindow = async ({
             state: 'open',
           },
         },
-        $setOnInsert: { campaignId: data.campaignId, userId: member.userId },
-      },
-      { upsert: true }
+      }
     );
+
+    const doc = await findOwnPlayerState(data.campaignId, member.userId);
+    if (!doc) throw new Error('Player state not found');
+
+    // The filter didn't match: either this ref is already open (dedup — the
+    // double-click case, which is a success from the caller's point of view) or
+    // the screen is at the cap. Re-read to tell them apart.
+    if (pushResult.modifiedCount === 0) {
+      const alreadyOpen = (doc.privateWindows ?? []).some(
+        (pw) =>
+          pw.surface === data.surface &&
+          String(pw.screenId) === data.screenId &&
+          pw.collection === data.collection &&
+          String(pw.documentId) === data.documentId
+      );
+      if (!alreadyOpen) {
+        throw new Error(`Private window limit reached (${MAX_PRIVATE_WINDOWS} per screen)`);
+      }
+    }
+
+    return serializePlayerState(doc);
+  } catch (e) {
+    serverCaptureException(e, sessionUserId, {
+      action: 'addPrivateWindow',
+      campaignId: data.campaignId,
+    });
+    throw e;
+  }
+};
+
+export const updatePrivateWindow = async ({
+  data,
+}: {
+  data: z.infer<typeof updatePrivateWindowSchema>;
+}): Promise<TabletopPlayerStateData> => {
+  let sessionUserId: string | undefined;
+  try {
+    const member = await requireCampaignMember(data.campaignId);
+    sessionUserId = member.sessionUserId;
+
+    // Malformed id is a no-op, matching removePrivateWindow: a layout write for
+    // a window that isn't there must not surface as a 500.
+    if (mongoose.Types.ObjectId.isValid(data.privateWindowId)) {
+      // Only layout fields are settable — the schema carries nothing else, so a
+      // move can never re-point the window at a document the caller may not see.
+      const set: Record<string, unknown> = {};
+      if (data.x !== undefined) set['privateWindows.$.x'] = data.x;
+      if (data.y !== undefined) set['privateWindows.$.y'] = data.y;
+      if (data.width !== undefined) set['privateWindows.$.width'] = data.width;
+      if (data.height !== undefined) set['privateWindows.$.height'] = data.height;
+      if (data.zIndex !== undefined) set['privateWindows.$.zIndex'] = data.zIndex;
+      if (data.state !== undefined) set['privateWindows.$.state'] = data.state;
+
+      if (Object.keys(set).length > 0) {
+        // The positional `$` targets the element matched by the filter, and the
+        // filter is scoped by campaignId + the AUTHENTICATED userId — so this
+        // can only ever move a window on the caller's own document.
+        await TabletopPlayerState.updateOne(
+          {
+            campaignId: data.campaignId,
+            userId: member.userId,
+            'privateWindows._id': data.privateWindowId,
+          },
+          { $set: set }
+        );
+      }
+    }
 
     const doc = await findOwnPlayerState(data.campaignId, member.userId);
     if (!doc) throw new Error('Player state not found');
     return serializePlayerState(doc);
   } catch (e) {
     serverCaptureException(e, sessionUserId, {
-      action: 'addPrivateWindow',
+      action: 'updatePrivateWindow',
       campaignId: data.campaignId,
     });
     throw e;
@@ -1320,10 +1465,15 @@ export const removePrivateWindow = async ({
     const member = await requireCampaignMember(data.campaignId);
     sessionUserId = member.sessionUserId;
 
-    await TabletopPlayerState.updateOne(
-      { campaignId: data.campaignId, userId: member.userId },
-      { $pull: { privateWindows: { _id: data.privateWindowId } } }
-    );
+    // A malformed id is a no-op, not a CastError: closing a window that isn't
+    // there should never surface as a 500. `$pull` is already a no-op for a
+    // well-formed id that matches nothing, so this just makes the two agree.
+    if (mongoose.Types.ObjectId.isValid(data.privateWindowId)) {
+      await TabletopPlayerState.updateOne(
+        { campaignId: data.campaignId, userId: member.userId },
+        { $pull: { privateWindows: { _id: data.privateWindowId } } }
+      );
+    }
 
     const doc = await findOwnPlayerState(data.campaignId, member.userId);
     if (!doc) throw new Error('Player state not found');

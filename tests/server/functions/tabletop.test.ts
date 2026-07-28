@@ -56,9 +56,13 @@ vi.mock('~/server/db/models/Rule', () => ({ Rule: { find: vi.fn() } }));
 vi.mock('~/server/db/models/Lore', () => ({ Lore: { find: vi.fn() } }));
 vi.mock('~/server/db/models/Monster', () => ({ Monster: { find: vi.fn() } }));
 vi.mock('~/server/db/models/Event', () => ({ Event: { find: vi.fn() } }));
-vi.mock('mongoose', () => ({
-  default: { startSession: vi.fn() },
-}));
+// `Types` is the real implementation: addPrivateWindow validates screen ids
+// with ObjectId.isValid and builds a real ObjectId for its $expr cap filter.
+vi.mock('mongoose', async () => {
+  const actual = await vi.importActual<typeof import('mongoose')>('mongoose');
+  return { default: { startSession: vi.fn(), Types: actual.Types } };
+});
+vi.mock('~/server/db/models/GMScreen', () => ({ GMScreen: { findOne: vi.fn() } }));
 
 import { getSession } from '~/server/session';
 import { User } from '~/server/db/models/User';
@@ -69,6 +73,9 @@ import { Lore } from '~/server/db/models/Lore';
 import { Monster } from '~/server/db/models/Monster';
 import { Note } from '~/server/db/models/Note';
 import { Event } from '~/server/db/models/Event';
+import { Character } from '~/server/db/models/Character';
+import { Race } from '~/server/db/models/Race';
+import { Rule } from '~/server/db/models/Rule';
 import { openTabletopWindow, getPlayerState, addPrivateWindow } from '~/server/functions/tabletop';
 
 // ---------------------------------------------------------------------------
@@ -905,6 +912,83 @@ describe('getPlayerState (handler) — private-window hydration', () => {
     expect(result?.privateWindows).toHaveLength(1);
   });
 
+  // -------------------------------------------------------------------------
+  // The creator exception. `listLore` shows a player their OWN non-public lore
+  // (`$or: [{isPublic: true}, {createdBy: userId}]`) and `getLore` returns it
+  // to the creator — so the wiki legitimately renders that card with a full
+  // overflow menu. Filtering on `isPublic === false` alone is STRICTER than the
+  // getters: Show on Tab would be accepted, then filtered back out on read, and
+  // the row would be left orphaned — invisible to its owner, undeletable
+  // (the client never receives its id), and still counting against the cap.
+  // -------------------------------------------------------------------------
+
+  it("hydrates a player's OWN non-public lore private window", async () => {
+    mockSessionAs('player');
+    vi.mocked(Lore.find).mockReturnValue({
+      lean: vi.fn().mockResolvedValue([
+        {
+          _id: 'lore-mine',
+          title: 'My Backstory',
+          content: 'private but mine',
+          isPublic: false,
+          createdBy: 'dbuser-1',
+        },
+      ]),
+    } as never);
+    mockPlayerStateDoc([privateWindow('lore', 'lore-mine')]);
+
+    const result = await _getPlayerState({ data: { campaignId: 'camp-1' } });
+
+    expect(result?.hydrated['lore:lore-mine']).toMatchObject({ title: 'My Backstory' });
+    expect(result?.privateWindows).toHaveLength(1);
+  });
+
+  it('still blocks a non-public lore created by SOMEONE ELSE', async () => {
+    mockSessionAs('player');
+    vi.mocked(Lore.find).mockReturnValue({
+      lean: vi.fn().mockResolvedValue([
+        {
+          _id: 'lore-theirs',
+          title: 'The GM Twist',
+          content: 'The duke is a lich',
+          isPublic: false,
+          createdBy: 'someone-else',
+        },
+      ]),
+    } as never);
+    mockPlayerStateDoc([privateWindow('lore', 'lore-theirs')]);
+
+    const result = await _getPlayerState({ data: { campaignId: 'camp-1' } });
+
+    expect(result?.hydrated['lore:lore-theirs']).toBeUndefined();
+    expect(result?.privateWindows).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain('The duke is a lich');
+  });
+
+  it('grants NO creator exception for rules, matching listRules/getRule', async () => {
+    // Rules are the one isPublic-bearing collection whose getters give a non-GM
+    // public rules only — no `createdBy` branch. The private path must not be
+    // more generous than the getter it mirrors.
+    mockSessionAs('player');
+    vi.mocked(Rule.find).mockReturnValue({
+      lean: vi.fn().mockResolvedValue([
+        {
+          _id: 'rule-mine',
+          title: 'My House Rule',
+          content: 'hidden',
+          isPublic: false,
+          createdBy: 'dbuser-1',
+        },
+      ]),
+    } as never);
+    mockPlayerStateDoc([privateWindow('rule', 'rule-mine')]);
+
+    const result = await _getPlayerState({ data: { campaignId: 'camp-1' } });
+
+    expect(result?.hydrated['rule:rule-mine']).toBeUndefined();
+    expect(result?.privateWindows).toEqual([]);
+  });
+
   it('does hydrate a non-public lore private window for the GM', async () => {
     mockSessionAs('gm');
     mockSecretLore();
@@ -986,6 +1070,11 @@ describe('getPlayerState (handler) — private-window hydration', () => {
 // ---------------------------------------------------------------------------
 
 describe('addPrivateWindow (handler) — GM-only collection guard', () => {
+  // Real ObjectIds: the handler validates the screen id and rejects malformed
+  // ones before it ever reaches the collection guard under test here.
+  const CAMPAIGN_ID = '65b0000000000000000000c1';
+  const SCREEN_ID = '65b0000000000000000000e1';
+  const DOC_ID = '65b0000000000000000000f1';
   const mockDbUser = { _id: 'dbuser-1', firstName: 'Test', lastName: 'User' };
 
   const _addPrivateWindow = addPrivateWindow as unknown as (args: {
@@ -1007,32 +1096,48 @@ describe('addPrivateWindow (handler) — GM-only collection guard', () => {
     vi.mocked(getSession).mockResolvedValue(session);
     vi.mocked(User.findOne).mockResolvedValue(mockDbUser as never);
     vi.mocked(Campaign.findById).mockResolvedValue({
-      _id: 'camp-1',
+      _id: CAMPAIGN_ID,
       gameMasterId: role === 'gm' ? 'dbuser-1' : 'someone-else',
       members: [{ userId: 'dbuser-1', role }],
     } as never);
   }
 
+  /** A lean() chain resolving to `value`. */
+  function lean(value: unknown) {
+    return { lean: vi.fn().mockResolvedValue(value) } as never;
+  }
+
+  /** Every hydration fetcher returns one PUBLIC doc, so only the collection
+   *  guard under test can be the reason a call is rejected. */
+  function stubHydrationDoc() {
+    const doc = [{ _id: DOC_ID, title: 'Doc', name: 'Doc', content: '', isPublic: true }];
+    for (const model of [Note, Character, Race, Rule, Lore, Monster, Event]) {
+      (model as unknown as { find: ReturnType<typeof vi.fn> }).find.mockReturnValue(lean(doc));
+    }
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(TabletopPlayerState.findOne).mockReturnValue({
-      lean: vi.fn().mockResolvedValue({
+    vi.mocked(TabletopPlayerState.findOne).mockReturnValue(
+      lean({
         _id: 'ps-1',
-        campaignId: 'camp-1',
+        campaignId: CAMPAIGN_ID,
         userId: 'dbuser-1',
         privateWindows: [],
-      }),
-    } as never);
-    vi.mocked(TabletopPlayerState.updateOne).mockResolvedValue({} as never);
+      })
+    );
+    vi.mocked(TabletopPlayerState.updateOne).mockResolvedValue({ modifiedCount: 1 } as never);
+    vi.mocked(TabletopScreen.findOne).mockReturnValue(lean({ _id: SCREEN_ID }));
+    stubHydrationDoc();
   });
 
   function payload(collection: string) {
     return {
-      campaignId: 'camp-1',
+      campaignId: CAMPAIGN_ID,
       surface: 'tabletop',
-      screenId: 'ts-1',
+      screenId: SCREEN_ID,
       collection,
-      documentId: 'doc-1',
+      documentId: DOC_ID,
     };
   }
 

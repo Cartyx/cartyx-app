@@ -121,6 +121,23 @@ export const removePrivateWindowSchema = z.object({
   privateWindowId: z.string().trim().min(1),
 });
 
+/**
+ * Layout-only update for one of the caller's own private windows. Deliberately
+ * carries no `collection`/`documentId`/`screenId`: moving a window must never be
+ * able to re-point it at another document, which would bypass the visibility
+ * check `addPrivateWindow` runs at creation.
+ */
+export const updatePrivateWindowSchema = z.object({
+  campaignId: z.string().trim().min(1),
+  privateWindowId: z.string().trim().min(1),
+  x: z.number().nullable().optional(),
+  y: z.number().nullable().optional(),
+  width: z.number().nullable().optional(),
+  height: z.number().nullable().optional(),
+  zIndex: z.number().optional(),
+  state: z.enum(['open', 'minimized', 'hidden']).optional(),
+});
+
 // ---------------------------------------------------------------------------
 // Session Events
 // ---------------------------------------------------------------------------

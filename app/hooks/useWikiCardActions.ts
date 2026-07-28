@@ -2,6 +2,7 @@ import { Edit2, Monitor, Trash2, Radio } from 'lucide-react';
 import { createElement } from 'react';
 import type { MenuItem } from '~/components/shared/OverflowMenu';
 import { useWikiCardActionsContext } from '~/components/wiki/shared/WikiCardActionsProvider';
+import { canHydratePrivately } from '~/types/windowVisibility';
 
 interface UseWikiCardActionsParams {
   collection: string;
@@ -91,7 +92,12 @@ export function useWikiCardActions({
     });
   }
 
-  if (surface) {
+  // Some collections are never private-window-able by a non-GM — `note` most
+  // visibly, since a player's own notes are listed to them with a full menu.
+  // The server rejects those outright, so offering the item would just produce
+  // a hard error and a GlitchTip report on a button the user was invited to
+  // press. Same predicate on both sides, so they cannot drift.
+  if (surface && canHydratePrivately(collection, isGM)) {
     // The target screen for this surface (existence-checked in the provider,
     // with the first-screen fallback for a fresh campaign).
     const screenId = surface === 'tabletop' ? tabletopScreenId : gmScreenId;

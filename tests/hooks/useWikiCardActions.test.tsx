@@ -94,6 +94,50 @@ describe('useWikiCardActions', () => {
     expect(keys(result.current.menuItems)).toEqual(['edit', 'show-on-tab']);
   });
 
+  // -------------------------------------------------------------------------
+  // Collections the server refuses on the private-window path must not be
+  // offered. `note` is the visible one: a player's own notes are listed to them
+  // with a full menu, and addPrivateWindow rejects `note` for a non-GM — so an
+  // ungated item is a button the user is invited to press that can only ever
+  // produce a hard error and a GlitchTip report.
+  // -------------------------------------------------------------------------
+
+  it('does not offer Show on Tab for a note to a player', () => {
+    mockCampaign.mockReturnValue({ campaign: { isGM: false } });
+    const { result } = renderHook(
+      () =>
+        useWikiCardActions({
+          collection: 'note',
+          documentId: 'n1',
+          canEdit: true,
+          canDelete: true,
+          onEdit: vi.fn(),
+          onDelete: vi.fn(),
+        }),
+      { wrapper: WikiCardActionsTestWrapper }
+    );
+    expect(keys(result.current.menuItems)).toEqual(['edit', 'delete']);
+  });
+
+  it('still offers Show on Tab for a note to a GM', () => {
+    const { result } = renderHook(
+      () => useWikiCardActions({ collection: 'note', documentId: 'n1' }),
+      { wrapper: WikiCardActionsTestWrapper }
+    );
+    expect(keys(result.current.menuItems)).toContain('show-on-tab');
+  });
+
+  it.each(['monster', 'events'])(
+    'does not offer Show on Tab for a %s to a player',
+    (collection) => {
+      mockCampaign.mockReturnValue({ campaign: { isGM: false } });
+      const { result } = renderHook(() => useWikiCardActions({ collection, documentId: 'd1' }), {
+        wrapper: WikiCardActionsTestWrapper,
+      });
+      expect(keys(result.current.menuItems)).not.toContain('show-on-tab');
+    }
+  );
+
   it('never gives a player push or delete, even without canEdit', () => {
     mockCampaign.mockReturnValue({ campaign: { isGM: false } });
     const { result } = renderHook(
