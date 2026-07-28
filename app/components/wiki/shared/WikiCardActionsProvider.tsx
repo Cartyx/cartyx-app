@@ -43,7 +43,13 @@ export interface WikiCardActionsContextValue {
   ) => void;
 }
 
-const WikiCardActionsContext = createContext<WikiCardActionsContextValue | null>(null);
+/**
+ * Exported only so `WikiCardActionsStubProvider` can supply a fixed value in
+ * Storybook, where the real provider cannot mount (it reads
+ * `useParams({ from: '/campaigns/$campaignId/play' })`). App code should always
+ * go through `WikiCardActionsProvider` / `useWikiCardActionsContext`.
+ */
+export const WikiCardActionsContext = createContext<WikiCardActionsContextValue | null>(null);
 
 // Stable empty fallbacks so the memoized value stays referentially stable while
 // the underlying queries have no data (null screen / null player state).
@@ -65,7 +71,11 @@ export function WikiCardActionsProvider({ children }: { children: ReactNode }) {
   const isGM = campaign?.isGM ?? false;
 
   const { screens: tabletopScreens } = useTabletopScreenList(campaignId);
-  const { screens: gmScreens } = useGMScreenList(campaignId);
+  // GM-gated: listGMScreens is requireCampaignGM, so for a player this query can
+  // only ever throw Forbidden — once per play-page load, each one a GlitchTip
+  // error, all of it swallowed here since we only read `screens`. Players have
+  // no GM screens to target anyway, so gmScreenId simply stays null for them.
+  const { screens: gmScreens } = useGMScreenList(campaignId, { enabled: isGM });
   const tabletopMutations = useTabletopMutations(campaignId);
   const { playerState, addPrivateWindow } = useTabletopPlayerState(campaignId);
 
@@ -83,8 +93,14 @@ export function WikiCardActionsProvider({ children }: { children: ReactNode }) {
       : (gmScreens[0]?.id ?? null);
 
   // Which surface is the user looking at? Dashboard/Maps have no surface.
+  //
+  // The `&& isGM` mirrors play.tsx's `effectiveTab`, which coerces a non-GM away
+  // from the GM-only tab. Reading the raw `tab` without it means a player who
+  // lands on `?tab=gmscreens` sees the Dashboard while this provider believes
+  // the surface is 'gmscreen' — and the card menus offer a permanently disabled
+  // "Show on Tab" pointing at a surface that isn't on screen.
   const surface: 'tabletop' | 'gmscreen' | null =
-    tab === 'tabletop' ? 'tabletop' : tab === 'gmscreens' ? 'gmscreen' : null;
+    tab === 'tabletop' ? 'tabletop' : tab === 'gmscreens' && isGM ? 'gmscreen' : null;
 
   // Fetch a surface's detail ONLY when its shared window list will be read, else
   // pass null so `enabled: !!screenId` short-circuits the query. A provider can't

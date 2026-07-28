@@ -8,7 +8,9 @@ import {
 // Spy counts prove the provider subscribes to each source EXACTLY ONCE — the
 // whole point of hoisting the fan-out out of the per-card hook.
 const listSpy = vi.fn(() => ({ screens: [{ id: 'first' }, { id: 'active' }] }));
-const gmListSpy = vi.fn(() => ({ screens: [{ id: 'gm-first' }, { id: 'gm1' }] }));
+const gmListSpy = vi.fn((_options?: { enabled?: boolean }) => ({
+  screens: [{ id: 'gm-first' }, { id: 'gm1' }],
+}));
 const mutationsSpy = vi.fn(() => ({ openWindow: { mutate: openWindowMutate, isPending: false } }));
 const playerStateSpy = vi.fn(() => ({
   playerState: {
@@ -26,11 +28,13 @@ const gmDetailSpy = vi.fn(() => ({ screen: null }));
 const openWindowMutate = vi.fn();
 const addPrivateWindowMutate = vi.fn();
 
+const mockTab = vi.fn(() => ({ tab: 'tabletop' }));
 vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ campaignId: 'c1' }),
-  useSearch: () => ({ tab: 'tabletop' }),
+  useSearch: () => mockTab(),
 }));
-vi.mock('~/hooks/useCampaigns', () => ({ useCampaign: () => ({ campaign: { isGM: true } }) }));
+const campaignSpy = vi.fn(() => ({ campaign: { isGM: true } }));
+vi.mock('~/hooks/useCampaigns', () => ({ useCampaign: () => campaignSpy() }));
 vi.mock('~/hooks/useTabletopPlayerState', () => ({
   useTabletopPlayerState: () => playerStateSpy(),
 }));
@@ -40,12 +44,16 @@ vi.mock('~/hooks/useTabletopScreens', () => ({
   useTabletopMutations: () => mutationsSpy(),
 }));
 vi.mock('~/hooks/useGMScreens', () => ({
-  useGMScreenList: () => gmListSpy(),
+  // Options are passed through so a test can assert the provider gates the
+  // query for players (see the `enabled` test below).
+  useGMScreenList: (_c: string, options?: { enabled?: boolean }) => gmListSpy(options),
   useGMScreenDetail: () => gmDetailSpy(),
 }));
 
 beforeEach(() => {
   vi.clearAllMocks();
+  campaignSpy.mockReturnValue({ campaign: { isGM: true } });
+  mockTab.mockReturnValue({ tab: 'tabletop' });
 });
 
 describe('WikiCardActionsProvider', () => {
@@ -99,6 +107,53 @@ describe('WikiCardActionsProvider', () => {
     } finally {
       window.removeEventListener('cartyx:focus-window', focusSpy);
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // listGMScreens is requireCampaignGM. This provider mounts for EVERY member of
+  // the play route, so an ungated query means every player fires a request that
+  // can only ever throw Forbidden — once per page load, each one a
+  // serverCaptureException in GlitchTip, all of it swallowed here because the
+  // provider only reads `screens`.
+  // ---------------------------------------------------------------------------
+
+  it('enables the GM-only screen list for a GM', () => {
+    renderHook(() => useWikiCardActionsContext(), { wrapper: WikiCardActionsProvider });
+    expect(gmListSpy).toHaveBeenCalledWith({ enabled: true });
+  });
+
+  it('does NOT enable the GM-only screen list for a player', () => {
+    campaignSpy.mockReturnValue({ campaign: { isGM: false } });
+    const { result } = renderHook(() => useWikiCardActionsContext(), {
+      wrapper: WikiCardActionsProvider,
+    });
+    expect(gmListSpy).toHaveBeenCalledWith({ enabled: false });
+    // And the surface still resolves — players simply have no GM screen target.
+    expect(result.current.isGM).toBe(false);
+  });
+
+  it('gives a player on ?tab=gmscreens no surface, mirroring effectiveTab', () => {
+    // play.tsx coerces a non-GM away from the GM-only tab, so the player is
+    // actually looking at the Dashboard. Trusting the raw `tab` here would offer
+    // a permanently disabled "Show on Tab" aimed at a surface that isn't shown.
+    mockTab.mockReturnValue({ tab: 'gmscreens' });
+    campaignSpy.mockReturnValue({ campaign: { isGM: false } });
+
+    const { result } = renderHook(() => useWikiCardActionsContext(), {
+      wrapper: WikiCardActionsProvider,
+    });
+
+    expect(result.current.surface).toBeNull();
+  });
+
+  it('gives a GM on ?tab=gmscreens the gmscreen surface', () => {
+    mockTab.mockReturnValue({ tab: 'gmscreens' });
+
+    const { result } = renderHook(() => useWikiCardActionsContext(), {
+      wrapper: WikiCardActionsProvider,
+    });
+
+    expect(result.current.surface).toBe('gmscreen');
   });
 
   it('throws when the context hook is used without a provider', () => {
