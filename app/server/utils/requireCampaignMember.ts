@@ -27,9 +27,7 @@ export async function requireCampaignMember(
 
   const userId = String(dbUser._id);
   const members = campaign.members ?? [];
-  const member = members.find(
-    (m: { userId: unknown; role?: string }) => String(m.userId) === userId
-  );
+  const member = members.find((m) => String(m.userId) === userId);
   const isGM = String(campaign.gameMasterId) === userId || member?.role === 'gm';
   const isMember = !!member || isGM;
   if (!isMember) throw new Error('Forbidden');

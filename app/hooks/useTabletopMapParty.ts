@@ -5,6 +5,7 @@ import type { MapTextData } from '~/types/mapText';
 import type { MapDrawingData } from '~/types/mapDrawing';
 import type { MapAoEData } from '~/types/mapAoe';
 import { parseTabletopMapMessage } from '~/types/schemas/tabletopMessage';
+import { captureException } from '~/utils/telemetry-client';
 
 const REALTIME_HOST = import.meta.env.VITE_PUBLIC_PARTYKIT_HOST ?? 'localhost:1999';
 
@@ -89,13 +90,15 @@ export function useTabletopMapParty(
     try {
       raw = JSON.parse(event.data);
     } catch (err) {
-      console.error('[TabletopMapParty] Failed to parse message', err);
+      captureException(err, { source: 'useTabletopMapParty.parse' });
       return;
     }
     // Peers can put arbitrary data on the socket — validate before dispatching.
     const msg = parseTabletopMapMessage(raw);
     if (!msg) {
-      console.warn('[TabletopMapParty] Dropped invalid message', raw);
+      captureException(new Error('Dropped invalid tabletop map message'), {
+        source: 'useTabletopMapParty.validate',
+      });
       return;
     }
     onMessageRef.current(msg);
@@ -111,12 +114,12 @@ export function useTabletopMapParty(
     // stays unchanged.
     party: 'tabletop_map',
     query: campaignId ? async () => ({ token: await getToken() }) : () => ({ token: '' }),
-    onOpen() {
-      console.info(`[TabletopMapParty] Connected to room ${roomId}`);
-    },
     onClose(event) {
       if (campaignId && event.code !== 1000) {
-        console.warn(`[TabletopMapParty] Disconnected code=${event.code}`);
+        captureException(new Error(`TabletopMapParty disconnected code=${event.code}`), {
+          source: 'useTabletopMapParty.close',
+          code: event.code,
+        });
       }
     },
     onMessage: stableOnMessage,

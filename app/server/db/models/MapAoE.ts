@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 // Spell area-of-effect template on a map. Any member can create an AoE;
 // deletion is gated to the author (createdBy) or any GM.
@@ -53,4 +53,7 @@ if (typeof (mapAoESchema as { index?: unknown }).index === 'function') {
   mapAoESchema.index({ campaignId: 1, mapId: 1 });
 }
 
-export const MapAoE = mongoose.models.MapAoE || mongoose.model('MapAoE', mapAoESchema);
+export type IMapAoE = InferSchemaType<typeof mapAoESchema>;
+
+export const MapAoE: Model<IMapAoE> =
+  (mongoose.models.MapAoE as Model<IMapAoE>) || mongoose.model<IMapAoE>('MapAoE', mapAoESchema);

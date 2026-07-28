@@ -35,7 +35,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getSession).mockResolvedValue(mockSession);
   vi.mocked(isDBConnected).mockReturnValue(true);
-  vi.mocked(User.findOne).mockResolvedValue(mockDbUser);
+  vi.mocked(User.findOne).mockResolvedValue(mockDbUser as never);
 });
 
 describe('requireCampaignMember', () => {

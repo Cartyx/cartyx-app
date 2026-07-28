@@ -226,57 +226,66 @@ export function InspectorSidebar({
         )}
       </div>
 
-      {/* Tab panels — one per tab, only active is visible */}
-      {tabs.map((tab) => {
-        const isActive = tab.id === activeTab;
-        return (
-          <div
-            key={tab.id}
-            id={panelId(tab.id)}
-            data-testid={isActive ? 'inspector-panel' : undefined}
-            role="tabpanel"
-            aria-labelledby={tabId(tab.id)}
-            hidden={!isActive}
-            className="flex flex-1 min-h-0 w-full"
-          >
-            {tab.id === 'chat' ? (
-              <ChatPanel
-                messages={messages}
-                onSendMessage={(text, channel) =>
-                  sendMessage(text, channel, user?.id ?? '', user?.name ?? '', socket)
-                }
-                sessions={sessionList}
-                activeSessionId={viewingSessionId}
-                onSessionChange={setViewingSessionId}
-                saveError={chatSaveError}
-                onDismissError={() => setChatSaveError(null)}
-              />
-            ) : tab.id === 'dice' ? (
-              <DicePanel
-                rolls={rolls}
-                isConnected={isConnected}
-                sessions={sessionList}
-                activeSessionId={viewingSessionId}
-                onSessionChange={setViewingSessionId}
-                saveError={diceSaveError}
-                onDismissError={() => setDiceSaveError(null)}
-              />
-            ) : tab.id === 'wiki' ? (
-              <WikiPanel />
-            ) : tab.id === 'notes' ? (
-              <NotesPanel />
-            ) : tab.id === 'settings' ? (
-              <SettingsPanel />
-            ) : (
-              <div className="flex flex-1 items-center justify-center">
-                <span className="font-sans font-semibold text-xs text-slate-600">
-                  {tab.label} — Coming Soon
-                </span>
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {/* Tab panels — one per tab, only active is visible. Every wiki card
+          (WikiPanel), note card (NotesPanel), and ShowOnTabletopButton modal
+          those panels render reads shared card-action data from the single
+          WikiCardActionsProvider mounted ABOVE this whole subtree in the play
+          route (wrapping both MainView's center column and this inspector), so
+          the Dashboard-widget consumers are covered by the same instance.
+          Context crosses the modals' portals by React tree, so portalled modals
+          are covered too. */}
+      <>
+        {tabs.map((tab) => {
+          const isActive = tab.id === activeTab;
+          return (
+            <div
+              key={tab.id}
+              id={panelId(tab.id)}
+              data-testid={isActive ? 'inspector-panel' : undefined}
+              role="tabpanel"
+              aria-labelledby={tabId(tab.id)}
+              hidden={!isActive}
+              className="flex flex-1 min-h-0 w-full"
+            >
+              {tab.id === 'chat' ? (
+                <ChatPanel
+                  messages={messages}
+                  onSendMessage={(text, channel) =>
+                    sendMessage(text, channel, user?.id ?? '', user?.name ?? '', socket)
+                  }
+                  sessions={sessionList}
+                  activeSessionId={viewingSessionId}
+                  onSessionChange={setViewingSessionId}
+                  saveError={chatSaveError}
+                  onDismissError={() => setChatSaveError(null)}
+                />
+              ) : tab.id === 'dice' ? (
+                <DicePanel
+                  rolls={rolls}
+                  isConnected={isConnected}
+                  sessions={sessionList}
+                  activeSessionId={viewingSessionId}
+                  onSessionChange={setViewingSessionId}
+                  saveError={diceSaveError}
+                  onDismissError={() => setDiceSaveError(null)}
+                />
+              ) : tab.id === 'wiki' ? (
+                <WikiPanel />
+              ) : tab.id === 'notes' ? (
+                <NotesPanel />
+              ) : tab.id === 'settings' ? (
+                <SettingsPanel />
+              ) : (
+                <div className="flex flex-1 items-center justify-center">
+                  <span className="font-sans font-semibold text-xs text-slate-600">
+                    {tab.label} — Coming Soon
+                  </span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </>
     </div>
   );
 }

@@ -6,8 +6,10 @@ import { WikiFilterBar } from '~/components/wiki/shared/WikiFilterBar';
 import { LoreCard } from './LoreCard';
 import { LoreModal } from './LoreModal';
 import { LoreViewModal } from './LoreViewModal';
-import { useLore } from '~/hooks/useLore';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
+import { useLore, useDeleteLore } from '~/hooks/useLore';
 import { useCampaign } from '~/hooks/useCampaigns';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import type { LoreListItem } from '~/types/lore';
 
 interface LorePanelProps {
@@ -31,6 +33,12 @@ export function LorePanel({ onBack }: LorePanelProps) {
     visibility,
     tags: filterTags.length > 0 ? filterTags : undefined,
   });
+  const { remove: removeLore, isLoading: isDeleting } = useDeleteLore();
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<LoreListItem>(
+      (item) => removeLore({ id: item.id, campaignId }),
+      'Failed to delete lore. Please try again.'
+    );
 
   const handleCreateClick = () => {
     setSelectedLoreId(undefined);
@@ -44,6 +52,12 @@ export function LorePanel({ onBack }: LorePanelProps) {
     } else {
       setViewLoreId(item.id);
     }
+  };
+
+  // The menu's Edit only renders when canEdit, so this always goes to the editor.
+  const handleLoreEdit = (item: LoreListItem) => {
+    setSelectedLoreId(item.id);
+    setIsModalOpen(true);
   };
 
   const handleModalClose = () => {
@@ -96,7 +110,13 @@ export function LorePanel({ onBack }: LorePanelProps) {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="flex flex-col">
             {lore.map((item) => (
-              <LoreCard key={item.id} lore={item} onClick={handleLoreClick} />
+              <LoreCard
+                key={item.id}
+                lore={item}
+                onClick={handleLoreClick}
+                onEdit={handleLoreEdit}
+                onDelete={() => requestDelete(item)}
+              />
             ))}
           </div>
         </div>
@@ -114,6 +134,18 @@ export function LorePanel({ onBack }: LorePanelProps) {
           onClose={handleViewModalClose}
           loreId={viewLoreId}
           campaignId={campaignId}
+        />
+      )}
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete lore"
+          message={`Delete "${pendingDelete.title}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={isDeleting}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

@@ -20,7 +20,7 @@ import {
 function serializeNote(n: {
   _id: unknown;
   campaignId: unknown;
-  sessionId: unknown;
+  sessionId?: unknown;
   createdBy: unknown;
   title?: string;
   note?: string;
@@ -43,17 +43,20 @@ function serializeNote(n: {
   };
 }
 
-function serializeNoteListItem(n: {
-  _id: unknown;
-  campaignId: unknown;
-  sessionId: unknown;
-  createdBy: unknown;
-  title?: string;
-  tags?: string[];
-  isPublic?: boolean;
-  createdAt?: Date;
-  updatedAt?: Date;
-}): NoteListItem {
+function serializeNoteListItem(
+  n: {
+    _id: unknown;
+    campaignId: unknown;
+    sessionId: unknown;
+    createdBy: unknown;
+    title?: string;
+    tags?: string[];
+    isPublic?: boolean;
+    createdAt?: Date;
+    updatedAt?: Date;
+  },
+  callerUserId: string
+): NoteListItem {
   return {
     id: String(n._id),
     campaignId: String(n.campaignId),
@@ -62,6 +65,9 @@ function serializeNoteListItem(n: {
     title: n.title ?? '',
     tags: n.tags ?? [],
     isPublic: n.isPublic ?? false,
+    // Notes are creator-only for edit and delete (see updateNote/deleteNote —
+    // no GM bypass), so canEdit is a plain creator check.
+    canEdit: String(n.createdBy) === callerUserId,
     createdAt: n.createdAt instanceof Date ? n.createdAt.toISOString() : '',
     updatedAt: n.updatedAt instanceof Date ? n.updatedAt.toISOString() : '',
   };
@@ -89,8 +95,7 @@ async function requireCampaignMember(
   const userId = String(dbUser._id);
   const members = campaign.members ?? [];
   const isMember =
-    members.some((m: { userId: unknown }) => String(m.userId) === userId) ||
-    String(campaign.gameMasterId) === userId;
+    members.some((m) => String(m.userId) === userId) || String(campaign.gameMasterId) === userId;
   if (!isMember) throw new Error('Forbidden');
 
   return { userId, sessionUserId: user.id };
@@ -164,8 +169,9 @@ export const updateNote = async ({ data }: { data: z.infer<typeof updateNoteSche
     if (existing.isReadOnly) throw new Error('Note is read-only');
 
     const finalTags = normalizeTags(data.tags ?? []);
-    existing.sessionId =
-      data.sessionId && data.sessionId !== '__none__' ? data.sessionId : undefined;
+    existing.sessionId = (data.sessionId && data.sessionId !== '__none__'
+      ? data.sessionId
+      : undefined) as unknown as typeof existing.sessionId;
     existing.title = data.title.trim();
     existing.note = data.note.trim();
     existing.tags = finalTags;
@@ -295,7 +301,7 @@ export const listNotes = async ({ data }: { data: z.infer<typeof listNotesSchema
         createdAt?: Date;
         updatedAt?: Date;
       }>
-    ).map(serializeNoteListItem);
+    ).map((n) => serializeNoteListItem(n, userId));
   } catch (e) {
     serverCaptureException(e, sessionUserId, {
       action: 'listNotes',

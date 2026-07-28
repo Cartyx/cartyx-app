@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 import { normalizeTags } from '~/server/utils/helpers';
 
 const giverSchema = new mongoose.Schema(
@@ -98,4 +98,7 @@ if (typeof (questSchema as { index?: unknown }).index === 'function') {
   questSchema.index({ name: 'text', publicInfo: 'text' });
 }
 
-export const Quest = mongoose.models.Quest || mongoose.model('Quest', questSchema);
+export type IQuest = InferSchemaType<typeof questSchema>;
+
+export const Quest: Model<IQuest> =
+  (mongoose.models.Quest as Model<IQuest>) || mongoose.model<IQuest>('Quest', questSchema);

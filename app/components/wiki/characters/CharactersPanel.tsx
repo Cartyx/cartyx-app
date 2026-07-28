@@ -6,7 +6,9 @@ import { WikiFilterBar } from '~/components/wiki/shared/WikiFilterBar';
 import { CharacterCard } from './CharacterCard';
 import { CharacterModal } from './CharacterModal';
 import { CharacterViewModal } from './CharacterViewModal';
-import { useCharacters } from '~/hooks/useCharacters';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
+import { useCharacters, useDeleteCharacter } from '~/hooks/useCharacters';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import { useCampaign } from '~/hooks/useCampaigns';
 import type { CharacterListItem } from '~/types/character';
 
@@ -27,6 +29,13 @@ export function CharactersPanel({ onBack }: CharactersPanelProps) {
   const [viewCharacterId, setViewCharacterId] = useState<string | undefined>();
 
   const sessions = campaign?.sessions ?? [];
+  const { remove: removeCharacter, isLoading: isDeleting } = useDeleteCharacter();
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<CharacterListItem>(
+      (item) => removeCharacter({ id: item.id, campaignId }),
+      'Failed to delete character. Please try again.'
+    );
 
   const { characters, isLoading, error } = useCharacters(campaignId, {
     search: search || undefined,
@@ -47,6 +56,12 @@ export function CharactersPanel({ onBack }: CharactersPanelProps) {
     } else {
       setViewCharacterId(character.id);
     }
+  };
+
+  // The menu's Edit only renders when canEdit, so this always goes to the editor.
+  const handleCharacterEdit = (character: CharacterListItem) => {
+    setSelectedCharacterId(character.id);
+    setIsModalOpen(true);
   };
 
   const handleModalClose = () => {
@@ -103,6 +118,8 @@ export function CharactersPanel({ onBack }: CharactersPanelProps) {
                 key={character.id}
                 character={character}
                 onClick={handleCharacterClick}
+                onEdit={handleCharacterEdit}
+                onDelete={() => requestDelete(character)}
               />
             ))}
           </div>
@@ -122,6 +139,18 @@ export function CharactersPanel({ onBack }: CharactersPanelProps) {
           onClose={handleViewModalClose}
           characterId={viewCharacterId}
           campaignId={campaignId}
+        />
+      )}
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete character"
+          message={`Delete "${pendingDelete.firstName} ${pendingDelete.lastName}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={isDeleting}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
         />
       )}
     </div>

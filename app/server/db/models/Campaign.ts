@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 const campaignSchema = new mongoose.Schema({
   gameMasterId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
@@ -28,4 +28,8 @@ if (typeof (campaignSchema as { index?: unknown }).index === 'function') {
   campaignSchema.index({ 'members.userId': 1 });
 }
 
-export const Campaign = mongoose.models.Campaign || mongoose.model('Campaign', campaignSchema);
+export type ICampaign = InferSchemaType<typeof campaignSchema>;
+
+export const Campaign: Model<ICampaign> =
+  (mongoose.models.Campaign as Model<ICampaign>) ||
+  mongoose.model<ICampaign>('Campaign', campaignSchema);

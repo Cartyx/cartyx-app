@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 import { normalizeTags } from '~/server/utils/helpers';
 
 const pictureCropSchema = new mongoose.Schema(
@@ -121,4 +121,8 @@ if (typeof (characterSchema as { index?: unknown }).index === 'function') {
   });
 }
 
-export const Character = mongoose.models.Character || mongoose.model('Character', characterSchema);
+export type ICharacter = InferSchemaType<typeof characterSchema>;
+
+export const Character: Model<ICharacter> =
+  (mongoose.models.Character as Model<ICharacter>) ||
+  mongoose.model<ICharacter>('Character', characterSchema);

@@ -4,7 +4,9 @@ import { Skull } from 'lucide-react';
 import { WikiCategoryHeader } from '~/components/wiki/shared/WikiCategoryHeader';
 import { WikiFilterBar } from '~/components/wiki/shared/WikiFilterBar';
 import { useCampaign } from '~/hooks/useCampaigns';
-import { useMonsters } from '~/hooks/useMonsters';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
+import { useMonsters, useMonsterMutations } from '~/hooks/useMonsters';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import { MonsterCard } from './MonsterCard';
 import { MonsterModal } from './MonsterModal';
 import type { MonsterListItem } from '~/types/monster';
@@ -33,6 +35,18 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
     tags: filterTags.length > 0 ? filterTags : undefined,
     sessionId: sessionId || undefined,
   });
+  const { remove } = useMonsterMutations(campaignId);
+
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  // Unlike the other wiki delete hooks, useMonsterMutations exposes the raw
+  // mutation, whose mutateAsync *rejects* on failure rather than resolving to
+  // null. useDeleteConfirm treats both shapes as a failure, so the rejection
+  // surfaces to the user instead of silently closing the dialog.
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<MonsterListItem>(
+      (item) => remove.mutateAsync(item.id),
+      'Failed to delete monster. Please try again.'
+    );
 
   const handleCreate = () => {
     setEditId(undefined);
@@ -91,7 +105,14 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
         <div className="min-h-0 flex-1 overflow-y-auto">
           <div className="flex flex-col">
             {monsters.map((m) => (
-              <MonsterCard key={m.id} monster={m} onClick={handleClick} />
+              <MonsterCard
+                key={m.id}
+                monster={m}
+                canEdit={isGM}
+                onClick={handleClick}
+                onEdit={handleClick}
+                onDelete={() => requestDelete(m)}
+              />
             ))}
           </div>
         </div>
@@ -106,6 +127,18 @@ export function MonstersPanel({ onBack }: MonstersPanelProps) {
           setEditId(undefined);
         }}
       />
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete monster"
+          message={`Delete "${pendingDelete.name}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={remove.isPending}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
+        />
+      )}
     </div>
   );
 }

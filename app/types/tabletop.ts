@@ -59,8 +59,32 @@ export interface TabletopPlayerStateData {
   campaignId: string;
   userId: string;
   activeScreenId: string | null;
+  activeGMScreenId: string | null;
   viewports: ViewportData[];
   windowOverrides: WindowOverrideData[];
+  privateWindows: PrivateWindowData[];
+  /**
+   * Hydrated docs for `privateWindows`, keyed `"collection:documentId"` — the
+   * same shape as TabletopScreenDetailData.hydrated. Private windows hang off
+   * player state, so the screen-detail hydration never covers them and their
+   * titles must come from here. Only `getPlayerState` populates it; the
+   * mutations that return player state leave it undefined.
+   */
+  hydrated?: Record<string, HydratedDocument>;
+}
+
+export interface PrivateWindowData {
+  id: string;
+  surface: 'tabletop' | 'gmscreen';
+  screenId: string;
+  collection: string;
+  documentId: string;
+  x: number;
+  y: number;
+  width: number | null;
+  height: number | null;
+  zIndex: number;
+  state: 'open' | 'minimized' | 'hidden';
 }
 
 export interface ViewportData {
@@ -101,13 +125,4 @@ export type TabletopMessage =
   | { type: 'tab:delete'; screenId: string }
   | { type: 'tab:focus-all'; screenId: string }
   | { type: 'tab:content-added'; screenId: string }
-  | {
-      type: 'ping';
-      screenId: string;
-      x: number;
-      y: number;
-      userId: string;
-      userName: string;
-      color: string;
-    }
   | { type: 'grid:style-change'; screenId: string; gridStyle: GridStyle };

@@ -1935,6 +1935,30 @@ def main() -> None:
         })
         print("    gm screen   1 default")
 
+        # A default Tabletop screen so the Tabletop view has a tab out of the
+        # box — and so "Push to Tabletop" (from the wiki card overflow menu) has
+        # a target instead of rendering disabled. Written with the full field
+        # set because pymongo does not apply the Mongoose schema defaults. The
+        # TabletopScreen model pins collection 'tabletopscreen'.
+        db.tabletopscreen.insert_one({
+            "campaignId": campaign_id,
+            "name": "Tabletop",
+            "tabOrder": 0,
+            "createdBy": gm_id,
+            "mode": "grid",
+            "gridStyle": "dark",
+            "gridSize": 50,
+            "gridVisible": True,
+            "gridScale": 5,
+            "locationId": None,
+            "battleMapImage": None,
+            "activeMapId": None,
+            "windows": [],
+            "createdAt": now,
+            "updatedAt": now,
+        })
+        print("    tabletop screen   1 default")
+
         # Insert any seed locations defined for this campaign.
         # location_ids: maps location name → inserted _id (for lore links).
         location_ids: dict[str, object] = {}

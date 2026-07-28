@@ -1,4 +1,4 @@
-import mongoose from 'mongoose'
+import mongoose, { type InferSchemaType, type Model, type HydratedDocument } from 'mongoose';
 
 const sessionSchema = new mongoose.Schema({
   campaignId: { type: mongoose.Schema.Types.ObjectId, ref: 'Campaign', required: true },
@@ -11,20 +11,24 @@ const sessionSchema = new mongoose.Schema({
   summary: { type: String },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },
-})
+});
 
 // istanbul ignore next
 if (typeof (sessionSchema as { index?: unknown }).index === 'function') {
-  sessionSchema.index({ campaignId: 1, number: -1 })
-  sessionSchema.index({ campaignId: 1, startDate: -1 })
+  sessionSchema.index({ campaignId: 1, number: -1 });
+  sessionSchema.index({ campaignId: 1, startDate: -1 });
   sessionSchema.index(
     { campaignId: 1, status: 1 },
     {
       unique: true,
       partialFilterExpression: { status: 'active' },
     }
-  )
+  );
 }
 
-export const Session =
-  mongoose.models.Session || mongoose.model('Session', sessionSchema)
+export type ISession = InferSchemaType<typeof sessionSchema>;
+export type SessionDoc = HydratedDocument<ISession>;
+
+export const Session: Model<ISession> =
+  (mongoose.models.Session as Model<ISession>) ||
+  mongoose.model<ISession>('Session', sessionSchema);

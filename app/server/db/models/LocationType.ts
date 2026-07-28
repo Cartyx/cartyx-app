@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 export const DEFAULT_LOCATION_TYPES = [
   'continent',
@@ -31,8 +31,11 @@ const locationTypeSchema = new mongoose.Schema(
 locationTypeSchema.index({ campaignId: 1, name: 1 }, { unique: true });
 locationTypeSchema.index({ campaignId: 1, sortOrder: 1 });
 
-export const LocationType =
-  mongoose.models.LocationType || mongoose.model('LocationType', locationTypeSchema);
+export type ILocationType = InferSchemaType<typeof locationTypeSchema>;
+
+export const LocationType: Model<ILocationType> =
+  (mongoose.models.LocationType as Model<ILocationType>) ||
+  mongoose.model<ILocationType>('LocationType', locationTypeSchema);
 
 /**
  * Seed default location types for a campaign if none exist.

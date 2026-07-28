@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 
 // Freeform text written on a map by a player or GM. Any member can create
 // text; deletion is gated to the author (createdBy) or any GM.
@@ -41,4 +41,8 @@ if (typeof (mapTextSchema as { index?: unknown }).index === 'function') {
   mapTextSchema.index({ mapId: 1, campaignId: 1 });
 }
 
-export const MapText = mongoose.models.MapText || mongoose.model('MapText', mapTextSchema);
+export type IMapText = InferSchemaType<typeof mapTextSchema>;
+
+export const MapText: Model<IMapText> =
+  (mongoose.models.MapText as Model<IMapText>) ||
+  mongoose.model<IMapText>('MapText', mapTextSchema);

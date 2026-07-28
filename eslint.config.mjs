@@ -32,10 +32,17 @@ export default [
     rules: {
       ...tsPlugin.configs.recommended.rules,
       ...reactHooksPlugin.configs.recommended.rules,
-      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
       '@typescript-eslint/no-explicit-any': 'warn',
       'react/react-in-jsx-scope': 'off',
-      'no-console': ['warn', { allow: ['warn', 'error'] }],
+      // No console anywhere. Server code logs via pino (app/server/utils/logger
+      // or realtime/src/logger) which redacts PII centrally; client code has no
+      // logger by design — the browser console is readable by any player, so
+      // client failures go to captureException -> GlitchTip instead.
+      'no-console': 'error',
       // base eslint:recommended's no-undef fires on ambient DOM/TS types
       // (e.g. RequestInit) in .ts/.tsx files. typescript-eslint's official
       // guidance is to disable no-undef for TypeScript — tsc already catches

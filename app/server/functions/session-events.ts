@@ -62,9 +62,7 @@ async function requireCampaignGM(
 
   const isGM =
     String(campaign.gameMasterId) === userId ||
-    members.some(
-      (m: { userId: unknown; role?: string }) => String(m.userId) === userId && m.role === 'gm'
-    );
+    members.some((m) => String(m.userId) === userId && m.role === 'gm');
 
   if (!isGM) throw new Error('Forbidden');
   return { userId, sessionUserId: user.id };

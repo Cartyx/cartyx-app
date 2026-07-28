@@ -56,7 +56,6 @@ const handleCallback = createServerFn({ method: 'GET' })
         return { redirectTo: '/campaigns' };
       } catch (e) {
         const errMessage = e instanceof Error ? e.message : String(e);
-        console.error('[oauth-callback] failed', provider, e);
         await serverCaptureException(e, undefined, {
           action: 'handleOAuthCallback',
           provider,

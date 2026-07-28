@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { NotesListWidget } from './NotesListWidget';
 import { mockSessions } from '~/services/mocks/sessionsService';
+import { WikiCardActionsStubProvider } from '~/components/wiki/shared/WikiCardActionsStubProvider';
 import type { NoteListItem } from '~/types/note';
 
 const mockNotes: NoteListItem[] = [
@@ -12,6 +13,7 @@ const mockNotes: NoteListItem[] = [
     title: 'The Traitor Revealed',
     tags: ['betrayal', 'emberfall', 'plot-twist'],
     isPublic: true,
+    canEdit: true,
     createdAt: '2026-03-21T20:00:00Z',
     updatedAt: '2026-03-21T22:15:00Z',
   },
@@ -23,6 +25,7 @@ const mockNotes: NoteListItem[] = [
     title: 'Hidden Sanctum Map Notes',
     tags: ['chapel', 'map'],
     isPublic: false,
+    canEdit: true,
     createdAt: '2026-03-14T19:00:00Z',
     updatedAt: '2026-03-15T10:30:00Z',
   },
@@ -34,6 +37,7 @@ const mockNotes: NoteListItem[] = [
     title: 'Glassmere Market Raid — Witness Accounts',
     tags: ['glassmere', 'raiders', 'investigation'],
     isPublic: true,
+    canEdit: false,
     createdAt: '2026-03-07T18:00:00Z',
     updatedAt: '2026-03-08T09:00:00Z',
   },
@@ -45,6 +49,7 @@ const mockNotes: NoteListItem[] = [
     title: 'Barrow Knight Negotiation Tactics',
     tags: [],
     isPublic: false,
+    canEdit: true,
     createdAt: '2026-02-28T20:00:00Z',
     updatedAt: '2026-02-28T23:00:00Z',
   },
@@ -55,10 +60,14 @@ const meta: Meta<typeof NotesListWidget> = {
   component: NotesListWidget,
   tags: ['autodocs'],
   decorators: [
+    // Each note card renders a WikiCardMenu, whose hook throws without a
+    // provider — and the real one can't mount outside the /play route.
     (Story) => (
-      <div className="max-w-sm h-[500px] flex flex-col bg-[#080A12]">
-        <Story />
-      </div>
+      <WikiCardActionsStubProvider>
+        <div className="max-w-sm h-[500px] flex flex-col bg-[#080A12]">
+          <Story />
+        </div>
+      </WikiCardActionsStubProvider>
     ),
   ],
 };

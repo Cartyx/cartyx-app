@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 import { normalizeTags } from '~/server/utils/helpers';
 
 const diceSchema = new mongoose.Schema({ count: Number, sides: Number }, { _id: false });
@@ -130,4 +130,7 @@ if (typeof (spellSchema as { index?: unknown }).index === 'function') {
   spellSchema.index({ name: 'text', description: 'text' });
 }
 
-export const Spell = mongoose.models.Spell || mongoose.model('Spell', spellSchema);
+export type ISpell = InferSchemaType<typeof spellSchema>;
+
+export const Spell: Model<ISpell> =
+  (mongoose.models.Spell as Model<ISpell>) || mongoose.model<ISpell>('Spell', spellSchema);

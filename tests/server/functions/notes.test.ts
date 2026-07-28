@@ -110,7 +110,7 @@ const _getNote = getNote as unknown as (args: {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getSession).mockResolvedValue(mockSession);
-  vi.mocked(User.findOne).mockResolvedValue(mockDbUser);
+  vi.mocked(User.findOne).mockResolvedValue(mockDbUser as never);
   vi.mocked(Campaign.findById).mockResolvedValue(mockCampaign);
 });
 
@@ -394,6 +394,24 @@ describe('listNotes', () => {
     // No unscoped query that would leak private notes
     expect(filter).not.toHaveProperty('isPublic');
     expect(filter).not.toHaveProperty('createdBy');
+  });
+
+  it('sets canEdit true only for notes the caller created', async () => {
+    // Caller resolves to 'dbuser-1' (see makeNote default + the $or filter).
+    const notes = [
+      makeNote({ _id: 'mine', createdBy: 'dbuser-1' }),
+      makeNote({ _id: 'theirs', createdBy: 'someone-else', isPublic: true }),
+    ];
+    vi.mocked(Note.find).mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        sort: vi.fn().mockReturnValue({ lean: vi.fn().mockResolvedValue(notes) }),
+      }),
+    } as never);
+
+    const result = await _listNotes({ data: { campaignId: 'camp-1' } });
+
+    expect(result.find((n) => n.id === 'mine')?.canEdit).toBe(true);
+    expect(result.find((n) => n.id === 'theirs')?.canEdit).toBe(false);
   });
 
   it('list responses omit note body field', async () => {

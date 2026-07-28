@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { type InferSchemaType, type Model } from 'mongoose';
 import { normalizeTags } from '~/server/utils/helpers';
 
 const noteSchema = new mongoose.Schema({
@@ -75,4 +75,7 @@ if (typeof (noteSchema as { index?: unknown }).index === 'function') {
   noteSchema.index({ title: 'text', note: 'text' });
 }
 
-export const Note = mongoose.models.Note || mongoose.model('Note', noteSchema);
+export type INote = InferSchemaType<typeof noteSchema>;
+
+export const Note: Model<INote> =
+  (mongoose.models.Note as Model<INote>) || mongoose.model<INote>('Note', noteSchema);

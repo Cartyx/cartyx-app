@@ -395,7 +395,12 @@ export const updatePlayerStatus = async ({
     if (!player) throw new Error('Player not found');
     if (String(player.campaignId) !== data.campaignId) throw new Error('Forbidden');
 
-    player.status = { value: data.value, changedAt: new Date(), changedBy: member.userId };
+    // Same string-id-vs-ObjectId compile-time boundary as Character's status update.
+    player.status = {
+      value: data.value,
+      changedAt: new Date(),
+      changedBy: member.userId,
+    } as unknown as typeof player.status;
     player.updatedAt = new Date();
     await player.save();
 
@@ -591,7 +596,7 @@ export const validateInviteCode = async ({
     // Check if user is already a member
     const userId = String(dbUser._id);
     const alreadyMember =
-      (campaign.members ?? []).some((m: { userId: unknown }) => String(m.userId) === userId) ||
+      (campaign.members ?? []).some((m) => String(m.userId) === userId) ||
       String(campaign.gameMasterId) === userId;
     if (alreadyMember) throw new Error('Already a member of this campaign');
 

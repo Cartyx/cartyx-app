@@ -4,6 +4,7 @@ import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NoteModal } from '~/components/mainview/notes/NoteModal';
 import { useCreateNote, useUpdateNote, useDeleteNote, useNote } from '~/hooks/useNotes';
+import { WikiCardActionsTestWrapper } from '../../../support/renderWithWikiCardActions';
 
 // Mock hooks
 vi.mock('~/hooks/useNotes');
@@ -13,10 +14,29 @@ vi.mock('~/hooks/useTags', () => ({
 vi.mock('~/hooks/useCampaigns', () => ({
   useCampaign: () => ({ campaign: { isGM: false }, isLoading: false }),
 }));
+vi.mock('~/hooks/useGMScreens', () => ({
+  useGMScreenDetail: () => ({ screen: null }),
+  useGMScreenList: () => ({ screens: [] }),
+}));
 vi.mock('~/hooks/useTabletopScreens', () => ({
+  useTabletopScreenDetail: () => ({ screen: null }),
   useTabletopScreenList: () => ({ screens: [], isLoading: false, error: null }),
   useTabletopMutations: () => ({
     openWindow: { mutate: vi.fn(), isPending: false },
+  }),
+}));
+
+// NoteModal's ShowOnTabletopButton now reads useWikiCardActions, which reads
+// the router and tabletop player state — stub that context so the modal
+// still renders standalone here (same pattern as LoreCard.test.tsx).
+vi.mock('@tanstack/react-router', () => ({
+  useParams: () => ({ campaignId: 'campaign-123' }),
+  useSearch: () => ({ tab: 'wiki' }),
+}));
+vi.mock('~/hooks/useTabletopPlayerState', () => ({
+  useTabletopPlayerState: () => ({
+    playerState: null,
+    addPrivateWindow: { mutate: vi.fn() },
   }),
 }));
 
@@ -149,7 +169,7 @@ function renderModal(overrides: Partial<React.ComponentProps<typeof NoteModal>> 
     sessions: mockSessions,
     ...overrides,
   };
-  const result = render(<NoteModal {...props} />);
+  const result = render(<NoteModal {...props} />, { wrapper: WikiCardActionsTestWrapper });
   return { ...result, props };
 }
 

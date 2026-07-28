@@ -158,5 +158,5 @@ client-side + broadcast.
 
 ## Phase 3 (unchanged, still deferred)
 
-Drawing `areaOfEffect` on the tabletop `spell-fx` layer — greenfield, separate
+Drawing `areaOfEffect` on the tabletop as an SVG overlay — greenfield, separate
 spec.

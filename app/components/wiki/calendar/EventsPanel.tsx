@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { useParams } from '@tanstack/react-router';
 import { CalendarDays } from 'lucide-react';
+import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
 import { WikiCategoryHeader } from '~/components/wiki/shared/WikiCategoryHeader';
 import { WikiFilterBar } from '~/components/wiki/shared/WikiFilterBar';
 import { EventCard } from './EventCard';
 import { EventModal } from './EventModal';
-import { useEvents } from '~/hooks/useEvents';
+import { useEvents, useDeleteEvent } from '~/hooks/useEvents';
+import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
 import { useCalendar } from '~/hooks/useCalendar';
 import { useCampaign } from '~/hooks/useCampaigns';
 import { calendarConfigFromData } from '~/types/calendar';
@@ -26,6 +28,13 @@ export function EventsPanel({ onBack }: EventsPanelProps) {
   const [epicOnly, setEpicOnly] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedEventId, setSelectedEventId] = useState<string | undefined>();
+  const { remove: removeItem, isLoading: isDeleting } = useDeleteEvent();
+  // The menu's Delete only renders for a GM (useWikiCardActions owns that gate).
+  const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
+    useDeleteConfirm<EventListItem>(
+      (item) => removeItem({ id: item.id, campaignId }),
+      'Failed to delete event. Please try again.'
+    );
 
   const { calendar, isLoading: isLoadingCalendar } = useCalendar(campaignId);
   const cfg = calendar ? calendarConfigFromData(calendar) : null;
@@ -145,7 +154,14 @@ export function EventsPanel({ onBack }: EventsPanelProps) {
         <div className="flex-1 overflow-y-auto min-h-0">
           <div className="flex flex-col">
             {events.map((item) => (
-              <EventCard key={item.id} event={item} cfg={cfg!} onClick={handleEventClick} />
+              <EventCard
+                key={item.id}
+                event={item}
+                cfg={cfg!}
+                onClick={handleEventClick}
+                onEdit={handleEventClick}
+                onDelete={() => requestDelete(item)}
+              />
             ))}
           </div>
         </div>
@@ -157,6 +173,18 @@ export function EventsPanel({ onBack }: EventsPanelProps) {
         campaignId={campaignId}
         eventId={selectedEventId}
       />
+      {pendingDelete && (
+        <ConfirmDialog
+          title="Delete event"
+          message={`Delete "${pendingDelete.title}"? This cannot be undone.`}
+          confirmLabel="Delete"
+          danger
+          isLoading={isDeleting}
+          error={deleteError}
+          onConfirm={confirmDelete}
+          onCancel={cancelDelete}
+        />
+      )}
     </div>
   );
 }

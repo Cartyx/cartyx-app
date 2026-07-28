@@ -16,8 +16,8 @@ to a specific spell's stored data in this phase.
 
 It reuses the established tabletop machinery: the **ruler tool's** placement
 interaction, the **drawing layer's** SVG rendering + coordinate math, the
-**map-text** realtime persistence/broadcast model (shared, not GM-gated), the
-`spell-fx` layer's visibility gate, and the shared **`ColorPicker`**.
+**map-text** realtime persistence/broadcast model (shared, not GM-gated), a
+per-viewer zoom-toolbar visibility toggle, and the shared **`ColorPicker`**.
 
 ## Decisions (locked)
 
@@ -109,7 +109,7 @@ atan2(cursor−origin)`); a **second click commits**.
 - State: `{ origin: ImagePoint | null, cursor: ImagePoint | null }`; exposes an
   in-progress **preview** shape.
 
-## 4. Rendering (`MapAoELayer`, SVG on `spell-fx`)
+## 4. Rendering (`MapAoELayer`, SVG overlay)
 
 New `app/components/mainview/tabletop/MapAoELayer.tsx`, modeled on
 `MapDrawingLayer`: one `pointer-events-none` `<svg className="absolute inset-0
@@ -129,8 +129,8 @@ translated to origin):
 - **cone** → 5e cone (width == length at the far edge): apex at origin, base
   corners `(L, +L/2)` and `(L, −L/2)` → rotate → `<polygon>` (isosceles triangle).
 
-Rendered in the stage's compositing after the map/grid and gated by
-`!hiddenLayers.has('spell-fx')`. An in-progress placement renders as a
+Rendered in the stage's compositing after the map/grid and gated by the
+per-viewer `showSpellEffects` zoom-toolbar toggle. An in-progress placement renders as a
 non-interactive **preview** (reuse the drawing `preview` pattern). Stacking:
 below tokens/text so tokens stay readable on top of the tint (place the AoE SVG
 just above the grid, below `MapDrawingLayer`/tokens).

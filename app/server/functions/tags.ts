@@ -27,8 +27,7 @@ async function requireCampaignMember(
   const userId = String(dbUser._id);
   const members = campaign.members ?? [];
   const isMember =
-    members.some((m: { userId: unknown }) => String(m.userId) === userId) ||
-    String(campaign.gameMasterId) === userId;
+    members.some((m) => String(m.userId) === userId) || String(campaign.gameMasterId) === userId;
   if (!isMember) throw new Error('Forbidden');
 
   return { userId, sessionUserId: user.id };
@@ -97,7 +96,10 @@ export const ensureTags = async ({ data }: { data: z.infer<typeof ensureTagsSche
       },
     }));
 
-    await Tag.bulkWrite(ops, { ordered: false });
+    // campaignId/createdBy are strings here (validated input / session user id);
+    // mongoose casts them to ObjectId at the driver level same as any other
+    // write. Narrow cast to the real bulkWrite operation type.
+    await Tag.bulkWrite(ops as Parameters<typeof Tag.bulkWrite>[0], { ordered: false });
     return { success: true };
   } catch (e) {
     serverCaptureException(e, sessionUserId, {

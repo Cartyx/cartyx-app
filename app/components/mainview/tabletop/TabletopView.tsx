@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef, type DragEvent } from 'react';
+import React, { useState, useCallback, useEffect, useMemo, useRef, type DragEvent } from 'react';
 import { Globe, Lock, ExternalLink, Dices } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -8,6 +8,7 @@ import {
   useTabletopMutations,
 } from '~/hooks/useTabletopScreens';
 import { useTabletopPlayerState } from '~/hooks/useTabletopPlayerState';
+import { usePrivateWindowLayout } from '~/hooks/usePrivateWindowLayout';
 import { useTabletopParty } from '~/hooks/useTabletopParty';
 import { useActiveMap } from '~/hooks/useMaps';
 import { useTabletopMapSync } from '~/hooks/useTabletopMapSync';
@@ -55,12 +56,15 @@ import {
   MonsterWindowWrapper,
   EditMonsterModalWrapper,
 } from '~/components/wiki/monsters/MonsterWindowWrapper';
+import {
+  SpellWindowWrapper,
+  EditSpellModalWrapper,
+} from '~/components/wiki/spells/SpellWindowWrapper';
 import type { TabletopMessage } from '~/types/tabletop';
 import type { ToolType } from '~/components/mainview/ToolBar';
 import { ToolWindow } from './ToolWindow';
 import { TOOL_WINDOW_META, type ToolWindowId } from './toolWindowState';
 import { useToolWindows } from './useToolWindows';
-import type { PingData } from './PingOverlay';
 
 // ---------------------------------------------------------------------------
 // Dialog state (mirrors GMScreenDialogs pattern)
@@ -118,7 +122,15 @@ export function TabletopView({
 }: TabletopViewProps) {
   const { screens, isLoading } = useTabletopScreenList(campaignId);
   const mutations = useTabletopMutations(campaignId);
-  const { playerState, updateState } = useTabletopPlayerState(campaignId);
+  const openWindow = mutations.openWindow.mutate;
+  const {
+    playerState,
+    isLoading: playerStateLoading,
+    updateState,
+    removePrivateWindow,
+  } = useTabletopPlayerState(campaignId);
+  const removePrivateWindowMutate = removePrivateWindow.mutate;
+  const { schedulePrivateLayout, cancelPrivateLayout } = usePrivateWindowLayout(campaignId);
   const [activeScreenId, setActiveScreenId] = useState<string | null>(null);
   // Active map is per-tab — render the active map of the tab being viewed.
   const { data: activeMap } = useActiveMap(campaignId, activeScreenId);
@@ -129,7 +141,6 @@ export function TabletopView({
   const sendMapMessage = useTabletopMapSync(campaignId, getToken, isGM);
 
   const [badgeScreenIds, setBadgeScreenIds] = useState<Set<string>>(new Set());
-  const [_pings, setPings] = useState<PingData[]>([]);
   const [dialog, setDialog] = useState<DialogState>({ type: 'none' });
   const [editingCharacterId, setEditingCharacterId] = useState<string | null>(null);
   const [editingRaceId, setEditingRaceId] = useState<string | null>(null);
@@ -140,10 +151,48 @@ export function TabletopView({
   const [editingLoreId, setEditingLoreId] = useState<string | null>(null);
   const [editingOrganizationId, setEditingOrganizationId] = useState<string | null>(null);
   const [editingQuestId, setEditingQuestId] = useState<string | null>(null);
+  const [editingSpellId, setEditingSpellId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const [localWindows, setLocalWindows] = useState<ManagedWindow[]>([]);
+  const [flashWindowId, setFlashWindowId] = useState<string | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const localScreenIdRef = useRef<string | null>(null);
   const workspaceRef = useRef<HTMLDivElement>(null);
+
+  // (privateWindows is derived below, once activeScreen is in scope — it has to
+  // subtract anything already open as a SHARED window.)
+
+  // Focus + flash an already-open window (shared or private). Mirrors the
+  // GM-screens flash (flag the id, clear it after 700ms), but raises z-index
+  // only locally: the tabletop has no updateWindow mutation for SHARED windows,
+  // and a focus bump is not worth a write for private ones either (their drag /
+  // resize / minimize DO persist, via handleWindowsChange).
+  const focusWindow = useCallback((windowId: string) => {
+    setLocalWindows((prev) => {
+      const target = prev.find((w) => w.id === windowId);
+      if (!target) return prev;
+      const maxZ = prev.reduce((max, w) => Math.max(max, w.zIndex), 0);
+      if (target.zIndex === maxZ && target.state !== 'minimized') return prev;
+      return prev.map((w) =>
+        w.id === windowId
+          ? { ...w, zIndex: maxZ + 1, state: w.state === 'minimized' ? 'normal' : w.state }
+          : w
+      );
+    });
+
+    setFlashWindowId(windowId);
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => {
+      flashTimerRef.current = null;
+      setFlashWindowId(null);
+    }, 700);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    };
+  }, []);
 
   // Per-user tool windows (Draw/Text/Ruler/Dice/Layers) — geometry only; the
   // open set lives in the play route. Dice renders here (works without an
@@ -153,15 +202,64 @@ export function TabletopView({
   // Ref guard to prevent double auto-creation of default screen
   const autoCreatedRef = useRef(false);
 
-  // Initialize active screen from player state or first screen
+  // Collision-safe primitive key that tracks the *set* of screen IDs. Sorted so
+  // harmless order changes (reorder, refetch jitter) don't trigger re-runs —
+  // only actual additions/removals change this value.
+  const screenIdsKey = useMemo(
+    () => JSON.stringify([...screens.map((s) => s.id)].sort()),
+    [screens]
+  );
+
+  // Ref to current ordered screens so the seeding effect can pick the first
+  // screen by tab-order without adding `screens` to its dep array.
+  const screensRef = useRef(screens);
+  screensRef.current = screens;
+
+  // Ref to the persisted screen id so the seeding effect can read it without
+  // re-running every time our own persist call round-trips.
+  const restoredScreenIdRef = useRef<string | null>(null);
+  restoredScreenIdRef.current = playerState?.activeScreenId ?? null;
+
+  // Whether the one-time restore from player state has already happened.
+  const hasSeededRef = useRef(false);
+
+  // TabletopView isn't remounted on a campaignId change (no `key` at the call
+  // site, and TanStack Router v1 doesn't remount on a path-param change), so
+  // hasSeededRef must be reset by hand when the campaign switches — otherwise
+  // campaign B's first pass sees hasSeededRef already true and falls back to
+  // screens[0] instead of restoring ITS persisted screen. Comparing-during-
+  // render (not in an effect) ensures the reset lands before the seeding effect.
+  const prevCampaignIdRef = useRef(campaignId);
+  if (prevCampaignIdRef.current !== campaignId) {
+    prevCampaignIdRef.current = campaignId;
+    hasSeededRef.current = false;
+  }
+
+  // Initialize active screen from player state or first screen. Fires only when
+  // the SET of ids changes (screenIdsKey is primitive), and uses a functional
+  // update so a persisted-but-DELETED id can never strand the view on a dead
+  // screen. Only the first pass reads player state (to restore the last tab);
+  // afterwards player state is ignored here and only written to on user action.
   useEffect(() => {
-    if (activeScreenId) return;
-    if (playerState?.activeScreenId) {
-      setActiveScreenId(playerState.activeScreenId);
-    } else if (screens.length > 0) {
-      setActiveScreenId(screens[0].id);
+    if (isLoading) return;
+    const current = screensRef.current;
+    if (current.length === 0) {
+      setActiveScreenId(null);
+      return;
     }
-  }, [screens, playerState, activeScreenId]);
+    // Only the initial seed waits on player state; later list changes must not.
+    if (!hasSeededRef.current && playerStateLoading) return;
+
+    const idSet = new Set(current.map((s) => s.id));
+    // Restore the last screen. Falls back to the first screen on first visit
+    // (activeScreenId is null until picked) and when the persisted screen has
+    // since been deleted (not present in idSet).
+    const restored = hasSeededRef.current ? null : restoredScreenIdRef.current;
+    hasSeededRef.current = true;
+    const fallback = restored && idSet.has(restored) ? restored : current[0]!.id;
+
+    setActiveScreenId((prev) => (prev && idSet.has(prev) ? prev : fallback));
+  }, [screenIdsKey, isLoading, playerStateLoading]);
 
   // Auto-create default screen when list is empty and user is GM
   useEffect(() => {
@@ -191,10 +289,36 @@ export function TabletopView({
   // Fetch detail for active screen
   const { screen: activeScreen } = useTabletopScreenDetail(campaignId, activeScreenId);
 
-  // Handle ping expired (used when PingOverlay is wired in)
-  const _handlePingExpired = useCallback((id: string) => {
-    setPings((prev) => prev.filter((p) => p.id !== id));
-  }, []);
+  /** `collection:documentId` of every SHARED window on this screen. */
+  const sharedRefKeys = useMemo(
+    () => new Set((activeScreen?.windows ?? []).map((w) => `${w.collection}:${w.documentId}`)),
+    [activeScreen]
+  );
+
+  // The caller's own private windows for this tab. These live on player state,
+  // are never broadcast, and only ever render for their owner.
+  //
+  // A private window for a document that is ALSO open as a shared window is
+  // suppressed: the GM can push an item the viewer already showed themselves
+  // (the client's own `isAlreadyOpen` check only prevents the reverse order),
+  // and rendering both produces two identical windows. The row is kept in the
+  // database, not deleted — if the GM later closes the shared window, the
+  // viewer's private one comes back.
+  //
+  // IMPORTANT: this filtered list is what `handleWindowsChange` uses to detect
+  // closes. It has to be, since a suppressed window is never rendered and so is
+  // never in `nextWindows` — reading the unfiltered list there would treat every
+  // suppressed window as "closed" and delete it.
+  const privateWindows = useMemo(
+    () =>
+      (playerState?.privateWindows ?? []).filter(
+        (pw) =>
+          pw.surface === 'tabletop' &&
+          pw.screenId === activeScreenId &&
+          !sharedRefKeys.has(`${pw.collection}:${pw.documentId}`)
+      ),
+    [playerState, activeScreenId, sharedRefKeys]
+  );
 
   // Realtime message handler
   const handleMessage = useCallback(
@@ -220,19 +344,6 @@ export function TabletopView({
           if (msg.screenId === activeScreenId) {
             mutations.invalidateDetail(msg.screenId);
           }
-          break;
-        case 'ping':
-          setPings((prev) => [
-            ...prev,
-            {
-              id: `${msg.userId}-${Date.now()}`,
-              x: msg.x,
-              y: msg.y,
-              userName: msg.userName,
-              color: msg.color,
-              createdAt: Date.now(),
-            },
-          ]);
           break;
         case 'grid:style-change':
           if (msg.screenId === activeScreenId) {
@@ -286,6 +397,10 @@ export function TabletopView({
     const idx = screens.findIndex((s) => s.id === deletingId);
     const nextScreen = screens[idx + 1] ?? screens[idx - 1] ?? null;
     setActiveScreenId(nextScreen?.id ?? null);
+    // Persist the new selection so the wiki's card Push / Show-on-Tab and the
+    // Maps panel (which read the SAVED activeScreenId, not this local state)
+    // stop pointing at the just-deleted screen.
+    updateState.mutate({ activeScreenId: nextScreen?.id ?? null });
 
     await mutations.deleteScreen.mutateAsync(deletingId);
     mutations.invalidateList();
@@ -314,14 +429,25 @@ export function TabletopView({
     const isScreenSwitch = localScreenIdRef.current !== activeScreenId;
     localScreenIdRef.current = activeScreenId;
 
+    // Shared windows (TabletopScreen.windows — everyone sees them) and the
+    // caller's private windows render through the SAME branch chain below;
+    // only their close route and hydration source differ. Close routing keys
+    // off which list an id came from (see handleWindowsChange), so the merged
+    // entries need no private/shared tag of their own.
+    const sources = [...activeScreen.windows, ...privateWindows];
+
+    // Both maps are keyed `collection:documentId`; private-window docs come
+    // from the player-state query, shared ones from the screen-detail query.
+    const hydratedDocs = { ...activeScreen.hydrated, ...(playerState?.hydrated ?? {}) };
+
     setLocalWindows((prev) => {
       const prevById = isScreenSwitch
         ? new Map<string, ManagedWindow>()
         : new Map(prev.map((w) => [w.id, w]));
 
-      const merged = activeScreen.windows.map((w) => {
+      const merged = sources.map((w) => {
         const key = `${w.collection}:${w.documentId}`;
-        const doc = activeScreen.hydrated[key];
+        const doc = hydratedDocs[key];
         const title = doc?.title || key;
         const markdownContent = doc?.content || '';
 
@@ -369,7 +495,7 @@ export function TabletopView({
               onEdit={() => setEditingLocationId(w.documentId)}
               onOpenLocation={(locId) => {
                 if (activeScreenId) {
-                  mutations.openWindow.mutate({
+                  openWindow({
                     screenId: activeScreenId,
                     collection: 'location',
                     documentId: locId,
@@ -409,6 +535,14 @@ export function TabletopView({
               questId={w.documentId}
               campaignId={campaignId}
               onEdit={() => setEditingQuestId(w.documentId)}
+            />
+          );
+        } else if (w.collection === 'spell') {
+          windowContent = (
+            <SpellWindowWrapper
+              spellId={w.documentId}
+              campaignId={campaignId}
+              onEdit={() => setEditingSpellId(w.documentId)}
             />
           );
         } else if (w.collection === 'events') {
@@ -476,6 +610,7 @@ export function TabletopView({
             titleSuffix,
             iconKey,
             contentKey: markdownContent,
+            className: flashWindowId === existing.id ? 'animate-flash-border' : '',
             content: windowContent,
           };
         }
@@ -493,6 +628,7 @@ export function TabletopView({
             w.width != null && w.height != null ? { width: w.width, height: w.height } : undefined,
           state: toFloatingState(w.state),
           zIndex: w.zIndex,
+          className: flashWindowId === w.id ? 'animate-flash-border' : '',
           content: windowContent,
         };
       });
@@ -505,7 +641,8 @@ export function TabletopView({
             p.id === merged[i]!.id &&
             p.title === merged[i]!.title &&
             p.contentKey === merged[i]!.contentKey &&
-            p.iconKey === merged[i]!.iconKey
+            p.iconKey === merged[i]!.iconKey &&
+            p.className === merged[i]!.className
         )
       ) {
         return prev;
@@ -513,22 +650,91 @@ export function TabletopView({
 
       return merged;
     });
-  }, [activeScreen, activeScreenId, campaignId, isGM]);
+  }, [
+    activeScreen,
+    activeScreenId,
+    campaignId,
+    isGM,
+    openWindow,
+    privateWindows,
+    playerState,
+    flashWindowId,
+  ]);
 
   // --- Window change handler (local state + close mutation) ---
   const handleWindowsChange = useCallback(
     (nextWindows: ManagedWindow[]) => {
       setLocalWindows(nextWindows);
-      if (!activeScreenId || !activeScreen) return;
       const nextIds = new Set(nextWindows.map((w) => w.id));
+
+      // Route each disappeared window by the list it came from. A private
+      // window must NOT go through closeWindow: that mutation is GM-only (a
+      // player would silently get Forbidden) and it closes the SHARED window
+      // for the whole campaign.
+      for (const pw of privateWindows) {
+        if (!nextIds.has(pw.id)) {
+          // Drop any in-flight layout write first — persisting geometry for a
+          // window that is being deleted is pointless and races the $pull.
+          cancelPrivateLayout(pw.id);
+          removePrivateWindowMutate({ privateWindowId: pw.id });
+        }
+      }
+
+      // Private windows persist their own geometry on the caller's player
+      // state. Shared tabletop windows still do not (pre-existing: the tabletop
+      // has no updateWindow mutation, unlike GM screens).
+      for (const nw of nextWindows) {
+        const pw = privateWindows.find((p) => p.id === nw.id);
+        if (pw) schedulePrivateLayout(nw, pw);
+      }
+
+      if (!activeScreenId || !activeScreen) return;
       for (const w of activeScreen.windows) {
         if (!nextIds.has(w.id)) {
           mutations.closeWindow.mutate({ screenId: activeScreenId, windowId: w.id });
         }
       }
     },
-    [activeScreenId, activeScreen, mutations]
+    [
+      activeScreenId,
+      activeScreen,
+      mutations,
+      privateWindows,
+      removePrivateWindowMutate,
+      schedulePrivateLayout,
+      cancelPrivateLayout,
+    ]
   );
+
+  // --- Focus requests from the wiki ("Show on Tab" on an already-open item) ---
+  // The event carries no screenId, so match on collection+documentId within the
+  // active screen, across both shared and private windows.
+  useEffect(() => {
+    const onFocus = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        campaignId?: string;
+        surface?: string;
+        collection?: string;
+        documentId?: string;
+      } | null;
+      // Guard on campaign too — a stale/cross-campaign event must not focus a
+      // window in this view.
+      if (!detail || detail.surface !== 'tabletop' || detail.campaignId !== campaignId) return;
+
+      const match =
+        privateWindows.find(
+          (pw) => pw.collection === detail.collection && pw.documentId === detail.documentId
+        ) ??
+        activeScreen?.windows.find(
+          (w) => w.collection === detail.collection && w.documentId === detail.documentId
+        );
+      if (!match) return;
+      focusWindow(match.id);
+    };
+
+    window.addEventListener('cartyx:focus-window', onFocus);
+    return () => window.removeEventListener('cartyx:focus-window', onFocus);
+  }, [privateWindows, activeScreen, focusWindow, campaignId]);
 
   // --- Drag-and-drop handlers ---
   const handleDragOver = useCallback(
@@ -571,7 +777,9 @@ export function TabletopView({
       );
 
       if (existing) {
-        // Already open — no flash/focus needed in Phase 1
+        // Already shared on this tab — focus + flash it rather than opening a
+        // duplicate, converging with the GM-screens drop behaviour.
+        focusWindow(existing.id);
         return;
       }
 
@@ -588,7 +796,7 @@ export function TabletopView({
         y,
       });
     },
-    [activeScreenId, activeScreen, mutations]
+    [activeScreenId, activeScreen, mutations, focusWindow]
   );
 
   if (isLoading) {
@@ -760,6 +968,13 @@ export function TabletopView({
           campaignId={campaignId}
           questId={editingQuestId}
           onClose={() => setEditingQuestId(null)}
+        />
+      )}
+      {editingSpellId !== null && (
+        <EditSpellModalWrapper
+          campaignId={campaignId}
+          spellId={editingSpellId}
+          onClose={() => setEditingSpellId(null)}
         />
       )}
     </div>

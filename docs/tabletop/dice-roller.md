@@ -1,8 +1,8 @@
 # Dice Roller
 
-Interactive dice rolling from the tabletop toolbar (dice icon). Feature-flagged
-by `VITE_PUBLIC_FF_DICE` (PostHog flag; dev name `cartyx-dice-dev`) — the same
-flag that gates the Inspector Dice tab.
+Interactive dice rolling from the tabletop toolbar (dice icon). Always available
+— the old `VITE_PUBLIC_FF_*` PostHog gating was removed along with PostHog
+itself, and the Inspector Dice tab now renders unconditionally.
 
 ## Usage
 
@@ -30,25 +30,28 @@ same card style as Beyond20 rolls, and are persisted to session history.
   pool/modifier/mode/privacy state; renders the last result via
   `DiceRollCard` (`rollType: 'custom'` variant shows all die values and a
   "Result" label).
-- `app/components/mainview/tabletop/TabletopView.tsx` — selecting the `dice`
-  tool opens a singleton ephemeral `ManagedWindow` (id `dice-roller`) kept
-  outside `localWindows` (the server-sync effect would drop it), then reverts
-  to the previously active tool.
+- `app/components/mainview/tabletop/toolWindowState.ts` — `dice` is a
+  `ToolWindowId` in `WINDOW_ONLY_TOOLS`: a window toggle, not a map mode, so
+  opening it does not change `activeTool` and there is nothing to revert.
+  `TabletopView.tsx` renders it as a `<ToolWindow>` via
+  `toolWindowManager.getWindowProps('dice')`.
 - `app/utils/diceRollerBridge.ts` — window-event bridge. The panel emits
   `DiceBroadcastRequest`; `InspectorSidebar` (socket owner) relays it via the
-  existing `useDiceRolls.sendDiceRoll` over the PartyKit `main` party `DICE`
-  message and answers with a `DiceDeliveryReport`. On failure the panel shows
-  an inline notice and the roll stays local.
+  existing `useDiceRolls.sendDiceRoll` as a `DICE` message on the `main` party
+  and answers with a `DiceDeliveryReport`. On failure the panel shows an inline
+  notice and the roll stays local.
 
-No server changes: the existing `DICE` wire type (`party/index.ts`), Mongo
-save path (`saveDiceRollSchema`), and 50-message room history are reused.
+No server changes: the existing `DICE` wire type
+(`realtime/src/parties/session.ts`), Mongo save path (`saveDiceRollSchema`), and
+50-message room history are reused.
 
 ## Message flow (public roll)
 
 DiceRollerPanel → rollDice() → toParsedDiceRoll() → requestDiceBroadcast()
-→ InspectorSidebar onDiceBroadcastRequest → sendDiceRoll(socket) → PartyKit
-`main` party (validates, assigns seq, broadcasts) → all clients' useDiceRolls
-→ Dice tab DiceRollCard; the sender also persists the echoed roll to Mongo.
+→ InspectorSidebar onDiceBroadcastRequest → sendDiceRoll(socket) → the realtime
+service's `main` party (validates, assigns seq, broadcasts) → all clients'
+useDiceRolls → Dice tab DiceRollCard; the sender also persists the echoed roll
+to Mongo.
 
 ## Testing
 
@@ -56,5 +59,5 @@ DiceRollerPanel → rollDice() → toParsedDiceRoll() → requestDiceBroadcast()
   `tests/components/mainview/DiceRollerPanel.test.tsx` (+ DicePanel, ToolBar,
   TabletopView, InspectorSidebar extensions).
 - E2E: `e2e/tabletop/dice-roller.spec.ts` — mocks the `main` party WebSocket
-  (HISTORY + DICE echo) since the Playwright web server doesn't run PartyKit.
-  Requires `VITE_PUBLIC_FF_DICE=cartyx-dice-dev` in the dev server env.
+  (HISTORY + DICE echo) since the Playwright web server doesn't run the realtime
+  service. No env var or feature flag is required.
