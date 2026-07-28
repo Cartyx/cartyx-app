@@ -160,7 +160,15 @@ export function OverflowMenu({ items, label }: OverflowMenuProps) {
                 onClick={(e) => {
                   e.stopPropagation();
                   if (item.disabled) return;
-                  close(false);
+                  // Restore focus to the trigger BEFORE running the action.
+                  // Several items open a dialog, and useFocusTrap captures
+                  // `document.activeElement` during the dialog's first render —
+                  // which is this menuitem, about to unmount in the very same
+                  // commit. It would then decline to restore focus to a detached
+                  // node and strand the keyboard user on <body>. Handing focus
+                  // back to the (still-mounted) trigger first gives the dialog a
+                  // durable opener to return to.
+                  close(true);
                   item.onSelect();
                 }}
                 className={[

@@ -36,6 +36,31 @@ describe('OverflowMenu', () => {
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
   });
 
+  it('restores focus to the trigger when an item is chosen', async () => {
+    // Several items open a dialog, and useFocusTrap captures
+    // `document.activeElement` during the dialog's FIRST RENDER — which lands
+    // on the chosen menuitem, about to unmount in that same commit. The trap
+    // then declines to restore focus to a detached node and the keyboard user
+    // is stranded on <body>. Handing focus back to the still-mounted trigger
+    // before running the action gives the dialog a durable opener.
+    const user = userEvent.setup();
+    let focusedAtSelect: Element | null = null;
+    const onSelect = vi.fn(() => {
+      focusedAtSelect = document.activeElement;
+    });
+    render(
+      <OverflowMenu items={[{ key: 'edit', label: 'Edit', onSelect }]} label="Item actions" />
+    );
+    const trigger = screen.getByRole('button', { name: 'Item actions' });
+    await user.click(trigger);
+    await user.click(screen.getByRole('menuitem', { name: 'Edit' }));
+
+    // Focus is on the trigger at the moment the action runs — not on the
+    // menuitem that is about to disappear.
+    expect(focusedAtSelect).toBe(trigger);
+    expect(trigger).toHaveFocus();
+  });
+
   it('closes on Escape and restores focus to the trigger', async () => {
     const user = userEvent.setup();
     render(<OverflowMenu items={items} label="Item actions" />);
