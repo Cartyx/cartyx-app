@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { X } from 'lucide-react';
 import { AUDIO_KINDS, AUDIO_ENVIRONMENTS, AUDIO_MOODS } from '~/types/audio';
 import type { AudioKind } from '~/types/audio';
+import { chipClass } from './chipStyles';
 
 /**
  * Mirrors `listAudioAssetsSchema` (`app/types/schemas/audio.ts`) field for
@@ -25,17 +26,6 @@ export interface AudioFilterBarProps {
   value: AudioFilters;
   /** Called with the next filter value whenever the user changes a control. */
   onChange: (next: AudioFilters) => void;
-}
-
-function chipClass(active: boolean, size: 'sm' | 'xs' = 'sm'): string {
-  const padding = size === 'sm' ? 'px-2.5 py-1 text-xs' : 'px-1.5 py-0.5 text-[11px]';
-  return [
-    'rounded transition-colors',
-    padding,
-    active
-      ? 'bg-blue-600 text-white'
-      : 'bg-white/[0.06] text-slate-400 hover:bg-white/[0.1] hover:text-slate-200',
-  ].join(' ');
 }
 
 /**

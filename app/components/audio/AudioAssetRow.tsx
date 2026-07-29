@@ -29,9 +29,9 @@ export interface AudioAssetRowProps {
   selected?: boolean;
   /** Called with the asset id when the selection checkbox is toggled. */
   onToggleSelect?: (id: string) => void;
-  /** Called with the full asset when the play button is clicked (ready assets only). */
+  /** Called with the full asset when the play button is clicked (ready assets only — a non-ready asset has no rendition to play). */
   onPlay?: (asset: AudioAssetData) => void;
-  /** Called with the full asset when the edit button is clicked (ready assets only). */
+  /** Called with the full asset when the edit button is clicked. Available regardless of status: the edit modal only touches metadata (title/kind/facets/tags), none of which depend on the audio existing yet. */
   onEdit?: (asset: AudioAssetData) => void;
 }
 
@@ -100,26 +100,28 @@ function AudioAssetRowComponent({
       </span>
 
       <div className="flex shrink-0 items-center gap-1">
-        {asset.status === 'ready' ? (
-          <>
-            <button
-              type="button"
-              onClick={() => onPlay?.(asset)}
-              aria-label={`Play ${asset.title}`}
-              className="rounded p-1.5 text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-blue-400"
-            >
-              <Play className="h-4 w-4" />
-            </button>
-            <button
-              type="button"
-              onClick={() => onEdit?.(asset)}
-              aria-label={`Edit ${asset.title}`}
-              className="rounded p-1.5 text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-slate-200"
-            >
-              <Pencil className="h-4 w-4" />
-            </button>
-          </>
-        ) : asset.status === 'failed' ? (
+        {asset.status === 'ready' && (
+          <button
+            type="button"
+            onClick={() => onPlay?.(asset)}
+            aria-label={`Play ${asset.title}`}
+            className="rounded p-1.5 text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-blue-400"
+          >
+            <Play className="h-4 w-4" />
+          </button>
+        )}
+
+        {/* Edit is reachable at every status — see the onEdit doc comment above. */}
+        <button
+          type="button"
+          onClick={() => onEdit?.(asset)}
+          aria-label={`Edit ${asset.title}`}
+          className="rounded p-1.5 text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-slate-200"
+        >
+          <Pencil className="h-4 w-4" />
+        </button>
+
+        {asset.status === 'failed' ? (
           <span className="flex items-center gap-1.5 text-xs text-red-400">
             <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             {asset.lastError ?? 'Processing failed'}
@@ -133,7 +135,7 @@ function AudioAssetRowComponent({
             <Clock className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
             Queued — waiting to process
           </span>
-        ) : (
+        ) : asset.status !== 'ready' ? (
           // uploading | processing — work is actively happening (client
           // upload or a worker that has claimed the job), so an animated
           // indicator is honest here.
@@ -141,7 +143,7 @@ function AudioAssetRowComponent({
             <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
             {asset.status === 'uploading' ? 'Uploading…' : 'Processing…'}
           </span>
-        )}
+        ) : null}
       </div>
     </li>
   );

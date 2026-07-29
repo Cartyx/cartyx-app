@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { AUDIO_KINDS, AUDIO_ENVIRONMENTS, AUDIO_MOODS } from '~/types/audio';
 import type { AudioKind, AudioEnvironment, AudioMood } from '~/types/audio';
 import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
+import { chipClass, toggleInArray } from './chipStyles';
 
 /** Mirrors `bulkTagAudioAssetsSchema` (`app/types/schemas/audio.ts`) minus `ids`. */
 export type BulkTagPayload = {
@@ -23,19 +24,6 @@ export interface AudioBulkTagBarProps {
 }
 
 const INTENSITY_OPTIONS = [1, 2, 3, 4, 5];
-
-function chipClass(active: boolean): string {
-  return [
-    'rounded px-1.5 py-0.5 text-[11px] transition-colors',
-    active
-      ? 'bg-blue-600 text-white'
-      : 'bg-white/[0.06] text-slate-400 hover:bg-white/[0.1] hover:text-slate-200',
-  ].join(' ');
-}
-
-function toggle<T>(list: T[], item: T): T[] {
-  return list.includes(item) ? list.filter((x) => x !== item) : [...list, item];
-}
 
 /**
  * Multi-select bulk classification bar for the audio library. A bulk upload
@@ -209,8 +197,8 @@ export function AudioBulkTagBar({ selectedCount, onApply, onClear }: AudioBulkTa
               key={env}
               type="button"
               aria-pressed={environment.includes(env)}
-              onClick={() => setEnvironment((prev) => toggle(prev, env))}
-              className={chipClass(environment.includes(env))}
+              onClick={() => setEnvironment((prev) => toggleInArray(prev, env))}
+              className={chipClass(environment.includes(env), 'xs')}
             >
               {env}
             </button>
@@ -223,8 +211,8 @@ export function AudioBulkTagBar({ selectedCount, onApply, onClear }: AudioBulkTa
               key={m}
               type="button"
               aria-pressed={mood.includes(m)}
-              onClick={() => setMood((prev) => toggle(prev, m))}
-              className={chipClass(mood.includes(m))}
+              onClick={() => setMood((prev) => toggleInArray(prev, m))}
+              className={chipClass(mood.includes(m), 'xs')}
             >
               {m}
             </button>

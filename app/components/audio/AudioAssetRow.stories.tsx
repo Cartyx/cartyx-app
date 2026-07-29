@@ -45,7 +45,7 @@ export const Ready: Story = {
 };
 
 export const Uploading: Story = {
-  args: { asset: { ...base, status: 'uploading', peaks: [], durationMs: null } },
+  args: { asset: { ...base, status: 'uploading', peaks: [], durationMs: null }, onEdit: () => {} },
 };
 
 /**
@@ -53,13 +53,17 @@ export const Uploading: Story = {
  * "Processing…" — if the worker is down, assets pile up here, and the
  * design mandates that a stalled queue must be visible, not disguised as
  * an in-progress spinner.
+ *
+ * Edit is reachable here (and for every non-ready status below) — the edit
+ * modal (Task 21) only touches metadata, which doesn't depend on the audio
+ * having finished processing. Only Play stays gated on `ready`.
  */
 export const Pending: Story = {
-  args: { asset: { ...base, status: 'pending', peaks: [], durationMs: null } },
+  args: { asset: { ...base, status: 'pending', peaks: [], durationMs: null }, onEdit: () => {} },
 };
 
 export const Processing: Story = {
-  args: { asset: { ...base, status: 'processing', peaks: [], durationMs: null } },
+  args: { asset: { ...base, status: 'processing', peaks: [], durationMs: null }, onEdit: () => {} },
 };
 
 export const Failed: Story = {
@@ -71,11 +75,15 @@ export const Failed: Story = {
       peaks: [],
       durationMs: null,
     },
+    onEdit: () => {},
   },
 };
 
 export const FailedNoMessage: Story = {
-  args: { asset: { ...base, status: 'failed', lastError: null, peaks: [], durationMs: null } },
+  args: {
+    asset: { ...base, status: 'failed', lastError: null, peaks: [], durationMs: null },
+    onEdit: () => {},
+  },
 };
 
 function SelectableExample(args: React.ComponentProps<typeof AudioAssetRow>) {

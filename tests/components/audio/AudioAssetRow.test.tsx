@@ -44,6 +44,23 @@ describe('AudioAssetRow', () => {
     expect(screen.queryByRole('button', { name: /play/i })).not.toBeInTheDocument();
   });
 
+  it.each(['pending', 'processing', 'uploading', 'failed'] as const)(
+    'keeps Edit reachable but hides Play when status is %s',
+    (status) => {
+      renderRow(<AudioAssetRow asset={{ ...asset, status, peaks: [] }} onEdit={vi.fn()} />);
+      expect(screen.queryByRole('button', { name: /play storm/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /edit storm/i })).toBeInTheDocument();
+    }
+  );
+
+  it('calls onEdit with the full asset even when the asset is not ready', async () => {
+    const onEdit = vi.fn();
+    const pendingAsset: AudioAssetData = { ...asset, status: 'pending', peaks: [] };
+    renderRow(<AudioAssetRow asset={pendingAsset} onEdit={onEdit} />);
+    await userEvent.click(screen.getByRole('button', { name: /edit storm/i }));
+    expect(onEdit).toHaveBeenCalledWith(pendingAsset);
+  });
+
   it('shows an uploading state distinct from processing', () => {
     renderRow(<AudioAssetRow asset={{ ...asset, status: 'uploading', peaks: [] }} />);
     expect(screen.getByText(/uploading/i)).toBeInTheDocument();
