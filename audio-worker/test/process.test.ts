@@ -117,6 +117,12 @@ describe('processAsset retry semantics', () => {
     // The success path and requeueForRetry both bump updatedAt; markFailed must
     // too, or a failed asset's row looks older than its actual last transition.
     expect(update.$set.updatedAt).toBeInstanceOf(Date);
+    // Exhausting the budget against a TRANSIENT fault (here: R2 unreachable)
+    // must leave the row retryable. `permanentFailure` is reserved for a source
+    // the worker has actually judged unusable — conflating the two would make
+    // the Retry button useless for exactly the failures it exists to recover
+    // from.
+    expect(update.$set.permanentFailure).toBe(false);
   });
 
   it('marks failed immediately for a malformed row with no sourceKey, without retrying', async () => {
@@ -134,6 +140,7 @@ describe('processAsset retry semantics', () => {
     expect(filter).toEqual({ _id: 'asset-no-key' });
     expect(update.$set.status).toBe('failed');
     expect(update.$set.lastError).toBe('Asset has no sourceKey');
+    expect(update.$set.permanentFailure).toBe(true);
   });
 
   it('treats a missing attempts field as already at the cap (fails, does not retry forever)', async () => {

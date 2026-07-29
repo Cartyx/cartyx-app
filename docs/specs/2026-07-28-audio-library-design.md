@@ -122,7 +122,8 @@ Owned by a user, not a campaign.
 | `sourceKey`                                       | String            | Original upload; retained so assets can be re-transcoded when settings change.                                                                                                              |
 | `renditions`                                      | Object            | `{ opus: {key,url,bytes}, aac: {key,url,bytes} }`.                                                                                                                                          |
 | `onceRenditions`                                  | Object?           | Optional second set, `kind: 'music'` only — see [Music variants](#music-variants).                                                                                                          |
-| `durationMs`                                      | Number            | From `ffprobe`, **not** from the decoded buffer. See [Gapless looping](#gapless-looping).                                                                                                   |
+| `durationMs`                                      | Number            | Decoded length, rounded to whole ms. **Display only** — see `durationSamples`.                                                                                                              |
+| `durationSamples`                                 | Number            | Exact decoded length in samples per channel at the renditions' 48 kHz. What phase 2's `loopEnd` reads. See [Gapless looping](#gapless-looping).                                             |
 | `loudnessTargetLufs`                              | Number            | The loudnorm **target** applied (`-20`), not a measurement — single-pass loudnorm doesn't guarantee the output lands on it. A real two-pass measurement would be a separate `loudnessLufs`. |
 | `sampleRate`, `channels`                          | Number            | From ffprobe.                                                                                                                                                                               |
 | `peaks[]`                                         | Number[]          | ~400 buckets; drives waveform UI without fetching audio.                                                                                                                                    |
@@ -217,15 +218,35 @@ pre-classified, and the browser dropzone's batch-default uses the same field.
 New `audio-worker/` package alongside `realtime/`; Node + ffmpeg on Alpine.
 Per claimed asset:
 
-1. `ffprobe` → true duration, sample rate, channels.
-2. `loudnorm=I=-20:TP=-1.5` → the POC's target.
-3. Encode **Opus** (`libopus`, Ogg) and **AAC** (`aac`, M4A).
-4. Decode to mono PCM, downsample to ~400 buckets → `peaks[]`.
-5. Upload renditions, write metadata, `status: 'ready'`.
+1. `ffprobe` the **first audio stream** (`stream=duration`, not the
+   container-wide `format=duration`) → header duration, sample rate, channels.
+   Reject here if the claimed duration is over the 30-minute cap, before
+   anything decodes.
+2. One decode pass (`astats`) → the exact sample count at 48 kHz and the peak
+   level. Reject a file with no samples, or one that is digital silence end to
+   end (loudnorm divides by the measured level and emits NaN, which kills the
+   AAC encoder).
+3. `loudnorm=I=-20:TP=-1.5`, `-map 0:a:0 -ar 48000 -ac 2` → encode **Opus**
+   (`libopus`, Ogg) and **AAC** (`aac`, M4A). The `-map` is what keeps embedded
+   cover art out of the M4A muxer; the `-ar`/`-ac` undo loudnorm's 192 kHz
+   output and collapse surround sources to stereo.
+4. Cross-check each rendition's duration against the header claim → reject a
+   truncated source, which otherwise publishes as `ready` with a fraction of
+   its audio.
+5. Decode the **Opus rendition** to mono PCM, ~400 buckets → `peaks[]`. The
+   rendition, not the source: the user hears the normalized audio, and a
+   waveform of a quiet source renders the loudest asset in the library as a
+   flat line.
+6. Upload renditions, write metadata, `status: 'ready'`.
 
 Concurrency defaults to 2 (configurable). Retries with backoff to `attempts: 3`,
-then `failed` with `lastError`. Permanent failures (corrupt source) are
-distinguished from transient ones (R2 timeout) and are not retried.
+then `failed` with `lastError`. Permanent failures — the rejections in steps 1,
+2 and 4, where the SOURCE is unusable — are distinguished from transient ones
+(R2 timeout) by a `PermanentError` thrown at the point of judgement rather than
+by pattern-matching exit codes. They skip the retry budget entirely and set
+`permanentFailure: true`, which `retryAudioAsset` refuses: the file fails
+identically every run, so a Retry click would only buy another pass of pinned
+CPU.
 
 #### Why two renditions
 
@@ -242,10 +263,17 @@ ambience track **ticks on every repeat — on Safari specifically**, which is th
 main use case on the browser the AAC rendition exists to serve.
 
 The fix is not a different codec. The board (phase 2) sets
-`source.loopStart = 0` and `source.loopEnd = durationMs / 1000` using ffprobe's
-value rather than trusting `buffer.duration`, giving sample-accurate looping
-regardless of codec padding. **This only works if an accurate duration is stored
-now**, which is why step 1 is ffprobe rather than reading the decoded buffer.
+`source.loopStart = 0` and `source.loopEnd = durationSamples / 48000` rather
+than trusting `buffer.duration`, giving sample-accurate looping regardless of
+codec padding. **This only works if an exact duration is stored now**, which is
+why the worker measures the decoded sample count instead of reading the
+container's duration.
+
+It has to be `durationSamples` and not `durationMs`: rounding to whole
+milliseconds is ±24 samples at 48 kHz for _every_ asset, and the container
+durations that value used to come from add more on top — measured at +312
+samples for an Ogg/Opus upload and +1440 (30 ms) for ADTS AAC. `durationMs` is
+kept for display, where a millisecond is not audible.
 
 ### UI
 
