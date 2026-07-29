@@ -36,6 +36,7 @@ export async function createAudioUpload({
     const { uploadUrl, key } = await getAudioUploadUrl({
       contentType: data.contentType,
       bytes: data.bytes,
+      userId,
     });
 
     const doc = await AudioAsset.create({
@@ -69,6 +70,17 @@ export async function confirmAudioUpload({
     await ensureDb();
     const asset = await AudioAsset.findOne({ _id: data.assetId, ownerId: userId });
     if (!asset) throw new Error('Audio asset not found');
+    // Confirm is only meaningful for a row still awaiting its upload. Without
+    // this precondition a logged-in user could replay confirm against an
+    // already-`ready` asset to flip it back to `pending` and make the worker
+    // re-transcode it — in a loop, on a single-node cluster. The check sits
+    // ahead of the HeadObject/DeleteObject block on purpose: a replay must
+    // never be able to delete the R2 object of a finished asset. The
+    // `failed -> pending` transition belongs to `retryAudioAsset`, which owns
+    // resetting the attempt budget with it.
+    if (asset.status !== 'uploading') {
+      throw new Error('Audio asset is not awaiting confirmation');
+    }
 
     const { client, bucket } = createR2();
     const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: asset.sourceKey }));
@@ -91,14 +103,18 @@ export async function confirmAudioUpload({
       throw new Error(reason);
     }
 
+    // `status: 'uploading'` again, and atomically this time: the read above can
+    // race a concurrent confirm for the same asset, and only the filter on the
+    // write makes exactly one of them win.
     const updated = await AudioAsset.findOneAndUpdate(
-      { _id: data.assetId, ownerId: userId },
+      { _id: data.assetId, ownerId: userId, status: 'uploading' },
       { $set: { status: 'pending', sourceBytes: bytes, updatedAt: new Date() } },
       { new: true }
     );
+    if (!updated) throw new Error('Audio asset is not awaiting confirmation');
 
     serverCaptureEvent(userId, 'audio_upload_confirmed', { assetId: data.assetId });
-    return { assetId: data.assetId, status: updated?.status ?? 'pending' };
+    return { assetId: data.assetId, status: updated.status ?? 'pending' };
   } catch (e) {
     serverCaptureException(e, userId, { action: 'confirmAudioUpload' });
     throw e;

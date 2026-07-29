@@ -8,7 +8,8 @@ import { confirmAudioUpload } from '~/server/functions/audio';
 // else (DB/S3 client errors, network failures, ...) falls back to a generic
 // message — those can carry infrastructure detail (bucket names, driver errors)
 // that shouldn't leave the server.
-const SAFE_CONFIRM_ERROR = /^(Audio asset not found|File too large: |Unsupported audio type: )/;
+const SAFE_CONFIRM_ERROR =
+  /^(Audio asset not found|Audio asset is not awaiting confirmation|File too large: |Unsupported audio type: )/;
 
 export async function post({
   request,
@@ -23,9 +24,19 @@ export async function post({
   try {
     return Response.json(await confirmAudioUpload({ data: { assetId: params.id }, userId }));
   } catch (e) {
-    const message =
-      e instanceof Error && SAFE_CONFIRM_ERROR.test(e.message) ? e.message : 'Confirm failed';
-    return Response.json({ error: message }, { status: 400 });
+    // The status code has to split the same way the message does. A
+    // SAFE_CONFIRM_ERROR describes something about the caller's own request
+    // (their asset, their file's real size/type) — permanently wrong, 400,
+    // don't retry. Everything else is an R2/Mongo-layer failure: retryable
+    // infrastructure, so 500. Returning 400 for both told an external client's
+    // retry logic that a transient outage was a permanent rejection — and
+    // `POST /api/audio/uploads` already returns 500 for that same failure
+    // class, so the two ingest routes disagreed with each other.
+    const safe = e instanceof Error && SAFE_CONFIRM_ERROR.test(e.message);
+    return Response.json(
+      { error: safe ? (e as Error).message : 'Confirm failed' },
+      { status: safe ? 400 : 500 }
+    );
   }
 }
 

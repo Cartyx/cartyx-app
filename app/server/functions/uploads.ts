@@ -67,17 +67,33 @@ export const getUploadUrl = async ({ data }: { data: z.infer<typeof getUploadUrl
   }
 };
 
+/**
+ * Mints a presigned PUT for an audio source object.
+ *
+ * Deliberately auth-agnostic: it takes `userId` rather than calling
+ * `getSession()` itself. Ingest is one shared module behind two adapters that
+ * authenticate differently (`~/utils/audio-server-fns` via session cookie,
+ * `~/routes/api/audio/uploads` via bearer token — see the design doc's "Ingest
+ * API surface"). Reading the session cookie here would 500 every token-
+ * authenticated ingest call the moment phase 3 issues a real token, which is
+ * precisely the restructuring this phase exists to avoid. The caller has
+ * already authenticated and knows who is acting.
+ *
+ * `userId` is the User document's Mongo `_id` — the same value
+ * `createAudioUpload` tags its telemetry with, so one failed upload can't
+ * surface under two different identities (the session's OAuth provider id and
+ * the Mongo id). It is used for telemetry only; nothing here is scoped by it.
+ */
 export const getAudioUploadUrl = async ({
   contentType,
   bytes,
+  userId,
 }: {
   contentType: string;
   bytes: number;
+  userId: string;
 }) => {
-  const user = await getSession();
   try {
-    if (!user) throw new Error('Not authenticated');
-
     const ext = AUDIO_SOURCE_TYPES.get(contentType);
     if (!ext) throw new Error(`Unsupported audio type: ${contentType}`);
     if (bytes > AUDIO_MAX_BYTES) {
@@ -95,7 +111,7 @@ export const getAudioUploadUrl = async ({
 
     return { uploadUrl, key, publicUrl: `${cdnUrl}/${key}` };
   } catch (e) {
-    serverCaptureException(e, user?.id, { action: 'getAudioUploadUrl' });
+    serverCaptureException(e, userId, { action: 'getAudioUploadUrl' });
     throw e;
   }
 };

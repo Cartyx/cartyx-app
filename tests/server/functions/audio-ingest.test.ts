@@ -45,6 +45,23 @@ describe('createAudioUpload', () => {
     expect(arg.status).toBe('uploading');
     expect(arg.title).toBe('storm');
   });
+
+  it('hands the presign step the acting user id instead of letting it re-read the session', async () => {
+    vi.mocked(AudioAsset.create).mockResolvedValue({ _id: 'a1' } as never);
+    const { createAudioUpload } = await import('~/server/functions/audio');
+    const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+
+    await createAudioUpload({ data: VALID, userId: 'mongo-id-1' });
+
+    // The bearer-token ingest route passes an explicit userId with no session
+    // cookie present. If the presign step resolved auth itself, that path would
+    // 500 the moment phase 3 issues a real token — and telemetry would tag the
+    // provider id here while createAudioUpload tags the Mongo id, splitting one
+    // failed upload across two identities.
+    expect(vi.mocked(getAudioUploadUrl)).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'mongo-id-1' })
+    );
+  });
 });
 
 describe('confirmAudioUpload', () => {
@@ -97,6 +114,64 @@ describe('confirmAudioUpload', () => {
     const deleteCall = send.mock.calls[1][0] as DeleteObjectCommand;
     expect(deleteCall).toBeInstanceOf(DeleteObjectCommand);
     expect(deleteCall.input).toEqual({ Bucket: 'b', Key: 'k' });
+  });
+
+  it('refuses to re-confirm an already-ready asset, without touching R2 or the row', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      _id: 'a1',
+      ownerId: 'u1',
+      sourceKey: 'k',
+      status: 'ready',
+    } as never);
+
+    const { confirmAudioUpload } = await import('~/server/functions/audio');
+    await expect(confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' })).rejects.toThrow(
+      /not awaiting confirmation/i
+    );
+
+    // Replaying confirm against a finished asset would otherwise flip it back to
+    // `pending` and make the worker re-transcode it — in a loop, on a
+    // single-node cluster. The guard sits ahead of HeadObject/DeleteObject so a
+    // replay can never delete a finished asset's source object either.
+    expect(send).not.toHaveBeenCalled();
+    expect(AudioAsset.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses to re-confirm a failed asset — that transition belongs to retryAudioAsset', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      _id: 'a1',
+      ownerId: 'u1',
+      sourceKey: 'k',
+      status: 'failed',
+    } as never);
+
+    const { confirmAudioUpload } = await import('~/server/functions/audio');
+    await expect(confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' })).rejects.toThrow(
+      /not awaiting confirmation/i
+    );
+    expect(AudioAsset.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('scopes the pending flip to status uploading so a concurrent confirm cannot double-apply', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      _id: 'a1',
+      ownerId: 'u1',
+      sourceKey: 'k',
+      status: 'uploading',
+    } as never);
+    send.mockResolvedValue({ ContentLength: 1024, ContentType: 'audio/wav' });
+    // The row was confirmed by a racing request between the read and the write.
+    vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue(null as never);
+
+    const { confirmAudioUpload } = await import('~/server/functions/audio');
+    await expect(confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' })).rejects.toThrow(
+      /not awaiting confirmation/i
+    );
+    expect(vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0][0]).toEqual({
+      _id: 'a1',
+      ownerId: 'u1',
+      status: 'uploading',
+    });
   });
 
   it("refuses another user's asset", async () => {
