@@ -1,4 +1,4 @@
-import React from 'react';
+import { memo } from 'react';
 import { Play, Pencil, Clock, Loader2, AlertTriangle } from 'lucide-react';
 import { AudioWaveform } from './AudioWaveform';
 import type { AudioAssetData } from '~/types/audio';
@@ -44,8 +44,21 @@ export interface AudioAssetRowProps {
  * Renders an `<li>` so it composes directly into a parent `<ul>` (see
  * `AudioLibraryBrowser`). Callers rendering a row standalone (tests,
  * Storybook) should wrap it in a `<ul>` themselves to keep the DOM valid.
+ *
+ * Memoized: each row renders an `AudioWaveform` with up to ~400 `<rect>`s,
+ * so a library list can carry tens of thousands of SVG nodes. Without
+ * `memo`, any re-render of the parent list (e.g. `AudioLibraryBrowser`
+ * re-rendering because `selectedIds` got a new array reference from
+ * toggling a checkbox) would reconcile every row's waveform, not just the
+ * one that changed — selection is the primary interaction for the bulk
+ * classification workflow this component exists to serve, so that's not
+ * an edge case. This only pays off if callers pass stable
+ * `onToggleSelect`/`onPlay`/`onEdit` references; `AudioLibraryBrowser`
+ * forwards its own props straight through without wrapping them in new
+ * closures, so memo bails out correctly as long as its caller does the
+ * same.
  */
-export function AudioAssetRow({
+function AudioAssetRowComponent({
   asset,
   selectable = false,
   selected = false,
@@ -133,3 +146,5 @@ export function AudioAssetRow({
     </li>
   );
 }
+
+export const AudioAssetRow = memo(AudioAssetRowComponent);

@@ -2,8 +2,16 @@ import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { AudioLibraryBrowser } from '~/components/audio/AudioLibraryBrowser';
 import type { AudioAssetData } from '~/types/audio';
+
+// Replaces the real AudioWaveform (up to ~400 <rect>s per row) with a call
+// counter, so the memoization test below can assert directly on how many
+// times each row's subtree actually re-rendered, rather than inferring it
+// indirectly.
+const { waveformSpy } = vi.hoisted(() => ({ waveformSpy: vi.fn(() => null) }));
+vi.mock('~/components/audio/AudioWaveform', () => ({ AudioWaveform: waveformSpy }));
+
+import { AudioLibraryBrowser } from '~/components/audio/AudioLibraryBrowser';
 
 function mkAsset(id: string, title: string): AudioAssetData {
   return {
@@ -117,5 +125,47 @@ describe('AudioLibraryBrowser', () => {
     render(<AudioLibraryBrowser assets={[]} filters={{}} onFiltersChange={onFiltersChange} />);
     await userEvent.click(screen.getByRole('button', { name: 'ambience' }));
     expect(onFiltersChange).toHaveBeenCalledWith({ kind: 'ambience' });
+  });
+
+  it('does not re-render unaffected rows when one row is selected (AudioAssetRow is memoized)', async () => {
+    waveformSpy.mockClear();
+    // AudioAssetRow only bails out via memo if the callbacks it receives are
+    // referentially stable across re-renders — AudioLibraryBrowser forwards
+    // onToggleSelect straight through without wrapping it, so the harness
+    // mirrors what a real caller must do (e.g. useCallback around a
+    // functional state update) to get that benefit.
+    const onToggleSelect = vi.fn();
+    const assets = [mkAsset('1', 'Storm'), mkAsset('2', 'Tavern')];
+
+    function Harness() {
+      const [selectedIds, setSelectedIds] = React.useState<string[]>([]);
+      const handleToggle = React.useCallback((id: string) => {
+        onToggleSelect(id);
+        setSelectedIds((prev) =>
+          prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+        );
+      }, []);
+      return (
+        <AudioLibraryBrowser
+          assets={assets}
+          filters={{}}
+          onFiltersChange={noop}
+          selectable
+          selectedIds={selectedIds}
+          onToggleSelect={handleToggle}
+        />
+      );
+    }
+
+    render(<Harness />);
+    expect(waveformSpy).toHaveBeenCalledTimes(2); // one per row, initial render
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /select tavern/i }));
+
+    // Only the Tavern row's props actually changed (selected: false -> true).
+    // If AudioAssetRow were unmemoized, this re-render would re-invoke
+    // AudioWaveform for both rows (4 total); memo should limit it to the one
+    // row whose props changed (3 total: 2 initial + 1 for Tavern).
+    expect(waveformSpy).toHaveBeenCalledTimes(3);
   });
 });

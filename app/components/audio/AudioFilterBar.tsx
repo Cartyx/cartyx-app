@@ -1,4 +1,4 @@
-import React, { useId, useState } from 'react';
+import React, { useState } from 'react';
 import { X } from 'lucide-react';
 import { AUDIO_KINDS, AUDIO_ENVIRONMENTS, AUDIO_MOODS } from '~/types/audio';
 import type { AudioKind } from '~/types/audio';
@@ -46,7 +46,6 @@ function chipClass(active: boolean, size: 'sm' | 'xs' = 'sm'): string {
  */
 export function AudioFilterBar({ value, onChange }: AudioFilterBarProps) {
   const [tagDraft, setTagDraft] = useState('');
-  const tagInputId = useId();
 
   const toggleMulti = (field: 'environment' | 'mood', item: string) => {
     const current = value[field] ?? [];
@@ -94,7 +93,7 @@ export function AudioFilterBar({ value, onChange }: AudioFilterBarProps) {
 
         <input
           type="search"
-          aria-label="Search title and tags"
+          aria-label="Search by title"
           placeholder="Search…"
           value={value.search ?? ''}
           onChange={(e) => onChange({ ...value, search: e.target.value || undefined })}
@@ -158,11 +157,7 @@ export function AudioFilterBar({ value, onChange }: AudioFilterBarProps) {
               </button>
             </span>
           ))}
-          <label htmlFor={tagInputId} className="sr-only">
-            Add tag
-          </label>
           <input
-            id={tagInputId}
             type="text"
             aria-label="Add tag"
             placeholder="Add tag…"
