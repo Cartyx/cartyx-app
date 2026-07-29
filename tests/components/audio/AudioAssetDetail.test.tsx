@@ -16,7 +16,7 @@ const asset: AudioAssetData = {
   tags: ['storm', 'rain'],
   status: 'ready',
   durationMs: 125_000,
-  loudnessLufs: -20,
+  loudnessTargetLufs: -20,
   peaks: [0.1, 0.9, 0.4],
   renditions: {},
   lastError: null,

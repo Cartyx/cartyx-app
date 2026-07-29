@@ -110,23 +110,24 @@ authored code and docs move; models and output stay gitignored and local.
 
 Owned by a user, not a campaign.
 
-| Field                                             | Type              | Notes                                                                                     |
-| ------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------- |
-| `ownerId`                                         | ObjectId → `User` | Indexed.                                                                                  |
-| `title`                                           | String            | Required.                                                                                 |
-| `kind`                                            | enum              | `music` \| `ambience` \| `one-shot`. Required; drives playback defaults in phase 2.       |
-| `environment[]`                                   | String[]          | Facet. Multi-value — a sound may be both `forest` and `night`.                            |
-| `mood[]`                                          | String[]          | Facet. Multi-value.                                                                       |
-| `intensity`                                       | Number            | 1–5, single value. Lets the board swap calm↔intense variants of a scene.                  |
-| `tags[]`                                          | String[]          | Free-form, normalized via the existing `normalizeTags` helper.                            |
-| `sourceKey`                                       | String            | Original upload; retained so assets can be re-transcoded when settings change.            |
-| `renditions`                                      | Object            | `{ opus: {key,url,bytes}, aac: {key,url,bytes} }`.                                        |
-| `onceRenditions`                                  | Object?           | Optional second set, `kind: 'music'` only — see [Music variants](#music-variants).        |
-| `durationMs`                                      | Number            | From `ffprobe`, **not** from the decoded buffer. See [Gapless looping](#gapless-looping). |
-| `loudnessLufs`, `sampleRate`, `channels`          | Number            | From ffprobe/loudnorm.                                                                    |
-| `peaks[]`                                         | Number[]          | ~400 buckets; drives waveform UI without fetching audio.                                  |
-| `status`                                          | enum              | `uploading` → `pending` → `processing` → `ready` \| `failed`.                             |
-| `attempts`, `lastError`, `claimedAt`, `claimedBy` | —                 | Queue/retry state.                                                                        |
+| Field                                             | Type              | Notes                                                                                                                                                                                       |
+| ------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ownerId`                                         | ObjectId → `User` | Indexed.                                                                                                                                                                                    |
+| `title`                                           | String            | Required.                                                                                                                                                                                   |
+| `kind`                                            | enum              | `music` \| `ambience` \| `one-shot`. Required; drives playback defaults in phase 2.                                                                                                         |
+| `environment[]`                                   | String[]          | Facet. Multi-value — a sound may be both `forest` and `night`.                                                                                                                              |
+| `mood[]`                                          | String[]          | Facet. Multi-value.                                                                                                                                                                         |
+| `intensity`                                       | Number            | 1–5, single value. Lets the board swap calm↔intense variants of a scene.                                                                                                                    |
+| `tags[]`                                          | String[]          | Free-form, normalized via the existing `normalizeTags` helper.                                                                                                                              |
+| `sourceKey`                                       | String            | Original upload; retained so assets can be re-transcoded when settings change.                                                                                                              |
+| `renditions`                                      | Object            | `{ opus: {key,url,bytes}, aac: {key,url,bytes} }`.                                                                                                                                          |
+| `onceRenditions`                                  | Object?           | Optional second set, `kind: 'music'` only — see [Music variants](#music-variants).                                                                                                          |
+| `durationMs`                                      | Number            | From `ffprobe`, **not** from the decoded buffer. See [Gapless looping](#gapless-looping).                                                                                                   |
+| `loudnessTargetLufs`                              | Number            | The loudnorm **target** applied (`-20`), not a measurement — single-pass loudnorm doesn't guarantee the output lands on it. A real two-pass measurement would be a separate `loudnessLufs`. |
+| `sampleRate`, `channels`                          | Number            | From ffprobe.                                                                                                                                                                               |
+| `peaks[]`                                         | Number[]          | ~400 buckets; drives waveform UI without fetching audio.                                                                                                                                    |
+| `status`                                          | enum              | `uploading` → `pending` → `processing` → `ready` \| `failed`.                                                                                                                               |
+| `attempts`, `lastError`, `claimedAt`, `claimedBy` | —                 | Queue/retry state.                                                                                                                                                                          |
 
 Indexes: `{ownerId, kind}`, `{ownerId, tags}`, `{status, createdAt}` for the
 claim query.

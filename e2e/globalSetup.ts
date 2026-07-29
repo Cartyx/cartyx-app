@@ -129,7 +129,7 @@ async function seedAudioFixtures(
       claimedAt: null,
       claimedBy: null,
       durationMs: isReady ? 42_000 : null,
-      loudnessLufs: isReady ? -20 : null,
+      loudnessTargetLufs: isReady ? -20 : null,
       sampleRate: isReady ? 48_000 : null,
       channels: isReady ? 2 : null,
       peaks: isReady ? fakePeaks() : [],

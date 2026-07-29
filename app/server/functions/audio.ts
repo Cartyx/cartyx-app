@@ -136,7 +136,7 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     tags?: string[];
     status?: string;
     durationMs?: number | null;
-    loudnessLufs?: number | null;
+    loudnessTargetLufs?: number | null;
     peaks?: number[];
     renditions?: AudioAssetData['renditions'];
     lastError?: string | null;
@@ -154,7 +154,7 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     tags: d.tags ?? [],
     status: (d.status ?? 'uploading') as AudioAssetData['status'],
     durationMs: d.durationMs ?? null,
-    loudnessLufs: d.loudnessLufs ?? null,
+    loudnessTargetLufs: d.loudnessTargetLufs ?? null,
     peaks: d.peaks ?? [],
     renditions: d.renditions ?? {},
     lastError: d.lastError ?? null,

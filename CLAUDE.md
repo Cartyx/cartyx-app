@@ -21,6 +21,20 @@ data, Cloudflare R2 + CDN for images, self-hosted observability
   render unconditionally — the old `VITE_PUBLIC_FF_*` gating was removed.
 - `deploy/charts/` is prettierignored — don't format it.
 
+## Testing conventions
+
+- Unit tests mock mongoose (per-method model mocks, no in-memory Mongo). That
+  makes them fast, but it also means **they cannot catch identity-resolution or
+  query-shape bugs**: a mock returns whatever it was told to regardless of what
+  the query actually asked for, so handing a query the wrong id (e.g. the OAuth
+  provider id where a `User` Mongo `_id` is required) or dropping a filter
+  clause passes every unit assertion. E2E against seeded data is what covers
+  those — the audio library's `ownerId` bug (2026-07-28) was green across the
+  whole unit suite and caught only by an E2E hitting a real seeded row.
+- E2E runs against deliberately fake R2 credentials (`ci.yml`'s e2e job), so
+  any server-side outbound R2 call in a user-facing path fails there. Exercise
+  new ones locally with those env vars before assuming CI will pass.
+
 ## Branching and deploys
 
 - Every PR targets `dev`. NEVER open PRs against `main`.

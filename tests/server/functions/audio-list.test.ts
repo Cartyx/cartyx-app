@@ -59,7 +59,7 @@ describe('listAudioAssets', () => {
       renditions: {},
       status: 'ready',
       durationMs: null,
-      loudnessLufs: null,
+      loudnessTargetLufs: null,
       lastError: null,
       createdAt: new Date(0),
       updatedAt: new Date(0),

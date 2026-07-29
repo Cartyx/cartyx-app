@@ -20,7 +20,7 @@ const mk = (
   tags: ['demo'],
   status: 'ready',
   durationMs: 90_000,
-  loudnessLufs: -20,
+  loudnessTargetLufs: -20,
   peaks: Array.from({ length: 120 }, (_, i) => Math.abs(Math.sin(i / 5)) * 0.7),
   renditions: {},
   lastError: null,

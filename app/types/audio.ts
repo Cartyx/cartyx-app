@@ -66,7 +66,7 @@ export type AudioAssetData = {
   tags: string[];
   status: AudioAssetStatus;
   durationMs: number | null;
-  loudnessLufs: number | null;
+  loudnessTargetLufs: number | null;
   peaks: number[];
   renditions: { opus?: AudioRendition; aac?: AudioRendition };
   lastError: string | null;

@@ -100,7 +100,7 @@ const FAKE_ASSET = {
   tags: [] as string[],
   status: 'ready' as const,
   durationMs: null,
-  loudnessLufs: null,
+  loudnessTargetLufs: null,
   peaks: [] as number[],
   renditions: {},
   lastError: null,

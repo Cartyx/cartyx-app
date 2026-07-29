@@ -30,7 +30,11 @@ const audioAssetSchema = new mongoose.Schema({
   },
 
   durationMs: { type: Number, default: null },
-  loudnessLufs: { type: Number, default: null },
+  // The loudnorm TARGET the worker normalized to (-20), not a measurement:
+  // single-pass loudnorm doesn't guarantee the output lands on it. Named for
+  // what it is so phase 2's gain logic can't mistake it for a measured value;
+  // a real two-pass measurement would be a separate `loudnessLufs` field.
+  loudnessTargetLufs: { type: Number, default: null },
   sampleRate: { type: Number, default: null },
   channels: { type: Number, default: null },
   peaks: { type: [Number], default: [] },

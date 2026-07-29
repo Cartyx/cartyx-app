@@ -182,15 +182,17 @@ export async function processAsset(
           durationMs: meta.durationMs,
           sampleRate: meta.sampleRate,
           channels: meta.channels,
-          // This is the loudnorm TARGET (`I=-20`), not a measured value.
-          // Single-pass loudnorm doesn't guarantee it lands on exactly
-          // -20 LUFS — a true measurement needs the two-pass loudnorm
-          // workflow (analyze, then re-encode with the measured
-          // input_i/input_tp/input_lra/target_offset). That's out of scope
-          // here; phase 2 doesn't currently read this field for gain-riding
-          // decisions, so recording the target is a defensible placeholder,
-          // but it should not be read as "this asset measured -20 LUFS."
-          loudnessLufs: -20,
+          // The loudnorm TARGET (`I=-20` — see LOUDNORM in ffmpeg.ts), which
+          // is exactly what the field name now says. Single-pass loudnorm
+          // does not guarantee the output lands on exactly -20 LUFS; a real
+          // measurement needs the two-pass workflow (analyze, then re-encode
+          // with the measured input_i/input_tp/input_lra/target_offset), and
+          // that is out of scope here. The value is still worth recording:
+          // if the canonical target ever changes, phase 2's gain logic needs
+          // to know which target each asset in a mixed-vintage library was
+          // normalized against. A measured value, when it lands, belongs in a
+          // separate `loudnessLufs` field alongside this one.
+          loudnessTargetLufs: -20,
           peaks,
           renditions,
           lastError: null,
