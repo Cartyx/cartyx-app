@@ -146,6 +146,43 @@ describe('bulkTagAudioAssets', () => {
     expect((update.$set as Record<string, unknown>).intensity).toBe(3);
     expect(update.$addToSet).toBeUndefined();
   });
+
+  it('replace mode with an empty tags array clears the tags ($set.tags === [])', async () => {
+    vi.mocked(AudioAsset.updateMany).mockResolvedValue({ modifiedCount: 1 } as never);
+    const { bulkTagAudioAssets } = await import('~/server/functions/audio');
+
+    await bulkTagAudioAssets({
+      data: { ids: ['a'], tags: [], tagMode: 'replace' },
+      userId: 'u1',
+    });
+
+    const [, update] = vi.mocked(AudioAsset.updateMany).mock.calls[0] as unknown as [
+      unknown,
+      Record<string, unknown>,
+    ];
+    // Empty replace is a meaningful "clear the tags" request, not a no-op — tags:
+    // [] absent from the schema's .min(1) means this is a valid, deliberate input.
+    expect((update.$set as Record<string, unknown>).tags).toEqual([]);
+    expect(update.$addToSet).toBeUndefined();
+  });
+
+  it('add mode with an empty tags array is a no-op: no $addToSet emitted', async () => {
+    vi.mocked(AudioAsset.updateMany).mockResolvedValue({ modifiedCount: 1 } as never);
+    const { bulkTagAudioAssets } = await import('~/server/functions/audio');
+
+    await bulkTagAudioAssets({
+      data: { ids: ['a'], tags: [], tagMode: 'add' },
+      userId: 'u1',
+    });
+
+    const [, update] = vi.mocked(AudioAsset.updateMany).mock.calls[0] as unknown as [
+      unknown,
+      Record<string, unknown>,
+    ];
+    // Nothing to add — unlike replace, an empty add must not touch tags at all.
+    expect(update.$addToSet).toBeUndefined();
+    expect((update.$set as Record<string, unknown>).tags).toBeUndefined();
+  });
 });
 
 describe('deleteAudioAsset', () => {
@@ -197,6 +234,30 @@ describe('deleteAudioAsset', () => {
     expect(send).toHaveBeenCalledTimes(2);
     const keys = send.mock.calls.map(([cmd]) => (cmd as DeleteObjectCommand).input.Key).sort();
     expect(keys).toEqual(['opus-key', 'src-key']);
+  });
+
+  it('does not delete the row if an R2 delete fails partway through the loop', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      _id: 'a1',
+      ownerId: 'u1',
+      sourceKey: 'src-key',
+      renditions: { opus: { key: 'opus-key' }, aac: { key: 'aac-key' } },
+    } as never);
+    send
+      .mockResolvedValueOnce(undefined) // sourceKey succeeds
+      .mockRejectedValueOnce(new Error('R2 unavailable')); // opus-key fails, loop aborts
+
+    const { deleteAudioAsset } = await import('~/server/functions/audio');
+    await expect(deleteAudioAsset({ data: { id: 'a1' }, userId: 'u1' })).rejects.toThrow(
+      /R2 unavailable/
+    );
+
+    // Only the two attempted sends happened (source succeeded, opus rejected, aac
+    // never reached) — and critically, the row must never be deleted when R2
+    // cleanup didn't finish, or a later refactor that reordered delete-row-first
+    // could orphan objects with nothing in the DB pointing at them.
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(AudioAsset.deleteOne).not.toHaveBeenCalled();
   });
 
   it("does not touch R2 or delete the row for another owner's asset", async () => {

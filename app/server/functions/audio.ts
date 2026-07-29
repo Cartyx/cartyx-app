@@ -293,12 +293,16 @@ export async function bulkTagAudioAssets({
     if (data.intensity !== undefined) set.intensity = data.intensity;
 
     const update: Record<string, unknown> = { $set: set };
-    if (data.tags?.length) {
+    // Distinguish "tags absent" (leave alone) from "tags: []" (explicit, meaningful
+    // input): in replace mode an empty array means "clear the tags," so it must
+    // still reach $set. In add mode an empty array has nothing to add, so it's a
+    // genuine no-op and must not emit $addToSet with an empty $each.
+    if (data.tags !== undefined) {
       const tags = normalizeTags(data.tags);
       if (data.tagMode === 'replace') {
-        // Whole-array overwrite — existing tags are discarded.
+        // Whole-array overwrite — existing tags are discarded, including down to [].
         set.tags = tags;
-      } else {
+      } else if (tags.length) {
         // $addToSet + $each preserves existing tags; findOneAndUpdate's own
         // pre('save') normalization doesn't run here, so tags are normalized above.
         update.$addToSet = { tags: { $each: tags } };
