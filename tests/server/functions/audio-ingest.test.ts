@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { HeadObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 
 vi.mock('~/server/db/connection', () => ({ connectDB: vi.fn(), isDBConnected: vi.fn(() => true) }));
 vi.mock('~/server/utils/telemetry', () => ({
@@ -84,8 +85,18 @@ describe('confirmAudioUpload', () => {
     await expect(confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' })).rejects.toThrow(
       /too large/i
     );
-    // DeleteObjectCommand issued in addition to HeadObjectCommand
+    // Exactly two calls: HeadObjectCommand (the real size check) followed by
+    // DeleteObjectCommand (the object must not survive a refused upload) — both
+    // targeting the asset's actual sourceKey/bucket, not just any two calls.
     expect(send).toHaveBeenCalledTimes(2);
+
+    const headCall = send.mock.calls[0][0] as HeadObjectCommand;
+    expect(headCall).toBeInstanceOf(HeadObjectCommand);
+    expect(headCall.input).toEqual({ Bucket: 'b', Key: 'k' });
+
+    const deleteCall = send.mock.calls[1][0] as DeleteObjectCommand;
+    expect(deleteCall).toBeInstanceOf(DeleteObjectCommand);
+    expect(deleteCall.input).toEqual({ Bucket: 'b', Key: 'k' });
   });
 
   it("refuses another user's asset", async () => {
@@ -94,5 +105,9 @@ describe('confirmAudioUpload', () => {
     await expect(confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u2' })).rejects.toThrow(
       /not found/i
     );
+    // Pins the ownerId scope itself, not just the null-return behavior — a future
+    // change that dropped the ownerId filter would still return null here from the
+    // mock, but this assertion would catch it.
+    expect(AudioAsset.findOne).toHaveBeenCalledWith({ _id: 'a1', ownerId: 'u2' });
   });
 });

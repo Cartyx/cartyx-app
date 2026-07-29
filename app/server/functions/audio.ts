@@ -76,7 +76,7 @@ export async function confirmAudioUpload({
         ? `File too large: ${bytes} bytes exceeds ${AUDIO_MAX_BYTES}`
         : `Unsupported audio type: ${type}`;
       await AudioAsset.findOneAndUpdate(
-        { _id: data.assetId },
+        { _id: data.assetId, ownerId: userId },
         { $set: { status: 'failed', lastError: reason, updatedAt: new Date() } }
       );
       throw new Error(reason);
