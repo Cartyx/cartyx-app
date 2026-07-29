@@ -140,4 +140,74 @@ describe('AudioUploadDropzone', () => {
     await waitFor(() => expect(screen.getByRole('list')).toBeInTheDocument());
     expect(screen.getByRole('list')).toHaveAttribute('aria-live', 'polite');
   });
+
+  it('refuses a second batch dropped while the first is still uploading, rather than interleaving them', async () => {
+    let resolveFirst!: (v: { assetId: string }) => void;
+    const firstUpload = new Promise<{ assetId: string }>((resolve) => {
+      resolveFirst = resolve;
+    });
+    uploadAudioFile.mockImplementationOnce(() => firstUpload);
+
+    render(<AudioUploadDropzone />);
+    const zone = screen.getByTestId('audio-upload-dropzone');
+    const fileA = makeFile('batch1.wav');
+    const fileB = makeFile('batch2.wav');
+
+    await userEvent.upload(screen.getByLabelText(/choose audio files/i), [fileA]);
+    await waitFor(() => expect(uploadAudioFile).toHaveBeenCalledTimes(1));
+
+    // Batch 1's upload is still unresolved. Attempt a second batch via a
+    // drop while it's in flight.
+    fireEvent.drop(zone, { dataTransfer: { files: [fileB] } });
+
+    // Let any (incorrect) async work from the drop run, then assert the
+    // second batch never reached uploadAudioFile and never got a row —
+    // it was refused outright, not queued, and definitely not interleaved
+    // with batch 1's still-pending loop.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(uploadAudioFile).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText('batch2.wav')).not.toBeInTheDocument();
+
+    // The disabled input reflects the refusal to the user, not just a
+    // silently dropped event.
+    expect(screen.getByLabelText(/choose audio files/i)).toBeDisabled();
+
+    resolveFirst({ assetId: 'a1' });
+    const batch1Row = screen.getByText('batch1.wav').closest('li');
+    await waitFor(() => expect(batch1Row).toHaveTextContent(/done/i));
+
+    // Batch 1's own completion must land on its own row, uncorrupted by
+    // the refused second batch.
+    expect(uploadAudioFile).toHaveBeenCalledTimes(1);
+
+    // Once batch 1 has settled, the zone accepts a new batch again.
+    expect(screen.getByLabelText(/choose audio files/i)).not.toBeDisabled();
+    fireEvent.drop(zone, { dataTransfer: { files: [fileB] } });
+    await waitFor(() => expect(uploadAudioFile).toHaveBeenCalledTimes(2));
+    expect(uploadAudioFile.mock.calls[1][0]).toBe(fileB);
+  });
+
+  it('keeps the drag-active highlight while the pointer passes over a child element inside the zone', () => {
+    render(<AudioUploadDropzone />);
+    const zone = screen.getByTestId('audio-upload-dropzone');
+    const child = screen.getByText(/choose audio files/i);
+
+    fireEvent.dragEnter(zone, { dataTransfer: { types: ['Files'] } });
+    expect(zone).toHaveClass('border-blue-500');
+
+    // A real drag that moves from the zone's own box onto a child inside
+    // it fires dragenter on the child (which bubbles to the zone too) and
+    // dragleave on the zone. Without depth counting, that dragleave would
+    // incorrectly clear the highlight even though the pointer never left
+    // the zone.
+    fireEvent.dragEnter(child, { dataTransfer: { types: ['Files'] } });
+    fireEvent.dragLeave(zone, { dataTransfer: { types: ['Files'] } });
+    expect(zone).toHaveClass('border-blue-500');
+
+    // Actually leaving: dragleave on the child bubbles to the zone and
+    // drops the depth counter to zero, clearing the highlight.
+    fireEvent.dragLeave(child, { dataTransfer: { types: ['Files'] } });
+    expect(zone).not.toHaveClass('border-blue-500');
+  });
 });

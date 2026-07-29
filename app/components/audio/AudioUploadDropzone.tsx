@@ -1,12 +1,23 @@
 import { useCallback, useRef, useState } from 'react';
 import { Upload, Loader2, CheckCircle2, AlertTriangle } from 'lucide-react';
 import { uploadAudioFile } from '~/utils/uploadAudio';
+import { captureException } from '~/utils/telemetry-client';
 import { AUDIO_KINDS, AUDIO_MAX_BYTES } from '~/types/audio';
 import type { AudioKind } from '~/types/audio';
 
 type UploadItemStatus = 'pending' | 'uploading' | 'done' | 'error';
 
 type UploadItem = {
+  /**
+   * Unique per item, not the array index. A second batch replaces `items`
+   * wholesale while the first batch's loop is still running (in-flight
+   * `setItems` updaters were written against the first batch's positions);
+   * an id lets each in-flight update find its own row — or safely become a
+   * no-op if that row no longer exists — instead of silently overwriting
+   * whatever now sits at the same numeric index. Belt-and-suspenders with
+   * the `isUploading` guard below, which is the primary fix.
+   */
+  id: string;
   name: string;
   status: UploadItemStatus;
   error?: string;
@@ -48,6 +59,18 @@ function formatMaxSize(bytes: number): string {
  * also keeps failures isolated — one file's row goes to `error` without
  * touching the files queued behind it, which still get their own attempt.
  *
+ * Only one batch runs at a time. While a batch is in flight, the file input
+ * is disabled and drops are refused (no highlight, no queued files) rather
+ * than starting a second, overlapping loop — a second batch is deliberately
+ * rejected outright, not queued. Queueing was considered (friendlier — no
+ * dropped input) but rejected here: it would need the queued files to
+ * appear immediately as `pending` rows without actually uploading yet,
+ * which is easy to mistake for "stuck," and it adds a second piece of state
+ * (a pending queue) for what's expected to be a rare collision — GM upload
+ * sessions are "drop a folder, wait, drop the next," not a firehose.
+ * Disabling is simpler to reason about and the zone's state (disabled
+ * input, no drag highlight) tells the user why up front.
+ *
  * The client-side size check against `AUDIO_MAX_BYTES` is a courtesy that
  * saves a pointless transfer for an obviously-oversized file; it is not the
  * enforcement boundary. A presigned PUT URL can't cap Content-Length, so the
@@ -58,41 +81,71 @@ export function AudioUploadDropzone({ onUploaded }: AudioUploadDropzoneProps) {
   const [kind, setKind] = useState<AudioKind>('ambience');
   const [items, setItems] = useState<UploadItem[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
   // Counts nested dragenter/dragleave pairs (the zone has children), so
   // only the outermost dragleave — actually exiting the zone — clears the
   // active state.
   const dragDepth = useRef(0);
+  // Mirrors isUploading for handleFiles's synchronous guard: state updates
+  // are async, so a second drop/change event arriving before React
+  // re-renders would still read the stale `false` from the isUploading
+  // closure. A ref is readable/writable synchronously within the same tick.
+  const uploadingRef = useRef(false);
 
   const handleFiles = useCallback(
     async (fileList: FileList | Iterable<File> | null) => {
       if (!fileList) return;
       const files = Array.from(fileList);
       if (files.length === 0) return;
-      setItems(files.map((f) => ({ name: f.name, status: 'pending' })));
+      if (uploadingRef.current) {
+        // A batch is already running — refuse the second one outright
+        // rather than interleaving two loops' index-addressed updates
+        // (see the class doc comment). The caller gets no feedback beyond
+        // the disabled input / suppressed drag highlight; nothing is
+        // queued.
+        return;
+      }
+      uploadingRef.current = true;
+      setIsUploading(true);
 
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        setItems((prev) => prev.map((it, j) => (j === i ? { ...it, status: 'uploading' } : it)));
+      const batch = files.map((file) => ({ id: crypto.randomUUID(), file }));
+      setItems(batch.map(({ id, file }) => ({ id, name: file.name, status: 'pending' })));
+
+      for (const { id, file } of batch) {
+        setItems((prev) => prev.map((it) => (it.id === id ? { ...it, status: 'uploading' } : it)));
         try {
           if (file.size > AUDIO_MAX_BYTES) {
             throw new Error(`File exceeds the ${formatMaxSize(AUDIO_MAX_BYTES)} limit`);
           }
           await uploadAudioFile(file, { kind });
-          setItems((prev) => prev.map((it, j) => (j === i ? { ...it, status: 'done' } : it)));
+          setItems((prev) => prev.map((it) => (it.id === id ? { ...it, status: 'done' } : it)));
         } catch (e) {
           const message = e instanceof Error ? e.message : 'Upload failed';
           setItems((prev) =>
-            prev.map((it, j) => (j === i ? { ...it, status: 'error', error: message } : it))
+            prev.map((it) => (it.id === id ? { ...it, status: 'error', error: message } : it))
           );
         }
       }
-      onUploaded?.();
+
+      uploadingRef.current = false;
+      setIsUploading(false);
+      try {
+        onUploaded?.();
+      } catch (e) {
+        // onUploaded is caller-provided (e.g. Task 19's query
+        // invalidation). handleFiles is invoked as `void handleFiles(...)`
+        // at both call sites below, so an uncaught throw here would become
+        // an unhandled promise rejection instead of a normal error the
+        // caller can see in its own telemetry.
+        captureException(e, { action: 'AudioUploadDropzone.onUploaded' });
+      }
     },
     [kind, onUploaded]
   );
 
   const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+    if (isUploading) return; // don't imply a drop would be accepted right now
     if (!e.dataTransfer.types.includes('Files')) return;
     dragDepth.current += 1;
     setIsDragging(true);
@@ -113,6 +166,7 @@ export function AudioUploadDropzone({ onUploaded }: AudioUploadDropzoneProps) {
     e.preventDefault();
     dragDepth.current = 0;
     setIsDragging(false);
+    if (isUploading) return; // refuse a second, overlapping batch
     void handleFiles(e.dataTransfer.files);
   };
 
@@ -154,20 +208,30 @@ export function AudioUploadDropzone({ onUploaded }: AudioUploadDropzoneProps) {
 
       <div className="flex flex-col items-center gap-2 py-4 text-center">
         <Upload className="h-6 w-6 text-slate-500" aria-hidden="true" />
-        <p className="text-sm text-slate-400">
-          Drag audio files here, or{' '}
+        <p className={isUploading ? 'text-sm text-slate-500' : 'text-sm text-slate-400'}>
+          {isUploading ? 'Uploading batch — ' : 'Drag audio files here, or '}
+          {/* The <label> stays rendered (and associated with the input)
+              in both states, disabled or not, so the input keeps an
+              accessible name and getByLabelText keeps resolving it even
+              while a batch is in flight. */}
           <label
             htmlFor="audio-files"
-            className="cursor-pointer text-blue-400 underline-offset-2 hover:underline"
+            className={
+              isUploading
+                ? 'text-slate-500'
+                : 'cursor-pointer text-blue-400 underline-offset-2 hover:underline'
+            }
           >
             choose audio files
           </label>
+          {isUploading && ' once this batch finishes'}
         </p>
         <input
           id="audio-files"
           type="file"
           multiple
           accept="audio/*"
+          disabled={isUploading}
           className="sr-only"
           onChange={(e) => {
             void handleFiles(e.target.files);
@@ -182,8 +246,8 @@ export function AudioUploadDropzone({ onUploaded }: AudioUploadDropzoneProps) {
         // screen-reader user would have no way to learn a file finished or
         // failed short of re-reading the whole list.
         <ul aria-live="polite" className="mt-3 space-y-1 text-sm">
-          {items.map((it, i) => (
-            <li key={`${it.name}-${i}`} className="flex items-center gap-2">
+          {items.map((it) => (
+            <li key={it.id} className="flex items-center gap-2">
               <span className="min-w-0 flex-1 truncate text-slate-300">{it.name}</span>
               <StatusBadge item={it} />
             </li>
