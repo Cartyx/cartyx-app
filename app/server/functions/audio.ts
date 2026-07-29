@@ -2,7 +2,7 @@ import { HeadObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import type { z } from 'zod';
 import { connectDB, isDBConnected } from '../db/connection';
 import { AudioAsset } from '../db/models/AudioAsset';
-import { escapeRegExp } from '../utils/helpers';
+import { escapeRegExp, normalizeTags } from '../utils/helpers';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { createR2, getAudioUploadUrl } from './uploads';
 import { AUDIO_MAX_BYTES, AUDIO_SOURCE_TYPES } from '~/types/audio';
@@ -11,6 +11,9 @@ import type {
   createAudioUploadSchema,
   confirmAudioUploadSchema,
   listAudioAssetsSchema,
+  updateAudioAssetSchema,
+  bulkTagAudioAssetsSchema,
+  deleteAudioAssetSchema,
 } from '~/types/schemas/audio';
 
 async function ensureDb() {
@@ -237,6 +240,110 @@ export async function listAudioAssets({
     return { items, nextCursor };
   } catch (e) {
     serverCaptureException(e, userId, { action: 'listAudioAssets' });
+    throw e;
+  }
+}
+
+export async function updateAudioAsset({
+  data,
+  userId,
+}: {
+  data: z.infer<typeof updateAudioAssetSchema>;
+  userId: string;
+}): Promise<AudioAssetData> {
+  try {
+    await ensureDb();
+    // Only include fields the caller actually provided — the pre('save') hook that
+    // normalizes tags does not fire on findOneAndUpdate, and an omitted field must
+    // not be clobbered with undefined/null via $set.
+    const set: Record<string, unknown> = { updatedAt: new Date() };
+    if (data.title !== undefined) set.title = data.title;
+    if (data.kind !== undefined) set.kind = data.kind;
+    if (data.environment !== undefined) set.environment = data.environment;
+    if (data.mood !== undefined) set.mood = data.mood;
+    if (data.intensity !== undefined) set.intensity = data.intensity;
+    if (data.tags !== undefined) set.tags = normalizeTags(data.tags);
+
+    const doc = await AudioAsset.findOneAndUpdate(
+      { _id: data.id, ownerId: userId },
+      { $set: set },
+      { new: true }
+    );
+    if (!doc) throw new Error('Audio asset not found');
+    return serializeAudioAsset(doc as unknown as AudioDoc);
+  } catch (e) {
+    serverCaptureException(e, userId, { action: 'updateAudioAsset' });
+    throw e;
+  }
+}
+
+export async function bulkTagAudioAssets({
+  data,
+  userId,
+}: {
+  data: z.infer<typeof bulkTagAudioAssetsSchema>;
+  userId: string;
+}): Promise<{ modified: number }> {
+  try {
+    await ensureDb();
+    const set: Record<string, unknown> = { updatedAt: new Date() };
+    if (data.kind !== undefined) set.kind = data.kind;
+    if (data.environment !== undefined) set.environment = data.environment;
+    if (data.mood !== undefined) set.mood = data.mood;
+    if (data.intensity !== undefined) set.intensity = data.intensity;
+
+    const update: Record<string, unknown> = { $set: set };
+    if (data.tags?.length) {
+      const tags = normalizeTags(data.tags);
+      if (data.tagMode === 'replace') {
+        // Whole-array overwrite — existing tags are discarded.
+        set.tags = tags;
+      } else {
+        // $addToSet + $each preserves existing tags; findOneAndUpdate's own
+        // pre('save') normalization doesn't run here, so tags are normalized above.
+        update.$addToSet = { tags: { $each: tags } };
+      }
+    }
+
+    const res = await AudioAsset.updateMany({ _id: { $in: data.ids }, ownerId: userId }, update);
+    return { modified: res.modifiedCount ?? 0 };
+  } catch (e) {
+    serverCaptureException(e, userId, { action: 'bulkTagAudioAssets' });
+    throw e;
+  }
+}
+
+export async function deleteAudioAsset({
+  data,
+  userId,
+}: {
+  data: z.infer<typeof deleteAudioAssetSchema>;
+  userId: string;
+}): Promise<{ deleted: boolean }> {
+  try {
+    await ensureDb();
+    const asset = await AudioAsset.findOne({ _id: data.id, ownerId: userId });
+    if (!asset) throw new Error('Audio asset not found');
+
+    const { client, bucket } = createR2();
+    // onceRenditions is reserved for phase 2's infinite/one-shot music variants and
+    // is never written in phase 1 (see AudioAsset model comment), so there is
+    // nothing there to clean up yet.
+    const keys = [asset.sourceKey, asset.renditions?.opus?.key, asset.renditions?.aac?.key].filter(
+      (k): k is string => Boolean(k)
+    );
+
+    // Delete every R2 object before the row: if the row went first and this loop
+    // then failed partway, the remaining objects would be orphaned with nothing
+    // in the DB pointing at them.
+    for (const Key of keys) {
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key }));
+    }
+
+    await AudioAsset.deleteOne({ _id: data.id, ownerId: userId });
+    return { deleted: true };
+  } catch (e) {
+    serverCaptureException(e, userId, { action: 'deleteAudioAsset' });
     throw e;
   }
 }
