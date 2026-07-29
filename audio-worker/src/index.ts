@@ -48,7 +48,11 @@ async function main(): Promise<void> {
   while (running) {
     try {
       beat();
-      await reapStale(model, STALE_MS, UPLOAD_STALE_MS, deleteSource);
+      // `() => running` and not `running`: reapStale reads it between rows, so
+      // a SIGTERM arriving mid-batch stops the reap at the next row instead of
+      // running the whole batch out and waiting for the 900 s grace period to
+      // end in a SIGKILL.
+      await reapStale(model, STALE_MS, UPLOAD_STALE_MS, deleteSource, () => running);
       const asset = await claimNext<{ _id: unknown; sourceKey?: string; attempts?: number }>(
         model,
         WORKER_ID

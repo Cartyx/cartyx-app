@@ -52,7 +52,8 @@ vi.mock('@aws-sdk/client-s3', () => {
   return { S3Client: FakeS3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand };
 });
 
-const { processAsset } = await import('../src/process.js');
+const { processAsset, DECODE_LIMIT_SECONDS, MAX_SOURCE_DURATION_MS } =
+  await import('../src/process.js');
 
 let dir: string;
 let fx: Fixtures;
@@ -277,14 +278,93 @@ describe('processAsset end to end', () => {
     expect(Math.max(...peaks)).toBeGreaterThan(0.5);
   }, 30_000);
 
-  it('does not reject a complete VBR MP3 whose header over-reports its duration', async () => {
-    // No Xing header, so ffprobe extrapolates from the first frame's bitrate:
-    // measured 6769 ms claimed against 6034 ms of real audio, a 12% over-
-    // report on a perfectly good file. A tighter truncation tolerance would
-    // permanently reject it.
-    const { written } = await processFixture(fx.vbrNoXing);
+  /**
+   * THE SHIP-STOPPER, on real files.
+   *
+   * `probe()` does not measure an MP3 without a Xing header, it extrapolates
+   * from the first frame's bitrate — so a quiet intro or a joined-in
+   * low-bitrate segment makes it over-report without bound. Comparing a
+   * rendition against that number rejected complete, ordinary music
+   * PERMANENTLY: `permanentFailure: true`, which `retryAudioAsset` refuses, so
+   * the owner's only recourse was to re-encode the file outside the product.
+   *
+   * Each case asserts the file is published AND that the old rule really did
+   * reject it — a regression test that cannot itself regress into vacuity.
+   */
+  const overReporting: [string, keyof Fixtures][] = [
+    ['a 1 s quiet intro before a loud body (109% over-report)', 'quietIntroVbr'],
+    ['a 32 kbit/s segment joined to a 320 kbit/s one (8.2x over-report)', 'concatBitrate'],
+    ['the mild 12% over-report the old fixture had', 'vbrNoXing'],
+  ];
+
+  for (const [label, fixture] of overReporting) {
+    it(`publishes a complete VBR MP3 with ${label}`, async () => {
+      const claimedMs = (await probe(fx[fixture])).durationMs;
+      const decodedMs = Math.round((await analyze(fx[fixture])).samples / 48);
+
+      const { written } = await processFixture(fx[fixture]);
+      expect(written.status).toBe('ready');
+      expect(written.permanentFailure).toBe(false);
+      // The published length is the DECODED one, not the claim.
+      expect(written.durationMs).toBe(decodedMs);
+      expect(written.durationSamples).toBe((await analyze(fx[fixture])).samples);
+
+      // And the header really was unusable: for the first two, the old rule
+      // (`claimed - rendition > max(500, claimed * 0.25)`) rejected them.
+      if (fixture !== 'vbrNoXing') {
+        expect(claimedMs - decodedMs).toBeGreaterThan(Math.max(500, claimedMs * 0.25));
+      }
+    }, 60_000);
+  }
+
+  it('rejects a source for being too long on the decode, not on the header', async () => {
+    // `overCap` is a genuine 31-minute file: header and decode agree.
+    const { written } = await processFixture(fx.overCap, 0);
+    expect(written.status).toBe('failed');
+    expect(written.permanentFailure).toBe(true);
+    expect(written.lastError).toMatch(/30 minute limit/i);
+  }, 120_000);
+
+  it('publishes a file whose header claims 31 minutes but which is really 40 s', async () => {
+    // `overCapTruncated` carries `overCap`'s 1 860 000 ms header claim over
+    // ~40 s of payload. The old pipeline rejected it as over the cap on that
+    // claim alone. A claim is not a length: this file is 40 seconds long, and
+    // the same header arithmetic that rejected it here is what rejected honest
+    // 17-minute VBR music. The decode is bounded (see DECODE_LIMIT_SECONDS), so
+    // asking the file rather than its header costs nothing.
+    const { written } = await processFixture(fx.overCapTruncated);
     expect(written.status).toBe('ready');
-  }, 30_000);
+    expect(written.durationMs).toBeGreaterThan(30_000);
+    expect(written.durationMs).toBeLessThan(60_000);
+  }, 60_000);
+
+  it('bounds the decode so an hours-long source cannot amplify into a stall', async () => {
+    // The bound is what lets the cap be decided on a measurement instead of on
+    // a header. `overCap` is 31 minutes; a decode limited to 30 min + 1 s reads
+    // strictly less of it than an unlimited one, and still enough to fail it.
+    const bounded = await analyze(fx.overCap, DECODE_LIMIT_SECONDS);
+    const full = await analyze(fx.overCap);
+    expect(bounded.samples).toBeLessThan(full.samples);
+    expect(bounded.samples).toBeGreaterThan((MAX_SOURCE_DURATION_MS / 1000) * 48_000);
+  }, 120_000);
+
+  it.each(['truncatedMp3', 'truncatedFlac'] as const)(
+    'publishes %s with its real length rather than its header claim',
+    async (fixture) => {
+      // A half-transferred upload is no longer a permanent rejection, because
+      // detecting one means trusting the header and the header is an
+      // extrapolation. What A10 actually complained of — a `ready` row whose
+      // recorded duration came from the header while its audio did not — is
+      // closed here instead: both durations come from the decode, so the row is
+      // honest about being short and the owner can see it and re-upload.
+      const claimedMs = (await probe(fx[fixture])).durationMs;
+      const { written } = await processFixture(fx[fixture]);
+      expect(written.status).toBe('ready');
+      expect(claimedMs).toBeGreaterThan(1900);
+      expect(written.durationMs).toBeLessThan(1000);
+    },
+    60_000
+  );
 
   /**
    * The permanent-failure cases. `attempts: 0` throughout: a retryable error at
@@ -294,21 +374,8 @@ describe('processAsset end to end', () => {
    * worker on a button click.
    */
   const rejections: [string, keyof Fixtures, RegExp][] = [
-    ['a source longer than the 30 minute cap', 'overCap', /30 minute limit/i],
-    // Same 31-minute header claim, ~40 s of actual payload. It must still be
-    // rejected FOR BEING TOO LONG, which only happens if the cap is applied to
-    // the header before anything decodes — judge it on its payload instead and
-    // it comes back as a truncation. That ordering is the DoS mitigation: an
-    // 18-hour source must never reach a decoder.
-    ['a source whose header claims more than the cap', 'overCapTruncated', /30 minute limit/i],
     ['a wholly silent source', 'silence', /completely silent/i],
     ['a WAV with no samples at all', 'empty', /no audio samples/i],
-    ['a truncated MP3 whose header still claims the full length', 'truncatedMp3', /truncated/i],
-    [
-      'a truncated FLAC, which fails the same way in a different codec',
-      'truncatedFlac',
-      /truncated/i,
-    ],
   ];
 
   for (const [label, fixture, message] of rejections) {

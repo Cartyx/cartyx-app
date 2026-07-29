@@ -116,6 +116,7 @@ const FAKE_ASSET = {
   peaks: [] as number[],
   renditions: {},
   lastError: null,
+  permanentFailure: false,
   createdAt: '2026-07-28T00:00:00.000Z',
   updatedAt: '2026-07-28T00:00:00.000Z',
 };

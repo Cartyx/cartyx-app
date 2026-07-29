@@ -221,6 +221,7 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     peaks?: number[];
     renditions?: AudioAssetData['renditions'];
     lastError?: string | null;
+    permanentFailure?: boolean | null;
     createdAt?: Date;
     updatedAt?: Date;
   };
@@ -240,6 +241,10 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     peaks: d.peaks ?? [],
     renditions: d.renditions ?? {},
     lastError: d.lastError ?? null,
+    // Mirrors `retryAudioAsset`'s `{ $ne: true }` exactly, so the UI's decision
+    // to offer Retry and the server's decision to accept it can never disagree.
+    // Absent (a row written before the field existed) means retryable.
+    permanentFailure: d.permanentFailure === true,
     createdAt: d.createdAt instanceof Date ? d.createdAt.toISOString() : '',
     updatedAt: d.updatedAt instanceof Date ? d.updatedAt.toISOString() : '',
   };
@@ -475,10 +480,16 @@ export async function bulkTagAudioAssets({
  *   through the worker; that is the same abuse `confirmAudioUpload`'s own
  *   precondition closes.
  * - `permanentFailure: { $ne: true }` — the failure must be one a retry could
- *   plausibly fix. The worker sets `permanentFailure` only when it rejected the
- *   SOURCE itself (over the 30-minute cap, zero decoded samples, wholly silent,
- *   truncated mid-payload — see `PermanentError` in audio-worker/src/errors.ts),
- *   never when a transient fault merely exhausted the attempt budget. Those
+ *   plausibly fix. The worker sets `permanentFailure` whenever it threw a
+ *   `PermanentError` (audio-worker/src/errors.ts), which covers rather more
+ *   than "the audio was bad": over the 30-minute cap as MEASURED by decoding,
+ *   zero decoded samples, wholly silent, an incomplete rendition, an object
+ *   over `AUDIO_MAX_BYTES` (whose R2 object the worker has also deleted, so
+ *   there is nothing left to retry against), a row with no `sourceKey`, and a
+ *   `sourceKey` predating the per-owner storage layout. What unites them is
+ *   that the worker KNEW the run could not succeed, rather than guessing from
+ *   an exit code — never a transient fault that merely exhausted the attempt
+ *   budget. Those
  *   files are poison on every run: without this clause each Retry click buys
  *   another full decode of pinned CPU on a single-node cluster, in a loop the
  *   user can drive by hand, for a guaranteed identical outcome. `$ne: true`

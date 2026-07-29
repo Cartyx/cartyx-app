@@ -88,6 +88,17 @@ export type AudioAssetData = {
   peaks: number[];
   renditions: { opus?: AudioRendition; aac?: AudioRendition };
   lastError: string | null;
+  /**
+   * True when the worker rejected the SOURCE ITSELF, so no rerun of the same
+   * bytes can ever succeed and `retryAudioAsset` refuses the row.
+   *
+   * Serialized because the UI cannot otherwise tell the two kinds of `failed`
+   * apart, and it has to: without this field `AudioAssetRow` offered Retry on
+   * every failed asset, and clicking it on a permanently-failed one threw a
+   * four-way error message that named every possible cause at once. A button
+   * whose only outcome is an error that cannot say why is worse than no button.
+   */
+  permanentFailure: boolean;
   createdAt: string;
   updatedAt: string;
 };

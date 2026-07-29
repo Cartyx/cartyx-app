@@ -144,6 +144,34 @@ describe('updateAudioAsset', () => {
     const res = await updateAudioAsset({ data: { id: 'a1', title: 'New' }, userId: 'u1' });
     expect(res.durationSamples).toBeNull();
   });
+
+  /**
+   * D-2. `retryAudioAsset` filters on `permanentFailure: { $ne: true }`, so the
+   * field decides whether the Retry button can work — and the serializer never
+   * emitted it, leaving the UI to render the button for every failed row and
+   * the click to fail with a message naming four possible causes at once.
+   *
+   * The serializer's mapping must match the query's `$ne: true` EXACTLY, or the
+   * UI and the server disagree about the same row.
+   */
+  it.each([
+    [true, true],
+    [false, false],
+    [undefined, false],
+    [null, false],
+  ])('serializes permanentFailure %s as %s, mirroring the retry filter', async (stored, out) => {
+    mockUpdateResult({
+      _id: 'a1',
+      ownerId: 'u1',
+      status: 'failed',
+      permanentFailure: stored,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    const { updateAudioAsset } = await import('~/server/functions/audio');
+    const res = await updateAudioAsset({ data: { id: 'a1', title: 'New' }, userId: 'u1' });
+    expect(res.permanentFailure).toBe(out);
+  });
 });
 
 describe('bulkTagAudioAssets', () => {

@@ -1,5 +1,6 @@
 import { envMs } from './config.js';
 import { logger } from './logger.js';
+import { beat } from './heartbeat.js';
 import { captureException } from './telemetry.js';
 
 export const MAX_ATTEMPTS = 3;
@@ -40,8 +41,49 @@ export type ClaimModel = {
   ) => { toArray: () => Promise<{ _id: unknown; sourceKey?: string }[]> };
 };
 
-/** Deletes one R2 object. Supplied by `index.ts` (see `makeSourceDeleter`). */
-export type SourceDeleter = (key: string) => Promise<void>;
+/**
+ * Deletes a BATCH of R2 objects. Supplied by `index.ts` (see
+ * `makeSourceDeleter`), which maps it onto `DeleteObjects` — one request per
+ * 1000 keys instead of one request per key.
+ */
+export type SourceDeleter = (keys: string[]) => Promise<void>;
+
+/**
+ * The most `uploading` rows one reap pass will touch.
+ *
+ * This bound is the whole fix, and its absence was a self-sustaining denial of
+ * service. `createAudioUpload` needs no upload and has no rate limit, so any
+ * authenticated user can create rows by the thousand; every one of them ages
+ * into `uploading`-abandoned after `UPLOAD_TIMEOUT_MS`; and the reaper then ran
+ * one Atlas `updateOne` plus one R2 `DeleteObject` for EVERY one of them,
+ * sequentially, inside the single worker loop with no `beat()` anywhere in it.
+ * Ten thousand rows is roughly ten minutes of that, the heartbeat goes stale at
+ * 600 s, the liveness probe kills the pod, SIGTERM only clears a flag the reap
+ * loop never read, so the pod hangs until the 900 s grace expires and is
+ * SIGKILLed — then restarts, re-lists the survivors, and does it again. It
+ * never converges: permanent CrashLoopBackOff, no asset ever transcodes, and
+ * every user's queue is blocked.
+ *
+ * 200 is sized to finish well inside one loop iteration: 200 sequential Atlas
+ * round trips is a couple of seconds, and the whole batch's deletes fit in a
+ * SINGLE `DeleteObjects` request (the API takes 1000 keys). Backlogs simply
+ * take more passes — and each pass still claims and transcodes an asset, so a
+ * backlog no longer starves the queue it shares a loop with.
+ */
+export const REAP_UPLOAD_BATCH = 200;
+
+/** `DeleteObjects` accepts at most 1000 keys per request. */
+const R2_DELETE_BATCH = 1000;
+
+/**
+ * Checked between reaper iterations so SIGTERM is honoured mid-batch.
+ *
+ * `index.ts` flips `running` on SIGTERM, and the loop it guards is only
+ * consulted between whole assets — a reap pass that ignores it turns an orderly
+ * shutdown into a wait for `terminationGracePeriodSeconds` (900 s) and a
+ * SIGKILL.
+ */
+export type ShouldContinue = () => boolean;
 
 /**
  * Atomically take the oldest pending asset whose backoff has elapsed. A single
@@ -107,12 +149,18 @@ export async function claimNext<T>(model: ClaimModel, workerId: string): Promise
  * not keep a user's spinner alive, so a failed delete is logged and reported,
  * not thrown. It is also skipped when the fenced write matched nothing, which
  * is how a confirm landing between the read and the write keeps its object.
+ *
+ * That upload reap is BOUNDED — `REAP_UPLOAD_BATCH` rows per pass, a `beat()`
+ * per row, batched deletes, and `shouldContinue` honoured between rows. It was
+ * none of those things, and the result was a denial of service any authenticated
+ * user could trigger; see `REAP_UPLOAD_BATCH`.
  */
 export async function reapStale(
   model: ClaimModel,
   timeoutMs: number,
   uploadTimeoutMs: number,
-  deleteSource?: SourceDeleter
+  deleteSource?: SourceDeleter,
+  shouldContinue?: ShouldContinue
 ): Promise<number> {
   const now = Date.now();
   const cutoff = new Date(now - timeoutMs);
@@ -149,33 +197,53 @@ export async function reapStale(
     }
   );
 
-  await reapAbandonedUploads(model, new Date(now - uploadTimeoutMs), deleteSource);
+  await reapAbandonedUploads(model, new Date(now - uploadTimeoutMs), deleteSource, shouldContinue);
 
   return requeued.modifiedCount ?? 0;
 }
 
 /**
- * Fail every row abandoned in `uploading`, one at a time, and delete its R2
- * object.
+ * Fail up to `REAP_UPLOAD_BATCH` rows abandoned in `uploading`, one at a time,
+ * then delete their R2 objects in batches.
  *
- * Row-at-a-time rather than one `updateMany` because the delete has to be tied
- * to a write this call actually performed. A user can confirm an upload in the
- * window between reading the candidate list and writing the failure; the write
- * is fenced on `status: 'uploading'` so it correctly no-ops for that row, and
- * only a matched write authorizes deleting the object. A bulk update cannot
- * report which rows it moved, so pairing it with a delete loop would destroy
- * the source of a freshly confirmed asset.
+ * Row-at-a-time STATUS WRITES rather than one `updateMany` because the delete
+ * has to be tied to a write this call actually performed. A user can confirm an
+ * upload in the window between reading the candidate list and writing the
+ * failure; the write is fenced on `status: 'uploading'` so it correctly no-ops
+ * for that row, and only a matched write authorizes deleting the object. A bulk
+ * update cannot report which rows it moved, so pairing it with a delete loop
+ * would destroy the source of a freshly confirmed asset.
+ *
+ * The DELETES are batched anyway, because that authorization is per row but the
+ * R2 call is not: keys are collected as each fenced write matches and handed to
+ * `deleteSource` in chunks, so 200 rows cost 200 Atlas round trips and ONE R2
+ * request rather than 400 round trips.
+ *
+ * `beat()` per row, because this loop is the one place in the worker that can
+ * legitimately run for seconds without touching a pipeline stage, and a stale
+ * heartbeat here gets a perfectly healthy pod killed mid-reap — which is how
+ * the backlog became self-sustaining.
  */
 async function reapAbandonedUploads(
   model: ClaimModel,
   cutoff: Date,
-  deleteSource?: SourceDeleter
+  deleteSource?: SourceDeleter,
+  shouldContinue?: ShouldContinue
 ): Promise<void> {
   const abandoned = await model
-    .find({ status: 'uploading', createdAt: { $lt: cutoff } }, { projection: { sourceKey: 1 } })
+    .find(
+      { status: 'uploading', createdAt: { $lt: cutoff } },
+      { projection: { sourceKey: 1 }, limit: REAP_UPLOAD_BATCH }
+    )
     .toArray();
 
+  const reclaimable: string[] = [];
+
   for (const row of abandoned) {
+    // Between rows, not between passes: a shutdown mid-batch leaves the
+    // untouched rows exactly as they were, and the next start re-lists them.
+    if (shouldContinue && !shouldContinue()) break;
+
     const result = await model.updateOne(
       { _id: row._id, status: 'uploading' },
       {
@@ -188,19 +256,26 @@ async function reapAbandonedUploads(
         },
       }
     );
+    beat();
     // Explicit 0 only: the raw driver always reports matchedCount, and treating
     // a missing field as "didn't match" would silently stop reclaiming objects.
     if (result?.matchedCount === 0) continue;
-    if (!row.sourceKey || !deleteSource) continue;
+    if (row.sourceKey) reclaimable.push(row.sourceKey);
+  }
 
+  if (!deleteSource) return;
+
+  for (let i = 0; i < reclaimable.length; i += R2_DELETE_BATCH) {
+    const chunk = reclaimable.slice(i, i + R2_DELETE_BATCH);
     try {
-      await deleteSource(row.sourceKey);
+      await deleteSource(chunk);
     } catch (err) {
-      logger.warn(
-        { err, assetId: String(row._id), sourceKey: row.sourceKey },
-        'failed to delete abandoned upload object'
-      );
-      captureException(err, { assetId: String(row._id), sourceKey: row.sourceKey });
+      // Best effort, and per chunk: the status transitions that unstick every
+      // user's spinner have already been written and must not be undone by an
+      // R2 outage. A chunk that fails is simply not reclaimed this pass.
+      logger.warn({ err, keys: chunk.length }, 'failed to delete abandoned upload objects');
+      captureException(err, { keys: chunk.length, scope: 'reap-delete' });
     }
+    beat();
   }
 }

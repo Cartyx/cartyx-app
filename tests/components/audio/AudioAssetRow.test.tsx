@@ -21,6 +21,7 @@ const asset: AudioAssetData = {
   peaks: [0.1, 0.9, 0.4],
   renditions: {},
   lastError: null,
+  permanentFailure: false,
   createdAt: '',
   updatedAt: '',
 };
@@ -109,6 +110,62 @@ describe('AudioAssetRow', () => {
         expect(screen.queryByRole('button', { name: /^Retry/ })).not.toBeInTheDocument();
       }
     );
+
+    /**
+     * D-2 — the button that lied.
+     *
+     * `retryAudioAsset` filters on `permanentFailure: { $ne: true }`, so a row
+     * the worker rejected for its own content can never be retried. The row
+     * offered the button anyway, and the server function's rejection is one
+     * message naming all four of its preconditions at once ("not found, not
+     * failed, its upload never completed, or the file itself was rejected") —
+     * so the click's only outcome was an error that could not say which.
+     */
+    it('does not offer Retry on a permanently failed asset', () => {
+      const onRetry = vi.fn();
+      renderRow(
+        <AudioAssetRow
+          asset={{
+            ...asset,
+            status: 'failed',
+            permanentFailure: true,
+            lastError: 'Audio file is completely silent',
+          }}
+          onRetry={onRetry}
+        />
+      );
+      expect(screen.queryByRole('button', { name: /^Retry/ })).not.toBeInTheDocument();
+    });
+
+    it('says why a permanently failed asset cannot be retried', () => {
+      renderRow(
+        <AudioAssetRow
+          asset={{
+            ...asset,
+            status: 'failed',
+            permanentFailure: true,
+            lastError: 'Audio is 47 minutes long, over the 30 minute limit',
+          }}
+        />
+      );
+      // The reason is known here, so state it here — the server function cannot.
+      expect(screen.getByText(/cannot be retried/i)).toBeInTheDocument();
+      expect(screen.getByText(/re-upload/i)).toBeInTheDocument();
+      expect(screen.getByText(/47 minutes long/i)).toBeInTheDocument();
+    });
+
+    it('still offers Retry on a transient failure', () => {
+      // A row that merely exhausted its attempts against an R2 blip is exactly
+      // what the button exists for, and must not be swept up with the above.
+      renderRow(
+        <AudioAssetRow
+          asset={{ ...asset, status: 'failed', permanentFailure: false, lastError: 'R2 timeout' }}
+          onRetry={vi.fn()}
+        />
+      );
+      expect(screen.getByRole('button', { name: 'Retry Storm' })).toBeInTheDocument();
+      expect(screen.queryByText(/cannot be retried/i)).not.toBeInTheDocument();
+    });
   });
 
   it('falls back to a generic message when a failed asset has no lastError', () => {

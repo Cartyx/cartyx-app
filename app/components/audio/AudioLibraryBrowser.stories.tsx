@@ -25,6 +25,7 @@ const mk = (
   peaks: Array.from({ length: 120 }, (_, i) => Math.abs(Math.sin(i / 5)) * 0.7),
   renditions: {},
   lastError: null,
+  permanentFailure: false,
   createdAt: '',
   updatedAt: '',
   ...overrides,

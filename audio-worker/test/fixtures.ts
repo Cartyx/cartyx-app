@@ -253,19 +253,116 @@ export function buildFixtures(dir: string): Fixtures {
     overCap,
   ]);
 
-  // Same header claim, but only the first 40 kB of payload — it decodes to
-  // ~40 s. The cap has to be applied to the HEADER, before anything decodes,
-  // or this file is judged on its 40 s of payload instead of its 31 minute
-  // claim. That ordering is the entire DoS mitigation.
+  // `overCap`'s 31-minute header claim over only the first 40 kB of payload —
+  // it decodes to ~40 s. It is therefore a 40-second file, and is PUBLISHED.
+  // The pipeline used to reject it as over the cap on the strength of the claim
+  // alone, and that is the same arithmetic that rejected honest 17-minute VBR
+  // music: a header is not a length. What made judging it on the header look
+  // necessary was the cost of decoding an hours-long source, and the bounded
+  // decode (see `DECODE_LIMIT_SECONDS`) removes that cost instead.
   const overCapTruncated = p('over-cap-truncated.mp3');
   truncate(overCap, overCapTruncated, 40_000 / readFileSync(overCap).length);
 
   // --- sources that must NOT be rejected ---
 
-  // A complete, valid VBR MP3 with no Xing header, so ffprobe can only
-  // extrapolate the duration from the first frame's bitrate. Quiet content
-  // first, loud content after, which makes that extrapolation OVER-report.
-  // This is the false-positive the truncation tolerance has to survive.
+  /*
+   * THE SHAPE THAT MATTERS.
+   *
+   * ffmpeg does not measure an MP3 with no Xing/VBRI header — it divides the
+   * file size by the FIRST FRAME's bitrate, so the reported duration is wrong
+   * by `avg_bitrate / first_frame_bitrate` and that ratio is bounded only by
+   * the format (8 kbit/s to 320 kbit/s, i.e. up to 40x).
+   *
+   * The suite already had a VBR-no-Xing fixture (`vbrNoXing` below) and it
+   * passed every check, because its shape is 5 s of quiet followed by 1 s of
+   * loud — the arrangement that MINIMISES the ratio, giving a mild 12%
+   * over-report. Real music is the inverse: a short quiet intro and a long loud
+   * body. That inversion is the entire difference between a fixture that
+   * catches the bug and one that certifies it, and the truncation detector
+   * shipped rejecting ordinary MP3s because the suite only had the latter.
+   *
+   * Measured with ffmpeg 8.1.2 (`stream=duration` vs the decoded sample count):
+   *
+   *   quietIntroVbr    10 554 ms claimed   5 042 ms real   (109% over)
+   *   concatBitrate    82 506 ms claimed  10 057 ms real   (8.2x over)
+   *   vbrNoXing         6 778 ms claimed   6 034 ms real   ( 12% over)
+   *
+   * Against the old rule — reject when the rendition falls more than
+   * `max(500, claimed * 0.25)` ms short of the CLAIM — the first two are
+   * permanently rejected as "truncated" (shortfall 5512 vs allowance 2639, and
+   * 72 449 vs 20 626) while the third passes with room to spare. All three are
+   * complete, valid, ordinary files.
+   */
+  const vbrIntro = p('vbr-intro.wav');
+  ffmpeg(['-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo', '-t', '1', vbrIntro]);
+  const vbrBody = p('vbr-body.wav');
+  ffmpeg(['-f', 'lavfi', '-i', 'anoisesrc=d=4:c=white:r=44100:a=0.8', '-ac', '2', vbrBody]);
+  const quietIntroSrc = p('quiet-intro-src.wav');
+  ffmpeg([
+    '-i',
+    vbrIntro,
+    '-i',
+    vbrBody,
+    '-filter_complex',
+    '[0:a][1:a]concat=n=2:v=0:a=1',
+    quietIntroSrc,
+  ]);
+  const quietIntroVbr = p('quiet-intro-vbr.mp3');
+  ffmpeg([
+    '-i',
+    quietIntroSrc,
+    '-c:a',
+    'libmp3lame',
+    '-q:a',
+    '0',
+    '-write_xing',
+    '0',
+    quietIntroVbr,
+  ]);
+
+  // Two CBR segments at wildly different bitrates, concatenated — which for MP3
+  // is a legitimate file (the format is a bare frame stream, and joining a
+  // low-bitrate intro stinger onto a high-bitrate body is exactly what
+  // `cat`-style editors and many podcast tools emit). ffmpeg reads the 32 kbit/s
+  // first frame and extrapolates the whole 330 kB across it.
+  const segLo = p('seg-lo.mp3');
+  ffmpeg([
+    '-f',
+    'lavfi',
+    '-i',
+    'sine=frequency=200:duration=2:sample_rate=44100',
+    '-ac',
+    '2',
+    '-c:a',
+    'libmp3lame',
+    '-b:a',
+    '32k',
+    '-write_xing',
+    '0',
+    segLo,
+  ]);
+  const segHi = p('seg-hi.mp3');
+  ffmpeg([
+    '-f',
+    'lavfi',
+    '-i',
+    'anoisesrc=d=8:c=white:r=44100:a=0.8',
+    '-ac',
+    '2',
+    '-c:a',
+    'libmp3lame',
+    '-b:a',
+    '320k',
+    '-write_xing',
+    '0',
+    segHi,
+  ]);
+  const concatBitrate = p('concat-bitrate.mp3');
+  writeFileSync(concatBitrate, Buffer.concat([readFileSync(segLo), readFileSync(segHi)]));
+
+  // The mild case, kept as the control: same defect, arranged so it barely
+  // shows. 5 s quiet then 1 s loud — a 12% over-report the old rule survived,
+  // which is why it certified the rule as safe.
   const quietHead = p('quiet-head.wav');
   ffmpeg([
     '-f',
@@ -348,6 +445,8 @@ export function buildFixtures(dir: string): Fixtures {
     overCap,
     overCapTruncated,
     vbrNoXing,
+    quietIntroVbr,
+    concatBitrate,
     quiet,
     trailingMarker,
     veryShort,

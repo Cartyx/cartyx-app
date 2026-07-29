@@ -9,13 +9,14 @@ import {
   GetObjectCommand,
   PutObjectCommand,
   DeleteObjectCommand,
+  DeleteObjectsCommand,
 } from '@aws-sdk/client-s3';
 import { logger } from './logger.js';
 import { probe, analyze, transcode, RENDITION_SAMPLE_RATE } from './ffmpeg.js';
 import { extractPeaks } from './peaks.js';
 import { MAX_ATTEMPTS, computeBackoffMs } from './claim.js';
 import { renditionKeyBase } from './keys.js';
-import { PermanentError } from './errors.js';
+import { PermanentError, PermanentSizeError } from './errors.js';
 import { maxSourceBytes, readS3Timeouts } from './config.js';
 import { beat } from './heartbeat.js';
 import { captureException } from './telemetry.js';
@@ -26,65 +27,57 @@ const PEAK_BUCKETS = 400;
  * Hard cap on source length: 30 minutes (the human partner's number).
  *
  * This bounds a decode-amplification DoS. `AUDIO_MAX_BYTES` is 50 MB, and 50 MB
- * of minimum-bitrate audio decodes to roughly 18 hours — each attempt pins the
- * single worker's CPU for as long as `FFMPEG_TIMEOUT_MS` allows while every
- * other user's upload queues behind it. Rejecting by *duration* rather than by
- * bytes is what closes it, because bytes say nothing about decode cost.
+ * of minimum-bitrate audio decodes to ~13.9 hours — each attempt pins the
+ * single worker's CPU while every other user's upload queues behind it.
+ * Rejecting by *duration* rather than by bytes is what closes it, because bytes
+ * say nothing about decode cost.
  *
- * Checked against the cheap header probe first, so an hours-long source never
- * reaches a decoder, and again against the decoded length so a header that
- * under-reports can't smuggle one past.
+ * Decided on the MEASURED decoded length and on nothing else. There is no
+ * header pre-gate: `probe()`'s duration is an extrapolation for any MP3 without
+ * a Xing header and over-reports by up to 8.2x on files measured here, so a
+ * 30-minute gate on it rejects honest uploads (an honest 17-minute file
+ * measured a 41.8-minute claim). What made a header gate look necessary was the
+ * cost of the decode, and `analyze(src, limitSeconds)` removes that cost
+ * instead: the pass is bounded to `MAX_SOURCE_DURATION_MS` + 1 s of audio, so a
+ * 13.9-hour source is answered in 0.93 s rather than 24.16 s (measured) and the
+ * answer is a fact rather than a claim. See `analyze` in ffmpeg.ts.
  */
 export const MAX_SOURCE_DURATION_MS = 30 * 60 * 1000;
 
 /**
- * How far a rendition may fall short of the source's header duration before we
- * call the source truncated: 25% of the claimed duration, floored at 500 ms.
- *
- * Both halves are measured, not guessed:
- *
- * - The floor is sized against real encoder/container padding. Across WAV, MP3,
- *   FLAC, Ogg/Opus, M4A and ADTS AAC fixtures the largest header-vs-decoded gap
- *   was 6.5 ms (Ogg/Opus), so 500 ms is ~75x the worst benign case — no
- *   well-formed short file can trip it.
- * - The proportional term exists because a container header can be an
- *   *estimate*, not a fact: a VBR MP3 with no Xing header is extrapolated from
- *   the first frame's bitrate, measured at 28 733 ms for a genuine 30 041 ms
- *   file (4.4% low). 25% leaves ~6x headroom over that class of false positive,
- *   which matters because a false positive permanently rejects a good upload.
- *
- * The check is ONE-SIDED. Truncation can only ever make a rendition shorter
- * than the header claims; a rendition that runs *longer* is the VBR-estimate
- * case above and is benign. Measured truncations sit far outside the band: a
- * 40%-payload MP3 renders 799 ms against a claimed 2000 ms, and a 10%-payload
- * FLAC 199 ms — both marked `ready` with no error before this check existed.
+ * What the bounded decode reads: one second past the cap, so a source exactly
+ * at the cap measures exactly at the cap and anything longer measures over it.
  */
-export function maxDurationShortfallMs(probedMs: number): number {
-  return Math.max(500, probedMs * 0.25);
-}
+export const DECODE_LIMIT_SECONDS = MAX_SOURCE_DURATION_MS / 1000 + 1;
+
+/**
+ * How far a rendition may fall short of the source's DECODED length before we
+ * call the transcode incomplete: a flat 500 ms.
+ *
+ * Flat, with no proportional term, because both sides are now measurements of
+ * the same audio and the only difference between them is fixed encoder/container
+ * padding — which does not scale with duration. Measured across WAV, MP3, FLAC,
+ * Matroska/Opus, M4A and ADTS AAC sources, in both rendition codecs, the
+ * rendition came out LONGER than the decoded source in every case but two, and
+ * the largest shortfall anywhere was 0.6 ms (ADTS AAC -> aac). 500 ms is ~800x
+ * that worst benign case.
+ *
+ * The predecessor of this function compared against `probe()`'s HEADER duration
+ * with a 25% proportional tolerance, and that was a ship-stopper: the header is
+ * an extrapolation for a VBR MP3 with no Xing header, a 1-second quiet intro
+ * over-reports a 60 s file as 145 s (measured), and 25% does not cover a 143%
+ * error — so ordinary music was permanently rejected as "truncated" with no way
+ * back. A tolerance can only ever be as trustworthy as the number it is a
+ * tolerance on.
+ *
+ * The check is still ONE-SIDED: padding can only make a rendition longer.
+ */
+export const MAX_RENDITION_SHORTFALL_MS = 500;
 
 /** Duration in whole minutes for a `lastError` a human reads, e.g. "47 minutes". */
 function formatMinutes(ms: number): string {
   const minutes = Math.round(ms / 60_000);
   return `${minutes} minute${minutes === 1 ? '' : 's'}`;
-}
-
-function assertWithinCap(ms: number): void {
-  if (ms > MAX_SOURCE_DURATION_MS) {
-    throw new PermanentError(
-      `Audio is ${formatMinutes(ms)} long, over the ${MAX_SOURCE_DURATION_MS / 60_000} minute limit`
-    );
-  }
-}
-
-/**
- * The duration cap, applied to the HEADER CLAIM — cheap, and the only check
- * that runs before anything decodes. Split out from `assertDecodedUsable` on
- * purpose: an hours-long source has to be rejected without a decode pass, which
- * is the entire point of the cap.
- */
-export function assertHeaderUsable(meta: { durationMs: number }): void {
-  assertWithinCap(meta.durationMs);
 }
 
 /**
@@ -115,32 +108,48 @@ export function assertDecodedUsable(decoded: { samples: number; peakDb: number }
 
   const durationSamples = decoded.samples;
   const durationMs = Math.round((durationSamples / RENDITION_SAMPLE_RATE) * 1000);
-  // The cap again, this time against what the file really decodes to: the
-  // header is an unverified claim, and one that under-reports would otherwise
-  // walk an arbitrarily long source straight past `assertHeaderUsable`.
-  assertWithinCap(durationMs);
+  // The duration cap, and the ONLY place it is applied. `decoded.samples` came
+  // from a decode bounded at `DECODE_LIMIT_SECONDS`, so a source of any length
+  // reports at most one second over the cap here — enough to fail it, and
+  // cheap enough that no header pre-gate is needed to afford asking.
+  if (durationMs > MAX_SOURCE_DURATION_MS) {
+    throw new PermanentError(
+      `Audio is ${formatMinutes(durationMs)} long, over the ${MAX_SOURCE_DURATION_MS / 60_000} minute limit`
+    );
+  }
   return { durationMs, durationSamples };
 }
 
 /**
- * A truncated upload keeps a perfectly valid header, so `probe` believes it;
- * only the renditions reveal how much audio there actually was. Measured: a
- * half-transferred MP3 probes 2000 ms and renders 799 ms, and was published
- * `ready` with no error at all.
+ * Guards the TRANSCODE, by comparing each rendition against the length the
+ * source really decoded to.
  *
- * Skipped entirely when the header carries no duration (`probedMs <= 0`) —
- * there is nothing to compare against, and inventing a comparison would reject
- * good files.
+ * Both numbers are measurements of the same audio, so a gap between them means
+ * this worker's own ffmpeg leg dropped content while still exiting 0 — a
+ * partially written output, a full disk, a muxer that gave up mid-file. That is
+ * the failure a `ready` asset must never be published with, because the row
+ * would then carry a `durationSamples` phase 2 loops on that the rendition
+ * cannot honour.
+ *
+ * NOTE what this deliberately no longer does: it does not detect a truncated
+ * SOURCE. It cannot. Detecting that means trusting the container header, and
+ * for the format truncation is most common in — MP3 — the header duration is an
+ * extrapolation that over-reports honest files by up to 8.2x (measured). The
+ * harm A10 actually described was a `ready` row whose recorded duration came
+ * from that header while its audio did not; that is closed at the source, by
+ * `durationMs`/`durationSamples` both coming from `analyze()`. A half-
+ * transferred MP3 now publishes as a shorter asset with an honest duration,
+ * which the owner can see and re-upload, rather than as a permanent rejection
+ * that ordinary music also trips.
  */
 export function assertRenditionComplete(
-  probedMs: number,
+  decodedMs: number,
   renditionMs: number,
   codec: string
 ): void {
-  if (probedMs <= 0) return;
-  if (probedMs - renditionMs > maxDurationShortfallMs(probedMs)) {
+  if (decodedMs - renditionMs > MAX_RENDITION_SHORTFALL_MS) {
     throw new PermanentError(
-      `Audio file appears truncated: it declares ${probedMs} ms but the ${codec} rendition contains only ${renditionMs} ms`
+      `The ${codec} rendition is incomplete: the source decodes to ${decodedMs} ms but the rendition contains only ${renditionMs} ms`
     );
   }
 }
@@ -218,6 +227,14 @@ function r2(): { client: S3Client; bucket: string; cdnUrl: string } {
  *
  * Oversize is PERMANENT: the object is not going to shrink, so retrying is
  * guaranteed waste and Retry must not buy another pass either.
+ *
+ * And the oversized object is DELETED, which is the other half of closing the
+ * same hole. Refusing to read it stops the OOM but leaves gigabytes sitting in
+ * R2 attached to a `failed` row — a row the owner-scoped cleanup correctly
+ * reads as in-use, so nothing but the uploading account can ever reclaim it.
+ * `AUDIO_MAX_BYTES` would then be enforced on what the worker *reads* and on
+ * nothing at all that is *stored*. The delete is scoped to the size rejection
+ * alone; see `PermanentSizeError` for why no other rejection deletes.
  */
 async function downloadSource(
   client: S3Client,
@@ -233,10 +250,27 @@ async function downloadSource(
 
   const body = obj.Body as unknown as Readable & { destroy?: () => void };
 
+  /**
+   * Best effort, and it must stay that way: an R2 outage during the delete must
+   * still leave the caller with the size rejection it asked for, not a generic
+   * transient error that spends the retry budget re-downloading a file already
+   * known to be too big.
+   */
+  const dropObject = async (): Promise<void> => {
+    try {
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+      logger.warn({ key, maxBytes }, 'deleted an oversized source object');
+    } catch (err) {
+      logger.warn({ err, key }, 'failed to delete an oversized source object');
+      captureException(err, { sourceKey: key, scope: 'oversize-cleanup' });
+    }
+  };
+
   if (typeof obj.ContentLength === 'number' && obj.ContentLength > maxBytes) {
     // Release the socket rather than leaving the response half-read.
     body.destroy?.();
-    throw new PermanentError(
+    await dropObject();
+    throw new PermanentSizeError(
       `Audio file is ${obj.ContentLength} bytes, over the ${maxBytes} byte limit`
     );
   }
@@ -246,33 +280,64 @@ async function downloadSource(
     transform(chunk: Buffer, _enc, done) {
       received += chunk.length;
       if (received > maxBytes) {
-        done(new PermanentError(`Audio file exceeds the ${maxBytes} byte limit`));
+        done(new PermanentSizeError(`Audio file exceeds the ${maxBytes} byte limit`));
         return;
       }
+      // A 50 MB source over a slow link can legitimately outlast
+      // `HEARTBEAT_MAX_AGE_MS` while making steady progress — the S3 request
+      // timeout is socket INACTIVITY, so a trickling transfer never trips it.
+      // Beating per chunk is a ~13-byte tmpfs write against a 64 KiB chunk.
+      beat();
       done(null, chunk);
     },
   });
 
-  await pipeline(body, cap, createWriteStream(dest));
+  try {
+    await pipeline(body, cap, createWriteStream(dest));
+  } catch (err) {
+    if (err instanceof PermanentSizeError) await dropObject();
+    throw err;
+  }
 }
 
 /**
- * Deletes an R2 object. Used by the reaper for sources abandoned mid-upload
- * (see `reapStale`) — the worker is the only process in the system that both
- * holds R2 credentials and knows a row was abandoned.
+ * Deletes a BATCH of R2 objects. Used by the reaper for sources abandoned
+ * mid-upload (see `reapStale`) — the worker is the only process in the system
+ * that both holds R2 credentials and knows a row was abandoned.
+ *
+ * `DeleteObjects` rather than N x `DeleteObject`: it takes up to 1000 keys per
+ * request (the caller chunks to that), which is what turns a backlog of ten
+ * thousand abandoned rows from ten thousand sequential round trips — long
+ * enough to stale the heartbeat and get the pod killed mid-reap — into ten.
+ *
+ * `Quiet: true` because a key that is already gone is not a failure worth
+ * hearing about; the response then carries only the keys that genuinely could
+ * not be deleted, which are logged by the caller.
  *
  * The client is built lazily and reused: `r2()` throws when R2 env vars are
  * missing, and that must surface as one caught, logged reap failure rather
  * than as a crash at worker startup.
  */
-export function makeSourceDeleter(): (key: string) => Promise<void> {
+export function makeSourceDeleter(): (keys: string[]) => Promise<void> {
   let cached: { client: S3Client; bucket: string } | null = null;
-  return async (key: string) => {
+  return async (keys: string[]) => {
+    if (keys.length === 0) return;
     if (!cached) {
       const { client, bucket } = r2();
       cached = { client, bucket };
     }
-    await cached.client.send(new DeleteObjectCommand({ Bucket: cached.bucket, Key: key }));
+    const result = await cached.client.send(
+      new DeleteObjectsCommand({
+        Bucket: cached.bucket,
+        Delete: { Objects: keys.map((Key) => ({ Key })), Quiet: true },
+      })
+    );
+    if (result.Errors?.length) {
+      logger.warn(
+        { count: result.Errors.length, first: result.Errors[0]?.Key },
+        'R2 refused to delete some abandoned upload objects'
+      );
+    }
   };
 }
 
@@ -461,23 +526,40 @@ export async function processAsset(
 
     const src = join(dir, 'source');
     await downloadSource(client, bucket, sourceKey, src, maxSourceBytes());
-    // Every stage ends with a beat: the liveness probe reads loop PROGRESS, and
-    // a single asset can legitimately occupy the loop for tens of minutes, so a
-    // heartbeat written only between assets would have to be given a threshold
-    // too generous to catch anything. See heartbeat.ts.
+    // EVERY child process and every R2 call is followed by a beat, and
+    // `downloadSource` beats as bytes arrive. The liveness probe reads loop
+    // PROGRESS, and a single asset can legitimately occupy the loop for tens of
+    // minutes, so a heartbeat written only between assets would need a
+    // threshold too generous to catch anything. The placement is not
+    // decorative: `HEARTBEAT_MAX_AGE_MS` is justified as 2x the longest
+    // single stage, so a stage boundary without a beat silently makes that
+    // arithmetic wrong and lets the probe kill a healthy worker. See
+    // `DEFAULT_HEARTBEAT_MAX_AGE_MS` in config.ts.
     beat();
 
+    // Provenance only — sample rate and channel count. `meta.durationMs` is a
+    // header claim that nothing is allowed to reject on; see `probe`.
     const meta = await probe(src);
-
-    // Cheapest gate first: the header claim, read without decoding a single
-    // frame. An 18-hour source must never reach a decoder at all.
-    assertHeaderUsable(meta);
-
-    // One full decode pass. Everything that needs to know what the file really
-    // contains — as opposed to what its header asserts — comes from here, so
-    // this runs once and only once.
-    const { durationMs, durationSamples } = assertDecodedUsable(await analyze(src));
     beat();
+
+    // The one decode pass, bounded at `DECODE_LIMIT_SECONDS`. Everything that
+    // needs to know what the file really contains — as opposed to what its
+    // header asserts — comes from here, so this runs once and only once.
+    const { durationMs, durationSamples } = assertDecodedUsable(
+      await analyze(src, DECODE_LIMIT_SECONDS)
+    );
+    beat();
+
+    if (meta.durationMs > 0 && Math.abs(meta.durationMs - durationMs) > 1000) {
+      // Not a failure, and deliberately not telemetry: for a VBR MP3 with no
+      // Xing header a large gap here is the NORM, not a fault. Logged because
+      // when someone is looking at an asset whose length surprises them, the
+      // two numbers side by side are the whole answer.
+      logger.info(
+        { assetId: String(id), headerMs: meta.durationMs, decodedMs: durationMs },
+        'container duration disagrees with the decoded length; using the decoded length'
+      );
+    }
 
     const opusPath = join(dir, 'out.opus');
     const aacPath = join(dir, 'out.m4a');
@@ -490,7 +572,11 @@ export async function processAsset(
       ['opus', opusPath],
       ['aac', aacPath],
     ] as const) {
-      assertRenditionComplete(meta.durationMs, (await probe(path)).durationMs, codec);
+      const renditionMs = (await probe(path)).durationMs;
+      beat();
+      // Against `durationMs` — the MEASURED decode — never against
+      // `meta.durationMs`. See `assertRenditionComplete`.
+      assertRenditionComplete(durationMs, renditionMs, codec);
     }
 
     // Peaks describe the OPUS RENDITION, not the source. The user hears the

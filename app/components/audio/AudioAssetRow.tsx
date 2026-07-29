@@ -35,7 +35,7 @@ export interface AudioAssetRowProps {
   onEdit?: (asset: AudioAssetData) => void;
   /** Called with the full asset when the delete button is clicked. Available regardless of status — a stuck `failed`/`pending` asset is exactly the kind of thing a GM most needs to be able to remove. */
   onDelete?: (asset: AudioAssetData) => void;
-  /** Called with the full asset when the retry button is clicked. Rendered for `failed` assets only — the source object is still in R2, so a transient transcode failure is recoverable without re-uploading. */
+  /** Called with the full asset when the retry button is clicked. Rendered for `failed` assets that are NOT `permanentFailure` — the source object is still in R2, so a transient transcode failure is recoverable without re-uploading. */
   onRetry?: (asset: AudioAssetData) => void;
 }
 
@@ -140,22 +140,37 @@ function AudioAssetRowComponent({
 
         {asset.status === 'failed' ? (
           <>
-            {/* The source object survives everything but delete, so a
-                transcode that lost to a transient fault (an R2 blip, a brief
-                Atlas failover) is recoverable without re-uploading. Without
-                this the only recovery is delete-and-re-upload — for a 50-file
-                bulk import, re-dropping the whole folder. */}
-            <button
-              type="button"
-              onClick={() => onRetry?.(asset)}
-              aria-label={`Retry ${asset.title}`}
-              className="rounded p-1.5 text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-blue-400"
-            >
-              <RotateCw className="h-4 w-4" />
-            </button>
+            {/* Retry is offered only for a failure a rerun could actually fix.
+                The source object survives everything but delete, so a transcode
+                that lost to a transient fault (an R2 blip, a brief Atlas
+                failover) is recoverable without re-uploading — without it the
+                only recovery is delete-and-re-upload, for a 50-file bulk import
+                the whole folder.
+
+                `permanentFailure` means the worker rejected the source itself,
+                and `retryAudioAsset` refuses those rows. Rendering the button
+                anyway is what made it a lie: the server function's rejection is
+                a single message naming all four of its preconditions at once
+                ("not found, not failed, its upload never completed, or the file
+                itself was rejected"), so the click's only possible outcome was
+                an error that could not say which. Say it here instead, where the
+                reason is known. */}
+            {asset.permanentFailure ? (
+              <span className="text-xs text-slate-500">Cannot be retried</span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onRetry?.(asset)}
+                aria-label={`Retry ${asset.title}`}
+                className="rounded p-1.5 text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-blue-400"
+              >
+                <RotateCw className="h-4 w-4" />
+              </button>
+            )}
             <span className="flex items-center gap-1.5 text-xs text-red-400">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               {asset.lastError ?? 'Processing failed'}
+              {asset.permanentFailure && ' — re-upload a corrected file to try again'}
             </span>
           </>
         ) : asset.status === 'pending' ? (

@@ -110,28 +110,28 @@ authored code and docs move; models and output stay gitignored and local.
 
 Owned by a user, not a campaign.
 
-| Field                                             | Type              | Notes                                                                                                                                                                                       |
-| ------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ownerId`                                         | ObjectId → `User` | Indexed.                                                                                                                                                                                    |
-| `title`                                           | String            | Required.                                                                                                                                                                                   |
-| `kind`                                            | enum              | `music` \| `ambience` \| `one-shot`. Required; drives playback defaults in phase 2.                                                                                                         |
-| `environment[]`                                   | String[]          | Facet. Multi-value — a sound may be both `forest` and `night`.                                                                                                                              |
-| `mood[]`                                          | String[]          | Facet. Multi-value.                                                                                                                                                                         |
-| `intensity`                                       | Number            | 1–5, single value. Lets the board swap calm↔intense variants of a scene.                                                                                                                    |
-| `tags[]`                                          | String[]          | Free-form, normalized via the existing `normalizeTags` helper.                                                                                                                              |
-| `sourceKey`                                       | String            | Original upload; retained so assets can be re-transcoded when settings change. `uploads/audio/<owner's random prefix>/<ts>-<rand>.<ext>` — see [Storage layout](#storage-layout).           |
-| `sourceBytes`, `confirmedAt`                      | Number?, Date?    | Both null until confirm's `HeadObject` measures the real object. `confirmedAt` is the flag that says the check happened; the client's declared size is never stored.                        |
-| `renditions`                                      | Object            | `{ opus: {key,url,bytes}, aac: {key,url,bytes} }`.                                                                                                                                          |
-| `onceRenditions`                                  | Object?           | Optional second set, `kind: 'music'` only — see [Music variants](#music-variants).                                                                                                          |
-| `durationMs`                                      | Number            | Decoded length, rounded to whole ms. **Display only** — see `durationSamples`.                                                                                                              |
-| `durationSamples`                                 | Number            | Exact decoded length in samples per channel at the renditions' 48 kHz. What phase 2's `loopEnd` reads. See [Gapless looping](#gapless-looping).                                             |
-| `loudnessTargetLufs`                              | Number            | The loudnorm **target** applied (`-20`), not a measurement — single-pass loudnorm doesn't guarantee the output lands on it. A real two-pass measurement would be a separate `loudnessLufs`. |
-| `sampleRate`, `channels`                          | Number            | From ffprobe.                                                                                                                                                                               |
-| `peaks[]`                                         | Number[]          | ~400 buckets; drives waveform UI without fetching audio.                                                                                                                                    |
-| `status`                                          | enum              | `uploading` → `pending` → `processing` → `ready` \| `failed`.                                                                                                                               |
-| `attempts`, `lastError`, `claimedAt`, `claimedBy` | —                 | Queue/retry state.                                                                                                                                                                          |
-| `nextAttemptAt`                                   | Date?             | Retry backoff gate — a `pending` row is claimable only once this is null or past. Written by the worker, read by `claimNext`.                                                               |
-| `permanentFailure`                                | Boolean           | "This source can never succeed" (over the 30-minute cap, zero samples, wholly silent, truncated). `retryAudioAsset` refuses rows carrying it.                                               |
+| Field                                             | Type              | Notes                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ownerId`                                         | ObjectId → `User` | Indexed.                                                                                                                                                                                                                                                              |
+| `title`                                           | String            | Required.                                                                                                                                                                                                                                                             |
+| `kind`                                            | enum              | `music` \| `ambience` \| `one-shot`. Required; drives playback defaults in phase 2.                                                                                                                                                                                   |
+| `environment[]`                                   | String[]          | Facet. Multi-value — a sound may be both `forest` and `night`.                                                                                                                                                                                                        |
+| `mood[]`                                          | String[]          | Facet. Multi-value.                                                                                                                                                                                                                                                   |
+| `intensity`                                       | Number            | 1–5, single value. Lets the board swap calm↔intense variants of a scene.                                                                                                                                                                                              |
+| `tags[]`                                          | String[]          | Free-form, normalized via the existing `normalizeTags` helper.                                                                                                                                                                                                        |
+| `sourceKey`                                       | String            | Original upload; retained so assets can be re-transcoded when settings change. `uploads/audio/<owner's random prefix>/<ts>-<rand>.<ext>` — see [Storage layout](#storage-layout).                                                                                     |
+| `sourceBytes`, `confirmedAt`                      | Number?, Date?    | Both null until confirm's `HeadObject` measures the real object. `confirmedAt` is the flag that says the check happened; the client's declared size is never stored.                                                                                                  |
+| `renditions`                                      | Object            | `{ opus: {key,url,bytes}, aac: {key,url,bytes} }`.                                                                                                                                                                                                                    |
+| `onceRenditions`                                  | Object?           | Optional second set, `kind: 'music'` only — see [Music variants](#music-variants).                                                                                                                                                                                    |
+| `durationMs`                                      | Number            | Decoded length, rounded to whole ms. **Display only** — see `durationSamples`.                                                                                                                                                                                        |
+| `durationSamples`                                 | Number            | Exact decoded length in samples per channel at the renditions' 48 kHz. What phase 2's `loopEnd` reads. See [Gapless looping](#gapless-looping).                                                                                                                       |
+| `loudnessTargetLufs`                              | Number            | The loudnorm **target** applied (`-20`), not a measurement — single-pass loudnorm doesn't guarantee the output lands on it. A real two-pass measurement would be a separate `loudnessLufs`.                                                                           |
+| `sampleRate`, `channels`                          | Number            | From ffprobe.                                                                                                                                                                                                                                                         |
+| `peaks[]`                                         | Number[]          | ~400 buckets; drives waveform UI without fetching audio.                                                                                                                                                                                                              |
+| `status`                                          | enum              | `uploading` → `pending` → `processing` → `ready` \| `failed`.                                                                                                                                                                                                         |
+| `attempts`, `lastError`, `claimedAt`, `claimedBy` | —                 | Queue/retry state.                                                                                                                                                                                                                                                    |
+| `nextAttemptAt`                                   | Date?             | Retry backoff gate — a `pending` row is claimable only once this is null or past. Written by the worker, read by `claimNext`.                                                                                                                                         |
+| `permanentFailure`                                | Boolean           | "This run can never succeed" (decoded length over the 30-minute cap, zero samples, wholly silent, an incomplete rendition, an object over `AUDIO_MAX_BYTES`, or an unusable `sourceKey`). `retryAudioAsset` refuses rows carrying it, and the UI hides Retry on them. |
 
 Indexes: `{ownerId, kind}`, `{ownerId, tags}`, `{ownerId, createdAt}` for the
 unfiltered library page and the pagination cursor, and `{status, createdAt}`
@@ -240,20 +240,29 @@ New `audio-worker/` package alongside `realtime/`; Node + ffmpeg on Alpine.
 Per claimed asset:
 
 1. `ffprobe` the **first audio stream** (`stream=duration`, not the
-   container-wide `format=duration`) → header duration, sample rate, channels.
-   Reject here if the claimed duration is over the 30-minute cap, before
-   anything decodes.
-2. One decode pass (`astats`) → the exact sample count at 48 kHz and the peak
-   level. Reject a file with no samples, or one that is digital silence end to
-   end (loudnorm divides by the measured level and emits NaN, which kills the
-   AAC encoder).
+   container-wide `format=duration`) → sample rate and channels, kept as
+   provenance. The header duration is recorded but **nothing is rejected on
+   it**: for an MP3 with no Xing frame ffmpeg extrapolates the duration from the
+   first frame's bitrate, which over-reports honest files without bound
+   (measured 8.2x on a file joining a 32 kbit/s segment to a 320 kbit/s one, and
+   41.8 minutes claimed for a genuine 17-minute file).
+2. One decode pass (`astats`), **bounded at the cap + 1 s** → the exact sample
+   count at 48 kHz and the peak level. The bound is what makes measuring
+   affordable enough to replace the header gate: 50 MB of 8 kbit/s audio is
+   ~13.9 hours, answered in 0.93 s bounded against 24.16 s unbounded. Reject
+   here if the **decoded** length is over the 30-minute cap, if there are no
+   samples, or if the file is digital silence end to end (loudnorm divides by
+   the measured level and emits NaN, which kills the AAC encoder).
 3. `loudnorm=I=-20:TP=-1.5`, `-map 0:a:0 -ar 48000 -ac 2` → encode **Opus**
    (`libopus`, Ogg) and **AAC** (`aac`, M4A). The `-map` is what keeps embedded
    cover art out of the M4A muxer; the `-ar`/`-ac` undo loudnorm's 192 kHz
    output and collapse surround sources to stereo.
-4. Cross-check each rendition's duration against the header claim → reject a
-   truncated source, which otherwise publishes as `ready` with a fraction of
-   its audio.
+4. Cross-check each rendition's duration against the **decoded** source length
+   (flat 500 ms allowance; measured encoder padding never exceeds 0.6 ms) →
+   reject a rendition this worker's own ffmpeg leg truncated while exiting 0.
+   This deliberately does not detect a truncated _source_, which would mean
+   trusting the header; a half-transferred upload publishes with its real,
+   measured duration instead.
 5. Decode the **Opus rendition** to mono PCM, ~400 buckets → `peaks[]`. The
    rendition, not the source: the user hears the normalized audio, and a
    waveform of a quiet source renders the loudest asset in the library as a
@@ -261,8 +270,9 @@ Per claimed asset:
 6. Upload renditions, write metadata, `status: 'ready'`.
 
 Concurrency defaults to 2 (configurable). Retries with backoff to `attempts: 3`,
-then `failed` with `lastError`. Permanent failures — the rejections in steps 1,
-2 and 4, where the SOURCE is unusable — are distinguished from transient ones
+then `failed` with `lastError`. Permanent failures — the rejections in steps 2
+and 4, plus an oversized source object (which is also deleted from R2, since
+nothing else can ever reclaim it) — are distinguished from transient ones
 (R2 timeout) by a `PermanentError` thrown at the point of judgement rather than
 by pattern-matching exit codes. They skip the retry budget entirely and set
 `permanentFailure: true`, which `retryAudioAsset` refuses: the file fails

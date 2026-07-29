@@ -30,6 +30,7 @@ function mkAsset(id: string, title: string): AudioAssetData {
     peaks: [0.1, 0.5, 0.3],
     renditions: {},
     lastError: null,
+    permanentFailure: false,
     createdAt: '',
     updatedAt: '',
   };

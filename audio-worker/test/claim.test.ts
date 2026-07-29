@@ -5,8 +5,23 @@ import {
   computeBackoffMs,
   DEFAULT_RETRY_BASE_MS,
   DEFAULT_RETRY_MAX_MS,
+  REAP_UPLOAD_BATCH,
 } from '../src/claim.js';
 import { logger } from '../src/logger.js';
+
+/**
+ * The heartbeat is counted, not written: `beat()` is a synchronous
+ * `writeFileSync`, and what these tests need to assert is HOW OFTEN the reaper
+ * signals progress — the liveness threshold is justified as 2x the longest gap
+ * between two beats, so the count is the contract.
+ */
+const beats = vi.hoisted(() => ({ count: 0 }));
+vi.mock('../src/heartbeat.js', () => ({
+  beat: () => {
+    beats.count += 1;
+  },
+  isHeartbeatFresh: () => true,
+}));
 
 const UPLOAD_STALE_MS = 900_000;
 
@@ -19,7 +34,12 @@ function reaperModel(
   updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 })
 ) {
   const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 1 });
-  const find = vi.fn(() => ({ toArray: async () => abandoned }));
+  // `limit` is HONOURED here, as the real driver honours it. A fake that
+  // returned every row regardless would make the bound look like it worked
+  // while testing a code path that never sees it.
+  const find = vi.fn((_f: unknown, options?: { limit?: number }) => ({
+    toArray: async () => (options?.limit ? abandoned.slice(0, options.limit) : abandoned),
+  }));
   return { updateMany, updateOne, find };
 }
 
@@ -213,7 +233,9 @@ describe('reapStale reclaims abandoned upload objects', () => {
 
     await reapStale(model as never, 600_000, UPLOAD_STALE_MS, deleteSource);
 
-    expect(deleteSource.mock.calls.map(([k]) => k)).toEqual([
+    // ONE call carrying both keys, not one call per key — see REAP_UPLOAD_BATCH.
+    expect(deleteSource).toHaveBeenCalledTimes(1);
+    expect(deleteSource.mock.calls[0][0]).toEqual([
       'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/a.wav',
       'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/b.wav',
     ]);
@@ -242,13 +264,13 @@ describe('reapStale reclaims abandoned upload objects', () => {
     ]);
     const deleteSource = vi.fn().mockRejectedValue(new Error('R2 down'));
 
-    // A failed delete must not stop the status transition that unsticks the
-    // user's spinner, and must not abandon the rest of the batch.
+    // A failed delete must not stop the status transitions that unstick the
+    // users' spinners — those are already written by the time the batch runs.
     await expect(
       reapStale(model as never, 600_000, UPLOAD_STALE_MS, deleteSource)
     ).resolves.toBeTypeOf('number');
     expect(model.updateOne).toHaveBeenCalledTimes(2);
-    expect(deleteSource).toHaveBeenCalledTimes(2);
+    expect(deleteSource).toHaveBeenCalledTimes(1);
     vi.restoreAllMocks();
   });
 
@@ -258,5 +280,92 @@ describe('reapStale reclaims abandoned upload objects', () => {
     ]);
     await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
     expect(model.updateOne).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The reaper as a denial of service.
+ *
+ * `createAudioUploadFn` has no rate limit and needs no upload, so any
+ * authenticated user can mint rows by the thousand and wait `UPLOAD_TIMEOUT_MS`.
+ * The reap then ran one Atlas `updateOne` and one R2 `DeleteObject` for EVERY
+ * abandoned row, sequentially, with no `.limit()`, no `beat()`, and no reading
+ * of the shutdown flag — inside the worker's single loop. Ten thousand rows is
+ * roughly ten minutes of that: the heartbeat goes stale at 600 s, the liveness
+ * probe kills the pod, SIGTERM only sets a flag this code never read, and the
+ * pod hangs to the 900 s grace and is SIGKILLed. On restart it re-lists the
+ * survivors and repeats — permanent CrashLoopBackOff, and no asset transcodes
+ * for anyone.
+ */
+describe('reapStale is bounded, beaten and interruptible', () => {
+  /** 10 000 abandoned rows: the attack, as a list. */
+  function flood(n: number) {
+    return Array.from({ length: n }, (_, i) => ({
+      _id: `u${i}`,
+      sourceKey: `uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/${i}.wav`,
+    }));
+  }
+
+  it('asks Mongo for a bounded page rather than every abandoned row', async () => {
+    const model = reaperModel(flood(10_000));
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS, vi.fn());
+
+    // Without this the DoS is unbeatable no matter what the loop does: the
+    // driver materialises all 10 000 documents before the first write.
+    const [, options] = model.find.mock.calls[0] as [unknown, { limit?: number }];
+    expect(options.limit).toBe(REAP_UPLOAD_BATCH);
+    expect(REAP_UPLOAD_BATCH).toBeLessThanOrEqual(1000);
+  });
+
+  it('beats for every row it writes, so a long batch cannot stale the heartbeat', async () => {
+    const model = reaperModel(flood(50));
+    const before = beats.count;
+
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS, vi.fn());
+
+    // One per row, plus one per delete batch. The liveness threshold is
+    // justified as 2x the longest gap between two beats; a reap pass that
+    // beats only at the top of the loop makes that arithmetic false, and the
+    // probe then kills a pod that is working perfectly well.
+    expect(beats.count - before).toBeGreaterThanOrEqual(50);
+  });
+
+  it('deletes in batches R2 can actually take, not one request per key', async () => {
+    const deleteSource = vi.fn().mockResolvedValue(undefined);
+    const model = reaperModel(flood(10_000));
+
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS, deleteSource);
+
+    // At most REAP_UPLOAD_BATCH rows are touched per pass, and DeleteObjects
+    // takes 1000 keys — so the whole pass is one R2 request.
+    expect(deleteSource).toHaveBeenCalledTimes(1);
+    for (const [keys] of deleteSource.mock.calls) {
+      expect(keys.length).toBeLessThanOrEqual(1000);
+    }
+    expect(model.updateOne.mock.calls.length).toBe(REAP_UPLOAD_BATCH);
+  });
+
+  it('stops mid-batch on SIGTERM instead of running to the grace period', async () => {
+    let running = true;
+    const model = reaperModel(flood(200));
+    // SIGTERM lands after the 5th row.
+    model.updateOne.mockImplementation(async () => {
+      if (model.updateOne.mock.calls.length >= 5) running = false;
+      return { matchedCount: 1 };
+    });
+
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS, vi.fn(), () => running);
+
+    // index.ts's handler only clears `running`; before this the reap never read
+    // it, so shutdown waited out terminationGracePeriodSeconds (900 s) and ended
+    // in a SIGKILL — with the reap's own writes half-applied either way.
+    expect(model.updateOne.mock.calls.length).toBeLessThan(200);
+    expect(model.updateOne.mock.calls.length).toBeGreaterThanOrEqual(5);
+  });
+
+  it('runs the whole batch when nothing asks it to stop', async () => {
+    const model = reaperModel(flood(200));
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS, vi.fn(), () => true);
+    expect(model.updateOne.mock.calls.length).toBe(200);
   });
 });

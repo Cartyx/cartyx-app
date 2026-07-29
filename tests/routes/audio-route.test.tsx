@@ -78,6 +78,7 @@ function mkAsset(overrides: Partial<AudioAssetData> = {}): AudioAssetData {
     peaks: [0.1, 0.5, 0.3],
     renditions: { opus: { key: 'k1', url: 'https://cdn.example/a1.ogg', bytes: 100 } },
     lastError: null,
+    permanentFailure: false,
     createdAt: '',
     updatedAt: '',
     ...overrides,

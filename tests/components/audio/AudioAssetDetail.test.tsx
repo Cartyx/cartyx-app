@@ -21,6 +21,7 @@ const asset: AudioAssetData = {
   peaks: [0.1, 0.9, 0.4],
   renditions: {},
   lastError: null,
+  permanentFailure: false,
   createdAt: '',
   updatedAt: '',
 };

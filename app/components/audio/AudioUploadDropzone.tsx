@@ -73,9 +73,14 @@ function formatMaxSize(bytes: number): string {
  *
  * The client-side size check against `AUDIO_MAX_BYTES` is a courtesy that
  * saves a pointless transfer for an obviously-oversized file; it is not the
- * enforcement boundary. A presigned PUT URL can't cap Content-Length, so the
- * server's `HeadObject` in `confirmAudioUpload` is what actually enforces
- * the limit (see `uploadAudioFile`'s doc comment in `~/utils/uploadAudio`).
+ * enforcement boundary, and neither is the server's `HeadObject` in
+ * `confirmAudioUpload`. A presigned PUT URL cannot cap Content-Length and stays
+ * valid and reusable for 300 s after confirm measured it, so `HeadObject`
+ * describes the object as it was at one instant and nothing re-measures it
+ * afterwards. The real enforcement is the audio worker's `downloadSource`,
+ * which counts the bytes as they arrive, refuses the source permanently if they
+ * exceed the cap, and deletes the R2 object so an oversized file cannot squat
+ * in storage behind a `failed` row.
  */
 export function AudioUploadDropzone({ onUploaded }: AudioUploadDropzoneProps) {
   const [kind, setKind] = useState<AudioKind>('ambience');

@@ -24,6 +24,10 @@ const hooks = vi.hoisted(() => ({
   bodyRead: false,
   /** Set if anything asks the SDK to materialise the whole object. */
   buffered: false,
+  /** Keys passed to DeleteObject — the oversized-source reclamation. */
+  deleted: [] as string[],
+  /** Make the delete fail, to prove it is best effort. */
+  deleteFails: false,
 }));
 
 vi.mock('@aws-sdk/client-s3', () => {
@@ -34,10 +38,15 @@ vi.mock('@aws-sdk/client-s3', () => {
     constructor(public input: unknown) {}
   }
   class DeleteObjectCommand {
-    constructor(public input: unknown) {}
+    constructor(public input: { Key?: string }) {}
   }
   class FakeS3Client {
     async send(cmd: unknown): Promise<unknown> {
+      if (cmd instanceof DeleteObjectCommand) {
+        if (hooks.deleteFails) throw new Error('R2 down');
+        hooks.deleted.push(cmd.input.Key ?? '');
+        return {};
+      }
       if (!(cmd instanceof GetObjectCommand)) throw new Error('unexpected command');
       const body = Readable.from(
         (function* () {
@@ -77,6 +86,8 @@ beforeEach(() => {
   hooks.chunks = [];
   hooks.bodyRead = false;
   hooks.buffered = false;
+  hooks.deleted = [];
+  hooks.deleteFails = false;
 });
 
 afterEach(() => {
@@ -159,5 +170,88 @@ describe('processAsset enforces the size cap at point of use', () => {
     const [, update] = updateOne.mock.calls[0];
     expect(update.$set.status).toBe('pending');
     expect(update.$set.permanentFailure).toBeUndefined();
+  });
+});
+
+/**
+ * F4 — `AUDIO_MAX_BYTES` on STORED bytes, not just on bytes read.
+ *
+ * Refusing to read the oversized object stops the OOM, and that fix holds. It
+ * does not stop the object from SITTING THERE: the row goes `failed` still
+ * carrying its `sourceKey`, and a referenced key is exactly what the
+ * owner-scoped cleanup treats as in-use and will never offer for reclamation.
+ * The only account that can free those gigabytes is the one that uploaded them.
+ *
+ * So a size rejection deletes. Only a size rejection: everything else is capped
+ * at `AUDIO_MAX_BYTES` anyway, and an unsupported codec or an undecodable file
+ * is precisely what a human may want to look at before it disappears.
+ */
+describe('an oversized source is reclaimed, not just refused', () => {
+  const KEY = 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/x.wav';
+
+  it('deletes the object when ContentLength declares it over the cap', async () => {
+    hooks.contentLength = 4 * 1024 * 1024 * 1024;
+    hooks.chunks = [Buffer.alloc(1024)];
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+
+    await processAsset(
+      { updateOne } as never,
+      { _id: 'huge', sourceKey: KEY, attempts: 0 },
+      WORKER
+    );
+
+    expect(hooks.deleted).toEqual([KEY]);
+    expect(updateOne.mock.calls[0][1].$set.permanentFailure).toBe(true);
+  });
+
+  it('deletes the object when only the streamed counter catches it', async () => {
+    // The re-PUT case: ContentLength understates or is absent, so the header
+    // check passes and the bytes are what give it away.
+    process.env.AUDIO_MAX_BYTES = String(64 * 1024);
+    hooks.contentLength = undefined;
+    hooks.chunks = [Buffer.alloc(32 * 1024), Buffer.alloc(32 * 1024), Buffer.alloc(32 * 1024)];
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+
+    await processAsset(
+      { updateOne } as never,
+      { _id: 'liar', sourceKey: KEY, attempts: 0 },
+      WORKER
+    );
+
+    expect(hooks.deleted).toEqual([KEY]);
+  });
+
+  it('does NOT delete a source rejected for any other reason', async () => {
+    // 2 KB of zeros: a real rejection, and one where the bytes are worth
+    // keeping. A human debugging "why did my upload fail" needs the file, and
+    // it costs at most AUDIO_MAX_BYTES.
+    hooks.contentLength = 2048;
+    hooks.chunks = [Buffer.alloc(2048)];
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+
+    await processAsset({ updateOne } as never, { _id: 'bad', sourceKey: KEY, attempts: 0 }, WORKER);
+
+    expect(updateOne.mock.calls[0][1].$set.status).not.toBe('ready');
+    expect(hooks.deleted).toEqual([]);
+  });
+
+  it('still records the size rejection when R2 refuses the delete', async () => {
+    // Best effort: an R2 outage must not turn a known-permanent size failure
+    // into a transient one that spends the retry budget re-downloading it.
+    hooks.deleteFails = true;
+    hooks.contentLength = 4 * 1024 * 1024 * 1024;
+    hooks.chunks = [Buffer.alloc(1024)];
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+
+    await processAsset(
+      { updateOne } as never,
+      { _id: 'huge', sourceKey: KEY, attempts: 0 },
+      WORKER
+    );
+
+    const [, update] = updateOne.mock.calls[0];
+    expect(update.$set.status).toBe('failed');
+    expect(update.$set.permanentFailure).toBe(true);
+    expect(update.$set.lastError).toContain(String(DEFAULT_MAX_SOURCE_BYTES));
   });
 });

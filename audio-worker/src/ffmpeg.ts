@@ -70,11 +70,23 @@ export type ProbeResult = { durationMs: number; sampleRate: number; channels: nu
  * The format value is kept only as a fallback for containers that carry no
  * per-stream duration at all.
  *
- * This is a HEADER CLAIM, not a measurement: a truncated file keeps its
- * original header, and a VBR MP3 with no Xing header only gets an
- * extrapolation from the first frame's bitrate (measured 28 733 ms for a real
- * 30 041 ms file). `analyze()` is what actually decodes; `processAsset`
- * cross-checks the two.
+ * This is a HEADER CLAIM, not a measurement, and it is not trustworthy enough
+ * to reject anything on. For an MP3 with no Xing/VBRI header ffmpeg EXTRAPOLATES
+ * the duration by dividing the file size by the first frame's bitrate, so the
+ * error is `avg_bitrate / first_frame_bitrate` and is bounded only by the format
+ * (8 kbit/s to 320 kbit/s, i.e. up to 40x). Measured on this machine with
+ * ffmpeg 8.1.2:
+ *
+ * | file (all complete and valid)          | stream=duration | truly decodes to |
+ * |----------------------------------------|-----------------|------------------|
+ * | 1 s quiet intro + 59 s loud body       |      145 654 ms |        60 029 ms |
+ * | 1 s quiet intro + 1020 s loud body     |    2 509 685 ms |     1 021 048 ms |
+ * | 32 kbit/s segment + 320 kbit/s segment |       82 506 ms |        10 057 ms |
+ *
+ * That last one over-reports by 8.2x, and the 17-minute one claims 41.8 minutes
+ * — so a duration cap applied to THIS number rejects honest files. `durationMs`
+ * is therefore carried for provenance and logging only; every decision that can
+ * reject an upload is made on `analyze()`'s decoded sample count instead.
  */
 export async function probe(path: string): Promise<ProbeResult> {
   const { stdout } = await run(
@@ -125,8 +137,23 @@ export async function probe(path: string): Promise<ProbeResult> {
  * encoder dies with `Input contains (near) NaN/+-Inf` (exit 234). Leading and
  * trailing silence are fine — only a wholly-silent file triggers it.
  *
- * Costs one full decode pass, which is why the duration cap is checked from
- * `probe()` first: an hours-long source must be rejected before it gets here.
+ * Costs one decode pass, BOUNDED BY `limitSeconds`. That bound is what closes
+ * the decode-amplification DoS, and it replaces the old header-duration gate
+ * outright: `AUDIO_MAX_BYTES` is 50 MB, and 50 MB of minimum-bitrate MP3 is
+ * ~13.9 hours of audio, so an unbounded pass over one costs real time on a
+ * worker that processes assets one at a time. Measured on exactly that file
+ * (50 000 000 bytes, 8 kbit/s mono, 50 000 s long):
+ *
+ *     unbounded            2 400 000 000 samples   24.16 s
+ *     -t 1801 (cap + 1 s)     86 448 000 samples    0.93 s
+ *
+ * The bounded run still answers the question the cap asks — 86 448 000 > the
+ * 86 400 000 samples that 30 minutes is — so the rejection is made on a
+ * MEASUREMENT that cannot be faked, at 4% of the cost of the honest answer and
+ * with none of the header's false positives. `-t` is passed as an INPUT option
+ * (before `-i`) so demuxing itself stops there; as an output option the filter
+ * graph overshoots slightly (measured 2 930 295 samples against an exact
+ * 2 928 000 for `-t 61`).
  *
  * astats writes its report to stderr at `info` level. A file with zero decoded
  * samples produces no report at all (ffmpeg still exits 0) — that is the
@@ -135,7 +162,7 @@ export async function probe(path: string): Promise<ProbeResult> {
  */
 export type AnalyzeResult = { samples: number; peakDb: number };
 
-export async function analyze(path: string): Promise<AnalyzeResult> {
+export async function analyze(path: string, limitSeconds?: number): Promise<AnalyzeResult> {
   const { stderr } = await run(
     'ffmpeg',
     [
@@ -143,6 +170,8 @@ export async function analyze(path: string): Promise<AnalyzeResult> {
       'info',
       '-hide_banner',
       '-nostats',
+      // Input-side, so it bounds the DEMUX as well as the filter graph.
+      ...(limitSeconds ? ['-t', String(limitSeconds)] : []),
       '-i',
       path,
       '-map',

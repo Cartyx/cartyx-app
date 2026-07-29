@@ -29,3 +29,36 @@ export class PermanentError extends Error {
     this.name = 'PermanentError';
   }
 }
+
+/**
+ * The one permanent rejection that also DELETES the source object.
+ *
+ * Split out from `PermanentError` because the deletion has to be scoped to
+ * exactly this reason and no other. The size rejection is the only one whose
+ * object is both worthless and expensive:
+ *
+ * - Worthless: the object failed the size check, and nothing about it will ever
+ *   pass. There is no version of "a human inspects it later" that ends in the
+ *   file being used.
+ * - Expensive: it is the ONLY rejection reason whose object can be arbitrarily
+ *   large. A presigned PUT cannot constrain Content-Length and stays valid and
+ *   reusable for 300 s after `confirmAudioUpload` measured it, so a client can
+ *   confirm 1 KB and then re-PUT gigabytes to the same URL. The worker refuses
+ *   to READ that object, correctly — but refusing to read it leaves it in R2,
+ *   referenced by a `failed` row, which is precisely the state the owner-scoped
+ *   cleanup treats as in-use and will never offer for reclamation. The only
+ *   person who can free it is the account that uploaded it, i.e. the attacker.
+ *
+ * Every other permanent rejection keeps its object: an unsupported codec, a
+ * source with no decodable samples, a wholly silent file and an over-length
+ * file are all bounded by `AUDIO_MAX_BYTES`, cost 50 MB at worst, and are
+ * exactly the cases where a human may want to look at what was actually
+ * uploaded before it disappears. Deleting those trades a real diagnostic for
+ * no meaningful storage saving.
+ */
+export class PermanentSizeError extends PermanentError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PermanentSizeError';
+  }
+}

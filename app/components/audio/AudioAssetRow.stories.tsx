@@ -19,6 +19,7 @@ const base: AudioAssetData = {
   peaks: Array.from({ length: 200 }, (_, i) => Math.abs(Math.sin(i / 6)) * 0.8),
   renditions: {},
   lastError: null,
+  permanentFailure: false,
   createdAt: '',
   updatedAt: '',
 };
@@ -91,6 +92,30 @@ export const Failed: Story = {
       ...base,
       status: 'failed',
       lastError: 'Unsupported codec',
+      peaks: [],
+      durationMs: null,
+    },
+    onEdit: () => {},
+    onDelete: () => {},
+    onRetry: () => {},
+  },
+};
+
+/**
+ * A failure the worker knows no rerun can fix — over the duration cap, no
+ * decodable samples, wholly silent, or an object over `AUDIO_MAX_BYTES` (whose
+ * R2 object the worker has already deleted). `retryAudioAsset` refuses these
+ * rows, so offering the button would only produce an error message that names
+ * all four of its preconditions and cannot say which one applied. The row says
+ * it instead, where the reason is actually known.
+ */
+export const FailedPermanently: Story = {
+  args: {
+    asset: {
+      ...base,
+      status: 'failed',
+      permanentFailure: true,
+      lastError: 'Audio is 47 minutes long, over the 30 minute limit',
       peaks: [],
       durationMs: null,
     },

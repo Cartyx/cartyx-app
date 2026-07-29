@@ -75,6 +75,15 @@ export const DEFAULT_UPLOAD_TIMEOUT_MS = 900_000;
  * confirm pass, then re-PUT gigabytes to the same URL. Nothing invalidates the
  * URL, so the worker cannot trust that what it downloads is what confirm
  * measured — it has to measure again itself.
+ *
+ * `downloadSource` is therefore the only enforcement point that sees the bytes
+ * as STORED rather than as declared, and it both refuses to read an oversized
+ * object and deletes it — refusing alone would leave the object in R2 attached
+ * to a `failed` row, which is exactly the state the owner-scoped cleanup reads
+ * as in-use. What is still NOT bounded is total storage per user: nothing caps
+ * how many separate under-50 MB objects one account may accumulate. A per-user
+ * quota is an open product question in the design doc, not something to invent
+ * here.
  */
 export const DEFAULT_MAX_SOURCE_BYTES = 50 * 1024 * 1024;
 
@@ -86,13 +95,35 @@ export const DEFAULT_S3_CONNECT_TIMEOUT_MS = 10_000;
 /**
  * How stale the heartbeat file may get before the liveness probe kills the pod.
  *
- * `beat()` is called on every loop iteration AND after every pipeline stage
- * inside `processAsset`, so the longest legitimate gap is one bounded stage —
- * `FFMPEG_TIMEOUT_MS` (300 s) for the ffmpeg legs, or an R2 call bounded by
- * `S3_REQUEST_TIMEOUT_MS` and the SDK's retries. Ten minutes is 2x the longest
- * of those. Sized against the longest STAGE, not the longest asset: a
- * per-asset threshold (~45 min, see `DEFAULT_CLAIM_TIMEOUT_MS`) would make the
- * probe nearly useless.
+ * Sized against the longest legitimate gap BETWEEN TWO `beat()` CALLS, so the
+ * number is only correct as long as the beats really are where this says they
+ * are. They are enumerated here on purpose — this comment previously claimed a
+ * 300 s worst case while `processAsset` ran two `probe()` calls and
+ * `extractPeaks()` between consecutive beats, three capped child processes back
+ * to back for a real worst case of 900 s: 1.5x the threshold, i.e. the probe
+ * could kill a healthy worker mid-asset. The fix was more beats, not a bigger
+ * number — a threshold raised to cover 900 s detects a genuine wedge three
+ * times slower, and this probe exists precisely because a wedge is otherwise
+ * invisible.
+ *
+ * Every gap in the worker, exhaustively:
+ *
+ * - `index.ts`'s loop beats each iteration, and `POLL_INTERVAL_MS` (5 s) is the
+ *   idle gap.
+ * - `reapStale` beats after every row it writes and after every delete batch.
+ * - `processAsset` beats after each of: the source download (which also beats
+ *   per chunk as bytes arrive, so a slow transfer cannot age it out), the
+ *   source `probe`, `analyze`, each `transcode`, each rendition `probe`,
+ *   `extractPeaks`, and each rendition `PutObject`.
+ *
+ * So the longest gap is one bounded stage: `FFMPEG_TIMEOUT_MS` (300 s) for a
+ * child process, or an R2 call bounded by `S3_REQUEST_TIMEOUT_MS` and the SDK's
+ * retries. Ten minutes is 2x the longest of those. Sized against the longest
+ * STAGE, not the longest asset: a per-asset threshold (~45 min, see
+ * `DEFAULT_CLAIM_TIMEOUT_MS`) would make the probe nearly useless.
+ *
+ * ADDING A STAGE MEANS ADDING A BEAT. That is the invariant this number rests
+ * on, and nothing but review enforces it.
  */
 export const DEFAULT_HEARTBEAT_MAX_AGE_MS = 600_000;
 
