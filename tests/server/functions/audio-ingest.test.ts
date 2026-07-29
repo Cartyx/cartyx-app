@@ -20,6 +20,10 @@ vi.mock('~/server/functions/uploads', () => ({
   })),
 }));
 
+vi.mock('~/server/functions/audio-storage', () => ({
+  resolveAudioStoragePrefix: vi.fn(async () => 'a1b2c3d4e5f60718293a4b5c6d7e8f90'),
+}));
+
 import { AudioAsset } from '~/server/db/models/AudioAsset';
 
 const VALID = {
@@ -69,6 +73,52 @@ describe('createAudioUpload', () => {
     expect(vi.mocked(getAudioUploadUrl)).toHaveBeenCalledWith(
       expect.objectContaining({ telemetryUserId: 'session-provider-id' })
     );
+  });
+
+  /**
+   * The presign step cannot build a key without the caller's storage namespace,
+   * and that namespace must be resolved from the acting user's OWN document —
+   * `resolveAudioStoragePrefix` mints one on first upload and returns the
+   * existing one after that. Without this the key falls back to a flat
+   * `uploads/audio/` root, which no owner-scoped listing can attribute.
+   */
+  it("resolves the acting user's storage prefix and hands it to the presign step", async () => {
+    vi.mocked(AudioAsset.create).mockResolvedValue({ _id: 'a1' } as never);
+    const { createAudioUpload } = await import('~/server/functions/audio');
+    const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+    const { resolveAudioStoragePrefix } = await import('~/server/functions/audio-storage');
+
+    await createAudioUpload({
+      data: VALID,
+      userId: 'mongo-id-1',
+      sessionUserId: 'session-provider-id',
+    });
+
+    // The MONGO id — the prefix belongs to the User document, and the provider
+    // id would resolve nobody.
+    expect(vi.mocked(resolveAudioStoragePrefix)).toHaveBeenCalledWith('mongo-id-1');
+    expect(vi.mocked(getAudioUploadUrl)).toHaveBeenCalledWith(
+      expect.objectContaining({ storagePrefix: 'a1b2c3d4e5f60718293a4b5c6d7e8f90' })
+    );
+  });
+
+  /**
+   * A user whose prefix cannot be resolved must not end up with a row pointing
+   * at a key nothing owns: the resolve runs BEFORE the presign and before the
+   * row is created.
+   */
+  it('creates no asset row when the storage prefix cannot be resolved', async () => {
+    const { resolveAudioStoragePrefix } = await import('~/server/functions/audio-storage');
+    vi.mocked(resolveAudioStoragePrefix).mockRejectedValueOnce(new Error('User not found'));
+
+    const { createAudioUpload } = await import('~/server/functions/audio');
+    const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+
+    await expect(createAudioUpload({ data: VALID, userId: 'u1' })).rejects.toThrow(
+      'User not found'
+    );
+    expect(vi.mocked(getAudioUploadUrl)).not.toHaveBeenCalled();
+    expect(vi.mocked(AudioAsset.create)).not.toHaveBeenCalled();
   });
 });
 

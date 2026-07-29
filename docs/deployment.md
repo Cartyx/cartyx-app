@@ -14,13 +14,14 @@ credentials outside the box.
 ```
 browser ── Cloudflare edge (TLS, apex 301 → app) ── Cloudflare Tunnel
              │                                          │
-   R2 + CDN (images, cdn.cartyx.io)              cloudflared pods
-                                                        │
-                                              Traefik (k3s, websecure)
-                                               │                  │
-                                        cartyx-web (SSR)   cartyx-realtime (ws)
-                                               │
-                                        MongoDB Atlas (per-env clusters)
+   R2 + CDN (images + audio, cdn.cartyx.io)      cloudflared pods
+             │                                          │
+             │                                Traefik (k3s, websecure)
+             │                                 │                  │
+             │                          cartyx-web (SSR)   cartyx-realtime (ws)
+             │                                 │
+             └── cartyx-audio-worker ──── MongoDB Atlas (per-env clusters)
+                 (no port; polls the queue)
 ```
 
 - **Environments:** namespace `dev` → dev.cartyx.io / dev-ws.cartyx.io;
@@ -29,6 +30,11 @@ browser ── Cloudflare edge (TLS, apex 301 → app) ── Cloudflare Tunnel
 - **Image uploads:** the browser PUTs directly to R2 via a presigned URL (the
   server only signs); local dev without `CDN_URL` falls back to a server-side
   path under `public/uploads/`.
+- **Audio uploads:** same presigned PUT, then `cartyx-audio-worker` claims the
+  row and transcodes to Opus + AAC with ffmpeg. Every audio object lives under
+  `uploads/audio/<per-user random prefix>/`, which is what makes the in-app
+  "Reclaim orphaned files" scan owner-scoped — see
+  `app/server/functions/audio-storage.ts`.
 - **Observability platform** (Grafana/GlitchTip/Umami/VictoriaLogs/-Metrics)
   runs in namespace `platform` — see `docs/observability.md`.
 
@@ -37,13 +43,19 @@ browser ── Cloudflare edge (TLS, apex 301 → app) ── Cloudflare Tunnel
 1. Merge a PR to `dev` (all PRs target `dev`; promotion to prod is a
    `dev`→`main` PR merged with `gh pr merge --merge --admin`).
 2. `.github/workflows/deploy.yml` builds and pushes
-   `ghcr.io/biozal/cartyx-{web,realtime}` images. Client-baked
+   `ghcr.io/biozal/cartyx-{web,realtime,audio-worker}` images. Client-baked
    `VITE_PUBLIC_*` values come from `deploy/build/web-<env>.args` — changing
-   one requires a rebuild, not a values change.
+   one requires a rebuild, not a values change. The realtime and audio-worker
+   images are built BEFORE the web image, so a broken Dockerfile in either
+   fails the job before web is ever pushed — which is why CI's `services` job
+   `docker build`s the worker on every PR.
 3. CI commits the new image tags to
    [biozal/cartyx-infrastructure](https://github.com/biozal/cartyx-infrastructure)
-   (`apps/<env>/helmrelease.yaml`, anchored on the `# ci:web-tag` /
-   `# ci:realtime-tag` markers).
+   (`apps/<env>/helmrelease.yaml`). Three services, three marker comments the
+   sed anchors on — `# ci:web-tag`, `# ci:realtime-tag`,
+   `# ci:audioworker-tag`. The step greps for all three first and fails loudly
+   if one is missing, because a missing marker makes its sed a silent no-op and
+   the "tags unchanged" early exit would then report success forever.
 4. Flux on the cluster reconciles within about a minute and rolls the pods.
 
 Operational details (stall diagnosis, forced reconciles, promotion runbook,
@@ -130,3 +142,9 @@ bypasses checksum auto-restart). Platform-namespace secrets: see
 - **WebSockets dead in containers but fine locally** → set
   `REALTIME_INTERNAL_HOST` (server→realtime broadcasts can't use the
   browser-facing host inside the cluster).
+- **Audio stuck `pending`/`processing`** → it's the worker, not web:
+  `kubectl -n <env> logs deploy/cartyx-audio-worker`. To stop it transcoding
+  immediately, `kubectl -n <env> scale deploy/cartyx-audio-worker
+--replicas=0` — but note the next `helm upgrade` silently undoes that; the
+  durable pause is `audioWorker.replicaCount: 0` in the infra repo. Both are
+  written up in `deploy/charts/cartyx/README.md` under Operations.

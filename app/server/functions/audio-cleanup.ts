@@ -1,8 +1,9 @@
-import { HeadObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import type { z } from 'zod';
 import { connectDB, isDBConnected } from '../db/connection';
 import { AudioAsset } from '../db/models/AudioAsset';
 import { serverCaptureEvent, serverCaptureException } from '../utils/telemetry';
+import { audioUserRoot, lookupAudioStoragePrefix } from './audio-storage';
 import { createR2 } from './uploads';
 import type {
   scanOrphanAudioSchema,
@@ -23,78 +24,67 @@ import type {
  * `TRACKED_PREFIXES`, being GM of your own campaign got you a bucket-wide
  * listing of every user's audio objects and a delete button for them.
  *
- * HOW THIS ONE IS SCOPED — and why the scoping is real, not nominal
- * -----------------------------------------------------------------
- * The R2 key for a SOURCE object is `uploads/audio/<timestamp>-<random>.<ext>`
- * (`getAudioUploadUrl`) — it carries no owner component, so `ListObjectsV2`
- * cannot be prefix-scoped to a user, and no amount of filtering an
- * `uploads/audio/` listing can prove who a given key belongs to. So this module
- * **never lists the bucket**. It goes the other way: it DERIVES the candidate
- * key set from the caller's own `AudioAsset` rows and then asks R2 about each
- * derived key by name (`HeadObject`).
+ * HOW THIS ONE IS SCOPED — and why the scoping is structural
+ * ----------------------------------------------------------
+ * Every audio object a user owns lives under `uploads/audio/<prefix>/`, where
+ * `<prefix>` is 128 random bits stored on their User document (see
+ * `./audio-storage.ts` for why it is random rather than the owner id, and why
+ * it lives there). This module lists exactly that prefix and nothing else.
  *
- * That inverts the trust relationship. In a listing you start with keys of
- * unknown provenance and try to attribute them; here every key that can ever
- * appear in a result — or be passed to `DeleteObject` — was computed from a
- * document that matched `{ ownerId: <caller> }`. A key belonging to another
- * user is not filtered out; it is never constructed. Confirming the scoping is
- * therefore a matter of reading two lines rather than trusting a filter.
- *
- * The derivation rests on one fact: RENDITION keys are deterministic in the
- * asset id. The worker writes them to `uploads/audio/renditions/<assetId>.opus`
- * and `.m4a` (`audio-worker/src/process.ts`, the `base` constant — keep
- * RENDITION_KEY_PREFIX below in step with it). So for any row the caller owns
- * we can name the two objects that row's processing could have produced, even
- * when the row does not record them.
+ * That makes the scoping a property of the S3 API rather than of any filter
+ * written here: `ListObjectsV2` with `Prefix: uploads/audio/<prefix>/` cannot
+ * return an object belonging to anyone else, because the server will not send
+ * one. There is no attribution step to get wrong. (The `startsWith` re-check
+ * below is belt-and-braces against a mocked/misbehaving client, not the
+ * mechanism.)
  *
  * WHAT THIS FINDS
  * ---------------
- * Renditions that were PUT to R2 but never recorded on the row: the worker
- * uploads both renditions and only then issues the fenced DB write, so an Atlas
- * blip, a lost fence, or a pod eviction in that window leaves two objects that
- * nothing references. Those objects survive every subsequent attempt (the key
- * is stable, so a later successful run overwrites rather than duplicates), and
- * if the asset ultimately lands in `failed` they are stranded permanently.
+ * Everything in the namespace that no row of the caller's references:
+ *
+ * - Renditions the worker PUT but never recorded: it uploads both renditions
+ *   and only then issues the fenced DB write, so an Atlas blip, a lost fence,
+ *   or a pod eviction in that window leaves objects nothing references. If the
+ *   asset ultimately lands in `failed` they are stranded permanently.
+ * - **Source objects whose row is already gone** — the case the previous,
+ *   derivation-based version of this module could not reach. `deleteAudioAsset`
+ *   deletes from R2 best-effort and drops the row regardless (deliberately), so
+ *   a failed object delete used to destroy the only record of that key. Under a
+ *   flat `uploads/audio/` root nothing could name it again and no listing could
+ *   attribute it to an owner. Under the per-user prefix the listing IS the
+ *   record.
  *
  * WHAT IT DOES NOT FIND — stated plainly rather than papered over
  * --------------------------------------------------------------
- * A SOURCE object whose row is already gone. `deleteAudioAsset` deletes R2
- * best-effort and removes the row regardless (deliberately — see its comment),
- * so if the object delete fails the only record of that key disappears with the
- * row. Nothing derivable from the caller's rows can name it again, and the only
- * thing that could is a bucket listing, which is exactly what cannot be
- * attributed to an owner. Closing that gap needs the key layout itself to carry
- * the owner (`uploads/audio/<ownerId>/…`), which is a storage-layout change,
- * not a cleanup change. Recorded in the fix report as the follow-up.
+ * Objects written under the OLD flat layout (`uploads/audio/<ts>-<rand>.<ext>`
+ * and `uploads/audio/renditions/<id>.<ext>`). They sit outside every user's
+ * prefix, so no owner-scoped listing reaches them and nothing here will ever
+ * report or delete them. Reclaiming those needs a bucket-wide sweep run by
+ * whoever administers the bucket, out of band. Nothing on this branch has
+ * shipped, so in practice that is dev/e2e data only — but the rule is
+ * structural, not transitional: an object outside a namespace has no owner.
  */
 
 /**
- * MUST match `audio-worker/src/process.ts`'s rendition `base`
- * (`uploads/audio/renditions/${id}`). The worker is a separate package with its
- * own tsconfig and cannot import this file, so the two are mirrored constants
- * with a test on each side pinning the string.
+ * The most objects one scan pass looks at.
+ *
+ * Each page is one `ListObjectsV2` round trip of up to 1000 keys, so this is
+ * ~10 requests at the ceiling. A library of any realistic size is one page.
  */
-const RENDITION_KEY_PREFIX = 'uploads/audio/renditions/';
-const RENDITION_EXTENSIONS = ['opus', 'm4a'] as const;
-
-/**
- * The most rows one scan pass inspects. Each row costs up to two `HeadObject`
- * round trips, so this is a real cost ceiling, not a formality. The candidate
- * query already narrows to rows that could plausibly have stranded renditions,
- * so a healthy library of any size contributes almost nothing to this count.
- */
-export const AUDIO_ORPHAN_SCAN_MAX_ROWS = 500;
+export const AUDIO_ORPHAN_SCAN_MAX_KEYS = 10_000;
 
 /**
  * An object younger than this is never reported or deleted.
  *
  * This closes the one genuine race in the design: the worker PUTs both
  * renditions and only afterwards writes the keys onto the row, so for a short
- * window an object legitimately exists with nothing referencing it. Without an
- * age floor a scan landing in that window would call a live, in-flight
- * rendition an orphan and offer to delete it. One hour is far longer than the
- * PUT→write gap (bounded by the worker's own R2 timeouts) and far shorter than
- * any useful reclamation horizon.
+ * window an object legitimately exists with nothing referencing it. It also
+ * covers the equivalent window on the upload side — a presigned PUT that has
+ * landed while the row still records only the key. Without an age floor a scan
+ * landing in either window would call a live object an orphan and offer to
+ * delete it. One hour is far longer than both gaps (bounded by the worker's R2
+ * timeouts and the 300 s presign lifetime) and far shorter than any useful
+ * reclamation horizon.
  */
 export const AUDIO_ORPHAN_MIN_AGE_MS = 60 * 60 * 1000;
 
@@ -102,116 +92,142 @@ async function ensureDb() {
   if (!isDBConnected()) await connectDB();
 }
 
-/** The two keys a given asset's processing could have written. */
-export function renditionKeysFor(assetId: string): string[] {
-  return RENDITION_EXTENSIONS.map((ext) => `${RENDITION_KEY_PREFIX}${assetId}.${ext}`);
-}
+type ListedObject = { key: string; sizeBytes: number; lastModified: Date | null };
 
-type CandidateRow = {
-  _id: unknown;
-  sourceKey?: string;
-  renditions?: { opus?: { key?: string }; aac?: { key?: string } };
-  onceRenditions?: { opus?: { key?: string }; aac?: { key?: string } };
-};
+/**
+ * Every object under one user's namespace, paginated properly.
+ *
+ * `truncated` is a first-class result, not a swallowed detail. The campaign
+ * image scanner's `listAllR2Objects` capped itself at `MAX_PAGES = 10` and
+ * discarded `IsTruncated`, so an account past the cap got a partial scan
+ * presented as a complete one — with "no orphans found" as the visible answer.
+ * Here the cap is reported, and the UI says the scan was partial.
+ */
+async function listUserObjects(
+  client: ReturnType<typeof createR2>['client'],
+  bucket: string,
+  root: string
+): Promise<{ objects: ListedObject[]; truncated: boolean }> {
+  const objects: ListedObject[] = [];
+  let token: string | undefined;
+  let truncated = false;
 
-function referencedKeys(row: CandidateRow): string[] {
-  return [
-    row.sourceKey,
-    row.renditions?.opus?.key,
-    row.renditions?.aac?.key,
-    // Reserved for phase 2's ∞/1× music variants and never written in phase 1,
-    // but a cleanup path that forgets them once phase 2 starts populating them
-    // would offer to delete a user's live music.
-    row.onceRenditions?.opus?.key,
-    row.onceRenditions?.aac?.key,
-  ].filter((k): k is string => Boolean(k));
+  do {
+    const res = await client.send(
+      new ListObjectsV2Command({ Bucket: bucket, Prefix: root, ContinuationToken: token })
+    );
+    for (const o of res.Contents ?? []) {
+      // The listing is already owner-scoped by the API — this re-check exists
+      // so that NOTHING outside the caller's namespace can reach a result or a
+      // DeleteObject even if the client returned something unexpected. It is
+      // the last line of defence for the property the module's whole design
+      // rests on, and it is cheap.
+      if (!o.Key || !o.Key.startsWith(root)) continue;
+      objects.push({
+        key: o.Key,
+        sizeBytes: o.Size ?? 0,
+        lastModified: o.LastModified ?? null,
+      });
+      if (objects.length >= AUDIO_ORPHAN_SCAN_MAX_KEYS) {
+        return { objects, truncated: true };
+      }
+    }
+    truncated = Boolean(res.IsTruncated);
+    token = res.NextContinuationToken;
+  } while (token);
+
+  return { objects, truncated };
 }
 
 /**
- * The caller's rows that could have a stranded rendition: those missing at least
- * one recorded rendition key. A row with both keys recorded references
- * everything its deterministic key namespace can hold, so it can contribute no
- * orphan and is not worth a `HeadObject`.
+ * Which of `keys` are referenced by one of the caller's asset rows.
  *
- * `$or` with `$exists: false` rather than `status != 'ready'`: it is the
- * *absence of the recorded key* that makes an object unreferenced, and that is
- * true regardless of what the status field happens to say.
+ * Keyed on the listed objects rather than loading every row, so the query is
+ * bounded by the page cap above and no row limit is needed — a row cap here
+ * would be dangerous rather than merely partial: an unloaded row's keys would
+ * look unreferenced, i.e. the scan would offer to delete live audio.
+ *
+ * `onceRenditions` is reserved for phase 2's ∞/1× music variants and is never
+ * written in phase 1, but a cleanup that forgets them once phase 2 starts
+ * populating them would offer to delete a user's live music.
  */
-async function loadCandidateRows(
-  userId: string
-): Promise<{ rows: CandidateRow[]; truncated: boolean }> {
+async function referencedKeys(userId: string, keys: string[]): Promise<Set<string>> {
+  if (keys.length === 0) return new Set();
+
   const rows = (await AudioAsset.find(
     {
+      // Redundant with the prefix — every key under `uploads/audio/<prefix>/`
+      // was minted for this user — and kept anyway because it lets the query
+      // use the `{ownerId, createdAt}` index instead of scanning the
+      // collection on unindexed key fields.
       ownerId: userId,
       $or: [
-        { 'renditions.opus.key': { $exists: false } },
-        { 'renditions.aac.key': { $exists: false } },
+        { sourceKey: { $in: keys } },
+        { 'renditions.opus.key': { $in: keys } },
+        { 'renditions.aac.key': { $in: keys } },
+        { 'onceRenditions.opus.key': { $in: keys } },
+        { 'onceRenditions.aac.key': { $in: keys } },
       ],
     },
-    '_id sourceKey renditions onceRenditions'
-  )
-    .sort({ createdAt: 1 })
-    // One extra row is fetched purely so truncation can be DETECTED. The
-    // campaign image scanner's `MAX_PAGES` cap discarded `IsTruncated` and
-    // returned a partial result that looked complete; a user past the cap got a
-    // silently blinded scan. Here the overflow row is the signal, and it is
-    // reported to the caller rather than dropped.
-    .limit(AUDIO_ORPHAN_SCAN_MAX_ROWS + 1)
-    .lean()) as unknown as CandidateRow[];
+    'sourceKey renditions onceRenditions'
+  ).lean()) as unknown as Array<{
+    sourceKey?: string;
+    renditions?: { opus?: { key?: string }; aac?: { key?: string } };
+    onceRenditions?: { opus?: { key?: string }; aac?: { key?: string } };
+  }>;
 
-  const truncated = rows.length > AUDIO_ORPHAN_SCAN_MAX_ROWS;
-  return { rows: truncated ? rows.slice(0, AUDIO_ORPHAN_SCAN_MAX_ROWS) : rows, truncated };
+  const referenced = new Set<string>();
+  for (const row of rows) {
+    for (const key of [
+      row.sourceKey,
+      row.renditions?.opus?.key,
+      row.renditions?.aac?.key,
+      row.onceRenditions?.opus?.key,
+      row.onceRenditions?.aac?.key,
+    ]) {
+      if (key) referenced.add(key);
+    }
+  }
+  return referenced;
 }
 
 /**
  * The orphan set for one user, shared by scan and delete so the delete path
- * re-derives ownership from the database instead of trusting the keys the
- * client hands back. A key the client did not receive from its own scan can
- * never reach `DeleteObject`.
+ * re-derives ownership from R2 + the database on the delete request instead of
+ * trusting the keys the client hands back.
  */
 async function findOrphans(
   userId: string,
   now: number
-): Promise<{ orphans: OrphanAudioObject[]; scannedAssetCount: number; truncated: boolean }> {
-  const { rows, truncated } = await loadCandidateRows(userId);
+): Promise<{ orphans: OrphanAudioObject[]; scannedObjectCount: number; truncated: boolean }> {
+  const storagePrefix = await lookupAudioStoragePrefix(userId);
+  // No prefix means the user has never uploaded audio, so they own no
+  // namespace and no objects. Deliberately does NOT mint one: a scan must not
+  // be the thing that writes to a user document.
+  if (!storagePrefix) return { orphans: [], scannedObjectCount: 0, truncated: false };
 
-  const inUse = new Set<string>();
-  for (const row of rows) {
-    for (const key of referencedKeys(row)) inUse.add(key);
-  }
-
-  const candidates: string[] = [];
-  for (const row of rows) {
-    for (const key of renditionKeysFor(String(row._id))) {
-      if (!inUse.has(key)) candidates.push(key);
-    }
-  }
-
+  const root = audioUserRoot(storagePrefix);
   const { client, bucket } = createR2();
+  const { objects, truncated } = await listUserObjects(client, bucket, root);
+
+  const referenced = await referencedKeys(
+    userId,
+    objects.map((o) => o.key)
+  );
+
   const orphans: OrphanAudioObject[] = [];
-  for (const Key of candidates) {
-    let head;
-    try {
-      head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key }));
-    } catch {
-      // Overwhelmingly "this object does not exist", which is the normal and
-      // expected answer for most candidates — the derivation names every key a
-      // row *could* have produced, not every key that was. A genuine R2 fault
-      // is indistinguishable here and equally safe to treat as "nothing to
-      // reclaim": the scan simply reports less.
-      continue;
-    }
-    const lastModified = head.LastModified ?? null;
-    if (lastModified && now - lastModified.getTime() < AUDIO_ORPHAN_MIN_AGE_MS) continue;
+  for (const o of objects) {
+    if (referenced.has(o.key)) continue;
+    if (o.lastModified && now - o.lastModified.getTime() < AUDIO_ORPHAN_MIN_AGE_MS) continue;
     orphans.push({
-      key: Key,
-      sizeBytes: head.ContentLength ?? 0,
-      lastModified: lastModified ? lastModified.toISOString() : null,
+      key: o.key,
+      sizeBytes: o.sizeBytes,
+      lastModified: o.lastModified ? o.lastModified.toISOString() : null,
     });
   }
 
   orphans.sort((a, b) => (a.lastModified ?? '').localeCompare(b.lastModified ?? ''));
-  return { orphans, scannedAssetCount: rows.length, truncated };
+  return { orphans, scannedObjectCount: objects.length, truncated };
 }
 
 function r2Configured(): boolean {
@@ -236,18 +252,18 @@ export async function scanOrphanAudio({
   try {
     await ensureDb();
     if (!r2Configured()) {
-      return { orphans: [], scannedAssetCount: 0, truncated: false, r2Disabled: true };
+      return { orphans: [], scannedObjectCount: 0, truncated: false, r2Disabled: true };
     }
 
-    const { orphans, scannedAssetCount, truncated } = await findOrphans(userId, Date.now());
+    const { orphans, scannedObjectCount, truncated } = await findOrphans(userId, Date.now());
 
     serverCaptureEvent(telemetryUserId, 'audio_orphan_scan', {
       orphan_count: orphans.length,
-      scanned_asset_count: scannedAssetCount,
+      scanned_object_count: scannedObjectCount,
       truncated,
     });
 
-    return { orphans, scannedAssetCount, truncated, r2Disabled: false };
+    return { orphans, scannedObjectCount, truncated, r2Disabled: false };
   } catch (e) {
     serverCaptureException(e, telemetryUserId, { action: 'scanOrphanAudio' });
     throw e;
@@ -273,11 +289,11 @@ export async function deleteOrphanAudio({
       };
     }
 
-    // Re-derived from the database on THIS request, not carried over from the
-    // scan. The client's key list is treated purely as a selection within the
-    // set the server independently computes; anything outside it is refused.
-    // That is what makes a forged or stale key — including one belonging to
-    // another user — unable to reach DeleteObject.
+    // Re-derived on THIS request, not carried over from the scan. The client's
+    // key list is treated purely as a selection within the set the server
+    // independently computes; anything outside it is refused. That is what
+    // makes a forged or stale key — including a well-formed one belonging to
+    // another user's namespace — unable to reach DeleteObject.
     const { orphans } = await findOrphans(userId, Date.now());
     const deletable = new Set(orphans.map((o) => o.key));
 

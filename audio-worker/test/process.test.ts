@@ -71,7 +71,7 @@ describe('processAsset retry semantics', () => {
       model,
       {
         _id: 'asset-below-cap',
-        sourceKey: 'uploads/audio/x.wav',
+        sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/x.wav',
         attempts: MAX_ATTEMPTS - 1,
       },
       WORKER
@@ -96,7 +96,7 @@ describe('processAsset retry semantics', () => {
       model,
       {
         _id: 'asset-backoff',
-        sourceKey: 'uploads/audio/x.wav',
+        sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/x.wav',
         attempts,
       },
       WORKER
@@ -124,7 +124,7 @@ describe('processAsset retry semantics', () => {
       model,
       {
         _id: 'asset-at-cap',
-        sourceKey: 'uploads/audio/x.wav',
+        sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/x.wav',
         attempts: MAX_ATTEMPTS,
       },
       WORKER
@@ -170,7 +170,10 @@ describe('processAsset retry semantics', () => {
 
     await processAsset(
       model,
-      { _id: 'asset-no-attempts', sourceKey: 'uploads/audio/x.wav' },
+      {
+        _id: 'asset-no-attempts',
+        sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/x.wav',
+      },
       WORKER
     );
 
@@ -194,7 +197,11 @@ describe('processAsset fences its writes on the claim it holds', () => {
     const updateOne = fakeUpdateOne();
     const model = { updateOne } as never;
 
-    await processAsset(model, { _id: 'a1', sourceKey: 'uploads/audio/x.wav', attempts }, WORKER);
+    await processAsset(
+      model,
+      { _id: 'a1', sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/x.wav', attempts },
+      WORKER
+    );
 
     const [filter] = updateOne.mock.calls[0];
     expect(filter).toEqual({ _id: 'a1', status: 'processing', claimedBy: WORKER });
@@ -218,7 +225,11 @@ describe('processAsset fences its writes on the claim it holds', () => {
 
     await processAsset(
       model,
-      { _id: 'a3', sourceKey: 'uploads/audio/x.wav', attempts: MAX_ATTEMPTS },
+      {
+        _id: 'a3',
+        sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/x.wav',
+        attempts: MAX_ATTEMPTS,
+      },
       WORKER
     );
 
@@ -235,7 +246,11 @@ describe('processAsset fences its writes on the claim it holds', () => {
 
     await processAsset(
       model,
-      { _id: 'a4', sourceKey: 'uploads/audio/x.wav', attempts: MAX_ATTEMPTS },
+      {
+        _id: 'a4',
+        sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/x.wav',
+        attempts: MAX_ATTEMPTS,
+      },
       WORKER
     );
 

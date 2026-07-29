@@ -15,6 +15,9 @@ vi.mock('~/server/functions/uploads', () => ({
     publicUrl: 'https://cdn.test/uploads/audio/1-a.wav',
   })),
 }));
+vi.mock('~/server/functions/audio-storage', () => ({
+  resolveAudioStoragePrefix: vi.fn(async () => 'a1b2c3d4e5f60718293a4b5c6d7e8f90'),
+}));
 vi.mock('~/server/db/models/AudioAsset', () => ({
   AudioAsset: {
     create: vi.fn(),

@@ -141,7 +141,9 @@ describe('reapStale', () => {
   });
 
   it('bumps updatedAt on every clause — these are real status transitions', async () => {
-    const model = reaperModel([{ _id: 'u1', sourceKey: 'uploads/audio/a.wav' }]);
+    const model = reaperModel([
+      { _id: 'u1', sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/a.wav' },
+    ]);
     await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
 
     // The UI reads updatedAt as "when did this row last change". Reaped rows
@@ -157,7 +159,9 @@ describe('reapStale', () => {
   });
 
   it('fails rows abandoned in `uploading` past the upload timeout', async () => {
-    const model = reaperModel([{ _id: 'u1', sourceKey: 'uploads/audio/a.wav' }]);
+    const model = reaperModel([
+      { _id: 'u1', sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/a.wav' },
+    ]);
 
     const before = Date.now();
     await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
@@ -166,7 +170,8 @@ describe('reapStale', () => {
     // browser that died between presign and confirm (or a failed PUT, which
     // uploadAudioFile correctly refuses to confirm) leaves it there forever:
     // an indefinite spinner in the UI, a /audio route polling every 4s
-    // forever, and a sourceKey the orphan scanner treats as in-use.
+    // forever, and a sourceKey that keeps its R2 object referenced (so no
+    // orphan scan may reclaim it) while nothing can ever play it.
     const [findFilter] = model.find.mock.calls[0];
     expect((findFilter as { status: string }).status).toBe('uploading');
     const cutoff = (findFilter as { createdAt: { $lt: Date } }).createdAt.$lt;
@@ -192,24 +197,25 @@ describe('reapStale', () => {
 
 /**
  * B10 — the storage leak. Reaping an abandoned `uploading` row used to leave
- * its R2 object permanently unreclaimable: `collectInUseKeys` has no status
- * filter, so the failed row keeps advertising its `sourceKey` as in-use
- * forever and no orphan scan can ever see it. The object never passed confirm,
- * so there is nothing worth keeping.
+ * its R2 object stranded indefinitely: the failed row keeps advertising its
+ * `sourceKey`, and a referenced key is exactly what the owner-scoped audio
+ * cleanup refuses to reclaim. The object never passed confirm, so there is
+ * nothing worth keeping — delete it here rather than leaving it to a scan that
+ * is, correctly, not allowed to touch it.
  */
 describe('reapStale reclaims abandoned upload objects', () => {
   it('deletes the R2 object of every row it fails', async () => {
     const model = reaperModel([
-      { _id: 'u1', sourceKey: 'uploads/audio/a.wav' },
-      { _id: 'u2', sourceKey: 'uploads/audio/b.wav' },
+      { _id: 'u1', sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/a.wav' },
+      { _id: 'u2', sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/b.wav' },
     ]);
     const deleteSource = vi.fn().mockResolvedValue(undefined);
 
     await reapStale(model as never, 600_000, UPLOAD_STALE_MS, deleteSource);
 
     expect(deleteSource.mock.calls.map(([k]) => k)).toEqual([
-      'uploads/audio/a.wav',
-      'uploads/audio/b.wav',
+      'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/a.wav',
+      'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/b.wav',
     ]);
   });
 
@@ -217,7 +223,10 @@ describe('reapStale reclaims abandoned upload objects', () => {
     // The fenced write no-ops because the row is no longer `uploading`; the
     // object now belongs to a real, confirmed asset.
     const updateOne = vi.fn().mockResolvedValue({ matchedCount: 0 });
-    const model = reaperModel([{ _id: 'u1', sourceKey: 'uploads/audio/a.wav' }], updateOne);
+    const model = reaperModel(
+      [{ _id: 'u1', sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/a.wav' }],
+      updateOne
+    );
     const deleteSource = vi.fn().mockResolvedValue(undefined);
 
     await reapStale(model as never, 600_000, UPLOAD_STALE_MS, deleteSource);
@@ -228,8 +237,8 @@ describe('reapStale reclaims abandoned upload objects', () => {
   it('keeps failing rows when R2 is down — the delete is best effort', async () => {
     vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
     const model = reaperModel([
-      { _id: 'u1', sourceKey: 'uploads/audio/a.wav' },
-      { _id: 'u2', sourceKey: 'uploads/audio/b.wav' },
+      { _id: 'u1', sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/a.wav' },
+      { _id: 'u2', sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/b.wav' },
     ]);
     const deleteSource = vi.fn().mockRejectedValue(new Error('R2 down'));
 
@@ -244,7 +253,9 @@ describe('reapStale reclaims abandoned upload objects', () => {
   });
 
   it('still transitions rows when no deleter is supplied', async () => {
-    const model = reaperModel([{ _id: 'u1', sourceKey: 'uploads/audio/a.wav' }]);
+    const model = reaperModel([
+      { _id: 'u1', sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/a.wav' },
+    ]);
     await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
     expect(model.updateOne).toHaveBeenCalledTimes(1);
   });

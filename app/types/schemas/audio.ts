@@ -118,7 +118,9 @@ export const scanOrphanAudioSchema = z.object({});
 
 export const deleteOrphanAudioSchema = z.object({
   // Bounded because every key costs one R2 DeleteObject round trip. The scan
-  // itself is bounded well below this (see AUDIO_ORPHAN_SCAN_MAX_ROWS).
+  // is bounded separately (see AUDIO_ORPHAN_SCAN_MAX_KEYS), so a scan that
+  // finds more than this takes more than one delete pass — which the UI's
+  // re-scan loop already handles.
   keys: z.array(z.string().min(1).max(1024)).min(1).max(500),
 });
 
@@ -130,13 +132,14 @@ export interface OrphanAudioObject {
 
 export interface ScanOrphanAudioResult {
   orphans: OrphanAudioObject[];
-  /** How many of the caller's own asset rows the scan inspected. */
-  scannedAssetCount: number;
+  /** How many stored objects in the caller's own namespace the scan inspected. */
+  scannedObjectCount: number;
   /**
-   * True when the caller has more candidate rows than one scan pass covers, so
-   * the result is a PARTIAL view. Surfaced rather than swallowed: the campaign
-   * image scanner's `MAX_PAGES` cap discarded `IsTruncated` silently, which
-   * meant a large library quietly blinded the scan with no signal at all.
+   * True when the caller's namespace holds more objects than one scan pass
+   * covers, so the result is a PARTIAL view. Surfaced rather than swallowed:
+   * the campaign image scanner's `MAX_PAGES` cap discarded `IsTruncated`
+   * silently, which meant a large library quietly blinded the scan with no
+   * signal at all.
    */
   truncated: boolean;
   /** True if R2 isn't configured for this environment (orphans is then empty). */

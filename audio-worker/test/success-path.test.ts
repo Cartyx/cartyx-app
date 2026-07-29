@@ -51,6 +51,8 @@ vi.mock('../src/peaks.js', () => ({ extractPeaks: vi.fn().mockResolvedValue([0.5
 import { processAsset } from '../src/process.js';
 
 const WORKER = 'worker-success';
+/** The owner's storage namespace; every key this run touches lives under it. */
+const PREFIX_ROOT = 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/';
 const FAKE_R2_ENV = {
   R2_ACCOUNT_ID: 'test-account',
   R2_ACCESS_KEY_ID: 'test-key',
@@ -81,7 +83,7 @@ async function runOnce(): Promise<ReturnType<typeof vi.fn>> {
   const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
   await processAsset(
     { updateOne } as never,
-    { _id: 'asset-ok', sourceKey: 'uploads/audio/x.wav', attempts: 1 },
+    { _id: 'asset-ok', sourceKey: `${PREFIX_ROOT}x.wav`, attempts: 1 },
     WORKER
   );
   return updateOne;
@@ -97,27 +99,55 @@ describe('the successful write', () => {
   });
 
   /**
-   * The rendition key format is a CROSS-SERVICE CONTRACT, not an internal
-   * detail. The app's owner-scoped audio cleanup
-   * (`renditionKeysFor` in app/server/functions/audio-cleanup.ts) reconstructs
-   * these two names from an asset id in order to find renditions this worker
-   * PUT but never recorded on the row — the window between these PutObjects and
-   * the fenced write below. That reconstruction is also what makes the cleanup
-   * owner-scoped: it derives keys from the caller's own rows instead of listing
-   * a bucket whose keys carry no owner. The two packages cannot import each
-   * other, so each pins the literal; change one without the other and those
-   * objects become permanently unreclaimable.
+   * The rendition key layout is a CROSS-SERVICE CONTRACT, not an internal
+   * detail. Both renditions must land INSIDE the owner's storage namespace —
+   * the `uploads/audio/<prefix>/` segment carried by the source key — because
+   * that prefix is the entire basis of the app's owner-scoped cleanup
+   * (app/server/functions/audio-cleanup.ts lists it and treats anything no row
+   * references as reclaimable). A rendition written to a shared
+   * `uploads/audio/renditions/` root, which is what this used to do, falls
+   * outside every user's listing and is unreclaimable by anyone: the worker PUTs
+   * both renditions and only then issues the fenced write, so one lost write
+   * strands them forever. The two packages cannot import each other, so each
+   * pins the literal.
    */
-  it('writes renditions to the deterministic key namespace the app reconstructs', async () => {
+  it("writes renditions inside the owner's namespace, beside the source", async () => {
     const updateOne = await runOnce();
     const [, update] = updateOne.mock.calls[0];
     const renditions = update.$set.renditions as Record<string, { key: string }>;
-    expect(renditions.opus.key).toBe('uploads/audio/renditions/asset-ok.opus');
-    expect(renditions.aac.key).toBe('uploads/audio/renditions/asset-ok.m4a');
+    expect(renditions.opus.key).toBe(`${PREFIX_ROOT}renditions/asset-ok.opus`);
+    expect(renditions.aac.key).toBe(`${PREFIX_ROOT}renditions/asset-ok.m4a`);
     expect(hooks.puts.map((p) => (p as { input: { Key: string } }).input.Key)).toEqual([
-      'uploads/audio/renditions/asset-ok.opus',
-      'uploads/audio/renditions/asset-ok.m4a',
+      `${PREFIX_ROOT}renditions/asset-ok.opus`,
+      `${PREFIX_ROOT}renditions/asset-ok.m4a`,
     ]);
+    // The prefix is the SOURCE's, not a constant: a second owner's asset must
+    // not land in the first owner's namespace.
+    for (const put of hooks.puts) {
+      expect((put as { input: { Key: string } }).input.Key.startsWith(PREFIX_ROOT)).toBe(true);
+    }
+  });
+
+  /**
+   * A source key from before the per-owner layout gives the worker nowhere safe
+   * to put renditions: the old shared root is outside every user's listing
+   * prefix, so anything written there can never be reclaimed by its owner.
+   * Permanent, not retryable — the source key is fixed, so every attempt lands
+   * in the same place. Nothing is uploaded at all.
+   */
+  it('permanently fails a legacy source key instead of writing outside a namespace', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    await processAsset(
+      { updateOne } as never,
+      { _id: 'asset-legacy', sourceKey: 'uploads/audio/1700000000000-deadbeef.wav', attempts: 0 },
+      WORKER
+    );
+
+    const [, update] = updateOne.mock.calls[0];
+    expect(update.$set.status).toBe('failed');
+    expect(update.$set.permanentFailure).toBe(true);
+    expect(update.$set.lastError).toMatch(/per-owner storage layout/);
+    expect(hooks.puts).toHaveLength(0);
   });
 
   it('is fenced on the claim this worker holds', async () => {

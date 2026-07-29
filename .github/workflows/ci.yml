@@ -100,6 +100,21 @@ jobs:
         run: npm test
         working-directory: ${{ matrix.service }}
 
+      # audio-worker/Dockerfile had never been built anywhere: this job runs
+      # npm ci/typecheck/test but no image build, so the FIRST execution of it
+      # would have been a deploy to dev — and deploy.yml builds the worker
+      # image BEFORE the web image, so a broken worker Dockerfile would block
+      # the web deploy with it. Building it here makes that a PR failure.
+      #
+      # It is also the pipeline's capability check: the final stage asserts
+      # ffprobe's presence, a libopus-enabled ffmpeg, and a real end-to-end run
+      # of the exact filter chain in src/ffmpeg.ts. Those were unverified
+      # assumptions that would otherwise have failed per-asset at runtime.
+      # No push and no registry credentials — this proves the build, nothing more.
+      - name: Build container image
+        if: matrix.service == 'audio-worker'
+        run: docker build -t cartyx-audio-worker:ci audio-worker
+
   build:
     name: Build
     runs-on: ubuntu-latest

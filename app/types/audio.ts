@@ -37,7 +37,17 @@ export type AudioMood = (typeof AUDIO_MOODS)[number];
 export const AUDIO_STATUSES = ['uploading', 'pending', 'processing', 'ready', 'failed'] as const;
 export type AudioAssetStatus = (typeof AUDIO_STATUSES)[number];
 
-/** 50 MB. The confirm step's HeadObject is what actually enforces this. */
+/**
+ * 50 MB. The confirm step's HeadObject enforces it here; the worker enforces
+ * it AGAIN while streaming, because the presigned PUT stays valid and reusable
+ * after confirm has passed.
+ *
+ * DUPLICATED as `DEFAULT_MAX_SOURCE_BYTES` in `audio-worker/src/config.ts` —
+ * the worker is an independent package and imports nothing from `app/`. The
+ * two are not allowed to drift and cannot do so silently:
+ * `tests/server/functions/audio-cross-service-contract.test.ts` reads the
+ * worker's source and fails when the numbers disagree.
+ */
 export const AUDIO_MAX_BYTES = 50 * 1024 * 1024;
 
 /** Source uploads we accept. Output is always Opus + AAC regardless. */

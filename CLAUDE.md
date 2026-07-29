@@ -1,8 +1,9 @@
 # Cartyx — D&D Campaign Management
 
-TanStack Start (React 19) web app + custom Node `ws` realtime service, self-hosted
-on a single-node k3s cluster (`z440`) behind a Cloudflare Tunnel. MongoDB Atlas for
-data, Cloudflare R2 + CDN for images, self-hosted observability
+TanStack Start (React 19) web app + custom Node `ws` realtime service + a Node
+`audio-worker` (ffmpeg transcode queue), self-hosted on a single-node k3s cluster
+(`z440`) behind a Cloudflare Tunnel. MongoDB Atlas for data, Cloudflare R2 + CDN
+for images and audio, self-hosted observability
 (GlitchTip/Umami/Grafana — see `docs/observability.md`).
 
 ## Commands
@@ -19,6 +20,11 @@ data, Cloudflare R2 + CDN for images, self-hosted observability
   REQUIRED whenever anything under `deploy/charts/` changes (also a CI job).
 - `npm run e2e` — Playwright; all inspector tabs (Chat/Dice/Wiki/Notes/Settings)
   render unconditionally — the old `VITE_PUBLIC_FF_*` gating was removed.
+- `realtime/` and `audio-worker/` are separate npm packages with their own
+  lockfiles and test suites — run `(cd audio-worker && npm run typecheck && npm
+test)` for worker changes; the root suite does not cover them. CI's `services`
+  job runs both, and also `docker build`s the worker image (its Dockerfile
+  asserts the ffmpeg capabilities the pipeline needs).
 - `deploy/charts/` is prettierignored — don't format it.
 
 ## Testing conventions

@@ -134,6 +134,24 @@ audioWorker:
     # asset — a per-asset threshold would be too generous to catch anything.
     HEARTBEAT_FILE: /tmp/audio-worker-heartbeat
     HEARTBEAT_MAX_AGE_MS: '600000'
+    # Wired so the worker can be turned up to debug WITHOUT an image rebuild —
+    # `helm upgrade --set audioWorker.env.LOG_LEVEL=debug` (or the value in the
+    # infra repo's HelmRelease) and a pod restart. Before this it was read from
+    # the environment but settable nowhere, so raising it at 2am meant a code
+    # change, a CI run, an image push and a Flux reconcile.
+    # Only pino's levels are accepted; anything else falls back to `info`
+    # (`logLevel` in audio-worker/src/config.ts) because pino THROWS on an
+    # unknown level at import time, which would be a crash loop rather than a
+    # noisy log.
+    LOG_LEVEL: info
+    # Delay before a failed asset is eligible again: 30s, 60s, 120s… capped.
+    # Without a delay all three attempts burn back-to-back in milliseconds and
+    # the transient failures retries exist to survive (an R2 blip, a brief
+    # Atlas failover) still end in a permanent `failed`. Raising the base is
+    # the lever for an ongoing R2 incident; it is TIED TO CLAIM_TIMEOUT_MS only
+    # in the sense that a very large max delays recovery, not correctness.
+    RETRY_BACKOFF_MS: '30000'
+    RETRY_BACKOFF_MAX_MS: '300000'
 
 ingress:
   enabled: true

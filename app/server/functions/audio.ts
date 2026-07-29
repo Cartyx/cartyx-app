@@ -4,6 +4,7 @@ import { connectDB, isDBConnected } from '../db/connection';
 import { AudioAsset } from '../db/models/AudioAsset';
 import { escapeRegExp, normalizeTags } from '../utils/helpers';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
+import { resolveAudioStoragePrefix } from './audio-storage';
 import { createR2, getAudioUploadUrl } from './uploads';
 import { AUDIO_MAX_BYTES, AUDIO_SOURCE_TYPES } from '~/types/audio';
 import type { AudioAssetData } from '~/types/audio';
@@ -86,9 +87,16 @@ export async function createAudioUpload({
 } & Actor) {
   try {
     await ensureDb();
+    // Mints the user's R2 namespace if this is their first upload, and returns
+    // the existing one otherwise — see `./audio-storage.ts`. It runs before the
+    // presign because the key cannot be built without it, and before the row is
+    // created so a user whose prefix cannot be resolved gets an error instead
+    // of an asset pointing at a key nothing owns.
+    const storagePrefix = await resolveAudioStoragePrefix(userId);
     const { uploadUrl, key } = await getAudioUploadUrl({
       contentType: data.contentType,
       bytes: data.bytes,
+      storagePrefix,
       telemetryUserId: telemetryId({ userId, sessionUserId }),
     });
 
@@ -569,15 +577,15 @@ export async function deleteAudioAsset({
     // the UI still shows, still polls, and still offers Delete for — a worse
     // outcome than a stranded object.
     //
-    // Be clear about the cost, though: there is NO backstop for what this
-    // strands. Once the row below is gone, its key exists nowhere else, and
-    // `~/server/functions/audio-cleanup.ts` reclaims only what it can derive
-    // from a row the caller still owns. (This comment used to claim the
-    // campaign orphan scanner covered it; that scanner no longer looks at audio
-    // at all, because being GM of one campaign is not authority over another
-    // user's audio library.) Each failure is reported so a systematically
-    // failing R2 delete shows up in GlitchTip rather than silently accruing
-    // storage cost.
+    // What this strands IS reclaimable, but only because of the storage
+    // layout. Once the row below is gone its key exists nowhere else, so
+    // nothing derived from the user's remaining rows can name it — the
+    // reclaim path is `~/server/functions/audio-cleanup.ts` listing
+    // `uploads/audio/<the caller's prefix>/` and subtracting what the rows
+    // still reference (see `./audio-storage.ts` for why the prefix exists).
+    // Each failure is still reported, so a systematically failing R2 delete
+    // shows up in GlitchTip rather than quietly accruing storage cost that
+    // somebody has to notice and sweep.
     for (const Key of keys) {
       try {
         await client.send(new DeleteObjectCommand({ Bucket: bucket, Key }));

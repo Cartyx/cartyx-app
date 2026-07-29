@@ -65,7 +65,11 @@ export const DEFAULT_UPLOAD_TIMEOUT_MS = 900_000;
 /**
  * The source-object size cap, enforced AT POINT OF USE in `processAsset`.
  *
- * MUST match `AUDIO_MAX_BYTES` in `app/types/audio.ts` (50 MB). The app-side
+ * MUST match `AUDIO_MAX_BYTES` in `app/types/audio.ts` (50 MB), and cannot
+ * drift silently: `tests/server/functions/audio-cross-service-contract.test.ts`
+ * in the app package reads THIS line and fails when the two disagree. That is
+ * deliberately cheaper than a shared module — see that file for why the
+ * packages stay independent. The app-side
  * check in `confirmAudioUpload` is a check-time HeadObject, and the presigned
  * PUT it validates is valid for 300 s and REUSABLE: a client can PUT 1 KB, let
  * confirm pass, then re-PUT gigabytes to the same URL. Nothing invalidates the
@@ -142,4 +146,32 @@ export function heartbeatFile(): string {
 
 export function heartbeatMaxAgeMs(): number {
   return envMs('HEARTBEAT_MAX_AGE_MS', DEFAULT_HEARTBEAT_MAX_AGE_MS);
+}
+
+/** The pino levels, plus `silent`. Anything else is not a level pino accepts. */
+const LOG_LEVELS = new Set(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent']);
+
+/**
+ * The log level, validated.
+ *
+ * `pino({ level })` THROWS on a value it does not recognise — measured:
+ * `pino({ level: '' })` fails with "default level: must be included in custom
+ * levels". `logger.ts` runs at import time, so that throw is not a bad log
+ * line, it is a pod that cannot start: CrashLoopBackOff on every replica, and
+ * the reason never reaches the log because the logger is what failed.
+ *
+ * Both hostile values are realistic now that this is a chart key. Helm renders
+ * an EMPTY STRING for a missing `values.yaml` entry (the same hazard `envMs`
+ * exists for, and `??` does not fire for `''`), and the whole point of wiring
+ * it is that an operator sets it by hand at 2am — `LOG_LEVEL=verbose` or
+ * `LOG_LEVEL=DEBUG` are the obvious wrong guesses. Falling back to `info`
+ * gives them a running worker and the default logs rather than no worker.
+ */
+export function logLevel(): string {
+  // Lower-cased rather than matched exactly: `LOG_LEVEL=DEBUG` is what an
+  // operator types, and honouring it beats silently ignoring it. (pino happens
+  // to accept `DEBUG` today, so an exact-match guard would have changed
+  // working behaviour into a fallback.)
+  const raw = process.env.LOG_LEVEL?.trim().toLowerCase();
+  return raw && LOG_LEVELS.has(raw) ? raw : 'info';
 }

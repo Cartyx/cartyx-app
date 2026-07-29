@@ -5,6 +5,7 @@ import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import crypto from 'node:crypto';
 import { serverCaptureException } from '../utils/telemetry';
+import { audioUserRoot } from './audio-storage';
 import { AUDIO_SOURCE_TYPES, AUDIO_MAX_BYTES } from '~/types/audio';
 
 const ALLOWED_TYPES = new Map([
@@ -94,14 +95,23 @@ export const getUploadUrl = async ({ data }: { data: z.infer<typeof getUploadUrl
  * and an audio upload URL landed in GlitchTip and Umami as two unrelated
  * people. `~/server/functions/audio.ts` now threads `sessionUserId` through for
  * this reason; see the `Actor` type there.
+ *
+ * `storagePrefix` is the caller's per-user R2 namespace (see
+ * `./audio-storage.ts`). It is passed in rather than resolved here for the
+ * same auth-agnostic reason as `telemetryUserId`: this module does no database
+ * work, and the ingest caller has already loaded the User document to get the
+ * Mongo `_id` it scopes rows by. `audioUserRoot` validates the shape, so a bug
+ * upstream throws instead of writing an object outside every user's namespace.
  */
 export const getAudioUploadUrl = async ({
   contentType,
   bytes,
+  storagePrefix,
   telemetryUserId,
 }: {
   contentType: string;
   bytes: number;
+  storagePrefix: string;
   telemetryUserId: string;
 }) => {
   try {
@@ -112,7 +122,11 @@ export const getAudioUploadUrl = async ({
     }
 
     const { client, bucket, cdnUrl } = createR2();
-    const key = `uploads/audio/${Date.now()}-${crypto.randomBytes(8).toString('hex')}.${ext}`;
+    // Under the caller's OWN namespace, not a flat `uploads/audio/` root. The
+    // root is what made a stranded source object unattributable and therefore
+    // unreclaimable — see the module comment in `./audio-storage.ts`.
+    const root = audioUserRoot(storagePrefix);
+    const key = `${root}${Date.now()}-${crypto.randomBytes(8).toString('hex')}.${ext}`;
 
     const uploadUrl = await getSignedUrl(
       client,

@@ -154,3 +154,53 @@ describe('maxSourceBytes', () => {
     expect(maxSourceBytes()).toBe(DEFAULT_MAX_SOURCE_BYTES);
   });
 });
+
+describe('logLevel', () => {
+  afterEach(() => {
+    delete process.env.LOG_LEVEL;
+  });
+
+  it('passes a level pino recognises straight through', async () => {
+    const { logLevel } = await import('../src/config.js');
+    for (const level of ['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent']) {
+      process.env.LOG_LEVEL = level;
+      expect(logLevel()).toBe(level);
+    }
+  });
+
+  /**
+   * The values that matter, and why this is a guard rather than a nicety:
+   * `pino({ level })` THROWS on anything it does not recognise, and
+   * `src/logger.ts` builds the logger at import time — so a bad value is a pod
+   * that never starts, with the reason invisible because the logger is what
+   * failed. Helm renders `''` for a missing `values.yaml` key (and `??` does
+   * not fire for `''`), and `verbose`/`DEBUG` are the obvious wrong guesses for
+   * an operator turning up logging by hand.
+   */
+  it('accepts the level an operator actually types, case and all', async () => {
+    const { logLevel } = await import('../src/config.js');
+    process.env.LOG_LEVEL = 'DEBUG';
+    expect(logLevel()).toBe('debug');
+    process.env.LOG_LEVEL = ' trace ';
+    expect(logLevel()).toBe('trace');
+  });
+
+  it.each(['', ' ', 'verbose', '10', 'true'])(
+    'falls back to info for %p rather than letting pino throw',
+    async (bad) => {
+      const pino = (await import('pino')).default;
+      process.env.LOG_LEVEL = bad;
+      const { logLevel } = await import('../src/config.js');
+
+      expect(logLevel()).toBe('info');
+      // The value is genuinely fatal to pino — so the fallback is load-bearing.
+      expect(() => pino({ level: bad })).toThrow();
+      expect(() => pino({ level: logLevel() })).not.toThrow();
+    }
+  );
+
+  it('falls back to info when the variable is absent', async () => {
+    const { logLevel } = await import('../src/config.js');
+    expect(logLevel()).toBe('info');
+  });
+});

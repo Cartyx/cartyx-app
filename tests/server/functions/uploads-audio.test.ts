@@ -9,6 +9,9 @@ vi.mock('@aws-sdk/s3-request-presigner', () => ({
 import { getSession } from '~/server/session';
 import { serverCaptureException } from '~/server/utils/telemetry';
 
+/** A well-formed per-user namespace prefix (see ~/server/functions/audio-storage). */
+const PREFIX = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+
 describe('getAudioUploadUrl', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -22,7 +25,12 @@ describe('getAudioUploadUrl', () => {
   it('rejects an unsupported content type', async () => {
     const { getAudioUploadUrl } = await import('~/server/functions/uploads');
     await expect(
-      getAudioUploadUrl({ contentType: 'image/png', bytes: 10, telemetryUserId: 'u1' })
+      getAudioUploadUrl({
+        contentType: 'image/png',
+        bytes: 10,
+        storagePrefix: PREFIX,
+        telemetryUserId: 'u1',
+      })
     ).rejects.toThrow(/audio/i);
   });
 
@@ -32,22 +40,50 @@ describe('getAudioUploadUrl', () => {
       getAudioUploadUrl({
         contentType: 'audio/wav',
         bytes: 50 * 1024 * 1024 + 1,
+        storagePrefix: PREFIX,
         telemetryUserId: 'u1',
       })
     ).rejects.toThrow(/too large/i);
   });
 
-  it('returns a signed url under the uploads/audio prefix', async () => {
+  /**
+   * The key must land inside the CALLER'S namespace, not a flat
+   * `uploads/audio/` root. The flat layout is what made a stranded source
+   * object unattributable: a bucket listing could not say whose it was, so the
+   * owner-scoped cleanup could not reclaim it. Asserting only the
+   * `uploads/audio/` root would pass against exactly the layout this replaced.
+   */
+  it("returns a signed url inside the caller's storage namespace", async () => {
     const { getAudioUploadUrl } = await import('~/server/functions/uploads');
     const r = await getAudioUploadUrl({
       contentType: 'audio/wav',
       bytes: 1024,
+      storagePrefix: PREFIX,
       telemetryUserId: 'u1',
     });
-    expect(r.key).toMatch(/^uploads\/audio\//);
-    expect(r.key).toMatch(/\.wav$/);
+    expect(r.key).toMatch(new RegExp(`^uploads/audio/${PREFIX}/[0-9]+-[0-9a-f]+\\.wav$`));
     expect(r.publicUrl).toBe(`https://cdn.test/${r.key}`);
   });
+
+  /**
+   * Fail closed. A prefix that is empty, undefined-coerced, or path-bearing
+   * would mint an object outside every user's listing prefix — permanently
+   * unreclaimable — or, with a traversal, inside somebody else's namespace.
+   */
+  it.each(['', 'undefined', '../0123456789abcdef0123456789abcdef', 'not-hex'])(
+    'refuses to mint a key for the malformed prefix %p',
+    async (bad) => {
+      const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+      await expect(
+        getAudioUploadUrl({
+          contentType: 'audio/wav',
+          bytes: 1024,
+          storagePrefix: bad,
+          telemetryUserId: 'u1',
+        })
+      ).rejects.toThrow('Invalid audio storage prefix');
+    }
+  );
 
   /**
    * Ingest is one shared module behind two adapters that authenticate
@@ -62,6 +98,7 @@ describe('getAudioUploadUrl', () => {
     await getAudioUploadUrl({
       contentType: 'audio/wav',
       bytes: 1024,
+      storagePrefix: PREFIX,
       telemetryUserId: 'session-provider-id',
     });
     expect(getSession).not.toHaveBeenCalled();
@@ -73,6 +110,7 @@ describe('getAudioUploadUrl', () => {
     const r = await getAudioUploadUrl({
       contentType: 'audio/wav',
       bytes: 1024,
+      storagePrefix: PREFIX,
       telemetryUserId: 'token-user',
     });
     expect(r.uploadUrl).toBe('https://signed.example/put');
@@ -84,6 +122,7 @@ describe('getAudioUploadUrl', () => {
       getAudioUploadUrl({
         contentType: 'image/png',
         bytes: 10,
+        storagePrefix: PREFIX,
         telemetryUserId: 'session-provider-id',
       })
     ).rejects.toThrow();

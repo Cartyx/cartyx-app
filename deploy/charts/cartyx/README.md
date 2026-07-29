@@ -1,8 +1,9 @@
 # cartyx Helm chart
 
-Deploys the Cartyx app — `web` (TanStack Start/Nitro, port 3000) and
-`realtime` (ws service, port 1999) — as ONE release per environment on the
-Flux-managed k3s cluster (`z440`, github.com/biozal/cartyx-infrastructure):
+Deploys the Cartyx app — `web` (TanStack Start/Nitro, port 3000),
+`realtime` (ws service, port 1999) and `audio-worker` (ffmpeg transcode queue,
+no port at all) — as ONE release per environment on the Flux-managed k3s
+cluster (`z440`, github.com/biozal/cartyx-infrastructure):
 
 | Release               | Namespace      | Values file         | Hosts                                |
 | --------------------- | -------------- | ------------------- | ------------------------------------ |
@@ -60,7 +61,7 @@ merge, let the workflow rebuild.** Server-read env (`MONGODB_URI`,
     the whoami placeholders with the `HelmRelease` + `GitRepository` objects.
 6.  **First deploy**: merge to `dev` (or Actions → Deploy → Run workflow on
     `dev`). ⚠️ The first push creates the ghcr packages **private** — open
-    github.com/biozal?tab=packages → `cartyx-web` and `cartyx-realtime` →
+    github.com/biozal?tab=packages → `cartyx-web`, `cartyx-realtime` and `cartyx-audio-worker` →
     settings → visibility **public** (private packages would need an
     imagePullSecret this chart deliberately doesn't carry). Flux retries on
     its interval; force it from the box with
@@ -71,8 +72,10 @@ merge, let the workflow rebuild.** Server-read env (`MONGODB_URI`,
 
 - **Rotate a secret**: `kubectl -n <env> edit secret cartyx` (or delete +
   recreate), then `kubectl -n <env> rollout restart deploy/cartyx-web
-deploy/cartyx-realtime` — the checksum auto-restart only covers the
-  chart-managed (kind) Secret, not `existingSecret`.
+deploy/cartyx-realtime deploy/cartyx-audio-worker` — the checksum auto-restart
+  only covers the chart-managed (kind) Secret, not `existingSecret`. The worker
+  reads `mongodbUri` and both R2 keys, so leaving it out of the restart list
+  leaves it authenticating with the old credentials.
 - **Flip a client feature flag**: edit `deploy/build/web-<env>.args`, merge.
 - **Roll back**: revert the tag-bump commit in cartyx-infrastructure (Flux
   reconciles the old tags back), or re-run Deploy from the last good commit.
@@ -81,6 +84,29 @@ deploy/cartyx-realtime` — the checksum auto-restart only covers the
 - **Realtime is single-replica by design** (in-memory rooms); the chart
   refuses `replicaCount > 1` and uses a Recreate strategy (a deploy = a few
   seconds of WebSocket disconnect; clients reconnect via partysocket).
+- **Audio worker: the emergency stop.** The worker is CPU-bound ffmpeg on a
+  node with one spare core, so "stop transcoding right now" is a real need
+  (runaway import, an R2 or Atlas incident, SSR starving under load). The
+  immediate lever is
+
+        kubectl -n <env> scale deploy/cartyx-audio-worker --replicas=0
+
+  It takes effect at once and is safe: a row the worker was holding stays
+  `processing` until `reapStale` returns it to `pending`, so nothing is lost —
+  work just stops. Uploads keep succeeding; they queue.
+
+  **It does not survive a `helm upgrade`.** The Deployment's `replicas` comes
+  from `audioWorker.replicaCount`, so the next Flux reconcile — which happens
+  on ANY commit to the infra repo, including one for an unrelated service —
+  silently scales it back to 1. Nothing warns you; the worker simply starts
+  transcoding again. If the pause needs to outlive the next deploy, set
+
+        audioWorker:
+          replicaCount: 0
+
+  in the infra repo's `apps/<env>/helmrelease.yaml` values and let Flux apply
+  it. That is the durable form; the `kubectl scale` is the thirty-second one.
+  Remember to revert it, or audio silently never processes.
 
 ## Troubleshooting
 
@@ -88,7 +114,8 @@ deploy/cartyx-realtime` — the checksum auto-restart only covers the
 | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ErrImagePull` on first install                 | ghcr package is private (fresh packages default private). Make it public — setup step 6.                                                                                                            |
 | Pods stuck `ContainerCreating`                  | The `cartyx` Secret doesn't exist in that namespace yet (setup step 1) — expected Flux behavior per the infra README.                                                                               |
-| HelmRelease render error `... is required`      | An image tag went missing — check the `values:` block (marker comments intact?) in the infra repo's helmrelease.yaml; the CI sed anchors on `# ci:web-tag` / `# ci:realtime-tag`.                   |
+| HelmRelease render error `... is required`      | An image tag went missing — check the `values:` block (marker comments intact?) in the infra repo's helmrelease.yaml. THREE markers, one per service: `# ci:web-tag`, `# ci:realtime-tag`, `# ci:audioworker-tag`. The error names which value it wanted (`web.image.tag` / `realtime.image.tag` / `audioWorker.image.tag`); the missing marker is the matching one. `deploy.yml` fails loudly if any marker is absent, so a render error here means the marker was edited out after a successful deploy. |
+| Audio uploads stay `pending` / `processing`     | The worker, not the web pod: `kubectl -n <env> logs deploy/cartyx-audio-worker`. Liveness is an exec probe on a heartbeat file, so a wedged loop restarts itself — check `RESTARTS`. To stop it processing entirely (runaway ffmpeg, R2 incident), see "Audio worker: the emergency stop" under Operations.                                                                                                                                                                                        |
 | `/healthz` from the internet returns 403        | By design (`ingress.blockHealthEndpoints`). Probe in-cluster: `kubectl -n <env> run hc --rm -i --restart=Never --image=curlimages/curl -- curl -fsS http://cartyx-web:3000/readyz`.                 |
 | Health block objects rejected by the API server | Traefik v2 CRDs use `ipWhiteList` instead of `ipAllowList` (check: `kubectl -n kube-system describe deploy traefik \| grep -i image`). Edit `templates/middleware.yaml` accordingly or upgrade k3s. |
 | WebSockets fail but the site loads              | Check the Cloudflare tunnel hostname routes cover `ws.` / `dev-ws.` and that cloudflared pods are Ready (`kubectl -n cloudflare get pods`); WebSockets ride the tunnel like everything else.        |

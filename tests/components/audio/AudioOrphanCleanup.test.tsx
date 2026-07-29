@@ -15,7 +15,7 @@ const BASE = {
 };
 
 function scan(over: Partial<ScanOrphanAudioResult> = {}): ScanOrphanAudioResult {
-  return { orphans: [], scannedAssetCount: 3, truncated: false, r2Disabled: false, ...over };
+  return { orphans: [], scannedObjectCount: 3, truncated: false, r2Disabled: false, ...over };
 }
 
 const ORPHAN = {
@@ -72,7 +72,7 @@ describe('AudioOrphanCleanup', () => {
    */
   it('warns when the scan was truncated', () => {
     render(
-      <AudioOrphanCleanup {...BASE} result={scan({ truncated: true, scannedAssetCount: 500 })} />
+      <AudioOrphanCleanup {...BASE} result={scan({ truncated: true, scannedObjectCount: 500 })} />
     );
     expect(screen.getByText(/partial scan/i)).toBeInTheDocument();
     expect(screen.getByText(/500/)).toBeInTheDocument();

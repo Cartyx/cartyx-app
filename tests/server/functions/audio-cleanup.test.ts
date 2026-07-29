@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { HeadObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { ListObjectsV2Command, DeleteObjectCommand } from '@aws-sdk/client-s3';
 
 vi.mock('~/server/db/connection', () => ({ connectDB: vi.fn(), isDBConnected: vi.fn(() => true) }));
 vi.mock('~/server/utils/telemetry', () => ({
@@ -12,35 +12,43 @@ vi.mock('~/server/functions/uploads', () => ({
   createR2: () => ({ client: { send }, bucket: 'b', cdnUrl: 'https://cdn.test' }),
 }));
 
-// Mirrors `AudioAsset.find(filter, projection).sort(...).limit(...).lean()`.
+// Mirrors `AudioAsset.find(filter, projection).lean()`.
 const lean = vi.fn();
-const limit = vi.fn(() => ({ lean }));
-const sort = vi.fn(() => ({ limit }));
-const find = vi.fn(() => ({ sort }));
+const find = vi.fn(() => ({ lean }));
 vi.mock('~/server/db/models/AudioAsset', () => ({ AudioAsset: { find } }));
+
+// `lookupAudioStoragePrefix` is NOT mocked — `~/server/functions/audio-storage`
+// runs for real (including `audioUserRoot`'s shape validation) against a mocked
+// User model, so a scan that resolved the wrong namespace would fail here.
+const userLean = vi.fn();
+const userSelect = vi.fn(() => ({ lean: userLean }));
+const findById = vi.fn(() => ({ select: userSelect }));
+const findOneAndUpdate = vi.fn();
+vi.mock('~/server/db/models/User', () => ({ User: { findById, findOneAndUpdate } }));
 
 import { serverCaptureEvent } from '~/server/utils/telemetry';
 
 const OWNER = '507f1f77bcf86cd799439011';
 const ASSET_A = '507f1f77bcf86cd799439aaa';
-const ASSET_B = '507f1f77bcf86cd799439bbb';
+
+/** The caller's namespace, and somebody else's. Both are well-formed prefixes. */
+const PREFIX = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
+const OTHER_PREFIX = '0123456789abcdef0123456789abcdef';
+const ROOT = `uploads/audio/${PREFIX}/`;
+const OTHER_ROOT = `uploads/audio/${OTHER_PREFIX}/`;
 
 /** Old enough to clear AUDIO_ORPHAN_MIN_AGE_MS. */
 const OLD = new Date('2026-01-01T00:00:00.000Z');
 
 const originalEnv = { ...process.env };
 
-/**
- * HeadObject answers for the given keys; anything else 404s, exactly like R2
- * does for a key the worker never wrote.
- */
-function r2Has(objects: Record<string, { size: number; lastModified: Date }>) {
+type Listed = { Key: string; Size: number; LastModified: Date };
+
+/** One page of listing results, then whatever DeleteObject asks for. */
+function r2Lists(contents: Listed[], extra: Record<string, unknown> = {}) {
   send.mockImplementation((cmd: unknown) => {
-    if (cmd instanceof HeadObjectCommand) {
-      const key = (cmd.input as { Key: string }).Key;
-      const obj = objects[key];
-      if (!obj) return Promise.reject(new Error('NotFound'));
-      return Promise.resolve({ ContentLength: obj.size, LastModified: obj.lastModified });
+    if (cmd instanceof ListObjectsV2Command) {
+      return Promise.resolve({ Contents: contents, IsTruncated: false, ...extra });
     }
     return Promise.resolve({});
   });
@@ -54,7 +62,8 @@ beforeEach(() => {
   process.env.R2_BUCKET = 'd';
   process.env.CDN_URL = 'https://cdn.test';
   lean.mockResolvedValue([]);
-  r2Has({});
+  userLean.mockResolvedValue({ audioStoragePrefix: PREFIX });
+  r2Lists([]);
 });
 
 afterEach(() => {
@@ -63,87 +72,123 @@ afterEach(() => {
 
 describe('scanOrphanAudio — ownership scoping', () => {
   /**
-   * The single most important property of this module. R2 audio keys carry no
-   * owner component, so a bucket listing can never be attributed; this path
-   * must therefore derive every candidate key from the caller's own rows and
-   * must never issue a List at all. A test that only checked the *result* would
-   * pass against a bucket-wide listing that happened to filter correctly — so
-   * this asserts on the query and on the commands actually issued.
+   * The single most important property of this module. Owner scoping is a
+   * property of the KEY LAYOUT: every object a user owns lives under
+   * `uploads/audio/<their prefix>/`, so the listing itself cannot return
+   * anybody else's object. A test that only checked the result would pass
+   * against a bucket-wide listing that happened to filter correctly — so this
+   * asserts on the request actually sent to R2.
    */
-  it('scopes the row query to the caller and never lists the bucket', async () => {
+  it('lists exactly the caller’s namespace and never a wider prefix', async () => {
     const { scanOrphanAudio } = await import('~/server/functions/audio-cleanup');
     await scanOrphanAudio({ userId: OWNER });
 
-    expect((find.mock.calls[0] as unknown as [Record<string, unknown>])[0]).toMatchObject({
-      ownerId: OWNER,
-    });
-    // Every command issued is a HeadObject for a key derived above. No
-    // ListObjectsV2 — there is no such thing as an owner-scoped listing here.
-    for (const call of send.mock.calls) {
-      expect(call[0]).toBeInstanceOf(HeadObjectCommand);
-    }
+    const lists = send.mock.calls
+      .map((c) => c[0])
+      .filter((c): c is ListObjectsV2Command => c instanceof ListObjectsV2Command);
+    expect(lists).toHaveLength(1);
+    expect(lists[0].input.Prefix).toBe(ROOT);
+    // Nothing else is issued: no bucket-wide list, no probing of derived keys.
+    expect(send.mock.calls).toHaveLength(1);
   });
 
   /**
-   * The keys are reconstructed from the asset id using the worker's
-   * deterministic rendition namespace (`uploads/audio/renditions/<id>.opus|.m4a`
-   * — audio-worker/src/process.ts). Another user's object cannot be filtered
-   * out incorrectly because it is never named in the first place.
+   * The guard that makes "cannot construct or return a key outside the
+   * caller's prefix" true rather than merely intended. R2 is made to answer
+   * with a perfectly well-formed key inside ANOTHER user's namespace — the
+   * shape a broken prefix, a mis-parameterized command, or a compromised
+   * client would produce. It must not reach the result, and it must not become
+   * deletable.
    */
-  it('asks R2 only about keys derived from the caller-owned rows', async () => {
-    lean.mockResolvedValue([{ _id: ASSET_A, sourceKey: 'uploads/audio/1-a.wav' }]);
-    const { scanOrphanAudio } = await import('~/server/functions/audio-cleanup');
-    await scanOrphanAudio({ userId: OWNER });
-
-    const asked = send.mock.calls.map((c) => (c[0] as HeadObjectCommand).input.Key);
-    expect(asked).toEqual([
-      `uploads/audio/renditions/${ASSET_A}.opus`,
-      `uploads/audio/renditions/${ASSET_A}.m4a`,
+  it('drops a returned key outside the caller’s prefix instead of reporting it', async () => {
+    r2Lists([
+      { Key: `${ROOT}1700000000000-aaaa.wav`, Size: 10, LastModified: OLD },
+      { Key: `${OTHER_ROOT}1700000000000-bbbb.wav`, Size: 20, LastModified: OLD },
+      { Key: 'uploads/audio/1700000000000-legacy.wav', Size: 30, LastModified: OLD },
     ]);
+
+    const { scanOrphanAudio, deleteOrphanAudio } = await import('~/server/functions/audio-cleanup');
+    const res = await scanOrphanAudio({ userId: OWNER });
+    expect(res.orphans.map((o) => o.key)).toEqual([`${ROOT}1700000000000-aaaa.wav`]);
+
+    const del = await deleteOrphanAudio({
+      data: { keys: [`${OTHER_ROOT}1700000000000-bbbb.wav`] },
+      userId: OWNER,
+    });
+    expect(del.deleted).toEqual([]);
+    expect(send.mock.calls.some((c) => c[0] instanceof DeleteObjectCommand)).toBe(false);
   });
 
-  it('reports a stranded rendition the row never recorded', async () => {
-    lean.mockResolvedValue([{ _id: ASSET_A, sourceKey: 'uploads/audio/1-a.wav' }]);
-    r2Has({
-      [`uploads/audio/renditions/${ASSET_A}.opus`]: { size: 2048, lastModified: OLD },
-    });
+  /**
+   * The gap the per-user prefix exists to close. `deleteAudioAsset` removes the
+   * row even when the R2 delete fails, so the source key's only record is gone;
+   * under the old flat layout nothing could ever name that object again. Here
+   * the listing is the record, so it is reclaimable.
+   */
+  it('reports a stranded SOURCE object whose asset row no longer exists', async () => {
+    r2Lists([{ Key: `${ROOT}1700000000000-aaaa.wav`, Size: 2048, LastModified: OLD }]);
+    lean.mockResolvedValue([]);
 
     const { scanOrphanAudio } = await import('~/server/functions/audio-cleanup');
     const res = await scanOrphanAudio({ userId: OWNER });
 
     expect(res.orphans).toEqual([
       {
-        key: `uploads/audio/renditions/${ASSET_A}.opus`,
+        key: `${ROOT}1700000000000-aaaa.wav`,
         sizeBytes: 2048,
         lastModified: OLD.toISOString(),
       },
     ]);
     expect(res.truncated).toBe(false);
-    expect(res.scannedAssetCount).toBe(1);
+    expect(res.scannedObjectCount).toBe(1);
   });
 
-  /**
-   * A key the row DOES reference is live: the asset plays it. Offering to
-   * delete it would break the user's library, so the recorded keys form the
-   * in-use set and are excluded even though they sit in the same namespace.
-   */
-  it('never offers a rendition the row still references', async () => {
-    lean.mockResolvedValue([
-      {
-        _id: ASSET_A,
-        sourceKey: 'uploads/audio/1-a.wav',
-        renditions: { opus: { key: `uploads/audio/renditions/${ASSET_A}.opus` } },
-      },
+  it('reports a stranded rendition the row never recorded', async () => {
+    r2Lists([
+      { Key: `${ROOT}1700000000000-aaaa.wav`, Size: 100, LastModified: OLD },
+      { Key: `${ROOT}renditions/${ASSET_A}.opus`, Size: 2048, LastModified: OLD },
     ]);
-    r2Has({
-      [`uploads/audio/renditions/${ASSET_A}.opus`]: { size: 2048, lastModified: OLD },
-      [`uploads/audio/renditions/${ASSET_A}.m4a`]: { size: 3072, lastModified: OLD },
-    });
+    lean.mockResolvedValue([{ sourceKey: `${ROOT}1700000000000-aaaa.wav` }]);
 
     const { scanOrphanAudio } = await import('~/server/functions/audio-cleanup');
     const res = await scanOrphanAudio({ userId: OWNER });
+    expect(res.orphans.map((o) => o.key)).toEqual([`${ROOT}renditions/${ASSET_A}.opus`]);
+  });
 
-    expect(res.orphans.map((o) => o.key)).toEqual([`uploads/audio/renditions/${ASSET_A}.m4a`]);
+  /**
+   * A key a row DOES reference is live: the asset plays it. Offering to delete
+   * it would break the user's library, so every recorded key — including the
+   * phase-2 `onceRenditions` variants nothing writes yet — is excluded.
+   */
+  it('never offers an object a row still references, including onceRenditions', async () => {
+    r2Lists([
+      { Key: `${ROOT}src.wav`, Size: 1, LastModified: OLD },
+      { Key: `${ROOT}renditions/${ASSET_A}.opus`, Size: 2, LastModified: OLD },
+      { Key: `${ROOT}renditions/${ASSET_A}.once.opus`, Size: 3, LastModified: OLD },
+      { Key: `${ROOT}renditions/orphan.m4a`, Size: 4, LastModified: OLD },
+    ]);
+    lean.mockResolvedValue([
+      {
+        sourceKey: `${ROOT}src.wav`,
+        renditions: { opus: { key: `${ROOT}renditions/${ASSET_A}.opus` } },
+        onceRenditions: { opus: { key: `${ROOT}renditions/${ASSET_A}.once.opus` } },
+      },
+    ]);
+
+    const { scanOrphanAudio } = await import('~/server/functions/audio-cleanup');
+    const res = await scanOrphanAudio({ userId: OWNER });
+    expect(res.orphans.map((o) => o.key)).toEqual([`${ROOT}renditions/orphan.m4a`]);
+  });
+
+  /** The reference lookup is scoped to the caller as well as to the listed keys. */
+  it('scopes the reference lookup to the caller and to the listed keys', async () => {
+    r2Lists([{ Key: `${ROOT}src.wav`, Size: 1, LastModified: OLD }]);
+    const { scanOrphanAudio } = await import('~/server/functions/audio-cleanup');
+    await scanOrphanAudio({ userId: OWNER });
+
+    const filter = (find.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+    expect(filter).toMatchObject({ ownerId: OWNER });
+    expect(JSON.stringify(filter)).toContain(`${ROOT}src.wav`);
   });
 
   /**
@@ -153,26 +198,55 @@ describe('scanOrphanAudio — ownership scoping', () => {
    * in-flight rendition an orphan and offers to delete it.
    */
   it('ignores an object younger than the minimum age', async () => {
-    lean.mockResolvedValue([{ _id: ASSET_A }]);
-    r2Has({
-      [`uploads/audio/renditions/${ASSET_A}.opus`]: { size: 2048, lastModified: new Date() },
-    });
-
+    r2Lists([{ Key: `${ROOT}renditions/${ASSET_A}.opus`, Size: 2048, LastModified: new Date() }]);
     const { scanOrphanAudio } = await import('~/server/functions/audio-cleanup');
     const res = await scanOrphanAudio({ userId: OWNER });
     expect(res.orphans).toEqual([]);
   });
 
   /**
-   * The campaign image scanner capped its listing at MAX_PAGES and discarded
-   * `IsTruncated`, so an account past the cap got a partial scan presented as a
-   * complete one. This path reports the partiality instead.
+   * The campaign image scanner's `listAllR2Objects` stopped after MAX_PAGES and
+   * threw the continuation token away, so a large account silently got a
+   * partial listing. This one follows the token.
    */
-  it('reports truncation when the caller has more candidate rows than one pass covers', async () => {
-    const { AUDIO_ORPHAN_SCAN_MAX_ROWS } = await import('~/server/functions/audio-cleanup');
-    lean.mockResolvedValue(
-      Array.from({ length: AUDIO_ORPHAN_SCAN_MAX_ROWS + 1 }, (_, i) => ({
-        _id: `5000000000000000000004${String(i).padStart(2, '0')}`,
+  it('follows the continuation token instead of stopping after one page', async () => {
+    send.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof ListObjectsV2Command) {
+        if (!cmd.input.ContinuationToken) {
+          return Promise.resolve({
+            Contents: [{ Key: `${ROOT}page1.wav`, Size: 1, LastModified: OLD }],
+            IsTruncated: true,
+            NextContinuationToken: 'tok',
+          });
+        }
+        return Promise.resolve({
+          Contents: [{ Key: `${ROOT}page2.wav`, Size: 2, LastModified: OLD }],
+          IsTruncated: false,
+        });
+      }
+      return Promise.resolve({});
+    });
+
+    const { scanOrphanAudio } = await import('~/server/functions/audio-cleanup');
+    const res = await scanOrphanAudio({ userId: OWNER });
+
+    expect(res.orphans.map((o) => o.key)).toEqual([`${ROOT}page1.wav`, `${ROOT}page2.wav`]);
+    expect(res.truncated).toBe(false);
+    expect(res.scannedObjectCount).toBe(2);
+  });
+
+  /**
+   * Past the cap the scan is PARTIAL, and says so. The campaign scanner
+   * returned "no orphans found" in this situation, which is a lie the operator
+   * has no way to detect.
+   */
+  it('reports truncation when the namespace holds more objects than one pass covers', async () => {
+    const { AUDIO_ORPHAN_SCAN_MAX_KEYS } = await import('~/server/functions/audio-cleanup');
+    r2Lists(
+      Array.from({ length: AUDIO_ORPHAN_SCAN_MAX_KEYS + 1 }, (_, i) => ({
+        Key: `${ROOT}obj-${i}.wav`,
+        Size: 1,
+        LastModified: OLD,
       }))
     );
 
@@ -180,17 +254,40 @@ describe('scanOrphanAudio — ownership scoping', () => {
     const res = await scanOrphanAudio({ userId: OWNER });
 
     expect(res.truncated).toBe(true);
-    expect(res.scannedAssetCount).toBe(AUDIO_ORPHAN_SCAN_MAX_ROWS);
-    // The overflow row exists purely to DETECT truncation; it must not be
-    // inspected, or the cap would be off by one every time.
-    expect(limit).toHaveBeenCalledWith(AUDIO_ORPHAN_SCAN_MAX_ROWS + 1);
+    expect(res.scannedObjectCount).toBe(AUDIO_ORPHAN_SCAN_MAX_KEYS);
+    expect(res.orphans).toHaveLength(AUDIO_ORPHAN_SCAN_MAX_KEYS);
+  });
+
+  /**
+   * A user who has never uploaded owns no namespace. The scan must answer
+   * "nothing" WITHOUT minting one — a read-only action that writes to the user
+   * document would hand a prefix to every account that ever clicked Scan.
+   */
+  it('returns an empty scan without touching R2 or minting a prefix', async () => {
+    userLean.mockResolvedValue({ audioStoragePrefix: null });
+    const { scanOrphanAudio } = await import('~/server/functions/audio-cleanup');
+    const res = await scanOrphanAudio({ userId: OWNER });
+
+    expect(res).toEqual({
+      orphans: [],
+      scannedObjectCount: 0,
+      truncated: false,
+      r2Disabled: false,
+    });
+    expect(send).not.toHaveBeenCalled();
+    expect(findOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('reports r2Disabled instead of throwing when storage is not configured', async () => {
     delete process.env.R2_BUCKET;
     const { scanOrphanAudio } = await import('~/server/functions/audio-cleanup');
     const res = await scanOrphanAudio({ userId: OWNER });
-    expect(res).toEqual({ orphans: [], scannedAssetCount: 0, truncated: false, r2Disabled: true });
+    expect(res).toEqual({
+      orphans: [],
+      scannedObjectCount: 0,
+      truncated: false,
+      r2Disabled: true,
+    });
     expect(send).not.toHaveBeenCalled();
   });
 
@@ -202,55 +299,63 @@ describe('scanOrphanAudio — ownership scoping', () => {
 });
 
 describe('deleteOrphanAudio', () => {
-  it('deletes a key the fresh server-side derivation confirms is reclaimable', async () => {
-    lean.mockResolvedValue([{ _id: ASSET_A }]);
-    r2Has({ [`uploads/audio/renditions/${ASSET_A}.opus`]: { size: 2048, lastModified: OLD } });
+  it('deletes a key the fresh server-side scan confirms is reclaimable', async () => {
+    r2Lists([{ Key: `${ROOT}renditions/${ASSET_A}.opus`, Size: 2048, LastModified: OLD }]);
 
     const { deleteOrphanAudio } = await import('~/server/functions/audio-cleanup');
     const res = await deleteOrphanAudio({
-      data: { keys: [`uploads/audio/renditions/${ASSET_A}.opus`] },
+      data: { keys: [`${ROOT}renditions/${ASSET_A}.opus`] },
       userId: OWNER,
     });
 
-    expect(res.deleted).toEqual([`uploads/audio/renditions/${ASSET_A}.opus`]);
+    expect(res.deleted).toEqual([`${ROOT}renditions/${ASSET_A}.opus`]);
     const deletes = send.mock.calls
       .map((c) => c[0])
       .filter((c): c is DeleteObjectCommand => c instanceof DeleteObjectCommand);
-    expect(deletes.map((d) => d.input.Key)).toEqual([`uploads/audio/renditions/${ASSET_A}.opus`]);
+    expect(deletes.map((d) => d.input.Key)).toEqual([`${ROOT}renditions/${ASSET_A}.opus`]);
   });
 
   /**
-   * The cross-tenant guard. The client's key list is only a SELECTION within
-   * the set the server derives from the caller's own rows on this request — it
-   * is never the source of truth. A key belonging to somebody else (here,
-   * another user's asset id, which is a perfectly well-formed key in the same
-   * namespace) is refused without a DeleteObject ever being issued.
+   * The cross-tenant guard, from the other direction: the key is real, it
+   * exists, and it is genuinely unreferenced — it just belongs to somebody
+   * else's namespace. The caller's own scan is the only set a delete can draw
+   * from, so it is refused with no DeleteObject issued.
    */
-  it("refuses a well-formed key that belongs to another user's asset", async () => {
-    lean.mockResolvedValue([{ _id: ASSET_A }]);
-    r2Has({
-      [`uploads/audio/renditions/${ASSET_A}.opus`]: { size: 2048, lastModified: OLD },
-      [`uploads/audio/renditions/${ASSET_B}.opus`]: { size: 4096, lastModified: OLD },
+  it("refuses a real, unreferenced key in another user's namespace", async () => {
+    send.mockImplementation((cmd: unknown) => {
+      if (cmd instanceof ListObjectsV2Command) {
+        // R2 answers honestly for whichever prefix it is asked about.
+        const prefix = cmd.input.Prefix ?? '';
+        const all: Listed[] = [
+          { Key: `${ROOT}mine.wav`, Size: 1, LastModified: OLD },
+          { Key: `${OTHER_ROOT}theirs.wav`, Size: 2, LastModified: OLD },
+        ];
+        return Promise.resolve({
+          Contents: all.filter((o) => o.Key.startsWith(prefix)),
+          IsTruncated: false,
+        });
+      }
+      return Promise.resolve({});
     });
 
     const { deleteOrphanAudio } = await import('~/server/functions/audio-cleanup');
     const res = await deleteOrphanAudio({
-      data: { keys: [`uploads/audio/renditions/${ASSET_B}.opus`] },
+      data: { keys: [`${OTHER_ROOT}theirs.wav`] },
       userId: OWNER,
     });
 
     expect(res.deleted).toEqual([]);
     expect(res.failed).toEqual([
       {
-        key: `uploads/audio/renditions/${ASSET_B}.opus`,
+        key: `${OTHER_ROOT}theirs.wav`,
         error: 'Not a reclaimable object for this account — re-scan',
       },
     ]);
     expect(send.mock.calls.some((c) => c[0] instanceof DeleteObjectCommand)).toBe(false);
   });
 
-  it('refuses a key outside the audio rendition namespace entirely', async () => {
-    lean.mockResolvedValue([{ _id: ASSET_A }]);
+  it('refuses a key outside the audio namespace entirely', async () => {
+    r2Lists([{ Key: `${ROOT}mine.wav`, Size: 1, LastModified: OLD }]);
     const { deleteOrphanAudio } = await import('~/server/functions/audio-cleanup');
     const res = await deleteOrphanAudio({
       data: { keys: ['uploads/campaigns/somebody-elses-cover.png'] },
@@ -266,34 +371,17 @@ describe('deleteOrphanAudio', () => {
    * delete request rather than trusting the scan's output is what catches that.
    */
   it('refuses a key that became referenced between the scan and the delete', async () => {
+    r2Lists([{ Key: `${ROOT}renditions/${ASSET_A}.opus`, Size: 2048, LastModified: OLD }]);
     lean.mockResolvedValue([
-      { _id: ASSET_A, renditions: { opus: { key: `uploads/audio/renditions/${ASSET_A}.opus` } } },
+      { renditions: { opus: { key: `${ROOT}renditions/${ASSET_A}.opus` } } },
     ]);
-    r2Has({ [`uploads/audio/renditions/${ASSET_A}.opus`]: { size: 2048, lastModified: OLD } });
 
     const { deleteOrphanAudio } = await import('~/server/functions/audio-cleanup');
     const res = await deleteOrphanAudio({
-      data: { keys: [`uploads/audio/renditions/${ASSET_A}.opus`] },
+      data: { keys: [`${ROOT}renditions/${ASSET_A}.opus`] },
       userId: OWNER,
     });
     expect(res.deleted).toEqual([]);
     expect(res.failed).toHaveLength(1);
-  });
-});
-
-describe('renditionKeysFor', () => {
-  /**
-   * Pins the cross-service contract. The worker builds these names in
-   * audio-worker/src/process.ts (`const base = uploads/audio/renditions/${id}`)
-   * and the two cannot import each other, so both sides carry a test on the
-   * literal. If the worker's format changes without this one, the objects it
-   * writes become permanently unreclaimable.
-   */
-  it('matches the worker rendition key format exactly', async () => {
-    const { renditionKeysFor } = await import('~/server/functions/audio-cleanup');
-    expect(renditionKeysFor(ASSET_A)).toEqual([
-      `uploads/audio/renditions/${ASSET_A}.opus`,
-      `uploads/audio/renditions/${ASSET_A}.m4a`,
-    ]);
   });
 });

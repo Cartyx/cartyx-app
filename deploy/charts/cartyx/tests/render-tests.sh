@@ -255,6 +255,31 @@ if [ "$heartbeat_ms" -gt "$ffmpeg_ms" ] && [ "$heartbeat_ms" -lt "$claim_ms" ]; 
   bad "HEARTBEAT_MAX_AGE_MS ($heartbeat_ms) must sit between one ffmpeg stage and the claim budget"
 fi
 
+# --- Adversarial review, group D: config that was read but not wired ---
+# All three were read from the environment by the worker and settable NOWHERE,
+# so changing any of them meant a code change, a CI run, an image push and a
+# Flux reconcile. LOG_LEVEL in particular is the 2am lever: without it you
+# cannot raise the worker to debug at all.
+# Assert the VALUES too, not just the names — Helm renders an empty string for
+# a missing values.yaml key, and the deployment's `range` drops empty values,
+# so a name-only assertion would still pass with the entry deleted.
+echo "$worker_out" | grep -q "name: LOG_LEVEL" && ok ||
+  bad "audio-worker log level is settable without an image rebuild"
+echo "$worker_out" | grep -A1 "name: LOG_LEVEL$" | grep -q 'value: "info"' && ok ||
+  bad "audio-worker LOG_LEVEL has a value"
+echo "$worker_out" | grep -q "name: RETRY_BACKOFF_MS" && ok ||
+  bad "audio-worker retry backoff base renders"
+echo "$worker_out" | grep -q "name: RETRY_BACKOFF_MAX_MS" && ok ||
+  bad "audio-worker retry backoff cap renders"
+backoff_ms=$(env_value RETRY_BACKOFF_MS)
+backoff_max_ms=$(env_value RETRY_BACKOFF_MAX_MS)
+# The cap must clear the base or every retry waits the cap, i.e. the backoff
+# stops being a backoff. It must also stay under the claim budget, or a row's
+# retry delay outlives the reaper window that is supposed to rescue it.
+if [ "$backoff_max_ms" -ge "$backoff_ms" ] && [ "$backoff_max_ms" -le "$claim_ms" ]; then ok; else
+  bad "RETRY_BACKOFF_MAX_MS ($backoff_max_ms) must sit between the base ($backoff_ms) and the claim budget ($claim_ms)"
+fi
+
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

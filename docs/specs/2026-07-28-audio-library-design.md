@@ -119,7 +119,8 @@ Owned by a user, not a campaign.
 | `mood[]`                                          | String[]          | Facet. Multi-value.                                                                                                                                                                         |
 | `intensity`                                       | Number            | 1–5, single value. Lets the board swap calm↔intense variants of a scene.                                                                                                                    |
 | `tags[]`                                          | String[]          | Free-form, normalized via the existing `normalizeTags` helper.                                                                                                                              |
-| `sourceKey`                                       | String            | Original upload; retained so assets can be re-transcoded when settings change.                                                                                                              |
+| `sourceKey`                                       | String            | Original upload; retained so assets can be re-transcoded when settings change. `uploads/audio/<owner's random prefix>/<ts>-<rand>.<ext>` — see [Storage layout](#storage-layout).           |
+| `sourceBytes`, `confirmedAt`                      | Number?, Date?    | Both null until confirm's `HeadObject` measures the real object. `confirmedAt` is the flag that says the check happened; the client's declared size is never stored.                        |
 | `renditions`                                      | Object            | `{ opus: {key,url,bytes}, aac: {key,url,bytes} }`.                                                                                                                                          |
 | `onceRenditions`                                  | Object?           | Optional second set, `kind: 'music'` only — see [Music variants](#music-variants).                                                                                                          |
 | `durationMs`                                      | Number            | Decoded length, rounded to whole ms. **Display only** — see `durationSamples`.                                                                                                              |
@@ -129,9 +130,29 @@ Owned by a user, not a campaign.
 | `peaks[]`                                         | Number[]          | ~400 buckets; drives waveform UI without fetching audio.                                                                                                                                    |
 | `status`                                          | enum              | `uploading` → `pending` → `processing` → `ready` \| `failed`.                                                                                                                               |
 | `attempts`, `lastError`, `claimedAt`, `claimedBy` | —                 | Queue/retry state.                                                                                                                                                                          |
+| `nextAttemptAt`                                   | Date?             | Retry backoff gate — a `pending` row is claimable only once this is null or past. Written by the worker, read by `claimNext`.                                                               |
+| `permanentFailure`                                | Boolean           | "This source can never succeed" (over the 30-minute cap, zero samples, wholly silent, truncated). `retryAudioAsset` refuses rows carrying it.                                               |
 
-Indexes: `{ownerId, kind}`, `{ownerId, tags}`, `{status, createdAt}` for the
-claim query.
+Indexes: `{ownerId, kind}`, `{ownerId, tags}`, `{ownerId, createdAt}` for the
+unfiltered library page and the pagination cursor, and `{status, createdAt}`
+for the claim query. Deliberately NO `{title: 'text'}` — title search is a
+`$regex`, which a text index cannot serve, so it was pure write cost.
+
+#### Storage layout
+
+Every audio object lives under a per-user namespace:
+
+    source:    uploads/audio/<prefix>/<timestamp>-<random>.<ext>
+    rendition: uploads/audio/<prefix>/renditions/<assetId>.<opus|m4a>
+
+`<prefix>` is 128 random bits minted on the user's first upload and stored on
+their `User` document (`audioStoragePrefix`). It is random rather than the
+owner id because the key becomes the object's public CDN URL, and an id in the
+path would let anyone holding one shared link correlate that user's whole
+library. The namespace is what makes reclamation owner-scoped: a
+`ListObjectsV2` under one prefix cannot return another user's object, so
+anything it returns that no row references is safe to delete. See
+`app/server/functions/audio-storage.ts`.
 
 #### Music variants
 
@@ -324,13 +345,13 @@ playback implementations would be worse than a dumb one here.
 
 Easy to miss, and each breaks something silently if skipped:
 
-| File                              | Change                                                                                                  |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `app/server/functions/uploads.ts` | `ALLOWED_TYPES` is image-only. Add audio MIME types and a size cap.                                     |
-| `app/server/functions/cleanup.ts` | Add `uploads/audio/` to `TRACKED_PREFIXES`, or the orphan scanner ignores every audio file ever stored. |
-| `.github/dependabot.yml`          | Add an `/audio-worker` npm entry targeting `dev` — the same gap fixed for `/realtime` on 2026-07-28.    |
-| `.github/workflows/deploy.yml`    | Build/push `cartyx-audio-worker`; add a `# ci:worker-tag` marker in `cartyx-infrastructure`.            |
-| `deploy/charts/cartyx/`           | `worker-deployment.yaml` + values, `replicas: 1`, explicit CPU limits. Run `render-tests.sh`.           |
+| File                              | Change                                                                                                                                                                                                               |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app/server/functions/uploads.ts` | `ALLOWED_TYPES` is image-only. Add audio MIME types and a size cap.                                                                                                                                                  |
+| `app/server/functions/cleanup.ts` | Do NOT add `uploads/audio/` to `TRACKED_PREFIXES` — that scanner authorizes on "GM of this campaign", which is not authority over anybody's audio. Audio has its own owner-scoped reclamation in `audio-cleanup.ts`. |
+| `.github/dependabot.yml`          | Add an `/audio-worker` npm entry targeting `dev` — the same gap fixed for `/realtime` on 2026-07-28.                                                                                                                 |
+| `.github/workflows/deploy.yml`    | Build/push `cartyx-audio-worker`; add a `# ci:audioworker-tag` marker in `cartyx-infrastructure`. CI's `services` job must also `docker build` the image, or the first execution of the Dockerfile is a deploy.      |
+| `deploy/charts/cartyx/`           | `worker-deployment.yaml` + values, `replicas: 1`, explicit CPU limits. Run `render-tests.sh`.                                                                                                                        |
 
 ## Error handling
 

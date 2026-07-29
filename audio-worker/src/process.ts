@@ -14,6 +14,7 @@ import { logger } from './logger.js';
 import { probe, analyze, transcode, RENDITION_SAMPLE_RATE } from './ffmpeg.js';
 import { extractPeaks } from './peaks.js';
 import { MAX_ATTEMPTS, computeBackoffMs } from './claim.js';
+import { renditionKeyBase } from './keys.js';
 import { PermanentError } from './errors.js';
 import { maxSourceBytes, readS3Timeouts } from './config.js';
 import { beat } from './heartbeat.js';
@@ -424,6 +425,27 @@ export async function processAsset(
   }
   const sourceKey = asset.sourceKey;
 
+  // Renditions go BESIDE their source, inside the owner's storage namespace
+  // (`uploads/audio/<prefix>/renditions/<id>.<ext>`), which is derived from the
+  // source key — see src/keys.ts. A source key that predates that layout gives
+  // us nowhere safe to put them: writing to the old shared
+  // `uploads/audio/renditions/` root would put objects outside every user's
+  // listing prefix, where the app's cleanup cannot see them and no owner can
+  // ever reclaim them. Permanent, not retryable — the source key is fixed, so
+  // a second attempt lands in exactly the same place.
+  const renditionBase = renditionKeyBase(sourceKey, String(id));
+  if (!renditionBase) {
+    logger.error({ assetId: String(id), sourceKey }, 'source key is not in the per-owner layout');
+    await markFailed(
+      model,
+      id,
+      workerId,
+      'Source key predates the per-owner storage layout; re-upload this file',
+      true
+    );
+    return;
+  }
+
   let dir: string | undefined;
 
   try {
@@ -485,17 +507,17 @@ export async function processAsset(
     const peaks = await extractPeaks(opusPath, PEAK_BUCKETS);
     beat();
 
-    // This key format is a CONTRACT, not an implementation detail. The app's
-    // owner-scoped audio cleanup (`renditionKeysFor` in
-    // app/server/functions/audio-cleanup.ts) reconstructs these two key names
-    // from an asset id in order to find renditions this worker PUT but never
-    // managed to record on the row — the window between these PutObjects and
-    // the fencedWrite below. That reconstruction is also what makes the cleanup
-    // owner-scoped at all: it derives keys from the caller's own rows instead
-    // of listing a bucket it cannot attribute. Change the prefix or the
-    // extensions here and RENDITION_KEY_PREFIX/RENDITION_EXTENSIONS there must
-    // change with them, or those objects become unreclaimable.
-    const base = `uploads/audio/renditions/${String(id)}`;
+    // This key format is a CONTRACT, not an implementation detail. Both
+    // renditions must land under the OWNER'S storage prefix, because that
+    // prefix is the entire basis of the app's owner-scoped cleanup
+    // (app/server/functions/audio-cleanup.ts): it lists
+    // `uploads/audio/<prefix>/` and treats anything no row references as
+    // reclaimable. An object written outside the prefix appears in no user's
+    // listing, so a rendition this worker PUT but never managed to record —
+    // the window between these PutObjects and the fencedWrite below — would be
+    // stranded forever. `renditionBase` is derived from the source key above
+    // precisely so the two cannot end up in different namespaces.
+    const base = renditionBase;
     const renditions: Record<string, { key: string; url: string; bytes: number }> = {};
 
     for (const [codec, path, ext, type] of [

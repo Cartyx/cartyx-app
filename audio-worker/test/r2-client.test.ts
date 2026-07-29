@@ -45,7 +45,7 @@ async function buildClient(): Promise<Record<string, unknown>> {
   hooks.configs = [];
   await processAsset(
     { updateOne: vi.fn().mockResolvedValue({ matchedCount: 1 }) } as never,
-    { _id: 'x', sourceKey: 'uploads/audio/x.wav', attempts: 0 },
+    { _id: 'x', sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/x.wav', attempts: 0 },
     'worker-test'
   );
   return hooks.configs[0];

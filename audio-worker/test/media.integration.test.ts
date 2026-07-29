@@ -114,7 +114,7 @@ async function processFixture(
   const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
   await processAsset(
     { updateOne },
-    { _id: 'asset-1', sourceKey: 'uploads/audio/x', attempts },
+    { _id: 'asset-1', sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/x', attempts },
     'worker-media-test'
   );
   expect(updateOne).toHaveBeenCalledTimes(1);

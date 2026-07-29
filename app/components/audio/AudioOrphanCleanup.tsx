@@ -24,10 +24,12 @@ function formatBytes(bytes: number): string {
 /**
  * "Reclaim orphaned files" for the audio library.
  *
- * The objects this finds are renditions the worker uploaded to R2 but never
- * managed to record on the asset row — the gap between the rendition PUTs and
- * the fenced DB write. Nothing references them, nothing plays them, and the
- * account pays storage for them forever.
+ * The objects this finds are files in the user's own storage namespace that no
+ * asset row references: renditions the worker uploaded but never managed to
+ * record (the gap between the rendition PUTs and the fenced DB write), and
+ * sources left behind when a delete removed the row but the storage delete
+ * failed. Nothing references them, nothing plays them, and the account pays
+ * storage for them forever.
  *
  * Deliberately NOT part of the campaign Clean Up panel. That one authorizes
  * with "GM of this campaign", which is not authority over anybody's audio
@@ -139,7 +141,7 @@ export function AudioOrphanCleanup({
       {result?.truncated && (
         <p className="mt-3 flex items-start gap-2 font-sans text-xs text-amber-300">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-          Partial scan — only the oldest {result.scannedAssetCount} candidate assets were checked.
+          Partial scan — only the first {result.scannedObjectCount} stored files were checked.
           Re-scan after deleting to cover the rest.
         </p>
       )}

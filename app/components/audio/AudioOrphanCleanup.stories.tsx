@@ -31,7 +31,7 @@ export const Scanning: Story = { args: { scanning: true } };
 
 export const NothingToReclaim: Story = {
   args: {
-    result: { orphans: [], scannedAssetCount: 12, truncated: false, r2Disabled: false },
+    result: { orphans: [], scannedObjectCount: 12, truncated: false, r2Disabled: false },
   },
 };
 
@@ -50,7 +50,7 @@ export const OrphansFound: Story = {
           lastModified: '2026-07-01T10:00:01.000Z',
         },
       ],
-      scannedAssetCount: 12,
+      scannedObjectCount: 12,
       truncated: false,
       r2Disabled: false,
     },
@@ -72,7 +72,7 @@ export const TruncatedScan: Story = {
           lastModified: '2026-07-01T10:00:00.000Z',
         },
       ],
-      scannedAssetCount: 500,
+      scannedObjectCount: 500,
       truncated: true,
       r2Disabled: false,
     },
@@ -81,7 +81,7 @@ export const TruncatedScan: Story = {
 
 export const StorageDisabled: Story = {
   args: {
-    result: { orphans: [], scannedAssetCount: 0, truncated: false, r2Disabled: true },
+    result: { orphans: [], scannedObjectCount: 0, truncated: false, r2Disabled: true },
   },
 };
 
@@ -91,7 +91,7 @@ export const ScanFailed: Story = {
 
 export const AfterDelete: Story = {
   args: {
-    result: { orphans: [], scannedAssetCount: 12, truncated: false, r2Disabled: false },
+    result: { orphans: [], scannedObjectCount: 12, truncated: false, r2Disabled: false },
     lastDelete: { deleted: 2, failed: 1 },
   },
 };

@@ -97,7 +97,11 @@ describe('processAsset enforces the size cap at point of use', () => {
 
     await processAsset(
       { updateOne } as never,
-      { _id: 'huge', sourceKey: 'uploads/audio/x.wav', attempts: 0 },
+      {
+        _id: 'huge',
+        sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/x.wav',
+        attempts: 0,
+      },
       WORKER
     );
 
@@ -120,7 +124,11 @@ describe('processAsset enforces the size cap at point of use', () => {
 
     await processAsset(
       { updateOne } as never,
-      { _id: 'liar', sourceKey: 'uploads/audio/x.wav', attempts: 0 },
+      {
+        _id: 'liar',
+        sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/x.wav',
+        attempts: 0,
+      },
       WORKER
     );
 
@@ -139,7 +147,7 @@ describe('processAsset enforces the size cap at point of use', () => {
 
     await processAsset(
       { updateOne } as never,
-      { _id: 'ok', sourceKey: 'uploads/audio/x.wav', attempts: 0 },
+      { _id: 'ok', sourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/x.wav', attempts: 0 },
       WORKER
     );
 
