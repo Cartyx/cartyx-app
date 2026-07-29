@@ -1,8 +1,8 @@
 import mongoose from 'mongoose';
 import { randomUUID } from 'node:crypto';
 import { logger } from './logger.js';
-import { claimNext, reapStale } from './claim.js';
-import { processAsset } from './process.js';
+import { claimNext, reapStale, type ClaimModel } from './claim.js';
+import { processAsset, type Model } from './process.js';
 
 const WORKER_ID = `worker-${randomUUID().slice(0, 8)}`;
 const POLL_MS = Number(process.env.POLL_INTERVAL_MS ?? 5000);
@@ -20,12 +20,24 @@ async function main(): Promise<void> {
   await mongoose.connect(uri);
   logger.info({ workerId: WORKER_ID }, 'audio worker started');
 
-  const model = mongoose.connection.collection('audioassets') as never;
+  // The real mongoose Collection's findOneAndUpdate/updateMany/updateOne are
+  // structurally incompatible with ClaimModel/Model — those type their
+  // filter/update params as `unknown`, which the real driver's narrower
+  // param types don't satisfy under contravariance — so *some* cast is
+  // required here. `as never` (the bottom type) was too wide: it disables
+  // checking on `model` for the rest of this file, so a typo, a wrong
+  // argument count, or a future signature change in claim.ts/process.ts
+  // would all silently compile. Bridge through `unknown` to the actual
+  // intersection type instead, so real drift is still caught.
+  const model = mongoose.connection.collection('audioassets') as unknown as ClaimModel & Model;
 
   while (running) {
     try {
       await reapStale(model, STALE_MS);
-      const asset = await claimNext<{ _id: unknown; sourceKey?: string }>(model, WORKER_ID);
+      const asset = await claimNext<{ _id: unknown; sourceKey?: string; attempts?: number }>(
+        model,
+        WORKER_ID
+      );
       if (!asset) {
         await new Promise((r) => setTimeout(r, POLL_MS));
         continue;

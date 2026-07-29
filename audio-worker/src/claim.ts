@@ -1,6 +1,6 @@
 export const MAX_ATTEMPTS = 3;
 
-type ClaimModel = {
+export type ClaimModel = {
   findOneAndUpdate: (f: unknown, u: unknown, o: unknown) => Promise<unknown>;
   updateMany: (f: unknown, u: unknown) => Promise<{ modifiedCount?: number }>;
 };

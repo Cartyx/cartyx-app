@@ -5,32 +5,52 @@ import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3
 import { logger } from './logger.js';
 import { probe, transcode } from './ffmpeg.js';
 import { extractPeaks } from './peaks.js';
+import { MAX_ATTEMPTS } from './claim.js';
 
 const PEAK_BUCKETS = 400;
 
-function r2() {
+/** Thrown by `r2()` when required R2 env vars are absent, named so it reads
+ * clearly in logs/lastError instead of surfacing as an opaque AWS SDK
+ * validation error from a client built with empty-string credentials. */
+class R2ConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'R2ConfigError';
+  }
+}
+
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new R2ConfigError(`Missing required R2 environment variable: ${name}`);
+  }
+  return value;
+}
+
+function r2(): { client: S3Client; bucket: string; cdnUrl: string } {
+  const accountId = requireEnv('R2_ACCOUNT_ID');
+  const accessKeyId = requireEnv('R2_ACCESS_KEY_ID');
+  const secretAccessKey = requireEnv('R2_SECRET_ACCESS_KEY');
+  const bucket = requireEnv('R2_BUCKET');
+  const cdnUrl = requireEnv('CDN_URL');
+
   return {
     client: new S3Client({
       region: 'auto',
-      endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
-      credentials: {
-        accessKeyId: process.env.R2_ACCESS_KEY_ID ?? '',
-        secretAccessKey: process.env.R2_SECRET_ACCESS_KEY ?? '',
-      },
+      endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+      credentials: { accessKeyId, secretAccessKey },
     }),
-    bucket: process.env.R2_BUCKET ?? '',
-    cdnUrl: (process.env.CDN_URL ?? '').replace(/\/+$/, ''),
+    bucket,
+    cdnUrl: cdnUrl.replace(/\/+$/, ''),
   };
 }
 
-type Model = {
+export type Model = {
   updateOne: (f: unknown, u: unknown) => Promise<unknown>;
 };
 
-/**
- * Mark a claimed asset failed. Used both for the "malformed row" fast path
- * (no sourceKey — see below) and the general catch-all in processAsset.
- */
+/** Permanent failure: nothing about retrying would help (bad row, exhausted
+ * attempts). Clears the claim so the row stops showing as in-flight. */
 async function markFailed(model: Model, id: unknown, message: string): Promise<void> {
   await model.updateOne(
     { _id: id },
@@ -38,9 +58,30 @@ async function markFailed(model: Model, id: unknown, message: string): Promise<v
   );
 }
 
+/**
+ * Return a claimed row to `pending` so the next `claimNext` picks it back up.
+ * `lastError` is still recorded so the reason for the retry stays visible.
+ * Only valid under the attempt cap — callers must check `attempts <
+ * MAX_ATTEMPTS` first; this function doesn't re-check.
+ */
+async function requeueForRetry(model: Model, id: unknown, message: string): Promise<void> {
+  await model.updateOne(
+    { _id: id },
+    {
+      $set: {
+        status: 'pending',
+        lastError: message,
+        claimedAt: null,
+        claimedBy: null,
+        updatedAt: new Date(),
+      },
+    }
+  );
+}
+
 export async function processAsset(
   model: Model,
-  asset: { _id: unknown; sourceKey?: string }
+  asset: { _id: unknown; sourceKey?: string; attempts?: number }
 ): Promise<void> {
   const id = asset._id;
 
@@ -52,6 +93,11 @@ export async function processAsset(
   // GetObjectCommand with Key: undefined — the AWS SDK would throw its own
   // opaque validation error deep in the retry/middleware stack. Fail fast
   // with a message that says what's actually wrong instead.
+  //
+  // This is a permanent condition — no amount of retrying fixes a row with
+  // no sourceKey — so it goes straight to `failed` rather than through the
+  // retry path below, and it does so before any temp dir or R2 client is
+  // created.
   if (!asset.sourceKey) {
     logger.error({ assetId: String(id) }, 'asset has no sourceKey, cannot transcode');
     await markFailed(model, id, 'Asset has no sourceKey');
@@ -59,10 +105,19 @@ export async function processAsset(
   }
   const sourceKey = asset.sourceKey;
 
-  const dir = await mkdtemp(join(tmpdir(), 'cartyx-audio-'));
-  const { client, bucket, cdnUrl } = r2();
+  let dir: string | undefined;
 
   try {
+    dir = await mkdtemp(join(tmpdir(), 'cartyx-audio-'));
+    // r2() throws R2ConfigError if any required env var is absent. It used
+    // to be called outside this try block; moved inside so a misconfigured
+    // environment goes through the same catch/retry/fail handling as any
+    // other failure (and so `dir` still gets cleaned up in `finally`)
+    // instead of propagating uncaught to index.ts's loop — which would
+    // leave the row stuck in `processing` until reapStale's timeout, and
+    // leak the temp dir.
+    const { client, bucket, cdnUrl } = r2();
+
     const src = join(dir, 'source');
     const obj = await client.send(new GetObjectCommand({ Bucket: bucket, Key: sourceKey }));
     if (!obj.Body) {
@@ -125,24 +180,38 @@ export async function processAsset(
     );
     logger.info({ assetId: String(id) }, 'transcoded');
   } catch (err) {
-    // NOTE: every failure here is recorded identically, regardless of
-    // whether it's permanent (corrupt/unsupported source that will never
-    // decode — retrying is pointless and just burns MAX_ATTEMPTS) or
-    // transient (an R2 timeout, a momentary network blip — retrying would
-    // likely succeed). reapStale() already returns attempts < MAX_ATTEMPTS
-    // rows to `pending` for a retry, so a transient failure does get
-    // another shot, but a permanent one burns through the same three
-    // attempts before landing on `failed` instead of failing immediately.
-    // Distinguishing ffmpeg's "Invalid data found when processing input" /
-    // decode errors (permanent) from AWS SDK network/5xx errors (transient)
-    // would let permanent failures skip straight to `failed` and free the
-    // retry budget for genuinely transient ones. Not implemented here —
-    // the brief specifies uniform `failed` handling and doing more would
-    // expand this task's scope.
+    // Every caught error here — a corrupt/unsupported source ffmpeg can
+    // never decode, an R2 timeout, a momentary network blip, a missing R2
+    // env var — is retried up to MAX_ATTEMPTS, then failed. No matching on
+    // ffmpeg exit codes or AWS SDK error names to tell "permanent" from
+    // "transient" apart: that surface is brittle and rots silently, and a
+    // corrupt file burning a few cheap attempts before failing is
+    // acceptable bounded waste.
+    //
+    // This can't lean on reapStale() for the retry: reapStale only rescues
+    // rows still stuck in `status: 'processing'` past its stale timeout —
+    // i.e. a worker that died before reaching this catch. A row that *was*
+    // caught here has already been moved out of `processing` (to `pending`
+    // or `failed` below), so reapStale never sees it. The retry budget for
+    // caught errors has to be enforced explicitly, right here, using the
+    // attempt count claimNext() already stamped on this row (`$inc:
+    // {attempts: 1}`, returned via `returnDocument: 'after'`) — no extra
+    // read needed.
+    //
+    // `attempts` is expected to always be present on a row that came
+    // through claimNext (Mongo's $inc creates it starting from 0 if
+    // missing). If it's ever absent anyway, treat that as "at the cap" —
+    // fail immediately rather than risk retrying a malformed row forever.
+    const attempts = asset.attempts ?? MAX_ATTEMPTS;
     const message = err instanceof Error ? err.message : 'Transcode failed';
-    logger.error({ err, assetId: String(id) }, 'transcode failed');
-    await markFailed(model, id, message);
+    logger.error({ err, assetId: String(id), attempts }, 'transcode failed');
+
+    if (attempts < MAX_ATTEMPTS) {
+      await requeueForRetry(model, id, message);
+    } else {
+      await markFailed(model, id, message);
+    }
   } finally {
-    await rm(dir, { recursive: true, force: true });
+    if (dir) await rm(dir, { recursive: true, force: true });
   }
 }
