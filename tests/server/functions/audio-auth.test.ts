@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
 
 describe('resolveApiUser', () => {
   it('returns null when no Authorization header is present', async () => {
@@ -136,17 +136,26 @@ describe('POST /api/audio/uploads/$id/confirm', () => {
   });
 });
 
+// Shared by both "authorized path" blocks below: the earlier 401 tests in this file
+// dynamic-import the route modules against the real (unmocked) resolver, and module
+// resolution caches that binding — so a fresh registry is required before doMock-ing
+// a resolveApiUser that actually returns a user id.
+function mockAuthorizedUser() {
+  vi.resetModules();
+  vi.doMock('~/server/functions/audio-auth', () => ({
+    resolveApiUser: vi.fn(async () => 'user-1'),
+  }));
+}
+
 describe('POST /api/audio/uploads — authorized path', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuthorizedUser();
+  });
+
+  afterAll(() => vi.doUnmock('~/server/functions/audio-auth'));
 
   it('calls createAudioUpload with the parsed payload and resolved user once authorized', async () => {
-    // The earlier tests in this file dynamic-import the route module against the
-    // real (unmocked) resolver; module resolution caches that binding, so a fresh
-    // registry is required before doMock-ing a different resolveApiUser here.
-    vi.resetModules();
-    vi.doMock('~/server/functions/audio-auth', () => ({
-      resolveApiUser: vi.fn(async () => 'user-1'),
-    }));
     const { createAudioUpload } = await import('~/server/functions/audio');
     vi.mocked(createAudioUpload).mockResolvedValue({
       assetId: 'a1',
@@ -166,6 +175,117 @@ describe('POST /api/audio/uploads — authorized path', () => {
       data: expect.objectContaining({ filename: 'storm.wav' }),
       userId: 'user-1',
     });
-    vi.doUnmock('~/server/functions/audio-auth');
+  });
+
+  it('returns 500 with the generic message when createAudioUpload throws, never echoing the raw message', async () => {
+    const { createAudioUpload } = await import('~/server/functions/audio');
+    vi.mocked(createAudioUpload).mockRejectedValue(
+      new Error('AccessDenied: bucket policy forbids PutObject on cartyx-audio-prod')
+    );
+    const { post } = await import('~/routes/api/audio/uploads');
+    const res = await post({
+      request: new Request('https://x.test/api/audio/uploads', {
+        method: 'POST',
+        headers: { authorization: 'Bearer cartyx_pat_whatever' },
+        body: JSON.stringify(VALID_UPLOAD_BODY),
+      }),
+    });
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body).toEqual({ error: 'Upload could not be started' });
+    expect(JSON.stringify(body)).not.toContain('cartyx-audio-prod');
+    expect(JSON.stringify(body)).not.toContain('AccessDenied');
+  });
+
+  it('returns 400 with the generic invalid-payload message for a malformed JSON body, without calling createAudioUpload', async () => {
+    const { createAudioUpload } = await import('~/server/functions/audio');
+    const { post } = await import('~/routes/api/audio/uploads');
+    const res = await post({
+      request: new Request('https://x.test/api/audio/uploads', {
+        method: 'POST',
+        headers: { authorization: 'Bearer cartyx_pat_whatever' },
+        body: '{not valid json',
+      }),
+    });
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body).toEqual({ error: 'Invalid payload' });
+    expect(createAudioUpload).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/audio/uploads/$id/confirm — authorized path', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockAuthorizedUser();
+  });
+
+  afterAll(() => vi.doUnmock('~/server/functions/audio-auth'));
+
+  async function callConfirm() {
+    const { post } = await import('~/routes/api/audio/uploads.$id.confirm');
+    return post({
+      request: new Request('https://x.test/api/audio/uploads/a1/confirm', {
+        method: 'POST',
+        headers: { authorization: 'Bearer cartyx_pat_whatever' },
+      }),
+      params: { id: 'a1' },
+    });
+  }
+
+  it('echoes "Audio asset not found" verbatim with a 400', async () => {
+    const { confirmAudioUpload } = await import('~/server/functions/audio');
+    vi.mocked(confirmAudioUpload).mockRejectedValue(new Error('Audio asset not found'));
+    const res = await callConfirm();
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: 'Audio asset not found' });
+  });
+
+  it('echoes a "File too large" message verbatim with a 400', async () => {
+    const { confirmAudioUpload } = await import('~/server/functions/audio');
+    const message = 'File too large: 52428801 bytes exceeds 52428800';
+    vi.mocked(confirmAudioUpload).mockRejectedValue(new Error(message));
+    const res = await callConfirm();
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: message });
+  });
+
+  it('echoes an "Unsupported audio type" message verbatim with a 400', async () => {
+    const { confirmAudioUpload } = await import('~/server/functions/audio');
+    const message = 'Unsupported audio type: audio/ogg';
+    vi.mocked(confirmAudioUpload).mockRejectedValue(new Error(message));
+    const res = await callConfirm();
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: message });
+  });
+
+  it('falls back to the generic "Confirm failed" message for a non-domain error and never echoes it', async () => {
+    const { confirmAudioUpload } = await import('~/server/functions/audio');
+    // Shaped like a real infra failure (Mongo connection refused) — exactly the
+    // class of error the allowlist exists to keep off the wire.
+    vi.mocked(confirmAudioUpload).mockRejectedValue(
+      new Error('connect ECONNREFUSED 127.0.0.1:27017')
+    );
+    const res = await callConfirm();
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body).toEqual({ error: 'Confirm failed' });
+    // The negative assertion is what actually protects the allowlist: a future
+    // reword of confirmAudioUpload's message text degrading the regex to
+    // match-everything would still pass a message-shape check, but not this one.
+    expect(JSON.stringify(body)).not.toContain('ECONNREFUSED');
+    expect(JSON.stringify(body)).not.toContain('27017');
+  });
+
+  it('returns 200 with the confirm result on success', async () => {
+    const { confirmAudioUpload } = await import('~/server/functions/audio');
+    vi.mocked(confirmAudioUpload).mockResolvedValue({ assetId: 'a1', status: 'pending' });
+    const res = await callConfirm();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ assetId: 'a1', status: 'pending' });
+    expect(confirmAudioUpload).toHaveBeenCalledWith({
+      data: { assetId: 'a1' },
+      userId: 'user-1',
+    });
   });
 });

@@ -7,7 +7,17 @@ export async function post({ request }: { request: Request }): Promise<Response>
   const userId = await resolveApiUser(request);
   if (!userId) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
-  const parsed = createAudioUploadSchema.safeParse(await request.json());
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    // Unreachable today (resolveApiUser 401s every request first), but goes live
+    // the moment phase 3 issues real tokens — a malformed body must not throw
+    // past the route's { error } contract.
+    return Response.json({ error: 'Invalid payload' }, { status: 400 });
+  }
+
+  const parsed = createAudioUploadSchema.safeParse(body);
   if (!parsed.success) {
     return Response.json({ error: 'Invalid payload' }, { status: 400 });
   }
