@@ -22,20 +22,28 @@ describe('getAudioUploadUrl', () => {
   it('rejects an unsupported content type', async () => {
     const { getAudioUploadUrl } = await import('~/server/functions/uploads');
     await expect(
-      getAudioUploadUrl({ contentType: 'image/png', bytes: 10, userId: 'u1' })
+      getAudioUploadUrl({ contentType: 'image/png', bytes: 10, telemetryUserId: 'u1' })
     ).rejects.toThrow(/audio/i);
   });
 
   it('rejects a declared size over the cap', async () => {
     const { getAudioUploadUrl } = await import('~/server/functions/uploads');
     await expect(
-      getAudioUploadUrl({ contentType: 'audio/wav', bytes: 50 * 1024 * 1024 + 1, userId: 'u1' })
+      getAudioUploadUrl({
+        contentType: 'audio/wav',
+        bytes: 50 * 1024 * 1024 + 1,
+        telemetryUserId: 'u1',
+      })
     ).rejects.toThrow(/too large/i);
   });
 
   it('returns a signed url under the uploads/audio prefix', async () => {
     const { getAudioUploadUrl } = await import('~/server/functions/uploads');
-    const r = await getAudioUploadUrl({ contentType: 'audio/wav', bytes: 1024, userId: 'u1' });
+    const r = await getAudioUploadUrl({
+      contentType: 'audio/wav',
+      bytes: 1024,
+      telemetryUserId: 'u1',
+    });
     expect(r.key).toMatch(/^uploads\/audio\//);
     expect(r.key).toMatch(/\.wav$/);
     expect(r.publicUrl).toBe(`https://cdn.test/${r.key}`);
@@ -51,7 +59,11 @@ describe('getAudioUploadUrl', () => {
    */
   it('never consults the session — the caller has already authenticated', async () => {
     const { getAudioUploadUrl } = await import('~/server/functions/uploads');
-    await getAudioUploadUrl({ contentType: 'audio/wav', bytes: 1024, userId: 'mongo-id-1' });
+    await getAudioUploadUrl({
+      contentType: 'audio/wav',
+      bytes: 1024,
+      telemetryUserId: 'session-provider-id',
+    });
     expect(getSession).not.toHaveBeenCalled();
   });
 
@@ -61,7 +73,7 @@ describe('getAudioUploadUrl', () => {
     const r = await getAudioUploadUrl({
       contentType: 'audio/wav',
       bytes: 1024,
-      userId: 'token-user',
+      telemetryUserId: 'token-user',
     });
     expect(r.uploadUrl).toBe('https://signed.example/put');
   });
@@ -69,11 +81,17 @@ describe('getAudioUploadUrl', () => {
   it('tags a failure with the caller-supplied id, not a session-derived one', async () => {
     const { getAudioUploadUrl } = await import('~/server/functions/uploads');
     await expect(
-      getAudioUploadUrl({ contentType: 'image/png', bytes: 10, userId: 'mongo-id-1' })
+      getAudioUploadUrl({
+        contentType: 'image/png',
+        bytes: 10,
+        telemetryUserId: 'session-provider-id',
+      })
     ).rejects.toThrow();
-    // createAudioUpload tags with the Mongo _id; this used to tag with the
-    // session's OAuth provider id, so one failed upload appeared under two
-    // different users.
-    expect(vi.mocked(serverCaptureException).mock.calls[0][1]).toBe('mongo-id-1');
+    // The caller supplies the telemetry identity, and it must be the one the
+    // rest of the app uses — the OAuth provider id that `requireCampaignMember`
+    // returns as `sessionUserId` and that `getUploadUrl` above passes. This
+    // parameter used to be the Mongo `_id`, so the same human minting an image
+    // upload URL and an audio upload URL landed in GlitchTip as two people.
+    expect(vi.mocked(serverCaptureException).mock.calls[0][1]).toBe('session-provider-id');
   });
 });

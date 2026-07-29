@@ -412,6 +412,40 @@ describe('retryAudioAsset', () => {
      * `permanentFailure: false` and MUST stay retryable — a guard that blocked
      * it would silently delete the feature this function exists for.
      */
+    /**
+     * Why `retryAudioAsset` needs no rate limit of its own.
+     *
+     * A retry is only accepted for a row in `failed`. The moment one is
+     * accepted the row becomes `pending`, and it cannot return to `failed`
+     * until the worker has claimed it, exhausted MAX_ATTEMPTS with exponential
+     * backoff between attempts (audio-worker/src/claim.ts), and written the
+     * terminal state. So retries for a given asset are SERIALIZED by the
+     * pipeline itself: a second click while the first cycle is in flight
+     * matches nothing and is refused. Combined with `permanentFailure` (a
+     * source the worker has judged unusable is never retryable at all) and the
+     * 30-minute duration cap that bounds any single attempt, there is no
+     * unbounded loop left for a cooldown to close — which is why none was
+     * added. This test pins the property that argument rests on.
+     */
+    it('refuses a row that is already in flight, so retries cannot overlap', async () => {
+      const { retryAudioAsset } = await import('~/server/functions/audio');
+      vi.mocked(AudioAsset.findOneAndUpdate).mockReset();
+      mockUpdateResult(null);
+      await expect(retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' })).rejects.toThrow(
+        /cannot be retried/i
+      );
+      const retryFilter = vi.mocked(AudioAsset.findOneAndUpdate).mock
+        .calls[0][0] as unknown as Record<string, unknown>;
+
+      const base = { _id: 'a1', ownerId: 'u1', confirmedAt: new Date(), permanentFailure: false };
+      // Every state a retried row passes through before it can be retried again.
+      expect(matchesFilter({ ...base, status: 'pending' }, retryFilter)).toBe(false);
+      expect(matchesFilter({ ...base, status: 'processing' }, retryFilter)).toBe(false);
+      expect(matchesFilter({ ...base, status: 'ready' }, retryFilter)).toBe(false);
+      // ...and the one state from which a retry is legitimate.
+      expect(matchesFilter({ ...base, status: 'failed' }, retryFilter)).toBe(true);
+    });
+
     it('excludes a permanently-failed row, and admits a transiently-failed or legacy one', async () => {
       const { retryAudioAsset } = await import('~/server/functions/audio');
       vi.mocked(AudioAsset.findOneAndUpdate).mockReset();

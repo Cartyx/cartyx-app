@@ -101,7 +101,7 @@ describe('POST /api/audio/uploads/$id/confirm', () => {
     const { post } = await import('~/routes/api/audio/uploads.$id.confirm');
     const res = await post({
       request: new Request('https://x.test/api/audio/uploads/a1/confirm', { method: 'POST' }),
-      params: { id: 'a1' },
+      params: { id: '507f1f77bcf86cd799439011' },
     });
     expect(res.status).toBe(401);
     expect(confirmAudioUpload).not.toHaveBeenCalled();
@@ -115,7 +115,7 @@ describe('POST /api/audio/uploads/$id/confirm', () => {
         method: 'POST',
         headers: { authorization: 'Basic dXNlcjpwYXNz' },
       }),
-      params: { id: 'a1' },
+      params: { id: '507f1f77bcf86cd799439011' },
     });
     expect(res.status).toBe(401);
     expect(confirmAudioUpload).not.toHaveBeenCalled();
@@ -129,7 +129,7 @@ describe('POST /api/audio/uploads/$id/confirm', () => {
         method: 'POST',
         headers: { authorization: 'Bearer cartyx_pat_whatever' },
       }),
-      params: { id: 'a1' },
+      params: { id: '507f1f77bcf86cd799439011' },
     });
     expect(res.status).toBe(401);
     expect(confirmAudioUpload).not.toHaveBeenCalled();
@@ -229,7 +229,7 @@ describe('POST /api/audio/uploads/$id/confirm — authorized path', () => {
         method: 'POST',
         headers: { authorization: 'Bearer cartyx_pat_whatever' },
       }),
-      params: { id: 'a1' },
+      params: { id: '507f1f77bcf86cd799439011' },
     });
   }
 
@@ -299,7 +299,7 @@ describe('POST /api/audio/uploads/$id/confirm — authorized path', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ assetId: 'a1', status: 'pending' });
     expect(confirmAudioUpload).toHaveBeenCalledWith({
-      data: { assetId: 'a1' },
+      data: { assetId: '507f1f77bcf86cd799439011' },
       userId: 'user-1',
     });
   });

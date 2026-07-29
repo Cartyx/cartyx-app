@@ -485,10 +485,16 @@ export async function processAsset(
     const peaks = await extractPeaks(opusPath, PEAK_BUCKETS);
     beat();
 
-    // Renditions MUST stay under uploads/audio/ — Task 8's orphan scanner
-    // (app/server/functions/cleanup.ts) only walks TRACKED_PREFIXES, and a
-    // key outside that prefix is invisible to it forever (never scanned,
-    // never flagged as orphan, never cleaned up).
+    // This key format is a CONTRACT, not an implementation detail. The app's
+    // owner-scoped audio cleanup (`renditionKeysFor` in
+    // app/server/functions/audio-cleanup.ts) reconstructs these two key names
+    // from an asset id in order to find renditions this worker PUT but never
+    // managed to record on the row — the window between these PutObjects and
+    // the fencedWrite below. That reconstruction is also what makes the cleanup
+    // owner-scoped at all: it derives keys from the caller's own rows instead
+    // of listing a bucket it cannot attribute. Change the prefix or the
+    // extensions here and RENDITION_KEY_PREFIX/RENDITION_EXTENSIONS there must
+    // change with them, or those objects become unreclaimable.
     const base = `uploads/audio/renditions/${String(id)}`;
     const renditions: Record<string, { key: string; url: string; bytes: number }> = {};
 

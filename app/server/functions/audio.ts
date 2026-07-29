@@ -21,6 +21,58 @@ async function ensureDb() {
   if (!isDBConnected()) await connectDB();
 }
 
+/**
+ * A mistake in the caller's own request — a malformed cursor, an id that isn't
+ * an id. It is still an error (the caller must learn its request was rejected),
+ * but it is NOT a server fault, so it must not file a GlitchTip event: a client
+ * that sends one bad cursor per keystroke would otherwise author one error
+ * report per keystroke, and the signal in GlitchTip is worth more than that.
+ *
+ * `~/types/schemas/audio.ts` rejects these shapes at the request boundary, so
+ * this class covers the fail-closed paths behind it rather than the common case.
+ */
+export class AudioClientError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'AudioClientError';
+  }
+}
+
+/**
+ * Every audio function takes the acting user twice, and the two values are
+ * genuinely different things:
+ *
+ * - `userId` is the User document's Mongo `_id`. It is what `AudioAsset.ownerId`
+ *   references, so it is the ONLY value that may be used to scope a query.
+ * - `sessionUserId` is the OAuth provider's subject id — the identity the rest
+ *   of this codebase tags telemetry with (`requireCampaignMember` returns it
+ *   under exactly this name, and ~150 call sites across `app/server/functions/`
+ *   pass it to `serverCaptureException`/`serverCaptureEvent`). Umami and
+ *   GlitchTip already know each human by it.
+ *
+ * Before this split, the audio functions tagged telemetry with the Mongo `_id`
+ * while every other server function tagged the provider id, so one human doing
+ * an image upload and an audio upload showed up as two unrelated users.
+ * `getAudioUploadUrl`'s doc comment used to assert that this could not happen;
+ * it was describing the intent, not the behaviour.
+ *
+ * It is optional because the ingest surface is deliberately auth-agnostic (see
+ * the module comment in `~/utils/audio-server-fns.ts`): the phase-3 bearer-token
+ * adapter has no OAuth session to draw one from. When it's absent the Mongo id
+ * is used, which is worse than a provider id but better than `undefined`.
+ */
+type Actor = { userId: string; sessionUserId?: string };
+
+function telemetryId(actor: Actor): string {
+  return actor.sessionUserId ?? actor.userId;
+}
+
+/** Report to GlitchTip unless the failure was the caller's own doing. */
+function reportAudioError(e: unknown, actor: Actor, context: Record<string, unknown>) {
+  if (e instanceof AudioClientError) return;
+  serverCaptureException(e, telemetryId(actor), context);
+}
+
 function titleFromFilename(filename: string): string {
   return filename.replace(/\.[^.]+$/, '').slice(0, 200) || 'Untitled';
 }
@@ -28,16 +80,16 @@ function titleFromFilename(filename: string): string {
 export async function createAudioUpload({
   data,
   userId,
+  sessionUserId,
 }: {
   data: z.infer<typeof createAudioUploadSchema>;
-  userId: string;
-}) {
+} & Actor) {
   try {
     await ensureDb();
     const { uploadUrl, key } = await getAudioUploadUrl({
       contentType: data.contentType,
       bytes: data.bytes,
-      userId,
+      telemetryUserId: telemetryId({ userId, sessionUserId }),
     });
 
     const doc = await AudioAsset.create({
@@ -63,7 +115,7 @@ export async function createAudioUpload({
 
     return { assetId: String(doc._id), uploadUrl, key };
   } catch (e) {
-    serverCaptureException(e, userId, { action: 'createAudioUpload' });
+    reportAudioError(e, { userId, sessionUserId }, { action: 'createAudioUpload' });
     throw e;
   }
 }
@@ -71,10 +123,10 @@ export async function createAudioUpload({
 export async function confirmAudioUpload({
   data,
   userId,
+  sessionUserId,
 }: {
   data: z.infer<typeof confirmAudioUploadSchema>;
-  userId: string;
-}) {
+} & Actor) {
   try {
     await ensureDb();
     const asset = await AudioAsset.findOne({ _id: data.assetId, ownerId: userId });
@@ -132,10 +184,12 @@ export async function confirmAudioUpload({
     );
     if (!updated) throw new Error('Audio asset is not awaiting confirmation');
 
-    serverCaptureEvent(userId, 'audio_upload_confirmed', { assetId: data.assetId });
+    serverCaptureEvent(telemetryId({ userId, sessionUserId }), 'audio_upload_confirmed', {
+      assetId: data.assetId,
+    });
     return { assetId: data.assetId, status: updated.status ?? 'pending' };
   } catch (e) {
-    serverCaptureException(e, userId, { action: 'confirmAudioUpload' });
+    reportAudioError(e, { userId, sessionUserId }, { action: 'confirmAudioUpload' });
     throw e;
   }
 }
@@ -194,22 +248,49 @@ function encodeAudioCursor(createdAt: Date, id: string): string {
   return `${createdAt.getTime()}_${id}`;
 }
 
+/** JS's maximum representable Date. Anything beyond it builds an `Invalid Date`. */
+const MAX_TIMESTAMP_MS = 8_640_000_000_000_000;
+const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
+
+/**
+ * Both halves of the cursor are validated, and both had to be.
+ *
+ * The old guard was `Number.isFinite(ms)`, which reads as "this is a safe
+ * timestamp" and isn't: `Number.isFinite(1e20)` is `true`, but the largest Date
+ * JS can represent is 8.64e15 ms, so `new Date(1e20)` is `Invalid Date`.
+ * Handing that to Mongoose produces a `CastError` — an HTTP 500 and a GlitchTip
+ * event, from a one-line request body. The id half was never checked at all, so
+ * `1700000000000_notanoid` did the same thing by a different route.
+ *
+ * Returning null means "this cursor is not something this server ever minted".
+ * `listAudioAssets` treats that as a hard error rather than silently restarting
+ * from page 1: a silent fallback re-serves page 1 in the middle of an infinite
+ * scroll, so the user sees duplicate rows and the client never learns its
+ * cursor was rejected. `listAudioAssetsSchema.cursor` rejects the same shapes at
+ * the request boundary, so in practice nothing reaches this fail-closed path —
+ * it exists so the function is safe for any caller, not just validated ones.
+ */
 function decodeAudioCursor(cursor: string): { createdAt: Date; id: string } | null {
   const idx = cursor.indexOf('_');
   if (idx <= 0 || idx === cursor.length - 1) return null;
-  const ms = Number(cursor.slice(0, idx));
+  const msPart = cursor.slice(0, idx);
   const id = cursor.slice(idx + 1);
-  if (!Number.isFinite(ms)) return null;
-  return { createdAt: new Date(ms), id };
+  if (!/^\d+$/.test(msPart)) return null;
+  const ms = Number(msPart);
+  if (!Number.isSafeInteger(ms) || ms > MAX_TIMESTAMP_MS) return null;
+  if (!OBJECT_ID_RE.test(id)) return null;
+  const createdAt = new Date(ms);
+  if (Number.isNaN(createdAt.getTime())) return null;
+  return { createdAt, id };
 }
 
 export async function listAudioAssets({
   data,
   userId,
+  sessionUserId,
 }: {
   data: z.infer<typeof listAudioAssetsSchema>;
-  userId: string;
-}): Promise<{ items: AudioAssetData[]; nextCursor: string | null }> {
+} & Actor): Promise<{ items: AudioAssetData[]; nextCursor: string | null }> {
   try {
     await ensureDb();
 
@@ -253,14 +334,17 @@ export async function listAudioAssets({
     }
     if (data.cursor) {
       const decoded = decodeAudioCursor(data.cursor);
-      if (decoded) {
-        // Compound cursor: strictly older createdAt, OR same createdAt with a
-        // strictly smaller _id — matches the `{ createdAt: -1, _id: -1 }` sort.
-        query.$or = [
-          { createdAt: { $lt: decoded.createdAt } },
-          { createdAt: decoded.createdAt, _id: { $lt: decoded.id } },
-        ];
-      }
+      // Fail closed. Silently ignoring an undecodable cursor restarts the list
+      // at page 1, which in the infinite-scroll UI appends page 1 underneath
+      // page 1 — duplicate rows, and no signal to the client that its cursor
+      // was thrown away.
+      if (!decoded) throw new AudioClientError('Invalid pagination cursor');
+      // Compound cursor: strictly older createdAt, OR same createdAt with a
+      // strictly smaller _id — matches the `{ createdAt: -1, _id: -1 }` sort.
+      query.$or = [
+        { createdAt: { $lt: decoded.createdAt } },
+        { createdAt: decoded.createdAt, _id: { $lt: decoded.id } },
+      ];
     }
 
     const rows = (await AudioAsset.find(query)
@@ -276,7 +360,7 @@ export async function listAudioAssets({
         : null;
     return { items, nextCursor };
   } catch (e) {
-    serverCaptureException(e, userId, { action: 'listAudioAssets' });
+    reportAudioError(e, { userId, sessionUserId }, { action: 'listAudioAssets' });
     throw e;
   }
 }
@@ -284,10 +368,10 @@ export async function listAudioAssets({
 export async function updateAudioAsset({
   data,
   userId,
+  sessionUserId,
 }: {
   data: z.infer<typeof updateAudioAssetSchema>;
-  userId: string;
-}): Promise<AudioAssetData> {
+} & Actor): Promise<AudioAssetData> {
   try {
     await ensureDb();
     // Only include fields the caller actually provided — the pre('save') hook that
@@ -317,7 +401,7 @@ export async function updateAudioAsset({
     if (!doc) throw new Error('Audio asset not found');
     return serializeAudioAsset(doc as unknown as AudioDoc);
   } catch (e) {
-    serverCaptureException(e, userId, { action: 'updateAudioAsset' });
+    reportAudioError(e, { userId, sessionUserId }, { action: 'updateAudioAsset' });
     throw e;
   }
 }
@@ -325,10 +409,10 @@ export async function updateAudioAsset({
 export async function bulkTagAudioAssets({
   data,
   userId,
+  sessionUserId,
 }: {
   data: z.infer<typeof bulkTagAudioAssetsSchema>;
-  userId: string;
-}): Promise<{ modified: number }> {
+} & Actor): Promise<{ modified: number }> {
   try {
     await ensureDb();
     const set: Record<string, unknown> = { updatedAt: new Date() };
@@ -357,7 +441,7 @@ export async function bulkTagAudioAssets({
     const res = await AudioAsset.updateMany({ _id: { $in: data.ids }, ownerId: userId }, update);
     return { modified: res.modifiedCount ?? 0 };
   } catch (e) {
-    serverCaptureException(e, userId, { action: 'bulkTagAudioAssets' });
+    reportAudioError(e, { userId, sessionUserId }, { action: 'bulkTagAudioAssets' });
     throw e;
   }
 }
@@ -416,10 +500,10 @@ export async function bulkTagAudioAssets({
 export async function retryAudioAsset({
   data,
   userId,
+  sessionUserId,
 }: {
   data: z.infer<typeof retryAudioAssetSchema>;
-  userId: string;
-}): Promise<AudioAssetData> {
+} & Actor): Promise<AudioAssetData> {
   try {
     await ensureDb();
     const doc = await AudioAsset.findOneAndUpdate(
@@ -449,10 +533,12 @@ export async function retryAudioAsset({
         'Audio asset cannot be retried (not found, not failed, its upload never completed, or the file itself was rejected)'
       );
     }
-    serverCaptureEvent(userId, 'audio_asset_retried', { assetId: data.id });
+    serverCaptureEvent(telemetryId({ userId, sessionUserId }), 'audio_asset_retried', {
+      assetId: data.id,
+    });
     return serializeAudioAsset(doc as unknown as AudioDoc);
   } catch (e) {
-    serverCaptureException(e, userId, { action: 'retryAudioAsset' });
+    reportAudioError(e, { userId, sessionUserId }, { action: 'retryAudioAsset' });
     throw e;
   }
 }
@@ -460,10 +546,10 @@ export async function retryAudioAsset({
 export async function deleteAudioAsset({
   data,
   userId,
+  sessionUserId,
 }: {
   data: z.infer<typeof deleteAudioAssetSchema>;
-  userId: string;
-}): Promise<{ deleted: boolean }> {
+} & Actor): Promise<{ deleted: boolean }> {
   try {
     await ensureDb();
     const asset = await AudioAsset.findOne({ _id: data.id, ownerId: userId });
@@ -481,28 +567,37 @@ export async function deleteAudioAsset({
     // delete. The user asked for this asset to be gone, and leaving the row
     // behind because a bucket was briefly unreachable produces a library entry
     // the UI still shows, still polls, and still offers Delete for — a worse
-    // outcome than a stranded object. Task 8's orphan scanner
-    // (`collectInUseKeys` in `~/server/functions/cleanup.ts`) now collects audio
-    // `sourceKey`/rendition keys, so anything left behind here is visible to
-    // that scan and reclaimable; it is the backstop that makes this ordering
-    // safe. Each failure is still reported so a systematically failing R2 delete
-    // shows up in GlitchTip rather than silently accruing storage cost.
+    // outcome than a stranded object.
+    //
+    // Be clear about the cost, though: there is NO backstop for what this
+    // strands. Once the row below is gone, its key exists nowhere else, and
+    // `~/server/functions/audio-cleanup.ts` reclaims only what it can derive
+    // from a row the caller still owns. (This comment used to claim the
+    // campaign orphan scanner covered it; that scanner no longer looks at audio
+    // at all, because being GM of one campaign is not authority over another
+    // user's audio library.) Each failure is reported so a systematically
+    // failing R2 delete shows up in GlitchTip rather than silently accruing
+    // storage cost.
     for (const Key of keys) {
       try {
         await client.send(new DeleteObjectCommand({ Bucket: bucket, Key }));
       } catch (e) {
-        void serverCaptureException(e, userId, {
-          action: 'deleteAudioAsset.r2Object',
-          assetId: data.id,
-          key: Key,
-        });
+        void reportAudioError(
+          e,
+          { userId, sessionUserId },
+          {
+            action: 'deleteAudioAsset.r2Object',
+            assetId: data.id,
+            key: Key,
+          }
+        );
       }
     }
 
     await AudioAsset.deleteOne({ _id: data.id, ownerId: userId });
     return { deleted: true };
   } catch (e) {
-    serverCaptureException(e, userId, { action: 'deleteAudioAsset' });
+    reportAudioError(e, { userId, sessionUserId }, { action: 'deleteAudioAsset' });
     throw e;
   }
 }

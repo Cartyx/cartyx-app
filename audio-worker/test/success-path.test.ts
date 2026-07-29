@@ -96,6 +96,30 @@ describe('the successful write', () => {
     expect(hooks.puts).toHaveLength(2);
   });
 
+  /**
+   * The rendition key format is a CROSS-SERVICE CONTRACT, not an internal
+   * detail. The app's owner-scoped audio cleanup
+   * (`renditionKeysFor` in app/server/functions/audio-cleanup.ts) reconstructs
+   * these two names from an asset id in order to find renditions this worker
+   * PUT but never recorded on the row — the window between these PutObjects and
+   * the fenced write below. That reconstruction is also what makes the cleanup
+   * owner-scoped: it derives keys from the caller's own rows instead of listing
+   * a bucket whose keys carry no owner. The two packages cannot import each
+   * other, so each pins the literal; change one without the other and those
+   * objects become permanently unreclaimable.
+   */
+  it('writes renditions to the deterministic key namespace the app reconstructs', async () => {
+    const updateOne = await runOnce();
+    const [, update] = updateOne.mock.calls[0];
+    const renditions = update.$set.renditions as Record<string, { key: string }>;
+    expect(renditions.opus.key).toBe('uploads/audio/renditions/asset-ok.opus');
+    expect(renditions.aac.key).toBe('uploads/audio/renditions/asset-ok.m4a');
+    expect(hooks.puts.map((p) => (p as { input: { Key: string } }).input.Key)).toEqual([
+      'uploads/audio/renditions/asset-ok.opus',
+      'uploads/audio/renditions/asset-ok.m4a',
+    ]);
+  });
+
   it('is fenced on the claim this worker holds', async () => {
     const updateOne = await runOnce();
     const [filter] = updateOne.mock.calls[0];

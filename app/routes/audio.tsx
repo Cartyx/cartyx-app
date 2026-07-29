@@ -10,6 +10,7 @@ import { AudioUploadDropzone } from '~/components/audio/AudioUploadDropzone';
 import { AudioBulkTagBar } from '~/components/audio/AudioBulkTagBar';
 import type { BulkTagPayload } from '~/components/audio/AudioBulkTagBar';
 import { AudioAssetDetail } from '~/components/audio/AudioAssetDetail';
+import { AudioOrphanCleanup } from '~/components/audio/AudioOrphanCleanup';
 import type { AudioAssetDetailPayload } from '~/components/audio/AudioAssetDetail';
 import type { AudioFilters } from '~/components/audio/AudioFilterBar';
 import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
@@ -20,10 +21,13 @@ import {
   updateAudioAssetFn,
   deleteAudioAssetFn,
   retryAudioAssetFn,
+  scanOrphanAudioFn,
+  deleteOrphanAudioFn,
 } from '~/utils/audio-server-fns';
 import { queryKeys } from '~/utils/queryKeys';
 import { captureException } from '~/utils/telemetry-client';
 import type { AudioAssetData, AudioEnvironment, AudioMood } from '~/types/audio';
+import type { ScanOrphanAudioResult } from '~/types/schemas/audio';
 
 const POLL_MS = 4000;
 
@@ -105,6 +109,11 @@ export function AudioLibraryPage() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [editingAssetId, setEditingAssetId] = useState<string | null>(null);
   const [nowPlaying, setNowPlaying] = useState<AudioAssetData | null>(null);
+  const [orphanScan, setOrphanScan] = useState<ScanOrphanAudioResult | null>(null);
+  const [lastOrphanDelete, setLastOrphanDelete] = useState<{
+    deleted: number;
+    failed: number;
+  } | null>(null);
 
   // Generics pinned explicitly: without them TS widens the page type to
   // `unknown` (server-fn return inference doesn't survive useInfiniteQuery's
@@ -192,6 +201,29 @@ export function AudioLibraryPage() {
       invalidateAudio();
     },
     onError: (e) => captureException(e, { action: 'AudioLibraryPage.deleteAsset' }),
+  });
+
+  // Orphan cleanup is a deliberate, explicit action, not part of the 4s poll:
+  // it costs a HeadObject per candidate key, and nothing about it changes on
+  // its own between clicks.
+  const scanOrphans = useMutation({
+    mutationFn: () => scanOrphanAudioFn({ data: {} }),
+    onSuccess: (data) => {
+      setLastOrphanDelete(null);
+      setOrphanScan(data);
+    },
+    onError: (e) => captureException(e, { action: 'AudioLibraryPage.scanOrphanAudio' }),
+  });
+
+  const deleteOrphans = useMutation({
+    mutationFn: (keys: string[]) => deleteOrphanAudioFn({ data: { keys } }),
+    onSuccess: (res) => {
+      setLastOrphanDelete({ deleted: res.deleted.length, failed: res.failed.length });
+      // Drop the stale list rather than leaving deleted rows on screen; the
+      // user re-scans to see what is left.
+      setOrphanScan((prev) => (prev ? { ...prev, orphans: [] } : prev));
+    },
+    onError: (e) => captureException(e, { action: 'AudioLibraryPage.deleteOrphanAudio' }),
   });
 
   const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
@@ -330,6 +362,22 @@ export function AudioLibraryPage() {
               }
             />
           </div>
+
+          <AudioOrphanCleanup
+            result={orphanScan}
+            scanning={scanOrphans.isPending}
+            deleting={deleteOrphans.isPending}
+            error={
+              scanOrphans.error
+                ? errorMessage(scanOrphans.error, 'Failed to scan for orphaned files.')
+                : deleteOrphans.error
+                  ? errorMessage(deleteOrphans.error, 'Failed to delete orphaned files.')
+                  : null
+            }
+            lastDelete={lastOrphanDelete}
+            onScan={() => scanOrphans.mutate()}
+            onDelete={(keys) => deleteOrphans.mutate(keys)}
+          />
 
           {editingAsset && (
             <AudioAssetDetail

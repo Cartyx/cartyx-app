@@ -131,70 +131,38 @@ afterEach(() => {
 });
 
 describe('TRACKED_PREFIXES', () => {
-  it('includes the audio upload prefix', async () => {
+  // Authorization for this scanner is `requireGmOfCampaign` — it proves the
+  // caller is GM of ONE campaign they name. Audio is a per-user library with no
+  // campaign dimension at all, so while `uploads/audio/` was tracked here,
+  // being GM of your own campaign listed every other user's audio objects and
+  // let you delete them. Audio cleanup lives in
+  // `~/server/functions/audio-cleanup.ts` and is scoped to the caller's own
+  // rows.
+  it('does not track the audio prefix — this scanner is campaign-image only', async () => {
     const mod = await import('~/server/functions/cleanup');
     const prefixes = (mod as unknown as { TRACKED_PREFIXES: string[] }).TRACKED_PREFIXES;
-    expect(prefixes).toContain('uploads/audio/');
+    expect(prefixes).not.toContain('uploads/audio/');
+    expect(prefixes).toEqual([
+      'uploads/locations/',
+      'uploads/characters/',
+      'uploads/players/',
+      'uploads/campaigns/',
+    ]);
   });
 });
 
-describe('scanOrphanImages — audio', () => {
-  it('treats every key an AudioAsset references as in-use, and only reports the truly unreferenced audio key as an orphan', async () => {
-    vi.mocked(AudioAsset.find).mockReturnValue(
-      leanCursorChain([
-        {
-          sourceKey: 'uploads/audio/a1/source.wav',
-          renditions: {
-            opus: { key: 'uploads/audio/a1/opus.ogg' },
-            aac: { key: 'uploads/audio/a1/aac.m4a' },
-          },
-        },
-      ]) as never
-    );
-
+describe('scanOrphanImages — audio is out of scope', () => {
+  it("never lists another user's audio objects, even when they are sitting in the bucket", async () => {
     setupR2Objects({
       'uploads/locations/': [],
       'uploads/characters/': [],
       'uploads/players/': [],
       'uploads/campaigns/': [],
+      // Present in R2 and belonging to somebody who has no relationship to
+      // campaign c1 whatsoever. The GM of c1 must never see it.
       'uploads/audio/': [
-        { Key: 'uploads/audio/a1/source.wav', Size: 1000 },
-        { Key: 'uploads/audio/a1/opus.ogg', Size: 200 },
-        { Key: 'uploads/audio/a1/aac.m4a', Size: 300 },
-        { Key: 'uploads/audio/orphan/unused.wav', Size: 50 },
-      ],
-    });
-
-    const { scanOrphanImages } = await import('~/server/functions/cleanup');
-    const result = await scanOrphanImages({ data: { campaignId: 'c1' } });
-
-    expect(result.orphans.map((o) => o.imageKey)).toEqual(['uploads/audio/orphan/unused.wav']);
-    expect(result.scannedKeyCount).toBe(4);
-    expect(result.inUseKeyCount).toBe(3);
-  });
-
-  it('collects onceRenditions keys too, even though phase 1 never writes them', async () => {
-    vi.mocked(AudioAsset.find).mockReturnValue(
-      leanCursorChain([
-        {
-          sourceKey: 'uploads/audio/a2/source.wav',
-          onceRenditions: {
-            opus: { key: 'uploads/audio/a2/once-opus.ogg' },
-            aac: { key: 'uploads/audio/a2/once-aac.m4a' },
-          },
-        },
-      ]) as never
-    );
-
-    setupR2Objects({
-      'uploads/locations/': [],
-      'uploads/characters/': [],
-      'uploads/players/': [],
-      'uploads/campaigns/': [],
-      'uploads/audio/': [
-        { Key: 'uploads/audio/a2/source.wav', Size: 1000 },
-        { Key: 'uploads/audio/a2/once-opus.ogg', Size: 200 },
-        { Key: 'uploads/audio/a2/once-aac.m4a', Size: 300 },
+        { Key: 'uploads/audio/1700000000000-deadbeef.wav', Size: 1000 },
+        { Key: 'uploads/audio/renditions/507f1f77bcf86cd799439011.opus', Size: 200 },
       ],
     });
 
@@ -202,6 +170,29 @@ describe('scanOrphanImages — audio', () => {
     const result = await scanOrphanImages({ data: { campaignId: 'c1' } });
 
     expect(result.orphans).toEqual([]);
-    expect(result.inUseKeyCount).toBe(3);
+    expect(result.scannedKeyCount).toBe(0);
+    // And the scan does not even open the AudioAsset collection to work out
+    // which audio keys are in use — it has no business reading them.
+    expect(vi.mocked(AudioAsset.find)).not.toHaveBeenCalled();
+  });
+
+  it('refuses to delete an audio key handed to it directly', async () => {
+    const { deleteOrphanImages } = await import('~/server/functions/cleanup');
+    const res = await deleteOrphanImages({
+      data: {
+        campaignId: 'c1',
+        imageKeys: ['uploads/audio/1700000000000-deadbeef.wav'],
+      },
+    });
+
+    expect(res.deleted).toEqual([]);
+    expect(res.failed).toEqual([
+      {
+        imageKey: 'uploads/audio/1700000000000-deadbeef.wav',
+        error: 'Key outside tracked prefixes',
+      },
+    ]);
+    // The prefix guard must reject it before any DeleteObject is issued.
+    expect(send.mock.calls.filter((c) => c[0] instanceof MockDeleteObjectCommand)).toHaveLength(0);
   });
 });

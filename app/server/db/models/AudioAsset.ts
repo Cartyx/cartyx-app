@@ -101,12 +101,23 @@ audioAssetSchema.pre('save', function () {
 
 // istanbul ignore next
 if (typeof (audioAssetSchema as { index?: unknown }).index === 'function') {
+  // `listAudioAssets`'s `kind` filter, and its `{ tags: { $all: [...] } }`
+  // filter (multikey).
   audioAssetSchema.index({ ownerId: 1, kind: 1 });
   audioAssetSchema.index({ ownerId: 1, tags: 1 });
+  // The unfiltered library page: `find({ ownerId }).sort({ createdAt: -1, _id: -1 })`,
+  // plus the compound pagination cursor's `createdAt` range.
   audioAssetSchema.index({ ownerId: 1, createdAt: -1 });
-  // Drives the worker's atomic claim.
+  // Drives the worker's atomic claim: `claimNext` matches `{ status: 'pending', ... }`
+  // and sorts `{ createdAt: 1 }` (audio-worker/src/claim.ts), and `reapStale`
+  // matches on `status` too.
   audioAssetSchema.index({ status: 1, createdAt: 1 });
-  audioAssetSchema.index({ title: 'text' });
+  // There is deliberately NO `{ title: 'text' }` index. Title search is
+  // `{ $regex: escapeRegExp(search), $options: 'i' }` in `listAudioAssets` —
+  // `$text` is not used anywhere in this codebase, and a text index cannot
+  // serve a `$regex` query. It only ever cost: Atlas tokenizes and writes an
+  // index entry per word of every title on every insert and every title edit,
+  // to answer a query nothing issues.
 }
 
 export type IAudioAsset = InferSchemaType<typeof audioAssetSchema>;

@@ -79,7 +79,18 @@ const SESSION_USER = {
   tokenIssuedAt: 0,
 };
 
-/** The resolved Mongo `_id` string `requireUserId()` should hand downstream — deliberately distinct from `SESSION_USER.id` so a test that accidentally asserts on the provider id (the bug this fix corrects) fails loudly. */
+/**
+ * The resolved Mongo `_id` string `requireActor()` should hand downstream —
+ * deliberately distinct from `SESSION_USER.id` so a test that accidentally
+ * asserts on the provider id (the bug this fix corrects) fails loudly.
+ *
+ * `requireActor` returns BOTH: `userId` for scoping the query and
+ * `sessionUserId` (the provider id) for telemetry, so a single human is one
+ * identity in GlitchTip/Umami across audio and everything else. Every
+ * assertion below pins both, because dropping `sessionUserId` silently
+ * reintroduces the split-identity bug — the functions fall back to the Mongo
+ * id when it's absent, so nothing else would fail.
+ */
 const DB_USER_ID = 'mongo-user-1';
 
 /** Stubs `User.findOne(...).select(...).lean()` — mirrors requireUserId's chain. */
@@ -140,7 +151,11 @@ describe('createAudioUploadFn', () => {
     });
     const r = await createAudioUploadFn({ data });
     expect(createAudioUpload).toHaveBeenCalledTimes(1);
-    expect(createAudioUpload).toHaveBeenCalledWith({ data, userId: DB_USER_ID });
+    expect(createAudioUpload).toHaveBeenCalledWith({
+      data,
+      userId: DB_USER_ID,
+      sessionUserId: SESSION_USER.id,
+    });
     expect(r).toEqual({ assetId: 'a1', uploadUrl: 'https://put', key: 'k' });
   });
 
@@ -167,7 +182,11 @@ describe('confirmAudioUploadFn', () => {
     vi.mocked(confirmAudioUpload).mockResolvedValue({ assetId: 'a1', status: 'pending' });
     const r = await confirmAudioUploadFn({ data });
     expect(confirmAudioUpload).toHaveBeenCalledTimes(1);
-    expect(confirmAudioUpload).toHaveBeenCalledWith({ data, userId: DB_USER_ID });
+    expect(confirmAudioUpload).toHaveBeenCalledWith({
+      data,
+      userId: DB_USER_ID,
+      sessionUserId: SESSION_USER.id,
+    });
     expect(r).toEqual({ assetId: 'a1', status: 'pending' });
   });
 });
@@ -187,7 +206,11 @@ describe('listAudioAssetsFn', () => {
     vi.mocked(listAudioAssets).mockResolvedValue({ items: [FAKE_ASSET], nextCursor: null });
     const r = await listAudioAssetsFn({ data });
     expect(listAudioAssets).toHaveBeenCalledTimes(1);
-    expect(listAudioAssets).toHaveBeenCalledWith({ data, userId: DB_USER_ID });
+    expect(listAudioAssets).toHaveBeenCalledWith({
+      data,
+      userId: DB_USER_ID,
+      sessionUserId: SESSION_USER.id,
+    });
     expect(r).toEqual({ items: [FAKE_ASSET], nextCursor: null });
   });
 });
@@ -207,7 +230,11 @@ describe('updateAudioAssetFn', () => {
     vi.mocked(updateAudioAsset).mockResolvedValue(FAKE_ASSET);
     const r = await updateAudioAssetFn({ data });
     expect(updateAudioAsset).toHaveBeenCalledTimes(1);
-    expect(updateAudioAsset).toHaveBeenCalledWith({ data, userId: DB_USER_ID });
+    expect(updateAudioAsset).toHaveBeenCalledWith({
+      data,
+      userId: DB_USER_ID,
+      sessionUserId: SESSION_USER.id,
+    });
     expect(r).toEqual(FAKE_ASSET);
   });
 });
@@ -227,7 +254,11 @@ describe('bulkTagAudioAssetsFn', () => {
     vi.mocked(bulkTagAudioAssets).mockResolvedValue({ modified: 2 });
     const r = await bulkTagAudioAssetsFn({ data });
     expect(bulkTagAudioAssets).toHaveBeenCalledTimes(1);
-    expect(bulkTagAudioAssets).toHaveBeenCalledWith({ data, userId: DB_USER_ID });
+    expect(bulkTagAudioAssets).toHaveBeenCalledWith({
+      data,
+      userId: DB_USER_ID,
+      sessionUserId: SESSION_USER.id,
+    });
     expect(r).toEqual({ modified: 2 });
   });
 });
@@ -247,7 +278,11 @@ describe('deleteAudioAssetFn', () => {
     vi.mocked(deleteAudioAsset).mockResolvedValue({ deleted: true });
     const r = await deleteAudioAssetFn({ data });
     expect(deleteAudioAsset).toHaveBeenCalledTimes(1);
-    expect(deleteAudioAsset).toHaveBeenCalledWith({ data, userId: DB_USER_ID });
+    expect(deleteAudioAsset).toHaveBeenCalledWith({
+      data,
+      userId: DB_USER_ID,
+      sessionUserId: SESSION_USER.id,
+    });
     expect(r).toEqual({ deleted: true });
   });
 });

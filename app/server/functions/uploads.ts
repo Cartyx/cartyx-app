@@ -79,19 +79,30 @@ export const getUploadUrl = async ({ data }: { data: z.infer<typeof getUploadUrl
  * precisely the restructuring this phase exists to avoid. The caller has
  * already authenticated and knows who is acting.
  *
- * `userId` is the User document's Mongo `_id` — the same value
- * `createAudioUpload` tags its telemetry with, so one failed upload can't
- * surface under two different identities (the session's OAuth provider id and
- * the Mongo id). It is used for telemetry only; nothing here is scoped by it.
+ * `telemetryUserId` is used for telemetry ONLY — nothing here is scoped by it,
+ * which is why it is named for its single purpose rather than as a generic
+ * `userId`.
+ *
+ * It must carry the SAME identity every other server function tags with: the
+ * OAuth provider's subject id, which is what `requireCampaignMember` returns as
+ * `sessionUserId` and what `getUploadUrl` above passes (`user?.id`). This
+ * parameter used to be the User document's Mongo `_id`, with a comment claiming
+ * that choice kept one failed upload from surfacing under two identities — the
+ * comment had it exactly backwards. Mongo `_id` is what the *rest of the audio
+ * module* used and the provider id is what the other ~150 telemetry call sites
+ * in `app/server/functions/` use, so the same human minting an image upload URL
+ * and an audio upload URL landed in GlitchTip and Umami as two unrelated
+ * people. `~/server/functions/audio.ts` now threads `sessionUserId` through for
+ * this reason; see the `Actor` type there.
  */
 export const getAudioUploadUrl = async ({
   contentType,
   bytes,
-  userId,
+  telemetryUserId,
 }: {
   contentType: string;
   bytes: number;
-  userId: string;
+  telemetryUserId: string;
 }) => {
   try {
     const ext = AUDIO_SOURCE_TYPES.get(contentType);
@@ -111,7 +122,7 @@ export const getAudioUploadUrl = async ({
 
     return { uploadUrl, key, publicUrl: `${cdnUrl}/${key}` };
   } catch (e) {
-    serverCaptureException(e, userId, { action: 'getAudioUploadUrl' });
+    serverCaptureException(e, telemetryUserId, { action: 'getAudioUploadUrl' });
     throw e;
   }
 };

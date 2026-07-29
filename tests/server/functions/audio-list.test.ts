@@ -84,12 +84,12 @@ describe('listAudioAssets', () => {
 
   it('builds a compound createdAt+_id filter from the cursor, not a bare _id filter', async () => {
     const { listAudioAssets } = await import('~/server/functions/audio');
-    const cursor = '1700000000000_a9';
+    const cursor = '1700000000000_507f1f77bcf86cd799439011';
     await listAudioAssets({ data: { limit: 50, cursor }, userId: 'u1' });
     const q = find.mock.calls[0][0] as Record<string, unknown>;
     expect(q.$or).toEqual([
       { createdAt: { $lt: new Date(1700000000000) } },
-      { createdAt: new Date(1700000000000), _id: { $lt: 'a9' } },
+      { createdAt: new Date(1700000000000), _id: { $lt: '507f1f77bcf86cd799439011' } },
     ]);
     // A bare `_id: { $lt }` filter under a createdAt-primary sort can skip or
     // duplicate rows across a page boundary — it must not be present.
@@ -117,5 +117,64 @@ describe('listAudioAssets', () => {
       ])
     );
     expect((q.$and as unknown[]).length).toBe(4);
+  });
+
+  /**
+   * The function is fail-closed independently of the schema.
+   *
+   * These are the actual hostile values, not a stand-in: `1e20` written out in
+   * digits (finite, so the old `Number.isFinite(ms)` guard passed it, but
+   * beyond JS's 8.64e15 maximum Date, so `new Date(ms)` is `Invalid Date`), and
+   * an id half that is not an ObjectId. Before the fix each one produced an
+   * `$or` containing an `Invalid Date` / an uncastable `_id`, Mongoose threw a
+   * CastError, and the caller got an HTTP 500 with a GlitchTip event attached.
+   *
+   * The decision here is REJECT, not "silently fall back to page 1". A silent
+   * fallback re-serves page 1 in the middle of an infinite scroll: the user
+   * sees duplicated rows and the client never learns its cursor was discarded.
+   */
+  it.each([
+    ['a finite but unrepresentable timestamp', '100000000000000000000_507f1f77bcf86cd799439011'],
+    ['an id half that is not an ObjectId', '1700000000000_notanoid'],
+    ['a non-numeric timestamp half', 'abc_507f1f77bcf86cd799439011'],
+    ['a timestamp one past the maximum Date', '8640000000000001_507f1f77bcf86cd799439011'],
+  ])('rejects %s rather than querying Mongo with it', async (_label, cursor) => {
+    const { listAudioAssets } = await import('~/server/functions/audio');
+    await expect(listAudioAssets({ data: { limit: 50, cursor }, userId: 'u1' })).rejects.toThrow(
+      /cursor/i
+    );
+    // The point is that no query was issued at all — not that the query it
+    // issued happened to be harmless.
+    expect(find).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A malformed cursor is the caller's mistake, so it must not author a
+   * GlitchTip issue. One bad cursor per request would otherwise be one error
+   * report per request.
+   */
+  it('does not report a malformed cursor to GlitchTip', async () => {
+    const { serverCaptureException } = await import('~/server/utils/telemetry');
+    const { listAudioAssets } = await import('~/server/functions/audio');
+    await expect(
+      listAudioAssets({ data: { limit: 50, cursor: '1700000000000_notanoid' }, userId: 'u1' })
+    ).rejects.toThrow();
+    expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Telemetry identity: the audio functions used to tag the Mongo `_id` while
+   * every other server function tags the OAuth provider id, so one human
+   * appeared in GlitchTip/Umami as two people. `sessionUserId` is that provider
+   * id and must win when present.
+   */
+  it('tags telemetry with the session identity, not the Mongo id', async () => {
+    const { serverCaptureException } = await import('~/server/utils/telemetry');
+    lean.mockRejectedValue(new Error('atlas is down'));
+    const { listAudioAssets } = await import('~/server/functions/audio');
+    await expect(
+      listAudioAssets({ data: { limit: 50 }, userId: 'mongo-id-1', sessionUserId: 'provider-id-1' })
+    ).rejects.toThrow('atlas is down');
+    expect(vi.mocked(serverCaptureException).mock.calls[0][1]).toBe('provider-id-1');
   });
 });

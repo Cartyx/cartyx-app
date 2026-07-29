@@ -51,15 +51,23 @@ describe('createAudioUpload', () => {
     const { createAudioUpload } = await import('~/server/functions/audio');
     const { getAudioUploadUrl } = await import('~/server/functions/uploads');
 
-    await createAudioUpload({ data: VALID, userId: 'mongo-id-1' });
+    await createAudioUpload({
+      data: VALID,
+      userId: 'mongo-id-1',
+      sessionUserId: 'session-provider-id',
+    });
 
     // The bearer-token ingest route passes an explicit userId with no session
     // cookie present. If the presign step resolved auth itself, that path would
-    // 500 the moment phase 3 issues a real token — and telemetry would tag the
-    // provider id here while createAudioUpload tags the Mongo id, splitting one
-    // failed upload across two identities.
+    // 500 the moment phase 3 issues a real token.
+    //
+    // And the id it is handed is the TELEMETRY identity — the OAuth provider id
+    // every other server function in this codebase tags with — not the Mongo
+    // `_id` used to scope the row. Passing the Mongo id here (which is what
+    // this did) made one human show up in GlitchTip as two people: provider id
+    // for image uploads, Mongo id for audio.
     expect(vi.mocked(getAudioUploadUrl)).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'mongo-id-1' })
+      expect.objectContaining({ telemetryUserId: 'session-provider-id' })
     );
   });
 });

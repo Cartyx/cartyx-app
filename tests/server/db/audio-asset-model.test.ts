@@ -199,4 +199,30 @@ describe('AudioAsset model', () => {
     });
     await expect(doc.validate()).rejects.toBeTruthy();
   });
+
+  /**
+   * A `{ title: 'text' }` index used to be declared here and was never queried.
+   * `listAudioAssets` searches titles with
+   * `{ $regex: escapeRegExp(search), $options: 'i' }`, and a text index cannot
+   * serve a `$regex` query — `$text` appears nowhere in this codebase. So it
+   * only ever cost: Atlas tokenizes every title and writes an index entry per
+   * word on every insert and every title edit, to answer a query nobody issues.
+   *
+   * Asserted through `schema.indexes()` (the real registered set) rather than
+   * by reading the source, and the other four are pinned alongside it so this
+   * doubles as the record of which index serves which query.
+   */
+  it('declares no text index, and keeps the four that are actually queried', () => {
+    const keys = (AudioAsset.schema.indexes() as Array<[Record<string, unknown>, unknown]>).map(
+      ([spec]) => spec
+    );
+
+    expect(keys.some((k) => Object.values(k).includes('text'))).toBe(false);
+    expect(keys).toContainEqual({ ownerId: 1, kind: 1 });
+    expect(keys).toContainEqual({ ownerId: 1, tags: 1 });
+    expect(keys).toContainEqual({ ownerId: 1, createdAt: -1 });
+    // The worker's atomic claim (`claimNext`) and its reaper.
+    expect(keys).toContainEqual({ status: 1, createdAt: 1 });
+    expect(keys).toHaveLength(4);
+  });
 });

@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router';
 import { resolveApiUser } from '~/server/functions/audio-auth';
 import { confirmAudioUpload } from '~/server/functions/audio';
+import { confirmAudioUploadSchema } from '~/types/schemas/audio';
 
 // confirmAudioUpload's thrown messages that are safe to hand back verbatim to an
 // external caller: each one describes something about *this caller's own request*
@@ -21,8 +22,17 @@ export async function post({
   const userId = await resolveApiUser(request);
   if (!userId) return Response.json({ error: 'Unauthorized' }, { status: 401 });
 
+  // The path segment goes through the same schema the browser adapter uses,
+  // rather than straight into the function. `params.id` is arbitrary client
+  // input: `/api/audio/uploads/x/confirm` used to hand `"x"` to
+  // `AudioAsset.findOne` and get a Mongoose CastError back, which this route's
+  // catch turned into a 500 with a GlitchTip event — for a URL a client simply
+  // typed wrong. A syntactically invalid id is a 400 and files nothing.
+  const parsed = confirmAudioUploadSchema.safeParse({ assetId: params.id });
+  if (!parsed.success) return Response.json({ error: 'Invalid asset id' }, { status: 400 });
+
   try {
-    return Response.json(await confirmAudioUpload({ data: { assetId: params.id }, userId }));
+    return Response.json(await confirmAudioUpload({ data: parsed.data, userId }));
   } catch (e) {
     // The status code has to split the same way the message does. A
     // SAFE_CONFIRM_ERROR describes something about the caller's own request

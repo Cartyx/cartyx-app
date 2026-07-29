@@ -7,6 +7,8 @@ import {
   bulkTagAudioAssetsSchema,
   deleteAudioAssetSchema,
   retryAudioAssetSchema,
+  scanOrphanAudioSchema,
+  deleteOrphanAudioSchema,
 } from '~/types/schemas/audio';
 
 // ---------------------------------------------------------------------------
@@ -44,7 +46,15 @@ import {
 // `.create` the provider id string instead throws a Mongoose `CastError` on
 // every call, for every user — caught by this task's E2E suite hitting a
 // genuinely seeded, real `ownerId`.
-async function requireUserId(): Promise<string> {
+//
+// It returns BOTH ids, because the two are used for different things and
+// conflating them is what produced the split telemetry identity this branch
+// shipped with. `userId` (Mongo `_id`) is the only value that may scope a
+// query; `sessionUserId` (the OAuth provider id) is the identity every other
+// server function in this codebase tags telemetry with, so the same human
+// stays one person in GlitchTip and Umami whether they are uploading an image
+// or an audio file. See the `Actor` type in `~/server/functions/audio.ts`.
+async function requireActor(): Promise<{ userId: string; sessionUserId: string }> {
   const { getSession } = await import('~/server/session');
   const { connectDB } = await import('~/server/db/connection');
   const { User } = await import('~/server/db/models/User');
@@ -53,54 +63,75 @@ async function requireUserId(): Promise<string> {
   await connectDB();
   const dbUser = await User.findOne({ providerId: session.id }).select('_id').lean();
   if (!dbUser) throw new Error('User not found');
-  return String(dbUser._id);
+  return { userId: String(dbUser._id), sessionUserId: session.id };
 }
 
 export const createAudioUploadFn = createServerFn({ method: 'POST' })
   .inputValidator(createAudioUploadSchema)
   .handler(async ({ data }) => {
     const { createAudioUpload } = await import('~/server/functions/audio');
-    return createAudioUpload({ data, userId: await requireUserId() });
+    return createAudioUpload({ data, ...(await requireActor()) });
   });
 
 export const confirmAudioUploadFn = createServerFn({ method: 'POST' })
   .inputValidator(confirmAudioUploadSchema)
   .handler(async ({ data }) => {
     const { confirmAudioUpload } = await import('~/server/functions/audio');
-    return confirmAudioUpload({ data, userId: await requireUserId() });
+    return confirmAudioUpload({ data, ...(await requireActor()) });
   });
 
 export const listAudioAssetsFn = createServerFn({ method: 'POST' })
   .inputValidator(listAudioAssetsSchema)
   .handler(async ({ data }) => {
     const { listAudioAssets } = await import('~/server/functions/audio');
-    return listAudioAssets({ data, userId: await requireUserId() });
+    return listAudioAssets({ data, ...(await requireActor()) });
   });
 
 export const updateAudioAssetFn = createServerFn({ method: 'POST' })
   .inputValidator(updateAudioAssetSchema)
   .handler(async ({ data }) => {
     const { updateAudioAsset } = await import('~/server/functions/audio');
-    return updateAudioAsset({ data, userId: await requireUserId() });
+    return updateAudioAsset({ data, ...(await requireActor()) });
   });
 
 export const bulkTagAudioAssetsFn = createServerFn({ method: 'POST' })
   .inputValidator(bulkTagAudioAssetsSchema)
   .handler(async ({ data }) => {
     const { bulkTagAudioAssets } = await import('~/server/functions/audio');
-    return bulkTagAudioAssets({ data, userId: await requireUserId() });
+    return bulkTagAudioAssets({ data, ...(await requireActor()) });
   });
 
 export const retryAudioAssetFn = createServerFn({ method: 'POST' })
   .inputValidator(retryAudioAssetSchema)
   .handler(async ({ data }) => {
     const { retryAudioAsset } = await import('~/server/functions/audio');
-    return retryAudioAsset({ data, userId: await requireUserId() });
+    return retryAudioAsset({ data, ...(await requireActor()) });
   });
 
 export const deleteAudioAssetFn = createServerFn({ method: 'POST' })
   .inputValidator(deleteAudioAssetSchema)
   .handler(async ({ data }) => {
     const { deleteAudioAsset } = await import('~/server/functions/audio');
-    return deleteAudioAsset({ data, userId: await requireUserId() });
+    return deleteAudioAsset({ data, ...(await requireActor()) });
+  });
+
+// ---------------------------------------------------------------------------
+// Owner-scoped orphan cleanup (see ~/server/functions/audio-cleanup.ts).
+// Neither takes a user id from the client — both are scoped entirely by the
+// session-resolved actor, which is the whole point of them existing separately
+// from the campaign image scanner.
+// ---------------------------------------------------------------------------
+
+export const scanOrphanAudioFn = createServerFn({ method: 'POST' })
+  .inputValidator(scanOrphanAudioSchema)
+  .handler(async ({ data }) => {
+    const { scanOrphanAudio } = await import('~/server/functions/audio-cleanup');
+    return scanOrphanAudio({ data, ...(await requireActor()) });
+  });
+
+export const deleteOrphanAudioFn = createServerFn({ method: 'POST' })
+  .inputValidator(deleteOrphanAudioSchema)
+  .handler(async ({ data }) => {
+    const { deleteOrphanAudio } = await import('~/server/functions/audio-cleanup');
+    return deleteOrphanAudio({ data, ...(await requireActor()) });
   });

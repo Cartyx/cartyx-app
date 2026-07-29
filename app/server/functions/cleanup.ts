@@ -12,7 +12,6 @@ import { Campaign } from '../db/models/Campaign';
 import { Location } from '../db/models/Location';
 import { Character } from '../db/models/Character';
 import { Player } from '../db/models/Player';
-import { AudioAsset } from '../db/models/AudioAsset';
 import { serverCaptureEvent, serverCaptureException } from '../utils/telemetry';
 import {
   scanOrphanImagesSchema,
@@ -22,14 +21,23 @@ import {
   type ScanOrphanImagesResult,
 } from '~/types/schemas/cleanup';
 
-// Prefixes the app uses for R2 uploads. Anything outside these is ignored so
-// the scan never proposes deleting keys we don't know how to attribute.
+// Prefixes the app uses for CAMPAIGN IMAGE uploads. Anything outside these is
+// ignored so the scan never proposes deleting keys we don't know how to
+// attribute.
+//
+// `uploads/audio/` is deliberately absent. Authorization for this scanner is
+// `requireGmOfCampaign` — it proves you are GM of ONE campaign you name. Audio
+// is a per-user library with no campaign scoping whatsoever, so including the
+// audio prefix meant that proving GM of your own campaign handed you a
+// bucket-wide listing of every other user's audio objects (keys, sizes, upload
+// times) and let you delete them. Owner-scoped audio cleanup lives in
+// `~/server/functions/audio-cleanup.ts`, which never lists a key it cannot
+// trace back to one of the caller's own AudioAsset rows.
 export const TRACKED_PREFIXES = [
   'uploads/locations/',
   'uploads/characters/',
   'uploads/players/',
   'uploads/campaigns/',
-  'uploads/audio/',
 ];
 
 function createR2Client(): { client: S3Client; bucket: string; cdnUrl: string | null } | null {
@@ -97,29 +105,10 @@ async function collectInUseKeys(cdnUrl: string | null): Promise<Set<string>> {
     }
   }
 
-  // AudioAsset: sourceKey and rendition keys are stored directly as keys, no
-  // URL parsing needed — same as Location.images.imageKey above.
-  const audioCursor = AudioAsset.find(
-    {},
-    'sourceKey renditions.opus.key renditions.aac.key onceRenditions.opus.key onceRenditions.aac.key'
-  )
-    .lean()
-    .cursor();
-  for await (const doc of audioCursor) {
-    const asset = doc as {
-      sourceKey?: string;
-      renditions?: { opus?: { key?: string }; aac?: { key?: string } };
-      // Reserved for phase 2's ∞/1× music variants — never written in phase 1,
-      // but a scanner that forgets about them once phase 2 starts populating
-      // them would silently offer to delete a user's music. Collect them now.
-      onceRenditions?: { opus?: { key?: string }; aac?: { key?: string } };
-    };
-    if (asset.sourceKey) inUse.add(asset.sourceKey);
-    if (asset.renditions?.opus?.key) inUse.add(asset.renditions.opus.key);
-    if (asset.renditions?.aac?.key) inUse.add(asset.renditions.aac.key);
-    if (asset.onceRenditions?.opus?.key) inUse.add(asset.onceRenditions.opus.key);
-    if (asset.onceRenditions?.aac?.key) inUse.add(asset.onceRenditions.aac.key);
-  }
+  // No AudioAsset walk here on purpose. Audio keys are outside TRACKED_PREFIXES
+  // now (see the comment there), so this scanner never lists one and therefore
+  // never needs to know which are in use. Audio's own in-use set is computed
+  // per-owner in `~/server/functions/audio-cleanup.ts`.
 
   return inUse;
 }
