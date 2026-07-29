@@ -2,7 +2,9 @@
 
 **Date:** 2026-07-28
 **Status:** Approved (design), pending implementation plan
-**Sub-project:** 1 of 3 (see [Programme context](#programme-context))
+**Phase:** 1 of 3 — see [GM Soundboard — Programme Scope](./2026-07-28-soundboard-roadmap.md)
+for the big picture, the other phases, and the programme-level decisions this
+design inherits.
 
 ## Summary
 
@@ -13,23 +15,26 @@ standalone route outside any campaign.
 
 This is the foundation for a GM soundboard (Syrinscape-style) in which the GM
 controls playback and **players hear the audio in their own browsers**. This
-sub-project deliberately ships no playback engine, no packages, and no realtime
+phase deliberately ships no playback engine, no packages, and no realtime
 broadcast — only a library you can fill, classify, find, and audition one file
 at a time.
 
 ## Programme context
 
-The wider soundboard request decomposes into three sub-projects, each with its
-own spec → plan → implementation cycle:
+**The authoritative source for the overall project is
+[GM Soundboard — Programme Scope](./2026-07-28-soundboard-roadmap.md).** It holds
+the vision, all three phases, the competitive research that sets phase 2's
+feature bar, the programme-level decisions, and the cross-cutting concerns. This
+section is only the minimum needed to read the present document.
 
-| #   | Sub-project                                                                                                   | Status        |
-| --- | ------------------------------------------------------------------------------------------------------------- | ------------- |
-| 1   | **Audio asset library** — upload, transcode, classify, search                                                 | this document |
-| 2   | **Packages + soundboard** — collections, Web Audio engine, GM controls, realtime broadcast, player join-audio | not started   |
-| 3   | **`ai-sound-generator`** — Python generate → approve → upload tool                                            | not started   |
+| #   | Phase                                                                                             | Status        |
+| --- | ------------------------------------------------------------------------------------------------- | ------------- |
+| 1   | **Audio asset library** — upload, transcode, classify, search                                     | this document |
+| 2   | **Packages + soundboard** — collections, moods, Web Audio engine, GM controls, realtime broadcast | not started   |
+| 3   | **`ai-sound-generator`** — Python generate → approve → upload tool                                | not started   |
 
-Packages and the soundboard are one sub-project because a package with no player
-is untestable and a board with no packages has nothing to load; splitting them
+Packages and the soundboard are one phase because a package with no player is
+untestable and a board with no packages has nothing to load; splitting them
 means building throwaway scaffolding twice.
 
 ### Prior art: the `ttrpg-sfx` POC
@@ -38,21 +43,21 @@ means building throwaway scaffolding twice.
 documents a **verified** Web Audio engine — per-track gain nodes, click-free
 fades, loop/one-shot semantics, retrigger behaviour, and `∞`/`1×` music variants
 with measured evidence (fade envelopes sampled in a real browser, master-bus RMS
-matching the −20 LUFS target). Sub-project 2 should port that engine rather than
+matching the −20 LUFS target). Phase 2 should port that engine rather than
 reinvent it.
 
 Its normalization target (−20 LUFS, via `normalize.sh`) is adopted as this
 library's canonical loudness so generated and hand-uploaded audio sit at the
 same level.
 
-### Sub-project 3 shape (summary — has its own spec)
+### Phase 3 shape (summary — has its own spec)
 
 `ai-sound-generator` is a **Python tool that generates a candidate sound, plays
 it for approval, and on acceptance uploads it through this library's ingest
 API**, returning the resulting asset link. Audio is never committed: the repo
 holds only the Python source, and every generated file lives in R2.
 
-This matters for sub-project 1 because the tool is a **second ingest client**.
+This matters for phase 1 because the tool is a **second ingest client**.
 It does not get its own R2 credentials or its own Mongo access — it uses the
 same presigned-upload and confirm endpoints the browser uses, so validation,
 transcoding, and the resulting `AudioAsset` are identical no matter which client
@@ -64,7 +69,7 @@ upload time. Generated audio therefore arrives **fully classified** and never
 enters the "needs tagging" pile, which is the case that would otherwise dominate
 that queue.
 
-Sizing note for that sub-project: `~/Developer/ttrpg-sfx` is currently 15 GB
+Sizing note for that phase: `~/Developer/ttrpg-sfx` is currently 15 GB
 (`models/` 10 G, `output/` 2.9 G, `MOSS-TTS/` 1.4 G, `stable-audio-3/` 473 M, the
 last a nested git repo) against roughly 50 KB of authored shell. Only the
 authored code and docs move; models and output stay gitignored and local.
@@ -75,7 +80,7 @@ authored code and docs move; models and output stay gitignored and local.
 - Guarantee every asset is playable in every browser a player might use.
 - Make one sound findable among hundreds.
 - Reuse the library across all campaigns a user runs, without re-uploading.
-- Build components that sub-project 2 can mount inside a campaign unchanged.
+- Build components that phase 2 can mount inside a campaign unchanged.
 
 ## Non-goals
 
@@ -84,7 +89,7 @@ authored code and docs move; models and output stay gitignored and local.
 - A curated global/built-in sound library shared across users.
 - Sharing a library between users.
 - **Personal access token issuance/revocation** — the ingest server routes and
-  their auth hook ship here, but token management belongs to sub-project 3.
+  their auth hook ship here, but token management belongs to phase 3.
 - The Python generator itself.
 
 ## Key decisions
@@ -109,7 +114,7 @@ Owned by a user, not a campaign.
 | ------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------- |
 | `ownerId`                                         | ObjectId → `User` | Indexed.                                                                                  |
 | `title`                                           | String            | Required.                                                                                 |
-| `kind`                                            | enum              | `music` \| `ambience` \| `one-shot`. Required; drives playback defaults in sub-project 2. |
+| `kind`                                            | enum              | `music` \| `ambience` \| `one-shot`. Required; drives playback defaults in phase 2.       |
 | `environment[]`                                   | String[]          | Facet. Multi-value — a sound may be both `forest` and `night`.                            |
 | `mood[]`                                          | String[]          | Facet. Multi-value.                                                                       |
 | `intensity`                                       | Number            | 1–5, single value. Lets the board swap calm↔intense variants of a scene.                  |
@@ -131,15 +136,15 @@ claim query.
 The POC ships two files per music track — `name.ogg` (seamless loop) and
 `name_once.ogg` (composed ending) — and its `∞`/`1×` toggle selects between
 them. That is a shipped, documented feature. `onceRenditions` exists in the
-schema from day one so sub-project 2 does not open with a migration.
+schema from day one so phase 2 does not open with a migration.
 
-**In this sub-project the field is reserved but never written.** The UI for
-attaching a `once` variant ships in sub-project 2, alongside the `∞`/`1×`
+**In this phase the field is reserved but never written.** The UI for
+attaching a `once` variant ships in phase 2, alongside the `∞`/`1×`
 toggle that consumes it — building the attach flow now would produce a field
 nothing reads. The worker requires no change to support it later: a `once`
 variant is transcoded by the same pipeline, writing to `onceRenditions` instead
 of `renditions`. Readers must therefore treat `onceRenditions` as always absent
-until sub-project 2.
+until phase 2.
 
 #### Queue-on-document
 
@@ -174,7 +179,7 @@ do not match. Without it the size cap is decorative.
 
 ### Ingest API surface
 
-The browser is **not** the only ingest client: sub-project 3's Python tool uses
+The browser is **not** the only ingest client: phase 3's Python tool uses
 the same two steps. That rules out implementing ingest solely as TanStack Start
 server functions — those speak an internal RPC protocol that is not a stable
 contract for an external client, and pinning a Python tool to it would break on
@@ -195,11 +200,11 @@ differs.
 
 **Personal access tokens do not exist in Cartyx today** — authentication is
 session-cookie only. Issuing, storing (hashed), scoping, and revoking a token is
-real work, and it belongs to **sub-project 3**, where the tool that needs it is
-built. Sub-project 1's obligation is narrower: put the ingest logic in a shared
+real work, and it belongs to **phase 3**, where the tool that needs it is
+built. Phase 1's obligation is narrower: put the ingest logic in a shared
 module and expose the server routes, with the token check stubbed to reject
-until sub-project 3 implements it. That keeps this sub-project from building an
-auth system nothing uses yet, while ensuring sub-project 3 does not have to
+until phase 3 implements it. That keeps this phase from building an
+auth system nothing uses yet, while ensuring phase 3 does not have to
 restructure ingest to add one.
 
 Accepting client-supplied metadata (`kind`, facets, tags) on the upload request
@@ -235,7 +240,7 @@ yields an `AudioBuffer` slightly longer than the real content, so a looping
 ambience track **ticks on every repeat — on Safari specifically**, which is the
 main use case on the browser the AAC rendition exists to serve.
 
-The fix is not a different codec. The board (sub-project 2) sets
+The fix is not a different codec. The board (phase 2) sets
 `source.loopStart = 0` and `source.loopEnd = durationMs / 1000` using ffprobe's
 value rather than trusting `buffer.duration`, giving sample-accurate looping
 regardless of codec padding. **This only works if an accurate duration is stored
@@ -257,7 +262,7 @@ Components in `app/components/audio/`, built context-agnostic:
 
 **Route:** `/audio`, a new top-level route beside `dashboard.tsx`.
 
-**In-campaign mounting is deferred to sub-project 2.** The components are
+**In-campaign mounting is deferred to phase 2.** The components are
 designed for reuse, but nothing in a campaign can receive a picked asset until
 packages exist. Building a picker now means building a throwaway destination for
 it.
@@ -352,4 +357,4 @@ skill). The worker ships at `replicas: 1` with explicit CPU limits.
 ## Open questions
 
 None blocking. Deferred by choice: facet counts, in-campaign mounting
-(sub-project 2), and any global/shared library.
+(phase 2), and any global/shared library.
