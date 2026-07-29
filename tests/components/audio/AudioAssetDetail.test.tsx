@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { AudioAssetDetail } from '~/components/audio/AudioAssetDetail';
 import type { AudioAssetData } from '~/types/audio';
@@ -191,6 +191,69 @@ describe('AudioAssetDetail', () => {
     await userEvent.type(tagsInput, 'storm, coastal');
     await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
     expect(onSave).toHaveBeenCalledWith({ tags: ['storm', 'coastal'] });
+  });
+
+  it('saves a tags edit that duplicates an existing tag, even though the set of unique values is unchanged', async () => {
+    // Regression test: `asset.tags` is ['storm', 'rain']. Retyping the field
+    // as 'storm, storm' is a different value (two of the same tag, not one
+    // of each) but has the same *set* of unique tags as the original. A
+    // same-set comparison would wrongly treat this as unchanged and drop
+    // `tags` from the payload entirely, silently discarding the edit.
+    const onSave = vi.fn();
+    render(<AudioAssetDetail asset={asset} onSave={onSave} onClose={vi.fn()} />);
+    const tagsInput = screen.getByLabelText(/tags/i);
+    await userEvent.clear(tagsInput);
+    await userEvent.type(tagsInput, 'storm, storm');
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    expect(onSave).toHaveBeenCalledWith({ tags: ['storm', 'storm'] });
+  });
+
+  it('resets the form to a newly-passed asset instead of keeping a stale in-progress edit', () => {
+    const otherAsset: AudioAssetData = {
+      ...asset,
+      id: 'a2',
+      title: 'Cave Drips',
+      kind: 'one-shot',
+      environment: ['dungeon'],
+      mood: ['eerie'],
+      intensity: 1,
+      tags: ['drip'],
+    };
+    const { rerender } = render(
+      <AudioAssetDetail asset={asset} onSave={vi.fn()} onClose={vi.fn()} />
+    );
+    // In-progress, unsaved edit to asset A's title.
+    fireEvent.change(screen.getByLabelText(/title/i), { target: { value: 'unsaved edit' } });
+    expect(screen.getByLabelText(/title/i)).toHaveValue('unsaved edit');
+
+    rerender(<AudioAssetDetail asset={otherAsset} onSave={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.getByLabelText(/title/i)).toHaveValue('Cave Drips');
+    expect(screen.getByLabelText(/^kind$/i)).toHaveValue('one-shot');
+    expect(screen.getByLabelText(/tags/i)).toHaveValue('drip');
+    expect(screen.getByRole('button', { name: 'dungeon' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'eerie' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('does not resubmit a stale value for an untouched field after a same-id prop refresh (e.g. a poll)', async () => {
+    // Task 19 polls the asset list every 4s while any asset is non-terminal,
+    // so the `asset` prop can get a new object for the *same* id mid-edit —
+    // e.g. someone else bulk-tagged this asset while the modal was open.
+    // The user never touched tags here; saving must not resubmit the tags
+    // value from when the modal opened (which is now stale) and clobber
+    // that concurrent change.
+    const onSave = vi.fn();
+    const { rerender } = render(
+      <AudioAssetDetail asset={asset} onSave={onSave} onClose={vi.fn()} />
+    );
+    const refreshedAsset: AudioAssetData = { ...asset, tags: ['storm', 'rain', 'thunder'] };
+    rerender(<AudioAssetDetail asset={refreshedAsset} onSave={onSave} onClose={vi.fn()} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'forest' }));
+    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    expect(onSave).toHaveBeenCalledWith({ environment: ['coast', 'forest'] });
+    expect(onSave).not.toHaveBeenCalledWith(expect.objectContaining({ tags: expect.anything() }));
   });
 
   it('sends only the fields that actually changed', async () => {

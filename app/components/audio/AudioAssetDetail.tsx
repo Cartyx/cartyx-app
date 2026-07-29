@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
@@ -46,11 +46,19 @@ const MAX_TAGS = 30;
 const MAX_TAG_LENGTH = 40;
 const INTENSITY_OPTIONS = [1, 2, 3, 4, 5];
 
-/** Order-insensitive equality — chip selections and parsed tags don't preserve the original array order. */
+/**
+ * Multiset (order-insensitive, count-sensitive) equality — chip selections
+ * and parsed tags don't preserve the original array order, but duplicate
+ * counts still matter. A same-*set* comparison (dropping duplicates before
+ * comparing) is wrong here: `['storm', 'rain']` vs. `['storm', 'storm']`
+ * have the same unique elements but are not the same edit, and treating
+ * them as equal would silently drop a real tags change from the payload.
+ */
 function sameElements(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
-  const setB = new Set(b);
-  return a.every((x) => setB.has(x));
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return sortedA.every((x, i) => x === sortedB[i]);
 }
 
 function parseTags(text: string): string[] {
@@ -101,18 +109,42 @@ export function AudioAssetDetail({
   const [tagText, setTagText] = useState(asset.tags.join(', '));
   const [titleError, setTitleError] = useState<string | null>(null);
 
-  // Defensive reset if the caller swaps `asset` without unmounting this
-  // component (Task 19 is expected to mount it per-asset, but this keeps
-  // the form correct either way).
+  // Read through a ref (not `asset` directly) so the reset effect below can
+  // key off `asset.id` alone without needing `asset` itself in its deps.
+  const assetRef = useRef(asset);
+  assetRef.current = asset;
+
+  // The snapshot every field is diffed against on Save (see handleSubmit) —
+  // deliberately not the live `asset` prop. It only advances when the reset
+  // effect below runs (asset.id changes), so a same-id refetch mid-edit
+  // can't make an untouched field look changed, or — worse — look
+  // unchanged and get silently resubmitted with a value that's gone stale
+  // relative to what the server now has, clobbering a legitimate
+  // concurrent update (e.g. a bulk tag applied to this same asset while
+  // the modal was open).
+  const baselineRef = useRef(asset);
+
+  // Resets the form when the *identity* of the edited asset changes — e.g.
+  // Task 19 swapping which asset this modal is open for, or a fresh mount.
+  // Deliberately keyed on `asset.id`, not the `asset` object reference:
+  // Task 19 polls the asset list every 4s while any asset is non-terminal,
+  // so a background refetch produces a new object for the *same* asset on
+  // every poll. Resetting on every new reference would wipe an in-progress,
+  // unsaved edit out from under the user mid-typing. Read-only context
+  // (duration/status/lastError) still reads `asset` directly in the JSX
+  // below, so it keeps refreshing from the latest poll even though the
+  // editable fields — and the baseline they're compared against — don't.
   useEffect(() => {
-    setTitle(asset.title);
-    setKind(asset.kind);
-    setEnvironment(asset.environment as AudioEnvironment[]);
-    setMood(asset.mood as AudioMood[]);
-    setIntensity(asset.intensity);
-    setTagText(asset.tags.join(', '));
+    const current = assetRef.current;
+    baselineRef.current = current;
+    setTitle(current.title);
+    setKind(current.kind);
+    setEnvironment(current.environment as AudioEnvironment[]);
+    setMood(current.mood as AudioMood[]);
+    setIntensity(current.intensity);
+    setTagText(current.tags.join(', '));
     setTitleError(null);
-  }, [asset]);
+  }, [asset.id]);
 
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -136,6 +168,7 @@ export function AudioAssetDetail({
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
+    const baseline = baselineRef.current;
 
     const trimmedTitle = title.trim();
     if (!trimmedTitle) {
@@ -147,12 +180,12 @@ export function AudioAssetDetail({
     const parsedTags = parseTags(tagText);
 
     const payload: AudioAssetDetailPayload = {};
-    if (trimmedTitle !== asset.title) payload.title = trimmedTitle;
-    if (kind !== asset.kind) payload.kind = kind;
-    if (!sameElements(environment, asset.environment)) payload.environment = environment;
-    if (!sameElements(mood, asset.mood)) payload.mood = mood;
-    if (intensity !== asset.intensity) payload.intensity = intensity;
-    if (!sameElements(parsedTags, asset.tags)) payload.tags = parsedTags;
+    if (trimmedTitle !== baseline.title) payload.title = trimmedTitle;
+    if (kind !== baseline.kind) payload.kind = kind;
+    if (!sameElements(environment, baseline.environment)) payload.environment = environment;
+    if (!sameElements(mood, baseline.mood)) payload.mood = mood;
+    if (intensity !== baseline.intensity) payload.intensity = intensity;
+    if (!sameElements(parsedTags, baseline.tags)) payload.tags = parsedTags;
 
     onSave(payload);
   };
