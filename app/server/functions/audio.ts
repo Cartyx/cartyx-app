@@ -2,6 +2,7 @@ import { HeadObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import type { z } from 'zod';
 import { connectDB, isDBConnected } from '../db/connection';
 import { AudioAsset } from '../db/models/AudioAsset';
+import { escapeRegExp } from '../utils/helpers';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { createR2, getAudioUploadUrl } from './uploads';
 import { AUDIO_MAX_BYTES, AUDIO_SOURCE_TYPES } from '~/types/audio';
@@ -131,7 +132,7 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     mood: d.mood ?? [],
     intensity: d.intensity ?? null,
     tags: d.tags ?? [],
-    status: (d.status ?? 'pending') as AudioAssetData['status'],
+    status: (d.status ?? 'uploading') as AudioAssetData['status'],
     durationMs: d.durationMs ?? null,
     loudnessLufs: d.loudnessLufs ?? null,
     peaks: d.peaks ?? [],
@@ -140,6 +141,26 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     createdAt: d.createdAt instanceof Date ? d.createdAt.toISOString() : '',
     updatedAt: d.updatedAt instanceof Date ? d.updatedAt.toISOString() : '',
   };
+}
+
+/**
+ * The list is sorted `{ createdAt: -1, _id: -1 }`, so the pagination cursor must
+ * constrain on both fields together (not `_id` alone) or a page boundary that falls
+ * between two documents with different `createdAt` values can skip or duplicate rows.
+ * Encoded as `<createdAt epoch ms>_<id>` — compact, and the delimiter can't collide
+ * with either part (epoch ms is digits-only, Mongo ids don't contain `_`).
+ */
+function encodeAudioCursor(createdAt: Date, id: string): string {
+  return `${createdAt.getTime()}_${id}`;
+}
+
+function decodeAudioCursor(cursor: string): { createdAt: Date; id: string } | null {
+  const idx = cursor.indexOf('_');
+  if (idx <= 0 || idx === cursor.length - 1) return null;
+  const ms = Number(cursor.slice(0, idx));
+  const id = cursor.slice(idx + 1);
+  if (!Number.isFinite(ms)) return null;
+  return { createdAt: new Date(ms), id };
 }
 
 export async function listAudioAssets({
@@ -157,7 +178,7 @@ export async function listAudioAssets({
     if (data.environment?.length) query.environment = { $in: data.environment };
     if (data.mood?.length) query.mood = { $in: data.mood };
     if (data.tags?.length) query.tags = { $all: data.tags };
-    if (data.search) query.title = { $regex: data.search, $options: 'i' };
+    if (data.search) query.title = { $regex: escapeRegExp(data.search), $options: 'i' };
     if (data.intensityMin != null || data.intensityMax != null) {
       const range: Record<string, number> = {};
       if (data.intensityMin != null) range.$gte = data.intensityMin;
@@ -166,11 +187,41 @@ export async function listAudioAssets({
     }
     if (data.needsTagging) {
       query.status = 'ready';
-      query.tags = { $size: 0 };
-      query.environment = { $size: 0 };
+      // needsTagging means "ready but unclassified": tags and environment must both
+      // be empty. If the caller *also* passed an explicit tags/environment filter
+      // (query.tags / query.environment already set above), don't clobber it — merge
+      // both requirements with $and instead. Note that requiring a facet array to be
+      // both non-empty (from the caller's filter) and $size:0 (from needsTagging) is
+      // never satisfiable; that's the caller asking for a contradiction, and an empty
+      // result set is the honest answer, not an implementation bug.
+      const explicitTags = query.tags;
+      const explicitEnvironment = query.environment;
+      if (explicitTags !== undefined || explicitEnvironment !== undefined) {
+        delete query.tags;
+        delete query.environment;
+        const and: Record<string, unknown>[] = [
+          { tags: { $size: 0 } },
+          { environment: { $size: 0 } },
+        ];
+        if (explicitTags !== undefined) and.push({ tags: explicitTags });
+        if (explicitEnvironment !== undefined) and.push({ environment: explicitEnvironment });
+        query.$and = and;
+      } else {
+        query.tags = { $size: 0 };
+        query.environment = { $size: 0 };
+      }
     }
-    // Cursor is the last seen _id under a stable createdAt DESC, _id DESC sort.
-    if (data.cursor) query._id = { $lt: data.cursor };
+    if (data.cursor) {
+      const decoded = decodeAudioCursor(data.cursor);
+      if (decoded) {
+        // Compound cursor: strictly older createdAt, OR same createdAt with a
+        // strictly smaller _id — matches the `{ createdAt: -1, _id: -1 }` sort.
+        query.$or = [
+          { createdAt: { $lt: decoded.createdAt } },
+          { createdAt: decoded.createdAt, _id: { $lt: decoded.id } },
+        ];
+      }
+    }
 
     const rows = (await AudioAsset.find(query)
       .sort({ createdAt: -1, _id: -1 })
@@ -178,7 +229,11 @@ export async function listAudioAssets({
       .lean()) as AudioDoc[];
 
     const items = rows.map(serializeAudioAsset);
-    const nextCursor = items.length === data.limit ? items[items.length - 1].id : null;
+    const lastRow = rows[rows.length - 1];
+    const nextCursor =
+      items.length === data.limit && lastRow
+        ? encodeAudioCursor(lastRow.createdAt as Date, items[items.length - 1].id)
+        : null;
     return { items, nextCursor };
   } catch (e) {
     serverCaptureException(e, userId, { action: 'listAudioAssets' });
