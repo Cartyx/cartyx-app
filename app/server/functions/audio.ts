@@ -154,6 +154,7 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     tags?: string[];
     status?: string;
     durationMs?: number | null;
+    durationSamples?: number | null;
     loudnessTargetLufs?: number | null;
     peaks?: number[];
     renditions?: AudioAssetData['renditions'];
@@ -172,6 +173,7 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     tags: d.tags ?? [],
     status: (d.status ?? 'uploading') as AudioAssetData['status'],
     durationMs: d.durationMs ?? null,
+    durationSamples: d.durationSamples ?? null,
     loudnessTargetLufs: d.loudnessTargetLufs ?? null,
     peaks: d.peaks ?? [],
     renditions: d.renditions ?? {},
@@ -375,11 +377,21 @@ export async function bulkTagAudioAssets({
  * it on the next pass, and the claim fields are cleared so it can't look
  * in-flight.
  *
- * The filter carries TWO preconditions, and both are load-bearing:
+ * The filter carries THREE preconditions, and all are load-bearing:
  *
  * - `status: 'failed'` — this can never be used to yank a `ready` asset back
  *   through the worker; that is the same abuse `confirmAudioUpload`'s own
  *   precondition closes.
+ * - `permanentFailure: { $ne: true }` — the failure must be one a retry could
+ *   plausibly fix. The worker sets `permanentFailure` only when it rejected the
+ *   SOURCE itself (over the 30-minute cap, zero decoded samples, wholly silent,
+ *   truncated mid-payload — see `PermanentError` in audio-worker/src/errors.ts),
+ *   never when a transient fault merely exhausted the attempt budget. Those
+ *   files are poison on every run: without this clause each Retry click buys
+ *   another full decode of pinned CPU on a single-node cluster, in a loop the
+ *   user can drive by hand, for a guaranteed identical outcome. `$ne: true`
+ *   rather than `false` so rows written before the field existed stay
+ *   retryable (Mongo equality treats an absent field as null).
  * - `confirmedAt: { $ne: null }` — the row must have **passed confirm**.
  *   `confirmAudioUpload`'s `HeadObject` is the only real enforcement of
  *   `AUDIO_MAX_BYTES` in the system (a presigned PUT cannot constrain
@@ -411,7 +423,13 @@ export async function retryAudioAsset({
   try {
     await ensureDb();
     const doc = await AudioAsset.findOneAndUpdate(
-      { _id: data.id, ownerId: userId, status: 'failed', confirmedAt: { $ne: null } },
+      {
+        _id: data.id,
+        ownerId: userId,
+        status: 'failed',
+        confirmedAt: { $ne: null },
+        permanentFailure: { $ne: true },
+      },
       {
         $set: {
           status: 'pending',
@@ -428,7 +446,7 @@ export async function retryAudioAsset({
     ).lean();
     if (!doc) {
       throw new Error(
-        'Audio asset cannot be retried (not found, not failed, or its upload never completed)'
+        'Audio asset cannot be retried (not found, not failed, its upload never completed, or the file itself was rejected)'
       );
     }
     serverCaptureEvent(userId, 'audio_asset_retried', { assetId: data.id });

@@ -43,6 +43,21 @@ const audioAssetSchema = new mongoose.Schema({
   },
 
   durationMs: { type: Number, default: null },
+  // Exact decoded length in samples per channel at 48 kHz (the rate every
+  // rendition is produced at — see RENDITION_SAMPLE_RATE in
+  // audio-worker/src/ffmpeg.ts), NOT at `sampleRate` below, which records what
+  // the source happened to be.
+  //
+  // Cross-service contract field: written by the worker through the raw driver
+  // (`processAsset`), declared here because the web app owns the schema.
+  //
+  // This is the field phase 2's gapless looping must read. `durationMs` is
+  // rounded to whole milliseconds, so `loopEnd = durationMs / 1000` is off by
+  // up to ±24 samples for every asset before any format-specific error, and
+  // the container's own duration adds more on top (+312 samples for an
+  // Ogg/Opus upload, +1440 for ADTS AAC — both measured). An audible tick on
+  // every repeat of an ambience loop is the failure that produces.
+  durationSamples: { type: Number, default: null },
   // The loudnorm TARGET the worker normalized to (-20), not a measurement:
   // single-pass loudnorm doesn't guarantee the output lands on it. Named for
   // what it is so phase 2's gain logic can't mistake it for a measured value;
@@ -55,6 +70,14 @@ const audioAssetSchema = new mongoose.Schema({
   status: { type: String, enum: AUDIO_STATUSES, default: 'uploading' },
   attempts: { type: Number, default: 0 },
   lastError: { type: String, default: null },
+  // "This source can never succeed" — set by the worker when a validation step
+  // rejects the file itself (over the 30-minute cap, zero samples, wholly
+  // silent, truncated) rather than when a transient fault ran out of attempts.
+  // `retryAudioAsset` refuses rows carrying it: the file is poison on every
+  // run, and each Retry click would buy another pass of pinned CPU on a
+  // single-node cluster for a guaranteed identical outcome. Cross-service
+  // contract field, written by the worker through the raw driver.
+  permanentFailure: { type: Boolean, default: false },
   claimedAt: { type: Date, default: null },
   claimedBy: { type: String, default: null },
   // Retry backoff gate, written by the audio worker (`requeueForRetry` in

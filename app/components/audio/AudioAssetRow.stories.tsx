@@ -14,6 +14,7 @@ const base: AudioAssetData = {
   tags: ['storm', 'rain'],
   status: 'ready',
   durationMs: 125_000,
+  durationSamples: 6_000_000,
   loudnessTargetLufs: -20,
   peaks: Array.from({ length: 200 }, (_, i) => Math.abs(Math.sin(i / 6)) * 0.8),
   renditions: {},

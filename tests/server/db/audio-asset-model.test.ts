@@ -152,6 +152,44 @@ describe('AudioAsset model', () => {
     expect(doc.toObject().confirmedAt).toEqual(when);
   });
 
+  /**
+   * Both of these are written by the WORKER, through the raw driver, and read
+   * by the app — so mongoose's strict-by-default stripping is again the failure
+   * mode: an undeclared path vanishes from `$set` updates issued through this
+   * model with no error at all.
+   *
+   * `durationSamples` is what phase 2's gapless looping reads. `durationMs`
+   * rounds to whole milliseconds, which at 48 kHz is up to ±24 samples of slop
+   * on every asset before any format-specific error on top (+312 samples for an
+   * Ogg/Opus upload, +1440 for ADTS AAC, both measured) — an audible tick on
+   * every repeat of an ambience loop.
+   *
+   * `permanentFailure` is what stops `retryAudioAsset` handing a source the
+   * worker has already judged unusable straight back to the worker.
+   */
+  it('declares durationSamples and permanentFailure, the fields the worker writes', () => {
+    expect(AudioAsset.schema.path('durationSamples').instance).toBe('Number');
+    expect(AudioAsset.schema.path('permanentFailure').instance).toBe('Boolean');
+
+    const doc = new AudioAsset({
+      ownerId: '507f1f77bcf86cd799439011',
+      title: 'Storm',
+      kind: 'ambience',
+      sourceKey: 'uploads/audio/x.wav',
+    });
+    // Unknown until the worker decodes the file; not zero, which would read as
+    // "measured, and empty".
+    expect(doc.durationSamples).toBeNull();
+    // Nothing has judged this source unusable, so Retry stays available.
+    expect(doc.permanentFailure).toBe(false);
+
+    doc.durationSamples = 96_313;
+    doc.permanentFailure = true;
+    const obj = doc.toObject();
+    expect(obj.durationSamples).toBe(96_313);
+    expect(obj.permanentFailure).toBe(true);
+  });
+
   it('rejects an unknown kind', async () => {
     const doc = new AudioAsset({
       ownerId: '507f1f77bcf86cd799439011',

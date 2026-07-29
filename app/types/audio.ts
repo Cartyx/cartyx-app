@@ -66,6 +66,14 @@ export type AudioAssetData = {
   tags: string[];
   status: AudioAssetStatus;
   durationMs: number | null;
+  /**
+   * Exact decoded length in samples per channel at the renditions' 48 kHz.
+   * Phase 2's gapless looping reads THIS, not `durationMs` — millisecond
+   * rounding costs up to ±24 samples per asset and the container duration adds
+   * more on top, which is an audible tick on every loop repeat. `durationMs`
+   * stays for display.
+   */
+  durationSamples: number | null;
   loudnessTargetLufs: number | null;
   peaks: number[];
   renditions: { opus?: AudioRendition; aac?: AudioRendition };

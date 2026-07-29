@@ -106,6 +106,41 @@ describe('updateAudioAsset', () => {
       updateAudioAsset({ data: { id: 'a1', title: 'X' }, userId: 'u2' })
     ).rejects.toThrow(/not found/i);
   });
+
+  /**
+   * `durationSamples` is a cross-service contract field: the worker writes it,
+   * the serializer is the only thing that can carry it to the client, and phase
+   * 2's gapless looping is the consumer. Dropping it here would leave phase 2
+   * silently back on `durationMs`, whose millisecond rounding is the ±24-sample
+   * error the field exists to remove.
+   */
+  it('carries the worker-written durationSamples through serialization', async () => {
+    mockUpdateResult({
+      _id: 'a1',
+      ownerId: 'u1',
+      durationMs: 2007,
+      durationSamples: 96_313,
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    const { updateAudioAsset } = await import('~/server/functions/audio');
+    const res = await updateAudioAsset({ data: { id: 'a1', title: 'New' }, userId: 'u1' });
+    expect(res.durationSamples).toBe(96_313);
+    // Not recomputed from the rounded milliseconds — that would be 96 336.
+    expect(res.durationSamples).not.toBe(res.durationMs! * 48);
+  });
+
+  it('reports durationSamples as null for an asset the worker has not processed yet', async () => {
+    mockUpdateResult({
+      _id: 'a1',
+      ownerId: 'u1',
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    const { updateAudioAsset } = await import('~/server/functions/audio');
+    const res = await updateAudioAsset({ data: { id: 'a1', title: 'New' }, userId: 'u1' });
+    expect(res.durationSamples).toBeNull();
+  });
 });
 
 describe('bulkTagAudioAssets', () => {
@@ -231,6 +266,7 @@ describe('retryAudioAsset', () => {
       ownerId: 'u1',
       status: 'failed',
       confirmedAt: { $ne: null },
+      permanentFailure: { $ne: true },
     });
     expect(update.$set.status).toBe('pending');
     // The row exhausted its budget — a retry that re-failed at the cap would be
@@ -362,6 +398,44 @@ describe('retryAudioAsset', () => {
 
       expect(matchesFilter(neverConfirmed, retryFilter)).toBe(false);
       expect(matchesFilter(confirmedThenFailed, retryFilter)).toBe(true);
+    });
+
+    /**
+     * The same technique applied to the OTHER thing a retry must not resurrect.
+     *
+     * The worker marks a row `permanentFailure: true` only when it rejected the
+     * source itself — over the 30-minute cap, zero decoded samples, wholly
+     * silent, truncated mid-payload (`PermanentError`, audio-worker/src/errors.ts).
+     * Those files fail identically every run, so each Retry click buys another
+     * full decode of pinned CPU on a single-node cluster and changes nothing.
+     * A row that merely exhausted its attempts against an R2 blip carries
+     * `permanentFailure: false` and MUST stay retryable — a guard that blocked
+     * it would silently delete the feature this function exists for.
+     */
+    it('excludes a permanently-failed row, and admits a transiently-failed or legacy one', async () => {
+      const { retryAudioAsset } = await import('~/server/functions/audio');
+      vi.mocked(AudioAsset.findOneAndUpdate).mockReset();
+      mockUpdateResult(null);
+      await expect(retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' })).rejects.toThrow(
+        /cannot be retried/i
+      );
+      const retryFilter = vi.mocked(AudioAsset.findOneAndUpdate).mock
+        .calls[0][0] as unknown as Record<string, unknown>;
+
+      const base = {
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'failed',
+        confirmedAt: new Date(),
+      };
+
+      // The worker rejected the file: "Audio file is completely silent".
+      expect(matchesFilter({ ...base, permanentFailure: true }, retryFilter)).toBe(false);
+      // The worker ran out of attempts against a transient fault.
+      expect(matchesFilter({ ...base, permanentFailure: false }, retryFilter)).toBe(true);
+      // Written before the field existed — must not become un-retryable by
+      // accident, which is why the clause is `$ne: true` and not `false`.
+      expect(matchesFilter(base, retryFilter)).toBe(true);
     });
 
     it('leaves the unverified client-declared size out of the created row entirely', async () => {

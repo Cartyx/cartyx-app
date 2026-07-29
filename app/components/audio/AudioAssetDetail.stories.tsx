@@ -13,6 +13,7 @@ const base: AudioAssetData = {
   tags: ['storm', 'rain'],
   status: 'ready',
   durationMs: 125_000,
+  durationSamples: 6_000_000,
   loudnessTargetLufs: -20,
   peaks: [0.1, 0.9, 0.4],
   renditions: {},

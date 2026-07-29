@@ -73,6 +73,7 @@ function mkAsset(overrides: Partial<AudioAssetData> = {}): AudioAssetData {
     tags: [],
     status: 'ready',
     durationMs: 10_000,
+    durationSamples: 480_000,
     loudnessTargetLufs: -20,
     peaks: [0.1, 0.5, 0.3],
     renditions: { opus: { key: 'k1', url: 'https://cdn.example/a1.ogg', bytes: 100 } },

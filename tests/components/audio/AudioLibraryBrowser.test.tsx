@@ -25,6 +25,7 @@ function mkAsset(id: string, title: string): AudioAssetData {
     tags: [],
     status: 'ready',
     durationMs: 10_000,
+    durationSamples: 480_000,
     loudnessTargetLufs: -20,
     peaks: [0.1, 0.5, 0.3],
     renditions: {},
