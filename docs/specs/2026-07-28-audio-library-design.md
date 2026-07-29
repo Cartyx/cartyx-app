@@ -26,7 +26,7 @@ own spec → plan → implementation cycle:
 | --- | ------------------------------------------------------------------------------------------------------------- | ------------- |
 | 1   | **Audio asset library** — upload, transcode, classify, search                                                 | this document |
 | 2   | **Packages + soundboard** — collections, Web Audio engine, GM controls, realtime broadcast, player join-audio | not started   |
-| 3   | **`ai-sound-generator`** — vendor the `ttrpg-sfx` toolkit into the monorepo                                   | not started   |
+| 3   | **`ai-sound-generator`** — Python generate → approve → upload tool                                            | not started   |
 
 Packages and the soundboard are one sub-project because a package with no player
 is untestable and a board with no packages has nothing to load; splitting them
@@ -41,15 +41,33 @@ with measured evidence (fade envelopes sampled in a real browser, master-bus RMS
 matching the −20 LUFS target). Sub-project 2 should port that engine rather than
 reinvent it.
 
-Two facts about that repo constrain sub-project 4: it is **15 GB** (`models/`
-10 G, `output/` 2.9 G, `MOSS-TTS/` 1.4 G, `stable-audio-3/` 473 M, the last being
-a nested git repo), while the authored code is roughly 50 KB of shell plus a
-24.8 KB single-file web app and the docs. Vendoring means bringing the scripts
-and docs with models and output gitignored — not moving the tree.
-
 Its normalization target (−20 LUFS, via `normalize.sh`) is adopted as this
 library's canonical loudness so generated and hand-uploaded audio sit at the
 same level.
+
+### Sub-project 3 shape (summary — has its own spec)
+
+`ai-sound-generator` is a **Python tool that generates a candidate sound, plays
+it for approval, and on acceptance uploads it through this library's ingest
+API**, returning the resulting asset link. Audio is never committed: the repo
+holds only the Python source, and every generated file lives in R2.
+
+This matters for sub-project 1 because the tool is a **second ingest client**.
+It does not get its own R2 credentials or its own Mongo access — it uses the
+same presigned-upload and confirm endpoints the browser uses, so validation,
+transcoding, and the resulting `AudioAsset` are identical no matter which client
+uploaded. See [Ingest API surface](#ingest-api-surface).
+
+The generator knows what it produced — the `SCENES`/`SPELLS` entry, the prompt,
+whether it is ambience or a one-shot — so it sends `kind`, facets, and tags at
+upload time. Generated audio therefore arrives **fully classified** and never
+enters the "needs tagging" pile, which is the case that would otherwise dominate
+that queue.
+
+Sizing note for that sub-project: `~/Developer/ttrpg-sfx` is currently 15 GB
+(`models/` 10 G, `output/` 2.9 G, `MOSS-TTS/` 1.4 G, `stable-audio-3/` 473 M, the
+last a nested git repo) against roughly 50 KB of authored shell. Only the
+authored code and docs move; models and output stay gitignored and local.
 
 ## Goals
 
@@ -65,6 +83,9 @@ same level.
 - Realtime broadcast to players; player-side audio.
 - A curated global/built-in sound library shared across users.
 - Sharing a library between users.
+- **Personal access token issuance/revocation** — the ingest server routes and
+  their auth hook ship here, but token management belongs to sub-project 3.
+- The Python generator itself.
 
 ## Key decisions
 
@@ -150,6 +171,40 @@ enforce a size limit — S3/R2 support content-length conditions only on POST
 policies. Confirm therefore issues a `HeadObject`, validates real size and
 content type against the cap, and deletes the object and fails the asset if they
 do not match. Without it the size cap is decorative.
+
+### Ingest API surface
+
+The browser is **not** the only ingest client: sub-project 3's Python tool uses
+the same two steps. That rules out implementing ingest solely as TanStack Start
+server functions — those speak an internal RPC protocol that is not a stable
+contract for an external client, and pinning a Python tool to it would break on
+framework upgrades.
+
+Ingest is therefore structured as **one shared module with two thin adapters**,
+the pattern `readyz.ts` already uses (a server route delegating to
+`~/server/functions/health`):
+
+| Consumer    | Adapter                                                                         | Auth           |
+| ----------- | ------------------------------------------------------------------------------- | -------------- |
+| Browser     | `createServerFn` wrapper                                                        | Session cookie |
+| Python tool | Server route — `POST /api/audio/uploads`, `POST /api/audio/uploads/:id/confirm` | Bearer token   |
+
+Both adapters call the same implementation, so validation, the `HeadObject` size
+check, and asset creation cannot drift between clients. Only the auth check
+differs.
+
+**Personal access tokens do not exist in Cartyx today** — authentication is
+session-cookie only. Issuing, storing (hashed), scoping, and revoking a token is
+real work, and it belongs to **sub-project 3**, where the tool that needs it is
+built. Sub-project 1's obligation is narrower: put the ingest logic in a shared
+module and expose the server routes, with the token check stubbed to reject
+until sub-project 3 implements it. That keeps this sub-project from building an
+auth system nothing uses yet, while ensuring sub-project 3 does not have to
+restructure ingest to add one.
+
+Accepting client-supplied metadata (`kind`, facets, tags) on the upload request
+is part of this surface from the start — it is how generated audio arrives
+pre-classified, and the browser dropzone's batch-default uses the same field.
 
 ### Worker pipeline
 
