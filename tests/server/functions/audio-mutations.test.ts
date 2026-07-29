@@ -9,10 +9,15 @@ vi.mock('~/server/utils/telemetry', () => ({
 const send = vi.fn();
 vi.mock('~/server/functions/uploads', () => ({
   createR2: () => ({ client: { send }, bucket: 'b', cdnUrl: 'https://cdn.test' }),
-  getAudioUploadUrl: vi.fn(),
+  getAudioUploadUrl: vi.fn(async () => ({
+    uploadUrl: 'https://signed/put',
+    key: 'uploads/audio/1-a.wav',
+    publicUrl: 'https://cdn.test/uploads/audio/1-a.wav',
+  })),
 }));
 vi.mock('~/server/db/models/AudioAsset', () => ({
   AudioAsset: {
+    create: vi.fn(),
     findOneAndUpdate: vi.fn(),
     updateMany: vi.fn(),
     findOne: vi.fn(),
@@ -218,13 +223,14 @@ describe('retryAudioAsset', () => {
       { $set: Record<string, unknown> },
     ];
     // Scoped to `failed`: this must never be usable to yank a `ready` asset
-    // back through the worker. And to `sourceBytes != null`: see the
-    // unconfirmed-upload test below.
+    // back through the worker. And to `confirmedAt != null`: see the
+    // "retry eligibility (property)" block below, which is what actually
+    // proves that clause excludes anything.
     expect(filter).toEqual({
       _id: 'a1',
       ownerId: 'u1',
       status: 'failed',
-      sourceBytes: { $ne: null },
+      confirmedAt: { $ne: null },
     });
     expect(update.$set.status).toBe('pending');
     // The row exhausted its budget — a retry that re-failed at the cap would be
@@ -248,34 +254,140 @@ describe('retryAudioAsset', () => {
   });
 
   /**
-   * A `failed` row with null `sourceBytes` never passed `confirmAudioUpload`'s
-   * HeadObject — the only real enforcement of AUDIO_MAX_BYTES in the system,
-   * since a presigned PUT cannot constrain Content-Length. Two paths produce
-   * one: the worker's upload reaper aging out an abandoned `uploading` row, and
-   * a confirm that rejected the file (whose object confirm already deleted).
+   * The property, not the shape.
    *
-   * Requeueing either hands the worker an object nobody has measured, which it
-   * buffers whole into memory in a pod capped at 768Mi. Declare `bytes: 1MB`,
-   * PUT 1GB, never confirm, wait out the reaper, click Retry → OOM → requeue →
-   * OOM ×3 → failed → Retry again, indefinitely.
+   * A previous version of this guard filtered on `sourceBytes: { $ne: null }`
+   * and was a tautology: `createAudioUpload` seeded `sourceBytes` at row
+   * creation from the client's self-declared `data.bytes`, so it was non-null
+   * for every row that had ever existed and the clause excluded nothing. The
+   * test that accompanied it passed because it only asserted the filter
+   * literal — it checked the code that was written, not the property that was
+   * needed. So this test never names a field: it runs the REAL creation,
+   * confirm, and retry code paths and evaluates the actual filter against the
+   * actual document each path produces. Any future guard whose premise is false
+   * fails here regardless of how it is spelled.
    *
-   * The DB filter is what closes this; asserting only on the mocked return
-   * value would pass no matter what the filter said, so this pins the clause
-   * itself.
+   * The attack it closes: declare `bytes: 1MB`, PUT 1 GB to the presigned URL,
+   * never confirm (confirm's HeadObject is the only real enforcement of
+   * AUDIO_MAX_BYTES — a presigned PUT cannot constrain Content-Length), wait
+   * out the worker's upload reaper, click Retry. `processAsset` then buffers
+   * the whole unmeasured object into memory via `transformToByteArray` in a pod
+   * capped at 768Mi: OOM, requeue, OOM ×3, failed, Retry, indefinitely.
    */
-  it('refuses a failed row whose upload never passed the confirm size check', async () => {
-    mockUpdateResult(null);
-    const { retryAudioAsset } = await import('~/server/functions/audio');
-    await expect(retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' })).rejects.toThrow(
-      /cannot be retried/i
-    );
+  describe('retry eligibility (property)', () => {
+    /**
+     * Minimal Mongo filter evaluator — equality and `{ $ne }` only, which is
+     * all `retryAudioAsset`'s filter uses. Deliberately not general: a fuller
+     * matcher would become its own source of bugs. Absent fields read as null,
+     * matching Mongo's equality-to-null semantics.
+     */
+    function matchesFilter(doc: Record<string, unknown>, filter: Record<string, unknown>): boolean {
+      return Object.entries(filter).every(([key, condition]) => {
+        const value = doc[key] ?? null;
+        if (condition && typeof condition === 'object' && '$ne' in condition) {
+          return value !== (condition as { $ne: unknown }).$ne;
+        }
+        return value === condition;
+      });
+    }
 
-    const [filter] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0] as unknown as [
-      Record<string, unknown>,
-    ];
-    // `sourceBytes` is written from confirm's HeadObject result, so `!= null`
-    // is exactly "this object was measured against the cap".
-    expect(filter.sourceBytes).toEqual({ $ne: null });
+    it('excludes a row that never passed confirm, and admits one that did', async () => {
+      const { createAudioUpload, confirmAudioUpload, retryAudioAsset } =
+        await import('~/server/functions/audio');
+
+      // --- 1. The real creation path, with a lie about the size. ---
+      vi.mocked(AudioAsset.create).mockResolvedValue({ _id: 'a1' } as never);
+      await createAudioUpload({
+        data: {
+          filename: 'huge.wav',
+          contentType: 'audio/wav',
+          bytes: 1_000_000, // claimed 1MB; the actual PUT body is never checked
+          kind: 'ambience',
+          environment: [],
+          mood: [],
+          tags: [],
+        },
+        userId: 'u1',
+      });
+      const createdRow = vi.mocked(AudioAsset.create).mock.calls[0][0] as Record<string, unknown>;
+
+      // --- 2. The real confirm path, capturing exactly what it writes. ---
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        sourceKey: 'uploads/audio/1-a.wav',
+        status: 'uploading',
+      } as never);
+      send.mockResolvedValue({ ContentLength: 1024, ContentType: 'audio/wav' });
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+        _id: 'a1',
+        status: 'pending',
+      } as never);
+      await confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' });
+      const confirmWrites = (
+        vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0][1] as { $set: Record<string, unknown> }
+      ).$set;
+
+      // --- 3. The real retry path, capturing the filter it actually issues. ---
+      vi.mocked(AudioAsset.findOneAndUpdate).mockReset();
+      mockUpdateResult(null);
+      await expect(retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' })).rejects.toThrow(
+        /cannot be retried/i
+      );
+      const retryFilter = vi.mocked(AudioAsset.findOneAndUpdate).mock
+        .calls[0][0] as unknown as Record<string, unknown>;
+
+      // --- 4. The two rows, built only from what the real code above wrote. ---
+
+      // The attack row: created, abandoned, then aged out of `uploading` by the
+      // worker's reaper. reapStale's uploading clause sets exactly these fields
+      // and touches nothing else — see audio-worker/src/claim.ts.
+      const neverConfirmed = {
+        _id: 'a1',
+        ...createdRow,
+        status: 'failed',
+        lastError: 'Upload never completed',
+      };
+
+      // The legitimate row: confirm succeeded, the worker then failed the
+      // transcode. This one MUST stay retryable — a guard that blocked it would
+      // silently delete the feature.
+      const confirmedThenFailed = {
+        _id: 'a1',
+        ...createdRow,
+        ...confirmWrites,
+        status: 'failed',
+        lastError: 'ffmpeg exited 1',
+      };
+
+      expect(matchesFilter(neverConfirmed, retryFilter)).toBe(false);
+      expect(matchesFilter(confirmedThenFailed, retryFilter)).toBe(true);
+    });
+
+    it('leaves the unverified client-declared size out of the created row entirely', async () => {
+      vi.mocked(AudioAsset.create).mockResolvedValue({ _id: 'a1' } as never);
+      const { createAudioUpload } = await import('~/server/functions/audio');
+      await createAudioUpload({
+        data: {
+          filename: 'huge.wav',
+          contentType: 'audio/wav',
+          bytes: 1_000_000,
+          kind: 'ambience',
+          environment: [],
+          mood: [],
+          tags: [],
+        },
+        userId: 'u1',
+      });
+
+      const created = vi.mocked(AudioAsset.create).mock.calls[0][0] as Record<string, unknown>;
+      // `bytes` is whatever the uploader typed into the request. Persisting it
+      // made `sourceBytes` read as a measured size when nothing had measured
+      // anything — which is exactly how the tautological guard above came to
+      // look correct. The real size arrives from confirm's HeadObject.
+      expect(created.sourceBytes).toBeNull();
+      expect(created.confirmedAt).toBeNull();
+    });
   });
 });
 

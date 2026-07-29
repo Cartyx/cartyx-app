@@ -122,7 +122,12 @@ async function seedAudioFixtures(
       intensity: def.intensity ?? null,
       tags: def.tags ?? [],
       sourceKey,
+      // Every fixture is past the upload step (`ready` or `processing`), so
+      // both of these are set — `confirmedAt` is what `retryAudioAsset`
+      // requires, and a fixture without it would be a row the real app can
+      // never produce.
       sourceBytes: 654_321,
+      confirmedAt: new Date(),
       status: def.status,
       attempts: isReady ? 1 : 0,
       lastError: null,

@@ -18,7 +18,20 @@ const audioAssetSchema = new mongoose.Schema({
   tags: { type: [String], default: [] },
 
   sourceKey: { type: String, required: true },
+  // The object's REAL size, measured by confirmAudioUpload's HeadObject. Null
+  // until then — deliberately: this used to be seeded at row creation from the
+  // client's self-declared `bytes`, which meant anything reading it before
+  // confirm got an unverified number the uploader chose.
   sourceBytes: { type: Number, default: null },
+  // Set by confirmAudioUpload's success path and by nothing else, ever. That
+  // exclusivity is the point: it is the one field that proves an object passed
+  // the HeadObject size/type check, which is the only real enforcement of
+  // AUDIO_MAX_BYTES in the system (a presigned PUT cannot constrain
+  // Content-Length). `retryAudioAsset` gates on it so an abandoned upload the
+  // worker's reaper aged into `failed` can never be pushed into the transcode
+  // queue. Cross-service contract field: declared here because the web app owns
+  // the schema, even though the worker doesn't read it.
+  confirmedAt: { type: Date, default: null },
   renditions: {
     opus: { type: renditionSchema, default: undefined },
     aac: { type: renditionSchema, default: undefined },

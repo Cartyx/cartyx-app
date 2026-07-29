@@ -124,6 +124,34 @@ describe('AudioAsset model', () => {
     expect(doc.toObject().nextAttemptAt).toEqual(when);
   });
 
+  // `retryAudioAsset` gates on `confirmedAt` to keep an object that never
+  // passed confirm's HeadObject out of the transcode queue. Mongoose is strict
+  // by default: an undeclared path is silently stripped from both documents and
+  // `$set` updates — so if this were missing, confirm's write would vanish, the
+  // guard would reject every asset, and Retry would break for everyone. The
+  // failure mode is silent in both directions, which is why it is pinned here.
+  it('declares confirmedAt, defaulting to null until confirm sets it', () => {
+    const path = AudioAsset.schema.path('confirmedAt');
+    expect(path).toBeDefined();
+    expect(path.instance).toBe('Date');
+
+    const doc = new AudioAsset({
+      ownerId: '507f1f77bcf86cd799439011',
+      title: 'Storm',
+      kind: 'ambience',
+      sourceKey: 'uploads/audio/x.wav',
+    });
+    // A freshly created row has not been confirmed — that is the whole premise
+    // the retry guard rests on.
+    expect(doc.confirmedAt).toBeNull();
+    // And nothing has measured its size yet either.
+    expect(doc.sourceBytes).toBeNull();
+
+    const when = new Date('2026-07-29T00:00:00.000Z');
+    doc.confirmedAt = when;
+    expect(doc.toObject().confirmedAt).toEqual(when);
+  });
+
   it('rejects an unknown kind', async () => {
     const doc = new AudioAsset({
       ownerId: '507f1f77bcf86cd799439011',

@@ -49,7 +49,15 @@ export async function createAudioUpload({
       intensity: data.intensity ?? null,
       tags: data.tags ?? [],
       sourceKey: key,
-      sourceBytes: data.bytes,
+      // Both explicitly null, and both must stay that way until confirm.
+      // `sourceBytes` used to be seeded here from `data.bytes` — the client's
+      // self-declared size, which nothing has verified and which the uploader
+      // is free to lie about. Storing it made the field read as "this object is
+      // N bytes" when it only ever meant "the uploader claimed N". The real
+      // size arrives from confirm's HeadObject, and until then "unknown" is the
+      // honest value. `confirmedAt` is the flag that says the check happened.
+      sourceBytes: null,
+      confirmedAt: null,
       status: 'uploading',
     });
 
@@ -109,7 +117,17 @@ export async function confirmAudioUpload({
     // write makes exactly one of them win.
     const updated = await AudioAsset.findOneAndUpdate(
       { _id: data.assetId, ownerId: userId, status: 'uploading' },
-      { $set: { status: 'pending', sourceBytes: bytes, updatedAt: new Date() } },
+      {
+        $set: {
+          status: 'pending',
+          // The HeadObject-measured size, and the stamp saying it was measured.
+          // This is the ONLY place either is written; `retryAudioAsset` relies
+          // on that.
+          sourceBytes: bytes,
+          confirmedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      },
       { new: true }
     );
     if (!updated) throw new Error('Audio asset is not awaiting confirmation');
@@ -362,19 +380,26 @@ export async function bulkTagAudioAssets({
  * - `status: 'failed'` — this can never be used to yank a `ready` asset back
  *   through the worker; that is the same abuse `confirmAudioUpload`'s own
  *   precondition closes.
- * - `sourceBytes: { $ne: null }` — the row must have **passed confirm**.
+ * - `confirmedAt: { $ne: null }` — the row must have **passed confirm**.
  *   `confirmAudioUpload`'s `HeadObject` is the only real enforcement of
  *   `AUDIO_MAX_BYTES` in the system (a presigned PUT cannot constrain
- *   Content-Length; the dropzone's check is a courtesy), and `sourceBytes` is
- *   written from that `HeadObject` result — so a null `sourceBytes` means
- *   nobody has ever measured this object. Two kinds of row are in that state:
- *   one the worker's `reapStale` aged out of `uploading`, and one confirm
- *   rejected (whose R2 object confirm already deleted, making a requeue
+ *   Content-Length; the dropzone's check is a courtesy), and `confirmedAt` is
+ *   written by that success path and by nothing else — so a null `confirmedAt`
+ *   means nobody has ever measured this object. Two kinds of row are in that
+ *   state: one the worker's `reapStale` aged out of `uploading`, and one
+ *   confirm rejected (whose R2 object confirm already deleted, making a requeue
  *   pointless anyway). Without this clause, declaring `bytes: 1MB`, PUTting a
  *   1 GB body, never confirming, waiting out the upload reaper and clicking
  *   Retry hands the worker an unmeasured object to buffer whole into memory
  *   (`transformToByteArray`) in a pod capped at 768Mi — OOM, requeue, OOM,
  *   fail, Retry, repeat, on a single-node cluster.
+ *
+ *   It must be `confirmedAt` and not `sourceBytes`: `sourceBytes` was, until
+ *   this commit, seeded at row creation from the client's self-declared
+ *   `data.bytes`, so `{sourceBytes: {$ne: null}}` was true for every row that
+ *   had ever existed and excluded exactly nothing. A guard whose premise is
+ *   false is worse than no guard, because it reads as one. `confirmedAt` is
+ *   true by construction — one writer, and its name states the invariant.
  */
 export async function retryAudioAsset({
   data,
@@ -386,7 +411,7 @@ export async function retryAudioAsset({
   try {
     await ensureDb();
     const doc = await AudioAsset.findOneAndUpdate(
-      { _id: data.id, ownerId: userId, status: 'failed', sourceBytes: { $ne: null } },
+      { _id: data.id, ownerId: userId, status: 'failed', confirmedAt: { $ne: null } },
       {
         $set: {
           status: 'pending',
