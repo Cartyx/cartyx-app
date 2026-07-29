@@ -34,6 +34,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: realtime
 {{- end -}}
 
+{{- define "cartyx.audioWorker.selectorLabels" -}}
+app.kubernetes.io/name: {{ include "cartyx.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: audio-worker
+{{- end -}}
+
 {{- define "cartyx.secretName" -}}
 {{- if .Values.secret.existingSecret -}}
 {{- .Values.secret.existingSecret -}}

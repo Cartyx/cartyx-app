@@ -11,6 +11,7 @@ PASS=0 FAIL=0
 BASE_ARGS=(
   --set=web.image.tag=prod-test123
   --set=realtime.image.tag=test123
+  --set=audioWorker.image.tag=test123
   --set=ingress.webHost=web.test
   --set=ingress.wsHost=ws.test
   --set=tls.certificate.clusterIssuer=test-issuer
@@ -187,6 +188,19 @@ echo "$prod_out" | grep -q "value: \"http://umami.platform.svc:3000\"" \
   && ok || bad "values-prod UMAMI_HOST resolves"
 echo "$dev_out" | grep -q "value: \"http://umami.platform.svc:3000\"" \
   && ok || bad "values-dev UMAMI_HOST resolves"
+
+# --- Task 12 (audio plan): audio-worker deployment ---
+assert_contains "audio-worker deployment exists" "name: cartyx-audio-worker"
+assert_contains "audio-worker poll interval env renders" "name: POLL_INTERVAL_MS"
+# CPU limit is the whole point of this deployment (ffmpeg is CPU-bound and
+# must not starve SSR) — "cpu:" alone would pass even with no limits block
+# at all, since web/realtime both set cpu under requests. "1" is the one cpu
+# value in the entire chart that only the audio-worker limits block sets.
+assert_contains "audio-worker gets a cpu limit (bulk imports must not starve SSR)" \
+  'cpu: "1"'
+filtered_args=$(args_without audioWorker.image.tag)
+# shellcheck disable=SC2086
+assert_fails "missing audioWorker.image.tag is a render error" "audioWorker.image.tag" $filtered_args
 
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"

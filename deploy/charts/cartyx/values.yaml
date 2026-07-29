@@ -67,6 +67,28 @@ realtime:
   env:
     PORT: '1999'
 
+audioWorker:
+  image:
+    repository: ghcr.io/biozal/cartyx-audio-worker
+    tag: ''
+    pullPolicy: IfNotPresent
+  # Safe to scale: work is claimed with an atomic findOneAndUpdate, so two
+  # workers can never take the same asset. Kept at 1 because the single-node
+  # cluster has no spare CPU headroom.
+  replicaCount: 1
+  # CPU limits matter here: ffmpeg is CPU-bound and a bulk import must not
+  # starve SSR in the web pod.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: '1'
+      memory: 768Mi
+  env:
+    POLL_INTERVAL_MS: '5000'
+    CLAIM_TIMEOUT_MS: '600000'
+
 ingress:
   enabled: true
   className: traefik

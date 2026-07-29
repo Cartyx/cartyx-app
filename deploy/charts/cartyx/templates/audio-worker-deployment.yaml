@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cartyx.fullname" . }}-audio-worker
+  labels:
+    {{- include "cartyx.labels" . | nindent 4 }}
+    app.kubernetes.io/component: audio-worker
+spec:
+  replicas: {{ .Values.audioWorker.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "cartyx.audioWorker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "cartyx.audioWorker.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: audio-worker
+          image: "{{ .Values.audioWorker.image.repository }}:{{ required "audioWorker.image.tag is required — set an immutable git-sha tag at install time" .Values.audioWorker.image.tag }}"
+          imagePullPolicy: {{ .Values.audioWorker.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: POLL_INTERVAL_MS
+              value: {{ .Values.audioWorker.env.POLL_INTERVAL_MS | quote }}
+            - name: CLAIM_TIMEOUT_MS
+              value: {{ .Values.audioWorker.env.CLAIM_TIMEOUT_MS | quote }}
+            # Shared with the web pod (deploy/charts/cartyx/values.yaml
+            # web.env) — same bucket/CDN, not worker-specific config. Empty
+            # values are omitted, matching the web deployment's convention.
+            {{- if .Values.web.env.CDN_URL }}
+            - name: CDN_URL
+              value: {{ .Values.web.env.CDN_URL | quote }}
+            {{- end }}
+            {{- if .Values.web.env.R2_ACCOUNT_ID }}
+            - name: R2_ACCOUNT_ID
+              value: {{ .Values.web.env.R2_ACCOUNT_ID | quote }}
+            {{- end }}
+            {{- if .Values.web.env.R2_BUCKET }}
+            - name: R2_BUCKET
+              value: {{ .Values.web.env.R2_BUCKET | quote }}
+            {{- end }}
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cartyx.secretName" . }}
+                  key: mongodbUri
+            - name: R2_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cartyx.secretName" . }}
+                  key: r2AccessKeyId
+            - name: R2_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cartyx.secretName" . }}
+                  key: r2SecretAccessKey
+          resources:
+            {{- toYaml .Values.audioWorker.resources | nindent 12 }}
