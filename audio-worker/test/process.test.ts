@@ -21,7 +21,7 @@ vi.mock('@aws-sdk/client-s3', () => {
 });
 
 import { processAsset } from '../src/process.js';
-import { MAX_ATTEMPTS } from '../src/claim.js';
+import { MAX_ATTEMPTS, computeBackoffMs } from '../src/claim.js';
 
 // r2() throws its own named R2ConfigError if these are absent — set fake
 // values so the failure under test is the mocked S3 error, not a config
@@ -71,6 +71,32 @@ describe('processAsset retry semantics', () => {
     expect(update.$set.updatedAt).toBeInstanceOf(Date);
   });
 
+  it('gates the requeued row behind an exponential backoff instead of making it instantly claimable', async () => {
+    const updateOne = vi.fn().mockResolvedValue({});
+    const model = { updateOne } as never;
+
+    const attempts = MAX_ATTEMPTS - 2;
+    const before = Date.now();
+    await processAsset(model, {
+      _id: 'asset-backoff',
+      sourceKey: 'uploads/audio/x.wav',
+      attempts,
+    });
+    const after = Date.now();
+
+    const [, update] = updateOne.mock.calls[0];
+    const next = update.$set.nextAttemptAt as Date;
+    // Without nextAttemptAt the requeued row keeps its original createdAt, so
+    // claimNext's `sort: { createdAt: 1 }` re-claims it on the very next loop
+    // iteration and the whole retry budget is spent in milliseconds against a
+    // fault that hasn't had time to clear.
+    expect(next).toBeInstanceOf(Date);
+    const expected = computeBackoffMs(attempts);
+    expect(next.getTime()).toBeGreaterThanOrEqual(before + expected);
+    expect(next.getTime()).toBeLessThanOrEqual(after + expected);
+    expect(expected).toBeGreaterThan(0);
+  });
+
   it('marks failed (not pending) when attempts is at MAX_ATTEMPTS', async () => {
     const updateOne = vi.fn().mockResolvedValue({});
     const model = { updateOne } as never;
@@ -88,6 +114,9 @@ describe('processAsset retry semantics', () => {
     expect(update.$set.lastError).toContain('simulated R2 failure');
     expect(update.$set.claimedAt).toBeNull();
     expect(update.$set.claimedBy).toBeNull();
+    // The success path and requeueForRetry both bump updatedAt; markFailed must
+    // too, or a failed asset's row looks older than its actual last transition.
+    expect(update.$set.updatedAt).toBeInstanceOf(Date);
   });
 
   it('marks failed immediately for a malformed row with no sourceKey, without retrying', async () => {

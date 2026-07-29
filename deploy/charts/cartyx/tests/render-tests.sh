@@ -192,6 +192,16 @@ echo "$dev_out" | grep -q "value: \"http://umami.platform.svc:3000\"" \
 # --- Task 12 (audio plan): audio-worker deployment ---
 assert_contains "audio-worker deployment exists" "name: cartyx-audio-worker"
 assert_contains "audio-worker poll interval env renders" "name: POLL_INTERVAL_MS"
+# Both timeouts are resilience knobs the worker degrades badly without: no
+# FFMPEG_TIMEOUT_MS and a hung ffmpeg wedges the single sequential loop (and
+# therefore the stale-row reaper) until a manual restart; no UPLOAD_TIMEOUT_MS
+# and rows abandoned in `uploading` never resolve. Assert the values too — a
+# bare name would still render if values.yaml dropped the entry, since Helm
+# emits an empty string for a missing key.
+assert_contains "audio-worker ffmpeg timeout env renders" "name: FFMPEG_TIMEOUT_MS"
+assert_contains "audio-worker ffmpeg timeout has a value" '"300000"'
+assert_contains "audio-worker upload-stale timeout env renders" "name: UPLOAD_TIMEOUT_MS"
+assert_contains "audio-worker upload-stale timeout has a value" '"900000"'
 # CPU limit is the whole point of this deployment (ffmpeg is CPU-bound and
 # must not starve SSR) — "cpu:" alone would pass even with no limits block
 # at all, since web/realtime both set cpu under requests. "1" is the one cpu

@@ -109,6 +109,10 @@ export default [
       'jest.config.cjs',
       'scripts/**',
       'realtime/dist/',
+      // The bare `dist` entry above only matches a top-level dist/ — building
+      // either service locally and then running root `npm run lint` would fail
+      // under --max-warnings 0 on its emitted output.
+      'audio-worker/dist/',
       '.claude/worktrees/**',
     ],
   },

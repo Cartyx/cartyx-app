@@ -40,6 +40,13 @@ const audioAssetSchema = new mongoose.Schema({
   lastError: { type: String, default: null },
   claimedAt: { type: Date, default: null },
   claimedBy: { type: String, default: null },
+  // Retry backoff gate, written by the audio worker (`requeueForRetry` in
+  // audio-worker/src/process.ts) and read by its claim query
+  // (`claimNext` in audio-worker/src/claim.ts): a `pending` row is only
+  // claimable once this is null/absent or in the past. Declared here because
+  // the field is a cross-service contract, not worker-local state — the web
+  // app owns the schema both services write.
+  nextAttemptAt: { type: Date, default: null },
 
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now },

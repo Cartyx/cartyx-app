@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { childProcOptions } from './ffmpeg.js';
 
 /**
  * Decode to mono 8kHz PCM and reduce to `buckets` normalized (0..1) peak
@@ -9,7 +10,10 @@ export function extractPeaks(path: string, buckets: number): Promise<number[]> {
     const child = execFile(
       'ffmpeg',
       ['-v', 'error', '-i', path, '-ac', '1', '-ar', '8000', '-f', 's16le', '-'],
-      { encoding: 'buffer', maxBuffer: 1024 * 1024 * 256 },
+      // Same wall-clock cap as ffmpeg.ts's calls — a hang here wedges the
+      // single sequential worker loop (and therefore reapStale) just as
+      // completely. See `childProcOptions`.
+      { encoding: 'buffer', maxBuffer: 1024 * 1024 * 256, ...childProcOptions() },
       (err, stdout) => {
         if (err) return reject(err);
 

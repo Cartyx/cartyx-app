@@ -36,6 +36,10 @@ spec:
               value: {{ .Values.audioWorker.env.POLL_INTERVAL_MS | quote }}
             - name: CLAIM_TIMEOUT_MS
               value: {{ .Values.audioWorker.env.CLAIM_TIMEOUT_MS | quote }}
+            - name: FFMPEG_TIMEOUT_MS
+              value: {{ .Values.audioWorker.env.FFMPEG_TIMEOUT_MS | quote }}
+            - name: UPLOAD_TIMEOUT_MS
+              value: {{ .Values.audioWorker.env.UPLOAD_TIMEOUT_MS | quote }}
             # Shared with the web pod (deploy/charts/cartyx/values.yaml
             # web.env) — same bucket/CDN, not worker-specific config. Empty
             # values are omitted, matching the web deployment's convention.

@@ -99,6 +99,31 @@ describe('AudioAsset model', () => {
     expect(doc.tags).toEqual(['storm', 'rain']);
   });
 
+  // The audio worker's retry backoff (`requeueForRetry` -> `claimNext` in
+  // audio-worker/src/) writes and reads `nextAttemptAt`, and `retryAudioAsset`
+  // clears it through this model. Mongoose is strict by default: an undeclared
+  // path is silently stripped from both documents and `$set` updates, so
+  // forgetting to declare it here breaks the cross-service contract without any
+  // error — the retry button would leave a stale future timestamp behind and
+  // the requeued asset would sit unclaimable until it expired.
+  it('declares nextAttemptAt so the worker backoff field is not stripped', () => {
+    const path = AudioAsset.schema.path('nextAttemptAt');
+    expect(path).toBeDefined();
+    expect(path.instance).toBe('Date');
+
+    const doc = new AudioAsset({
+      ownerId: '507f1f77bcf86cd799439011',
+      title: 'Storm',
+      kind: 'ambience',
+      sourceKey: 'uploads/audio/x.wav',
+    });
+    expect(doc.nextAttemptAt).toBeNull();
+
+    const when = new Date('2026-07-29T00:00:00.000Z');
+    doc.nextAttemptAt = when;
+    expect(doc.toObject().nextAttemptAt).toEqual(when);
+  });
+
   it('rejects an unknown kind', async () => {
     const doc = new AudioAsset({
       ownerId: '507f1f77bcf86cd799439011',

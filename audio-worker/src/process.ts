@@ -5,7 +5,7 @@ import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3
 import { logger } from './logger.js';
 import { probe, transcode } from './ffmpeg.js';
 import { extractPeaks } from './peaks.js';
-import { MAX_ATTEMPTS } from './claim.js';
+import { MAX_ATTEMPTS, computeBackoffMs } from './claim.js';
 
 const PEAK_BUCKETS = 400;
 
@@ -54,17 +54,38 @@ export type Model = {
 async function markFailed(model: Model, id: unknown, message: string): Promise<void> {
   await model.updateOne(
     { _id: id },
-    { $set: { status: 'failed', lastError: message, claimedAt: null, claimedBy: null } }
+    {
+      $set: {
+        status: 'failed',
+        lastError: message,
+        claimedAt: null,
+        claimedBy: null,
+        updatedAt: new Date(),
+      },
+    }
   );
 }
 
 /**
- * Return a claimed row to `pending` so the next `claimNext` picks it back up.
- * `lastError` is still recorded so the reason for the retry stays visible.
- * Only valid under the attempt cap — callers must check `attempts <
- * MAX_ATTEMPTS` first; this function doesn't re-check.
+ * Return a claimed row to `pending` so a later `claimNext` picks it back up,
+ * after `computeBackoffMs(attempts)` has elapsed. `lastError` is still recorded
+ * so the reason for the retry stays visible. Only valid under the attempt cap —
+ * callers must check `attempts < MAX_ATTEMPTS` first; this function doesn't
+ * re-check.
+ *
+ * `nextAttemptAt` is non-negotiable here: the requeued row keeps its original
+ * `createdAt` and claimNext sorts `{ createdAt: 1 }`, so without a future
+ * timestamp it is still the oldest pending doc and gets re-claimed on the very
+ * next loop iteration — the whole retry budget spent in milliseconds against a
+ * fault that hasn't had time to clear.
  */
-async function requeueForRetry(model: Model, id: unknown, message: string): Promise<void> {
+async function requeueForRetry(
+  model: Model,
+  id: unknown,
+  message: string,
+  attempts: number
+): Promise<void> {
+  const now = new Date();
   await model.updateOne(
     { _id: id },
     {
@@ -73,7 +94,8 @@ async function requeueForRetry(model: Model, id: unknown, message: string): Prom
         lastError: message,
         claimedAt: null,
         claimedBy: null,
-        updatedAt: new Date(),
+        nextAttemptAt: new Date(now.getTime() + computeBackoffMs(attempts)),
+        updatedAt: now,
       },
     }
   );
@@ -207,7 +229,7 @@ export async function processAsset(
     logger.error({ err, assetId: String(id), attempts }, 'transcode failed');
 
     if (attempts < MAX_ATTEMPTS) {
-      await requeueForRetry(model, id, message);
+      await requeueForRetry(model, id, message, attempts);
     } else {
       await markFailed(model, id, message);
     }

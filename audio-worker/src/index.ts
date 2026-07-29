@@ -7,6 +7,10 @@ import { processAsset, type Model } from './process.js';
 const WORKER_ID = `worker-${randomUUID().slice(0, 8)}`;
 const POLL_MS = Number(process.env.POLL_INTERVAL_MS ?? 5000);
 const STALE_MS = Number(process.env.CLAIM_TIMEOUT_MS ?? 600_000);
+// Presigned PUT URLs expire after 300s (app/server/functions/uploads.ts), so a
+// row still `uploading` 15 minutes after creation can never be confirmed —
+// nothing will ever move it again. See reapStale's doc comment.
+const UPLOAD_STALE_MS = Number(process.env.UPLOAD_TIMEOUT_MS ?? 900_000);
 
 let running = true;
 process.on('SIGTERM', () => {
@@ -33,7 +37,7 @@ async function main(): Promise<void> {
 
   while (running) {
     try {
-      await reapStale(model, STALE_MS);
+      await reapStale(model, STALE_MS, UPLOAD_STALE_MS);
       const asset = await claimNext<{ _id: unknown; sourceKey?: string; attempts?: number }>(
         model,
         WORKER_ID

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdtempSync, existsSync, statSync } from 'node:fs';
@@ -104,6 +104,55 @@ describe('ffmpeg pipeline', () => {
     // signal-detection threshold, not a guess — well above the silence
     // floor (0) and comfortably below the measured ~0.088 peak.
     expect(Math.max(...peaks)).toBeGreaterThan(0.05);
+  });
+
+  /**
+   * A FIFO with no writer makes `open(2)` block indefinitely, so ffmpeg/ffprobe
+   * hang rather than exit — the exact failure mode that would otherwise wedge
+   * the worker forever. The worker is one sequential loop at replicaCount 1 and
+   * `reapStale` runs inside it, so a hung child blocks processAsset, which
+   * blocks the loop, which means nothing can ever rescue the row from
+   * `processing` and every later upload queues behind it.
+   *
+   * Each case below hangs until the vitest timeout (i.e. fails) if
+   * `childProcOptions()` stops being passed to that call site.
+   */
+  describe('child process timeout', () => {
+    let fifo: string;
+    let previous: string | undefined;
+
+    beforeAll(() => {
+      fifo = join(dir, 'blocking.fifo');
+      execFileSync('mkfifo', [fifo]);
+    });
+
+    beforeEach(() => {
+      previous = process.env.FFMPEG_TIMEOUT_MS;
+      process.env.FFMPEG_TIMEOUT_MS = '800';
+    });
+
+    afterEach(() => {
+      if (previous === undefined) delete process.env.FFMPEG_TIMEOUT_MS;
+      else process.env.FFMPEG_TIMEOUT_MS = previous;
+    });
+
+    it('kills a hung ffprobe in probe() instead of blocking forever', async () => {
+      const started = Date.now();
+      await expect(probe(fifo)).rejects.toThrow();
+      expect(Date.now() - started).toBeLessThan(8000);
+    }, 15_000);
+
+    it('kills a hung ffmpeg in transcode() instead of blocking forever', async () => {
+      const started = Date.now();
+      await expect(transcode(fifo, join(dir, 'never.opus'), 'opus')).rejects.toThrow();
+      expect(Date.now() - started).toBeLessThan(8000);
+    }, 15_000);
+
+    it('kills a hung ffmpeg in extractPeaks() instead of blocking forever', async () => {
+      const started = Date.now();
+      await expect(extractPeaks(fifo, 10)).rejects.toThrow();
+      expect(Date.now() - started).toBeLessThan(8000);
+    }, 15_000);
   });
 
   it('extracts a silent buffer as all-zero peaks, not garbage', async () => {
