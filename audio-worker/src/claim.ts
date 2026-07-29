@@ -1,4 +1,6 @@
 import { envMs } from './config.js';
+import { logger } from './logger.js';
+import { captureException } from './telemetry.js';
 
 export const MAX_ATTEMPTS = 3;
 
@@ -31,7 +33,15 @@ export function computeBackoffMs(attempts: number): number {
 export type ClaimModel = {
   findOneAndUpdate: (f: unknown, u: unknown, o: unknown) => Promise<unknown>;
   updateMany: (f: unknown, u: unknown) => Promise<{ modifiedCount?: number }>;
+  updateOne: (f: unknown, u: unknown) => Promise<{ matchedCount?: number }>;
+  find: (
+    f: unknown,
+    o?: unknown
+  ) => { toArray: () => Promise<{ _id: unknown; sourceKey?: string }[]> };
 };
+
+/** Deletes one R2 object. Supplied by `index.ts` (see `makeSourceDeleter`). */
+export type SourceDeleter = (key: string) => Promise<void>;
 
 /**
  * Atomically take the oldest pending asset whose backoff has elapsed. A single
@@ -80,15 +90,29 @@ export async function claimNext<T>(model: ClaimModel, workerId: string): Promise
  * `uploadAudioFile` correctly refuses to confirm — leaves the row there
  * forever: an animated spinner in the UI that never resolves, a `/audio` route
  * that polls every 4s forever, and a `sourceKey` the orphan scanner treats as
- * in-use so the R2 object is never reclaimed either. Presigned URLs expire in
- * 300s, so a row older than this cap is definitively abandoned and is failed
- * with an honest message, which stops the poll and lets delete/orphan-scan
- * reclaim it.
+ * in-use. Presigned URLs expire in 300s, so a row older than this cap is
+ * definitively abandoned and is failed with an honest message, which stops the
+ * poll.
+ *
+ * That reap also DELETES the abandoned R2 object, and it has to. The previous
+ * version of this comment claimed the reap "lets delete/orphan-scan reclaim
+ * it", which was false by construction: `collectInUseKeys`
+ * (app/server/functions/cleanup.ts) has no status filter, so the failed row
+ * goes on advertising its `sourceKey` as in-use forever and no orphan scan can
+ * ever reclaim the object. Deleting here loses nothing — the object never
+ * passed `confirmAudioUpload`, so it was never accepted as a source in the
+ * first place.
+ *
+ * The delete is BEST EFFORT and runs AFTER the status write: an R2 outage must
+ * not keep a user's spinner alive, so a failed delete is logged and reported,
+ * not thrown. It is also skipped when the fenced write matched nothing, which
+ * is how a confirm landing between the read and the write keeps its object.
  */
 export async function reapStale(
   model: ClaimModel,
   timeoutMs: number,
-  uploadTimeoutMs: number
+  uploadTimeoutMs: number,
+  deleteSource?: SourceDeleter
 ): Promise<number> {
   const now = Date.now();
   const cutoff = new Date(now - timeoutMs);
@@ -125,18 +149,58 @@ export async function reapStale(
     }
   );
 
-  await model.updateMany(
-    { status: 'uploading', createdAt: { $lt: new Date(now - uploadTimeoutMs) } },
-    {
-      $set: {
-        status: 'failed',
-        lastError: 'Upload never completed',
-        claimedAt: null,
-        claimedBy: null,
-        updatedAt: new Date(),
-      },
-    }
-  );
+  await reapAbandonedUploads(model, new Date(now - uploadTimeoutMs), deleteSource);
 
   return requeued.modifiedCount ?? 0;
+}
+
+/**
+ * Fail every row abandoned in `uploading`, one at a time, and delete its R2
+ * object.
+ *
+ * Row-at-a-time rather than one `updateMany` because the delete has to be tied
+ * to a write this call actually performed. A user can confirm an upload in the
+ * window between reading the candidate list and writing the failure; the write
+ * is fenced on `status: 'uploading'` so it correctly no-ops for that row, and
+ * only a matched write authorizes deleting the object. A bulk update cannot
+ * report which rows it moved, so pairing it with a delete loop would destroy
+ * the source of a freshly confirmed asset.
+ */
+async function reapAbandonedUploads(
+  model: ClaimModel,
+  cutoff: Date,
+  deleteSource?: SourceDeleter
+): Promise<void> {
+  const abandoned = await model
+    .find({ status: 'uploading', createdAt: { $lt: cutoff } }, { projection: { sourceKey: 1 } })
+    .toArray();
+
+  for (const row of abandoned) {
+    const result = await model.updateOne(
+      { _id: row._id, status: 'uploading' },
+      {
+        $set: {
+          status: 'failed',
+          lastError: 'Upload never completed',
+          claimedAt: null,
+          claimedBy: null,
+          updatedAt: new Date(),
+        },
+      }
+    );
+    // Explicit 0 only: the raw driver always reports matchedCount, and treating
+    // a missing field as "didn't match" would silently stop reclaiming objects.
+    if (result?.matchedCount === 0) continue;
+    if (!row.sourceKey || !deleteSource) continue;
+
+    try {
+      await deleteSource(row.sourceKey);
+    } catch (err) {
+      logger.warn(
+        { err, assetId: String(row._id), sourceKey: row.sourceKey },
+        'failed to delete abandoned upload object'
+      );
+      captureException(err, { assetId: String(row._id), sourceKey: row.sourceKey });
+    }
+  }
 }

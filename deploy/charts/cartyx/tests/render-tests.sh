@@ -212,6 +212,49 @@ filtered_args=$(args_without audioWorker.image.tag)
 # shellcheck disable=SC2086
 assert_fails "missing audioWorker.image.tag is a render error" "audioWorker.image.tag" $filtered_args
 
+# --- Adversarial review, group B: worker resilience ---
+# Scoped to the audio-worker manifest: a whole-chart grep for "Recreate" or
+# "livenessProbe" passes on realtime's, which proves nothing about this pod.
+worker_out=$(render -s templates/audio-worker-deployment.yaml)
+env_value() { echo "$worker_out" | grep -A1 "name: $1$" | grep 'value:' | tr -dc '0-9'; }
+
+# B4: the default RollingUpdate starts the new pod before the old one exits, so
+# every deploy runs two claiming workers at replicas: 1.
+echo "$worker_out" | grep -q "type: Recreate" && ok || bad "audio-worker uses Recreate"
+# B11: default grace is 30s, shorter than a legitimate transcode — every
+# rollout SIGKILLed a live job and burned one of its three attempts.
+echo "$worker_out" | grep -q "terminationGracePeriodSeconds: 900" && ok ||
+  bad "audio-worker sets a termination grace period longer than a transcode"
+# B7: no port, so the only liveness signal is the heartbeat file's age.
+echo "$worker_out" | grep -q "dist/healthcheck.js" && ok ||
+  bad "audio-worker has an exec liveness probe on the heartbeat"
+echo "$worker_out" | grep -q "name: HEARTBEAT_MAX_AGE_MS" && ok ||
+  bad "audio-worker heartbeat threshold is configured"
+# B2: without these the AWS SDK has no request timeout at all.
+echo "$worker_out" | grep -q "name: S3_REQUEST_TIMEOUT_MS" && ok ||
+  bad "audio-worker R2 request timeout renders"
+echo "$worker_out" | grep -q "name: S3_CONNECT_TIMEOUT_MS" && ok ||
+  bad "audio-worker R2 connect timeout renders"
+# B8: worker errors must reach GlitchTip like every other service's.
+echo "$worker_out" | grep -q "name: GLITCHTIP_DSN" && bad "empty GLITCHTIP_DSN reaches the worker" || ok
+render -s templates/audio-worker-deployment.yaml --set web.env.GLITCHTIP_DSN=https://k@gt.test/1 |
+  grep -q "name: GLITCHTIP_DSN" && ok || bad "audio-worker receives GLITCHTIP_DSN when set"
+
+# B5: the relationship, not the literals. One asset spawns SEVEN capped ffmpeg
+# children, so a claim timeout below 7x FFMPEG_TIMEOUT_MS tells the reaper to
+# revoke the claims of healthy workers mid-transcode.
+claim_ms=$(env_value CLAIM_TIMEOUT_MS)
+ffmpeg_ms=$(env_value FFMPEG_TIMEOUT_MS)
+heartbeat_ms=$(env_value HEARTBEAT_MAX_AGE_MS)
+if [ "$claim_ms" -ge $((ffmpeg_ms * 7)) ]; then ok; else
+  bad "CLAIM_TIMEOUT_MS ($claim_ms) must clear 7 x FFMPEG_TIMEOUT_MS ($ffmpeg_ms)"
+fi
+# The heartbeat threshold has to sit above one bounded stage (or the probe kills
+# healthy transcodes) and below the claim budget (or it never fires first).
+if [ "$heartbeat_ms" -gt "$ffmpeg_ms" ] && [ "$heartbeat_ms" -lt "$claim_ms" ]; then ok; else
+  bad "HEARTBEAT_MAX_AGE_MS ($heartbeat_ms) must sit between one ffmpeg stage and the claim budget"
+fi
+
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -30,19 +30,26 @@ vi.mock('@aws-sdk/client-s3', () => {
   class PutObjectCommand {
     constructor(public input: Record<string, unknown>) {}
   }
+  class DeleteObjectCommand {
+    constructor(public input: Record<string, unknown>) {}
+  }
   class FakeS3Client {
     async send(command: GetObjectCommand | PutObjectCommand): Promise<unknown> {
       if (command instanceof GetObjectCommand) {
-        const { readFileSync: read } = await import('node:fs');
-        const bytes = read(s3.sourcePath);
-        return { Body: { transformToByteArray: async () => new Uint8Array(bytes) } };
+        const { createReadStream, statSync } = await import('node:fs');
+        // A real stream with a real ContentLength: the worker streams the
+        // source to disk under a size cap rather than buffering it.
+        return {
+          ContentLength: statSync(s3.sourcePath).size,
+          Body: createReadStream(s3.sourcePath),
+        };
       }
       const input = command.input as { Key: string; Body: Buffer; ContentType: string };
       s3.puts.push({ Key: input.Key, Body: input.Body, ContentType: input.ContentType });
       return {};
     }
   }
-  return { S3Client: FakeS3Client, GetObjectCommand, PutObjectCommand };
+  return { S3Client: FakeS3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand };
 });
 
 const { processAsset } = await import('../src/process.js');
@@ -104,8 +111,12 @@ async function processFixture(
 ): Promise<{ written: Written; puts: typeof s3.puts }> {
   s3.sourcePath = sourcePath;
   s3.puts = [];
-  const updateOne = vi.fn().mockResolvedValue({});
-  await processAsset({ updateOne }, { _id: 'asset-1', sourceKey: 'uploads/audio/x', attempts });
+  const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+  await processAsset(
+    { updateOne },
+    { _id: 'asset-1', sourceKey: 'uploads/audio/x', attempts },
+    'worker-media-test'
+  );
   expect(updateOne).toHaveBeenCalledTimes(1);
   const [, update] = updateOne.mock.calls[0] as unknown as [
     unknown,

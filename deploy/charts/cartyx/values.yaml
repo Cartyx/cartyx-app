@@ -72,9 +72,14 @@ audioWorker:
     repository: ghcr.io/biozal/cartyx-audio-worker
     tag: ''
     pullPolicy: IfNotPresent
-  # Safe to scale: work is claimed with an atomic findOneAndUpdate, so two
-  # workers can never take the same asset. Kept at 1 because the single-node
-  # cluster has no spare CPU headroom.
+  # Safe to scale. Two things make that true together, and the atomic claim is
+  # only the first of them: `claimNext` takes a row with a single
+  # findOneAndUpdate, AND every terminal write is fenced on
+  # `claimedBy` + `status: processing`, so a worker whose claim the reaper
+  # revoked mid-job writes nothing instead of overwriting the row a second
+  # worker now owns. Atomic claiming alone was never exclusive ownership,
+  # because reapStale can hand a live claim away.
+  # Kept at 1 because the single-node cluster has no spare CPU headroom.
   replicaCount: 1
   # CPU limits matter here: ffmpeg is CPU-bound and a bulk import must not
   # starve SSR in the web pod.
@@ -85,16 +90,50 @@ audioWorker:
     limits:
       cpu: '1'
       memory: 768Mi
+  # Recreate, not RollingUpdate: the default strategy starts the new pod before
+  # the old one terminates, so every deploy briefly runs TWO workers even at
+  # replicas: 1 — both claiming, both transcoding, on a node with one spare
+  # core. realtime sets this for the same class of reason.
+  strategy: Recreate
+  # Long enough for an in-flight transcode to finish after SIGTERM (the worker
+  # stops claiming and drains the current asset). The default 30s is shorter
+  # than a legitimate 30-minute-source transcode, so every rollout SIGKILLed a
+  # live job and burned one of its three attempts. 900s covers a real
+  # worst-case asset with headroom without letting a pathological one hold a
+  # rollout open for the full ~45 minute claim budget — the liveness probe is
+  # what handles that case.
+  terminationGracePeriodSeconds: 900
   env:
     POLL_INTERVAL_MS: '5000'
-    CLAIM_TIMEOUT_MS: '600000'
+    # 60 minutes, and it is TIED TO FFMPEG_TIMEOUT_MS: one asset spawns seven
+    # capped ffmpeg/ffprobe children (probe, analyze, 2 transcodes, 2 rendition
+    # probes, peaks) = 7 x 300s = 2100s, plus ~600s of bounded R2 time. The old
+    # 600000 was below that worst case, i.e. it instructed the reaper to revoke
+    # the claims of HEALTHY workers. Raise FFMPEG_TIMEOUT_MS and this must move
+    # with it. See audio-worker/src/config.ts.
+    CLAIM_TIMEOUT_MS: '3600000'
     # Wall-clock cap on any single ffmpeg/ffprobe invocation. The worker is one
     # sequential loop and the stale-row reaper runs inside it, so a hung child
-    # process wedges the whole queue until the pod is restarted.
+    # process wedges the whole queue until the pod is restarted. Measured: a
+    # 30-minute source (the hard cap) costs ~45s CPU for the Opus leg and ~51s
+    # for the AAC leg on a fast core, so this is a small multiple of real work
+    # on this node, not slack — lowering it risks killing healthy transcodes.
     FFMPEG_TIMEOUT_MS: '300000'
     # A row stuck in `uploading` past this age is failed: presigned PUT URLs
     # expire after 300s, so nothing can confirm it any more.
     UPLOAD_TIMEOUT_MS: '900000'
+    # R2 request/connect timeouts. The AWS SDK's Node handler has NO request
+    # timeout by default, which made these the only unbounded awaits in the
+    # loop: a half-open socket hangs processAsset, which hangs the loop, which
+    # stops the reaper that lives inside it.
+    S3_REQUEST_TIMEOUT_MS: '60000'
+    S3_CONNECT_TIMEOUT_MS: '10000'
+    # Liveness: the worker touches HEARTBEAT_FILE after every pipeline stage,
+    # and `node dist/healthcheck.js` fails once it is older than this. Sized
+    # against the longest single stage (FFMPEG_TIMEOUT_MS), not the longest
+    # asset — a per-asset threshold would be too generous to catch anything.
+    HEARTBEAT_FILE: /tmp/audio-worker-heartbeat
+    HEARTBEAT_MAX_AGE_MS: '600000'
 
 ingress:
   enabled: true

@@ -1,12 +1,23 @@
-import { mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { Transform, type Readable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import {
+  S3Client,
+  GetObjectCommand,
+  PutObjectCommand,
+  DeleteObjectCommand,
+} from '@aws-sdk/client-s3';
 import { logger } from './logger.js';
 import { probe, analyze, transcode, RENDITION_SAMPLE_RATE } from './ffmpeg.js';
 import { extractPeaks } from './peaks.js';
 import { MAX_ATTEMPTS, computeBackoffMs } from './claim.js';
 import { PermanentError } from './errors.js';
+import { maxSourceBytes, readS3Timeouts } from './config.js';
+import { beat } from './heartbeat.js';
+import { captureException } from './telemetry.js';
 
 const PEAK_BUCKETS = 400;
 
@@ -163,15 +174,157 @@ function r2(): { client: S3Client; bucket: string; cdnUrl: string } {
       region: 'auto',
       endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
       credentials: { accessKeyId, secretAccessKey },
+      // The AWS SDK's Node handler has NO request timeout by default, which
+      // made these R2 calls the only unbounded awaits left in the worker —
+      // every child process is already capped by `childProcOptions`. A
+      // half-open socket to R2 hangs `processAsset` forever, which hangs the
+      // single sequential loop, and `reapStale` runs INSIDE that loop: the row
+      // stays `processing` with nothing able to rescue it, every later upload
+      // queues behind it, and (before the heartbeat probe) nothing restarted
+      // the pod either. Passed as plain options rather than a constructed
+      // NodeHttpHandler so no new dependency is needed — the SDK feeds this
+      // object straight to `NodeHttpHandler.create`.
+      requestHandler: readS3Timeouts(),
     }),
     bucket,
     cdnUrl: cdnUrl.replace(/\/+$/, ''),
   };
 }
 
+/**
+ * Streams the source object to `dest`, refusing anything over `maxBytes`.
+ *
+ * This is the enforcement point for the size cap, and it has to exist here
+ * even though `confirmAudioUpload` already HeadObjects the same object:
+ *
+ * - The presigned PUT is valid for 300 s and is REUSABLE, and nothing
+ *   invalidates it once confirm succeeds. PUT 1 KB, let confirm pass and stamp
+ *   `confirmedAt`, then re-PUT gigabytes to the same URL. Confirm measured a
+ *   file that no longer exists.
+ * - The consequence used to be an OOMKill, not a failed asset:
+ *   `transformToByteArray()` materialised the whole object in a pod limited to
+ *   768Mi. The row stuck in `processing`, the reaper requeued it, it OOMed
+ *   again, and after three passes `failed` — from which the Retry button
+ *   accepted it, because `confirmedAt` really was set. At `replicaCount: 1`
+ *   every one of those OOMs stalls every other user's queue.
+ *
+ * Both halves matter. `ContentLength` is refused before a byte is read, so an
+ * honest oversized object costs nothing. The streamed counter then re-checks
+ * against what actually arrives, because `ContentLength` is a claim from the
+ * same place the bytes come from and an absent or understated one must not be
+ * a way through. And streaming to disk rather than into a Buffer means even an
+ * accepted 50 MB source never sits in RSS at all.
+ *
+ * Oversize is PERMANENT: the object is not going to shrink, so retrying is
+ * guaranteed waste and Retry must not buy another pass either.
+ */
+async function downloadSource(
+  client: S3Client,
+  bucket: string,
+  key: string,
+  dest: string,
+  maxBytes: number
+): Promise<void> {
+  const obj = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  if (!obj.Body) {
+    throw new Error(`R2 object body missing for key ${key}`);
+  }
+
+  const body = obj.Body as unknown as Readable & { destroy?: () => void };
+
+  if (typeof obj.ContentLength === 'number' && obj.ContentLength > maxBytes) {
+    // Release the socket rather than leaving the response half-read.
+    body.destroy?.();
+    throw new PermanentError(
+      `Audio file is ${obj.ContentLength} bytes, over the ${maxBytes} byte limit`
+    );
+  }
+
+  let received = 0;
+  const cap = new Transform({
+    transform(chunk: Buffer, _enc, done) {
+      received += chunk.length;
+      if (received > maxBytes) {
+        done(new PermanentError(`Audio file exceeds the ${maxBytes} byte limit`));
+        return;
+      }
+      done(null, chunk);
+    },
+  });
+
+  await pipeline(body, cap, createWriteStream(dest));
+}
+
+/**
+ * Deletes an R2 object. Used by the reaper for sources abandoned mid-upload
+ * (see `reapStale`) — the worker is the only process in the system that both
+ * holds R2 credentials and knows a row was abandoned.
+ *
+ * The client is built lazily and reused: `r2()` throws when R2 env vars are
+ * missing, and that must surface as one caught, logged reap failure rather
+ * than as a crash at worker startup.
+ */
+export function makeSourceDeleter(): (key: string) => Promise<void> {
+  let cached: { client: S3Client; bucket: string } | null = null;
+  return async (key: string) => {
+    if (!cached) {
+      const { client, bucket } = r2();
+      cached = { client, bucket };
+    }
+    await cached.client.send(new DeleteObjectCommand({ Bucket: cached.bucket, Key: key }));
+  };
+}
+
 export type Model = {
-  updateOne: (f: unknown, u: unknown) => Promise<unknown>;
+  updateOne: (f: unknown, u: unknown) => Promise<{ matchedCount?: number }>;
 };
+
+/**
+ * Every terminal write goes through here, and every one of them is FENCED on
+ * the claim this worker holds.
+ *
+ * `claimNext` stamps `claimedBy` precisely so ownership can be proven, and
+ * until now nothing ever read it back: all three writes filtered on `{ _id }`
+ * alone. That makes the reaper's revocation cosmetic. Once `reapStale` decides
+ * a claim is stale it hands the row to a second worker, and the FIRST worker —
+ * still alive, still transcoding — then writes its own result over the second
+ * worker's in-flight row: `status: 'ready'` with renditions the second worker
+ * is concurrently overwriting, or `failed` on a row that is now legitimately
+ * `processing` elsewhere. Fencing on `claimedBy` + `status: 'processing'` makes
+ * a revoked worker's write a no-op instead.
+ *
+ * A no-op is LOGGED and reported rather than swallowed: it means the reaper
+ * revoked a live claim, i.e. `CLAIM_TIMEOUT_MS` is set below real worst-case
+ * processing time (see `DEFAULT_CLAIM_TIMEOUT_MS`). That is a config bug worth
+ * seeing, and silence is how it stays unfixed.
+ *
+ * `matchedCount === 0` specifically, not falsy: the raw driver always returns
+ * the field, and treating `undefined` as "lost" would make every mock and any
+ * future driver that omits it log a false alarm.
+ */
+async function fencedWrite(
+  model: Model,
+  id: unknown,
+  workerId: string,
+  set: Record<string, unknown>,
+  transition: string
+): Promise<void> {
+  const result = await model.updateOne(
+    { _id: id, status: 'processing', claimedBy: workerId },
+    { $set: set }
+  );
+  if (result?.matchedCount === 0) {
+    logger.warn(
+      { assetId: String(id), workerId, transition },
+      'lost claim before writing result — the reaper revoked a live claim'
+    );
+    captureException(new Error(`Lost claim on audio asset before writing ${transition}`), {
+      assetId: String(id),
+      workerId,
+      transition,
+    });
+  }
+}
 
 /**
  * Terminal failure: nothing about retrying *now* would help. Clears the claim
@@ -187,21 +340,23 @@ export type Model = {
 async function markFailed(
   model: Model,
   id: unknown,
+  workerId: string,
   message: string,
   permanent = false
 ): Promise<void> {
-  await model.updateOne(
-    { _id: id },
+  await fencedWrite(
+    model,
+    id,
+    workerId,
     {
-      $set: {
-        status: 'failed',
-        lastError: message,
-        permanentFailure: permanent,
-        claimedAt: null,
-        claimedBy: null,
-        updatedAt: new Date(),
-      },
-    }
+      status: 'failed',
+      lastError: message,
+      permanentFailure: permanent,
+      claimedAt: null,
+      claimedBy: null,
+      updatedAt: new Date(),
+    },
+    'failed'
   );
 }
 
@@ -221,28 +376,31 @@ async function markFailed(
 async function requeueForRetry(
   model: Model,
   id: unknown,
+  workerId: string,
   message: string,
   attempts: number
 ): Promise<void> {
   const now = new Date();
-  await model.updateOne(
-    { _id: id },
+  await fencedWrite(
+    model,
+    id,
+    workerId,
     {
-      $set: {
-        status: 'pending',
-        lastError: message,
-        claimedAt: null,
-        claimedBy: null,
-        nextAttemptAt: new Date(now.getTime() + computeBackoffMs(attempts)),
-        updatedAt: now,
-      },
-    }
+      status: 'pending',
+      lastError: message,
+      claimedAt: null,
+      claimedBy: null,
+      nextAttemptAt: new Date(now.getTime() + computeBackoffMs(attempts)),
+      updatedAt: now,
+    },
+    'pending'
   );
 }
 
 export async function processAsset(
   model: Model,
-  asset: { _id: unknown; sourceKey?: string; attempts?: number }
+  asset: { _id: unknown; sourceKey?: string; attempts?: number },
+  workerId: string
 ): Promise<void> {
   const id = asset._id;
 
@@ -261,7 +419,7 @@ export async function processAsset(
   // created.
   if (!asset.sourceKey) {
     logger.error({ assetId: String(id) }, 'asset has no sourceKey, cannot transcode');
-    await markFailed(model, id, 'Asset has no sourceKey', true);
+    await markFailed(model, id, workerId, 'Asset has no sourceKey', true);
     return;
   }
   const sourceKey = asset.sourceKey;
@@ -280,11 +438,12 @@ export async function processAsset(
     const { client, bucket, cdnUrl } = r2();
 
     const src = join(dir, 'source');
-    const obj = await client.send(new GetObjectCommand({ Bucket: bucket, Key: sourceKey }));
-    if (!obj.Body) {
-      throw new Error(`R2 object body missing for key ${sourceKey}`);
-    }
-    await writeFile(src, Buffer.from(await obj.Body.transformToByteArray()));
+    await downloadSource(client, bucket, sourceKey, src, maxSourceBytes());
+    // Every stage ends with a beat: the liveness probe reads loop PROGRESS, and
+    // a single asset can legitimately occupy the loop for tens of minutes, so a
+    // heartbeat written only between assets would have to be given a threshold
+    // too generous to catch anything. See heartbeat.ts.
+    beat();
 
     const meta = await probe(src);
 
@@ -296,11 +455,14 @@ export async function processAsset(
     // contains — as opposed to what its header asserts — comes from here, so
     // this runs once and only once.
     const { durationMs, durationSamples } = assertDecodedUsable(await analyze(src));
+    beat();
 
     const opusPath = join(dir, 'out.opus');
     const aacPath = join(dir, 'out.m4a');
     await transcode(src, opusPath, 'opus');
+    beat();
     await transcode(src, aacPath, 'aac');
+    beat();
 
     for (const [codec, path] of [
       ['opus', opusPath],
@@ -321,6 +483,7 @@ export async function processAsset(
     // 16 000 samples at the 8 kHz peak-decode rate, against 16 043 for the
     // M4A, whose encoder delay/padding shifts every bucket).
     const peaks = await extractPeaks(opusPath, PEAK_BUCKETS);
+    beat();
 
     // Renditions MUST stay under uploads/audio/ — Task 8's orphan scanner
     // (app/server/functions/cleanup.ts) only walks TRACKED_PREFIXES, and a
@@ -333,53 +496,63 @@ export async function processAsset(
       ['opus', opusPath, 'opus', 'audio/ogg'],
       ['aac', aacPath, 'm4a', 'audio/mp4'],
     ] as const) {
+      // Renditions stay `readFile`d whole while the SOURCE is streamed, and the
+      // asymmetry is deliberate. A source is attacker-controlled and unbounded
+      // (that is the whole TOCTOU hole above); a rendition is something this
+      // worker just produced at a fixed bitrate from an input already capped at
+      // MAX_SOURCE_DURATION_MS — 1800 s x 128 kbit/s is ~28.8 MB, measured at
+      // 27.8 MB for a real 30-minute AAC leg — read one at a time. Streaming
+      // them would also make the PUT body non-replayable, turning the SDK's
+      // internal retry of a transient R2 blip into a hard failure.
       const body = await readFile(path);
       const key = `${base}.${ext}`;
       await client.send(
         new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: type })
       );
       renditions[codec] = { key, url: `${cdnUrl}/${key}`, bytes: body.length };
+      beat();
     }
 
-    await model.updateOne(
-      { _id: id },
+    await fencedWrite(
+      model,
+      id,
+      workerId,
       {
-        $set: {
-          status: 'ready',
-          // Both durations describe the DECODED content, so they can never
-          // disagree with each other. `durationSamples` is the one phase 2's
-          // gapless looping reads: `durationMs` is rounded to whole
-          // milliseconds, which at 48 kHz is 48 samples of slop on every
-          // asset before any format-specific error, and the container's own
-          // duration adds more (+312 samples for Ogg/Opus, +1440 for ADTS
-          // AAC, measured). `durationMs` stays for display.
-          durationMs,
-          durationSamples,
-          // The SOURCE's rate and channel count, kept as provenance. The
-          // renditions are always 48 kHz stereo (see RENDITION_SAMPLE_RATE),
-          // and `durationSamples` is expressed at that rate, not at this one.
-          sampleRate: meta.sampleRate,
-          channels: meta.channels,
-          // The loudnorm TARGET (`I=-20` — see LOUDNORM in ffmpeg.ts), which
-          // is exactly what the field name now says. Single-pass loudnorm
-          // does not guarantee the output lands on exactly -20 LUFS; a real
-          // measurement needs the two-pass workflow (analyze, then re-encode
-          // with the measured input_i/input_tp/input_lra/target_offset), and
-          // that is out of scope here. The value is still worth recording:
-          // if the canonical target ever changes, phase 2's gain logic needs
-          // to know which target each asset in a mixed-vintage library was
-          // normalized against. A measured value, when it lands, belongs in a
-          // separate `loudnessLufs` field alongside this one.
-          loudnessTargetLufs: -20,
-          peaks,
-          renditions,
-          lastError: null,
-          permanentFailure: false,
-          claimedAt: null,
-          claimedBy: null,
-          updatedAt: new Date(),
-        },
-      }
+        status: 'ready',
+        // Both durations describe the DECODED content, so they can never
+        // disagree with each other. `durationSamples` is the one phase 2's
+        // gapless looping reads: `durationMs` is rounded to whole
+        // milliseconds, which at 48 kHz is 48 samples of slop on every
+        // asset before any format-specific error, and the container's own
+        // duration adds more (+312 samples for Ogg/Opus, +1440 for ADTS
+        // AAC, measured). `durationMs` stays for display.
+        durationMs,
+        durationSamples,
+        // The SOURCE's rate and channel count, kept as provenance. The
+        // renditions are always 48 kHz stereo (see RENDITION_SAMPLE_RATE),
+        // and `durationSamples` is expressed at that rate, not at this one.
+        sampleRate: meta.sampleRate,
+        channels: meta.channels,
+        // The loudnorm TARGET (`I=-20` — see LOUDNORM in ffmpeg.ts), which
+        // is exactly what the field name now says. Single-pass loudnorm
+        // does not guarantee the output lands on exactly -20 LUFS; a real
+        // measurement needs the two-pass workflow (analyze, then re-encode
+        // with the measured input_i/input_tp/input_lra/target_offset), and
+        // that is out of scope here. The value is still worth recording:
+        // if the canonical target ever changes, phase 2's gain logic needs
+        // to know which target each asset in a mixed-vintage library was
+        // normalized against. A measured value, when it lands, belongs in a
+        // separate `loudnessLufs` field alongside this one.
+        loudnessTargetLufs: -20,
+        peaks,
+        renditions,
+        lastError: null,
+        permanentFailure: false,
+        claimedAt: null,
+        claimedBy: null,
+        updatedAt: new Date(),
+      },
+      'ready'
     );
     logger.info({ assetId: String(id) }, 'transcoded');
   } catch (err) {
@@ -408,6 +581,16 @@ export async function processAsset(
     const attempts = asset.attempts ?? MAX_ATTEMPTS;
     const message = err instanceof Error ? err.message : 'Transcode failed';
     logger.error({ err, assetId: String(id), attempts }, 'transcode failed');
+    // Also to GlitchTip: a pino line on a pod nobody tails is not error
+    // reporting, and this worker fails in exactly the ways (bad sources, R2
+    // faults) that only show up in production. Never awaited — see telemetry.ts.
+    captureException(err, {
+      assetId: String(id),
+      workerId,
+      attempts,
+      sourceKey,
+      permanent: err instanceof PermanentError,
+    });
 
     // The one exception to the paragraph above, and the reason it is an
     // exception: a PermanentError is thrown only by a validation step that
@@ -416,14 +599,14 @@ export async function processAsset(
     // so it skips the budget entirely and is stamped as un-retryable so a
     // human clicking Retry can't buy another pass either. See errors.ts.
     if (err instanceof PermanentError) {
-      await markFailed(model, id, message, true);
+      await markFailed(model, id, workerId, message, true);
       return;
     }
 
     if (attempts < MAX_ATTEMPTS) {
-      await requeueForRetry(model, id, message, attempts);
+      await requeueForRetry(model, id, workerId, message, attempts);
     } else {
-      await markFailed(model, id, message);
+      await markFailed(model, id, workerId, message);
     }
   } finally {
     if (dir) await rm(dir, { recursive: true, force: true });

@@ -6,8 +6,22 @@ import {
   DEFAULT_RETRY_BASE_MS,
   DEFAULT_RETRY_MAX_MS,
 } from '../src/claim.js';
+import { logger } from '../src/logger.js';
 
 const UPLOAD_STALE_MS = 900_000;
+
+/**
+ * A reaper model. `find` returns the abandoned `uploading` rows; `updateOne`
+ * reports a match by default, which is what the real driver always does.
+ */
+function reaperModel(
+  abandoned: { _id: unknown; sourceKey?: string }[] = [],
+  updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 })
+) {
+  const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+  const find = vi.fn(() => ({ toArray: async () => abandoned }));
+  return { updateMany, updateOne, find };
+}
 
 describe('claimNext', () => {
   it('claims the oldest pending asset atomically and marks it processing', async () => {
@@ -101,13 +115,13 @@ describe('computeBackoffMs', () => {
 
 describe('reapStale', () => {
   it('returns processing rows under the attempt cap to pending, clearing the backoff gate', async () => {
-    const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 2 });
-    const model = { updateMany } as never;
+    const model = reaperModel();
+    model.updateMany.mockResolvedValue({ modifiedCount: 2 });
 
-    const n = await reapStale(model, 600_000, UPLOAD_STALE_MS);
+    const n = await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
     expect(n).toBe(2);
 
-    const [filter, update] = updateMany.mock.calls[0];
+    const [filter, update] = model.updateMany.mock.calls[0];
     expect(filter.status).toBe('processing');
     expect(filter.claimedAt.$lt).toBeInstanceOf(Date);
     expect(filter.attempts.$lt).toBe(3);
@@ -119,59 +133,119 @@ describe('reapStale', () => {
   });
 
   it('fails rows that have exhausted their attempts', async () => {
-    const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 1 });
-    const model = { updateMany } as never;
-    await reapStale(model, 600_000, UPLOAD_STALE_MS);
-    const secondCall = updateMany.mock.calls[1];
+    const model = reaperModel();
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
+    const secondCall = model.updateMany.mock.calls[1];
     expect(secondCall[0].attempts.$gte).toBe(3);
     expect(secondCall[1].$set.status).toBe('failed');
   });
 
   it('bumps updatedAt on every clause — these are real status transitions', async () => {
-    const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 1 });
-    const model = { updateMany } as never;
-    await reapStale(model, 600_000, UPLOAD_STALE_MS);
+    const model = reaperModel([{ _id: 'u1', sourceKey: 'uploads/audio/a.wav' }]);
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
 
     // The UI reads updatedAt as "when did this row last change". Reaped rows
     // are by definition hours stale by the time this runs, so omitting it makes
     // them claim to have last changed when they were created — most misleading
     // for exactly the rows this function produces. markFailed and
     // requeueForRetry (process.ts) already do this.
-    expect(updateMany).toHaveBeenCalledTimes(3);
-    for (const [, update] of updateMany.mock.calls) {
+    expect(model.updateMany).toHaveBeenCalledTimes(2);
+    for (const [, update] of model.updateMany.mock.calls) {
       expect(update.$set.updatedAt).toBeInstanceOf(Date);
     }
+    expect(model.updateOne.mock.calls[0][1].$set.updatedAt).toBeInstanceOf(Date);
   });
 
   it('fails rows abandoned in `uploading` past the upload timeout', async () => {
-    const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 1 });
-    const model = { updateMany } as never;
+    const model = reaperModel([{ _id: 'u1', sourceKey: 'uploads/audio/a.wav' }]);
 
     const before = Date.now();
-    await reapStale(model, 600_000, UPLOAD_STALE_MS);
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
 
     // Nothing but confirmAudioUpload ever writes an `uploading` row, so a
     // browser that died between presign and confirm (or a failed PUT, which
     // uploadAudioFile correctly refuses to confirm) leaves it there forever:
     // an indefinite spinner in the UI, a /audio route polling every 4s
     // forever, and a sourceKey the orphan scanner treats as in-use.
-    const [filter, update] = updateMany.mock.calls[2];
-    expect(filter.status).toBe('uploading');
-    const cutoff = filter.createdAt.$lt as Date;
+    const [findFilter] = model.find.mock.calls[0];
+    expect((findFilter as { status: string }).status).toBe('uploading');
+    const cutoff = (findFilter as { createdAt: { $lt: Date } }).createdAt.$lt;
     expect(cutoff).toBeInstanceOf(Date);
     expect(cutoff.getTime()).toBeLessThanOrEqual(before - UPLOAD_STALE_MS + 1);
+
+    const [filter, update] = model.updateOne.mock.calls[0];
+    expect(filter).toEqual({ _id: 'u1', status: 'uploading' });
     expect(update.$set.status).toBe('failed');
     expect(update.$set.lastError).toBe('Upload never completed');
   });
 
   it('leaves a freshly created uploading row alone', async () => {
-    const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 0 });
-    const model = { updateMany } as never;
-    await reapStale(model, 600_000, UPLOAD_STALE_MS);
+    const model = reaperModel();
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
 
     // The cutoff must be strictly in the past by the full timeout — a filter of
     // `{ $lt: now }` would fail every in-flight upload the instant it started.
-    const cutoff = updateMany.mock.calls[2][0].createdAt.$lt as Date;
+    const cutoff = (model.find.mock.calls[0][0] as { createdAt: { $lt: Date } }).createdAt.$lt;
     expect(Date.now() - cutoff.getTime()).toBeGreaterThanOrEqual(UPLOAD_STALE_MS);
+  });
+});
+
+/**
+ * B10 — the storage leak. Reaping an abandoned `uploading` row used to leave
+ * its R2 object permanently unreclaimable: `collectInUseKeys` has no status
+ * filter, so the failed row keeps advertising its `sourceKey` as in-use
+ * forever and no orphan scan can ever see it. The object never passed confirm,
+ * so there is nothing worth keeping.
+ */
+describe('reapStale reclaims abandoned upload objects', () => {
+  it('deletes the R2 object of every row it fails', async () => {
+    const model = reaperModel([
+      { _id: 'u1', sourceKey: 'uploads/audio/a.wav' },
+      { _id: 'u2', sourceKey: 'uploads/audio/b.wav' },
+    ]);
+    const deleteSource = vi.fn().mockResolvedValue(undefined);
+
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS, deleteSource);
+
+    expect(deleteSource.mock.calls.map(([k]) => k)).toEqual([
+      'uploads/audio/a.wav',
+      'uploads/audio/b.wav',
+    ]);
+  });
+
+  it('does not delete the object of a row that got confirmed in the meantime', async () => {
+    // The fenced write no-ops because the row is no longer `uploading`; the
+    // object now belongs to a real, confirmed asset.
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 0 });
+    const model = reaperModel([{ _id: 'u1', sourceKey: 'uploads/audio/a.wav' }], updateOne);
+    const deleteSource = vi.fn().mockResolvedValue(undefined);
+
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS, deleteSource);
+
+    expect(deleteSource).not.toHaveBeenCalled();
+  });
+
+  it('keeps failing rows when R2 is down — the delete is best effort', async () => {
+    vi.spyOn(logger, 'warn').mockImplementation(() => undefined);
+    const model = reaperModel([
+      { _id: 'u1', sourceKey: 'uploads/audio/a.wav' },
+      { _id: 'u2', sourceKey: 'uploads/audio/b.wav' },
+    ]);
+    const deleteSource = vi.fn().mockRejectedValue(new Error('R2 down'));
+
+    // A failed delete must not stop the status transition that unsticks the
+    // user's spinner, and must not abandon the rest of the batch.
+    await expect(
+      reapStale(model as never, 600_000, UPLOAD_STALE_MS, deleteSource)
+    ).resolves.toBeTypeOf('number');
+    expect(model.updateOne).toHaveBeenCalledTimes(2);
+    expect(deleteSource).toHaveBeenCalledTimes(2);
+    vi.restoreAllMocks();
+  });
+
+  it('still transitions rows when no deleter is supplied', async () => {
+    const model = reaperModel([{ _id: 'u1', sourceKey: 'uploads/audio/a.wav' }]);
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
+    expect(model.updateOne).toHaveBeenCalledTimes(1);
   });
 });
