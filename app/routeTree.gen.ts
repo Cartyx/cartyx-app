@@ -14,6 +14,7 @@ import { Route as ReadyzRouteImport } from './routes/readyz'
 import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as HealthzRouteImport } from './routes/healthz'
 import { Route as DashboardRouteImport } from './routes/dashboard'
+import { Route as AudioRouteImport } from './routes/audio'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as CampaignsIndexRouteImport } from './routes/campaigns/index'
 import { Route as CampaignsNewRouteImport } from './routes/campaigns/new'
@@ -50,6 +51,11 @@ const HealthzRoute = HealthzRouteImport.update({
 const DashboardRoute = DashboardRouteImport.update({
   id: '/dashboard',
   path: '/dashboard',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AudioRoute = AudioRouteImport.update({
+  id: '/audio',
+  path: '/audio',
   getParentRoute: () => rootRouteImport,
 } as any)
 const IndexRoute = IndexRouteImport.update({
@@ -117,6 +123,7 @@ const ApiAudioUploadsIdConfirmRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/audio': typeof AudioRoute
   '/dashboard': typeof DashboardRoute
   '/healthz': typeof HealthzRoute
   '/privacy': typeof PrivacyRoute
@@ -136,6 +143,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/audio': typeof AudioRoute
   '/dashboard': typeof DashboardRoute
   '/healthz': typeof HealthzRoute
   '/privacy': typeof PrivacyRoute
@@ -156,6 +164,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/audio': typeof AudioRoute
   '/dashboard': typeof DashboardRoute
   '/healthz': typeof HealthzRoute
   '/privacy': typeof PrivacyRoute
@@ -177,6 +186,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/audio'
     | '/dashboard'
     | '/healthz'
     | '/privacy'
@@ -196,6 +206,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/audio'
     | '/dashboard'
     | '/healthz'
     | '/privacy'
@@ -215,6 +226,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/audio'
     | '/dashboard'
     | '/healthz'
     | '/privacy'
@@ -235,6 +247,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AudioRoute: typeof AudioRoute
   DashboardRoute: typeof DashboardRoute
   HealthzRoute: typeof HealthzRoute
   PrivacyRoute: typeof PrivacyRoute
@@ -287,6 +300,13 @@ declare module '@tanstack/react-router' {
       path: '/dashboard'
       fullPath: '/dashboard'
       preLoaderRoute: typeof DashboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/audio': {
+      id: '/audio'
+      path: '/audio'
+      fullPath: '/audio'
+      preLoaderRoute: typeof AudioRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/': {
@@ -390,6 +410,7 @@ const ApiAudioUploadsRouteWithChildren = ApiAudioUploadsRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AudioRoute: AudioRoute,
   DashboardRoute: DashboardRoute,
   HealthzRoute: HealthzRoute,
   PrivacyRoute: PrivacyRoute,

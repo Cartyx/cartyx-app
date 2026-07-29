@@ -81,13 +81,30 @@ describe('AudioBulkTagBar', () => {
     });
   });
 
-  it('deselecting a chip removes it from the payload', async () => {
+  it('deselecting a chip removes it from the payload, leaving Apply disabled again', async () => {
     const onApply = vi.fn();
     render(<AudioBulkTagBar selectedCount={5} onApply={onApply} />);
     await userEvent.click(screen.getByRole('button', { name: 'forest' }));
+    expect(screen.getByRole('button', { name: /^apply$/i })).toBeEnabled();
     await userEvent.click(screen.getByRole('button', { name: 'forest' }));
-    await userEvent.click(screen.getByRole('button', { name: /apply/i }));
-    expect(onApply).toHaveBeenCalledWith({ tagMode: 'add' });
+    // Back to a fully untouched payload ({tagMode: 'add'} alone) — Apply
+    // goes back to disabled rather than firing a no-op round trip.
+    expect(screen.getByRole('button', { name: /^apply$/i })).toBeDisabled();
+    expect(onApply).not.toHaveBeenCalled();
+  });
+
+  it('disables Apply until at least one field is touched, and does not call onApply for an untouched payload', async () => {
+    const onApply = vi.fn();
+    render(<AudioBulkTagBar selectedCount={5} onApply={onApply} />);
+    const applyButton = screen.getByRole('button', { name: /^apply$/i });
+    expect(applyButton).toBeDisabled();
+
+    await userEvent.click(applyButton);
+    expect(onApply).not.toHaveBeenCalled();
+
+    // Setting a real field re-enables it.
+    await userEvent.selectOptions(screen.getByLabelText(/kind to apply/i), 'music');
+    expect(applyButton).toBeEnabled();
   });
 
   it('lets intensity be explicitly cleared via the "Clear" option', async () => {

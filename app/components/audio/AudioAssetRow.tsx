@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { Play, Pencil, Clock, Loader2, AlertTriangle } from 'lucide-react';
+import { Play, Pencil, Trash2, Clock, Loader2, AlertTriangle } from 'lucide-react';
 import { AudioWaveform } from './AudioWaveform';
 import type { AudioAssetData } from '~/types/audio';
 
@@ -33,6 +33,8 @@ export interface AudioAssetRowProps {
   onPlay?: (asset: AudioAssetData) => void;
   /** Called with the full asset when the edit button is clicked. Available regardless of status: the edit modal only touches metadata (title/kind/facets/tags), none of which depend on the audio existing yet. */
   onEdit?: (asset: AudioAssetData) => void;
+  /** Called with the full asset when the delete button is clicked. Available regardless of status — a stuck `failed`/`pending` asset is exactly the kind of thing a GM most needs to be able to remove. */
+  onDelete?: (asset: AudioAssetData) => void;
 }
 
 /**
@@ -53,7 +55,7 @@ export interface AudioAssetRowProps {
  * one that changed — selection is the primary interaction for the bulk
  * classification workflow this component exists to serve, so that's not
  * an edge case. This only pays off if callers pass stable
- * `onToggleSelect`/`onPlay`/`onEdit` references; `AudioLibraryBrowser`
+ * `onToggleSelect`/`onPlay`/`onEdit`/`onDelete` references; `AudioLibraryBrowser`
  * forwards its own props straight through without wrapping them in new
  * closures, so memo bails out correctly as long as its caller does the
  * same.
@@ -65,6 +67,7 @@ function AudioAssetRowComponent({
   onToggleSelect,
   onPlay,
   onEdit,
+  onDelete,
 }: AudioAssetRowProps) {
   return (
     <li className="flex items-center gap-3 border-b border-white/[0.06] px-3 py-2">
@@ -119,6 +122,17 @@ function AudioAssetRowComponent({
           className="rounded p-1.5 text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-slate-200"
         >
           <Pencil className="h-4 w-4" />
+        </button>
+
+        {/* Delete is reachable at every status too — a stuck `pending`/`failed`
+            asset is exactly what a GM most needs to be able to remove. */}
+        <button
+          type="button"
+          onClick={() => onDelete?.(asset)}
+          aria-label={`Delete ${asset.title}`}
+          className="rounded p-1.5 text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-red-400"
+        >
+          <Trash2 className="h-4 w-4" />
         </button>
 
         {asset.status === 'failed' ? (

@@ -25,6 +25,8 @@ export interface AudioLibraryBrowserProps {
   onPlay?: (asset: AudioAssetData) => void;
   /** Called with the full asset when a row's edit button is clicked. */
   onEdit?: (asset: AudioAssetData) => void;
+  /** Called with the full asset when a row's delete button is clicked. */
+  onDelete?: (asset: AudioAssetData) => void;
   /**
    * Rendered above the list, below the filter bar. A bulk-action bar when
    * managing a library, an "Add to scene" button when mounted as a picker
@@ -55,6 +57,7 @@ export function AudioLibraryBrowser({
   onToggleSelect,
   onPlay,
   onEdit,
+  onDelete,
   actionsSlot,
   emptyMessage = 'No audio matches these filters.',
 }: AudioLibraryBrowserProps) {
@@ -83,6 +86,7 @@ export function AudioLibraryBrowser({
               onToggleSelect={onToggleSelect}
               onPlay={onPlay}
               onEdit={onEdit}
+              onDelete={onDelete}
             />
           ))}
         </ul>

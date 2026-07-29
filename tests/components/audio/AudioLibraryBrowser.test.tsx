@@ -106,6 +106,21 @@ describe('AudioLibraryBrowser', () => {
     expect(onToggleSelect).not.toHaveBeenCalledWith('1');
   });
 
+  it('forwards onDelete with the clicked asset, not the first row', async () => {
+    const onDelete = vi.fn();
+    render(
+      <AudioLibraryBrowser
+        assets={[mkAsset('1', 'Storm'), mkAsset('2', 'Tavern')]}
+        filters={{}}
+        onFiltersChange={noop}
+        onDelete={onDelete}
+      />
+    );
+    await userEvent.click(screen.getByRole('button', { name: /delete tavern/i }));
+    expect(onDelete).toHaveBeenCalledWith(expect.objectContaining({ id: '2' }));
+    expect(onDelete).not.toHaveBeenCalledWith(expect.objectContaining({ id: '1' }));
+  });
+
   it('does not filter or drop assets client-side — filtering is server-side', () => {
     // If the browser ever starts filtering the array it's handed, this test
     // should fail: these assets don't match `filters`, and must still render.

@@ -41,11 +41,15 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 export const Ready: Story = {
-  args: { asset: base, onPlay: () => {}, onEdit: () => {} },
+  args: { asset: base, onPlay: () => {}, onEdit: () => {}, onDelete: () => {} },
 };
 
 export const Uploading: Story = {
-  args: { asset: { ...base, status: 'uploading', peaks: [], durationMs: null }, onEdit: () => {} },
+  args: {
+    asset: { ...base, status: 'uploading', peaks: [], durationMs: null },
+    onEdit: () => {},
+    onDelete: () => {},
+  },
 };
 
 /**
@@ -59,11 +63,19 @@ export const Uploading: Story = {
  * having finished processing. Only Play stays gated on `ready`.
  */
 export const Pending: Story = {
-  args: { asset: { ...base, status: 'pending', peaks: [], durationMs: null }, onEdit: () => {} },
+  args: {
+    asset: { ...base, status: 'pending', peaks: [], durationMs: null },
+    onEdit: () => {},
+    onDelete: () => {},
+  },
 };
 
 export const Processing: Story = {
-  args: { asset: { ...base, status: 'processing', peaks: [], durationMs: null }, onEdit: () => {} },
+  args: {
+    asset: { ...base, status: 'processing', peaks: [], durationMs: null },
+    onEdit: () => {},
+    onDelete: () => {},
+  },
 };
 
 export const Failed: Story = {
@@ -76,6 +88,7 @@ export const Failed: Story = {
       durationMs: null,
     },
     onEdit: () => {},
+    onDelete: () => {},
   },
 };
 
@@ -83,6 +96,7 @@ export const FailedNoMessage: Story = {
   args: {
     asset: { ...base, status: 'failed', lastError: null, peaks: [], durationMs: null },
     onEdit: () => {},
+    onDelete: () => {},
   },
 };
 
@@ -95,7 +109,7 @@ function SelectableExample(args: React.ComponentProps<typeof AudioAssetRow>) {
 
 export const Selectable: Story = {
   render: (args) => <SelectableExample {...args} />,
-  args: { asset: base, selectable: true, selected: true },
+  args: { asset: base, selectable: true, selected: true, onEdit: () => {}, onDelete: () => {} },
 };
 
 export const NoTags: Story = {

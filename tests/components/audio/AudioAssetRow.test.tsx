@@ -45,11 +45,18 @@ describe('AudioAssetRow', () => {
   });
 
   it.each(['pending', 'processing', 'uploading', 'failed'] as const)(
-    'keeps Edit reachable but hides Play when status is %s',
+    'keeps Edit and Delete reachable but hides Play when status is %s',
     (status) => {
-      renderRow(<AudioAssetRow asset={{ ...asset, status, peaks: [] }} onEdit={vi.fn()} />);
+      renderRow(
+        <AudioAssetRow
+          asset={{ ...asset, status, peaks: [] }}
+          onEdit={vi.fn()}
+          onDelete={vi.fn()}
+        />
+      );
       expect(screen.queryByRole('button', { name: /play storm/i })).not.toBeInTheDocument();
       expect(screen.getByRole('button', { name: /edit storm/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /delete storm/i })).toBeInTheDocument();
     }
   );
 
@@ -114,6 +121,21 @@ describe('AudioAssetRow', () => {
     renderRow(<AudioAssetRow asset={asset} onEdit={onEdit} />);
     await userEvent.click(screen.getByRole('button', { name: /edit storm/i }));
     expect(onEdit).toHaveBeenCalledWith(asset);
+  });
+
+  it('calls onDelete with the full asset when the delete button is clicked', async () => {
+    const onDelete = vi.fn();
+    renderRow(<AudioAssetRow asset={asset} onDelete={onDelete} />);
+    await userEvent.click(screen.getByRole('button', { name: /delete storm/i }));
+    expect(onDelete).toHaveBeenCalledWith(asset);
+  });
+
+  it('calls onDelete with the full asset even when the asset is not ready', async () => {
+    const onDelete = vi.fn();
+    const pendingAsset: AudioAssetData = { ...asset, status: 'pending', peaks: [] };
+    renderRow(<AudioAssetRow asset={pendingAsset} onDelete={onDelete} />);
+    await userEvent.click(screen.getByRole('button', { name: /delete storm/i }));
+    expect(onDelete).toHaveBeenCalledWith(pendingAsset);
   });
 
   it('renders tags', () => {

@@ -112,6 +112,18 @@ export function AudioBulkTagBar({ selectedCount, onApply, onClear }: AudioBulkTa
     };
   };
 
+  // Nothing set at all (`{tagMode}` alone, tagMode's default plus no other
+  // field touched) is a genuine no-op — once wired to the server, Apply
+  // would otherwise fire a round trip over up to 200 assets that changes
+  // nothing. Fixed here, in the component that already builds the payload
+  // and already knows what "nothing set" means, rather than downstream in
+  // the route: disabling the control gives immediate feedback (a greyed-out
+  // Apply) instead of a silent no-op click. The destructive empty-replace
+  // case below is intentionally NOT folded into this: `{tagMode: 'replace',
+  // tags: []}` is a real, meaningful instruction (clear all tags), not an
+  // empty one — it still goes through the confirm dialog.
+  const isPayloadEmpty = Object.keys(buildPayload()).length === 1;
+
   const handleApply = () => {
     const payload = buildPayload();
     const isDestructiveClear =
@@ -174,7 +186,8 @@ export function AudioBulkTagBar({ selectedCount, onApply, onClear }: AudioBulkTa
         <button
           type="button"
           onClick={handleApply}
-          className="rounded bg-blue-600 px-3 py-1 text-sm font-semibold text-white hover:bg-blue-500"
+          disabled={isPayloadEmpty}
+          className="rounded bg-blue-600 px-3 py-1 text-sm font-semibold text-white hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-blue-600"
         >
           Apply
         </button>

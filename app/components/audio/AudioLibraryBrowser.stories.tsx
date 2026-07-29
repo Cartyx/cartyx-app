@@ -63,6 +63,7 @@ export const WithAssets: Story = {
     onFiltersChange: () => {},
     onPlay: () => {},
     onEdit: () => {},
+    onDelete: () => {},
   },
 };
 
@@ -108,5 +109,5 @@ function SelectableExample(args: React.ComponentProps<typeof AudioLibraryBrowser
 
 export const SelectableWithActionsSlot: Story = {
   render: (args) => <SelectableExample {...args} />,
-  args: { assets, filters: {}, onFiltersChange: () => {} },
+  args: { assets, filters: {}, onFiltersChange: () => {}, onDelete: () => {} },
 };
