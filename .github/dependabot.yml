@@ -138,6 +138,37 @@ updates:
       - dependency-name: 'vitest'
         versions: ['>=5.0.0']
 
+  # --- audio-worker service (own package.json + lockfile) ---
+  # Same reasoning as /realtime: without an entry here dependabot runs no
+  # version updates on this directory and its security updates fall back to the
+  # default branch (`main`), which we never open PRs against.
+  - package-ecosystem: 'npm'
+    directory: '/audio-worker'
+    target-branch: 'dev'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+    open-pull-requests-limit: 5
+    labels:
+      - 'dependencies'
+    commit-message:
+      prefix: 'chore(deps)'
+    groups:
+      audio-worker-minor-and-patch:
+        applies-to: version-updates
+        update-types: ['minor', 'patch']
+    cooldown:
+      default-days: 10
+    ignore:
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      - dependency-name: 'typescript'
+        versions: ['>=7.0.0']
+      - dependency-name: 'vitest'
+        versions: ['>=5.0.0']
+      - dependency-name: 'mongoose'
+        update-types: ['version-update:semver-major']
+
   - package-ecosystem: 'github-actions'
     directory: '/'
     target-branch: 'dev'
