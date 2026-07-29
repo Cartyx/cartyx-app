@@ -6,6 +6,7 @@ import {
   updateAudioAssetSchema,
   bulkTagAudioAssetsSchema,
   deleteAudioAssetSchema,
+  retryAudioAssetSchema,
 } from '~/types/schemas/audio';
 
 // ---------------------------------------------------------------------------
@@ -88,6 +89,13 @@ export const bulkTagAudioAssetsFn = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const { bulkTagAudioAssets } = await import('~/server/functions/audio');
     return bulkTagAudioAssets({ data, userId: await requireUserId() });
+  });
+
+export const retryAudioAssetFn = createServerFn({ method: 'POST' })
+  .inputValidator(retryAudioAssetSchema)
+  .handler(async ({ data }) => {
+    const { retryAudioAsset } = await import('~/server/functions/audio');
+    return retryAudioAsset({ data, userId: await requireUserId() });
   });
 
 export const deleteAudioAssetFn = createServerFn({ method: 'POST' })

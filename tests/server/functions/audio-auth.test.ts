@@ -259,6 +259,17 @@ describe('POST /api/audio/uploads/$id/confirm — authorized path', () => {
     expect(await res.json()).toEqual({ error: message });
   });
 
+  it('echoes the "not awaiting confirmation" precondition verbatim with a 400', async () => {
+    const { confirmAudioUpload } = await import('~/server/functions/audio');
+    // Replaying confirm against an already-ready (or failed) asset is a caller
+    // mistake, not infrastructure — permanently wrong, so 400 and don't retry.
+    const message = 'Audio asset is not awaiting confirmation';
+    vi.mocked(confirmAudioUpload).mockRejectedValue(new Error(message));
+    const res = await callConfirm();
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: message });
+  });
+
   it('falls back to the generic "Confirm failed" message for a non-domain error and never echoes it', async () => {
     const { confirmAudioUpload } = await import('~/server/functions/audio');
     // Shaped like a real infra failure (Mongo connection refused) — exactly the
@@ -267,7 +278,11 @@ describe('POST /api/audio/uploads/$id/confirm — authorized path', () => {
       new Error('connect ECONNREFUSED 127.0.0.1:27017')
     );
     const res = await callConfirm();
-    expect(res.status).toBe(400);
+    // 500, not 400: this failure class is retryable infrastructure, and an
+    // external client's retry logic keys off the status code. `POST
+    // /api/audio/uploads` already returns 500 here, so 400 also meant the two
+    // ingest routes disagreed about the same failure.
+    expect(res.status).toBe(500);
     const body = await res.json();
     expect(body).toEqual({ error: 'Confirm failed' });
     // The negative assertion is what actually protects the allowlist: a future

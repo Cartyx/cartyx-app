@@ -1,4 +1,3 @@
-import React from 'react';
 import type { ReactNode } from 'react';
 import { AudioFilterBar } from './AudioFilterBar';
 import type { AudioFilters } from './AudioFilterBar';
@@ -27,6 +26,18 @@ export interface AudioLibraryBrowserProps {
   onEdit?: (asset: AudioAssetData) => void;
   /** Called with the full asset when a row's delete button is clicked. */
   onDelete?: (asset: AudioAssetData) => void;
+  /** Called with the full asset when a failed row's retry button is clicked. */
+  onRetry?: (asset: AudioAssetData) => void;
+  /**
+   * Called when "Load more" is clicked. Omit it (or pass `hasMore: false`) and
+   * no control renders — the caller owns pagination state; this component
+   * never fetches.
+   */
+  onLoadMore?: () => void;
+  /** Whether another page exists. The control only renders when this is true. */
+  hasMore?: boolean;
+  /** Whether the next page is currently in flight — disables the control and relabels it. */
+  loadingMore?: boolean;
   /**
    * Rendered above the list, below the filter bar. A bulk-action bar when
    * managing a library, an "Add to scene" button when mounted as a picker
@@ -58,6 +69,10 @@ export function AudioLibraryBrowser({
   onPlay,
   onEdit,
   onDelete,
+  onRetry,
+  onLoadMore,
+  hasMore = false,
+  loadingMore = false,
   actionsSlot,
   emptyMessage = 'No audio matches these filters.',
 }: AudioLibraryBrowserProps) {
@@ -87,9 +102,29 @@ export function AudioLibraryBrowser({
               onPlay={onPlay}
               onEdit={onEdit}
               onDelete={onDelete}
+              onRetry={onRetry}
             />
           ))}
         </ul>
+      )}
+
+      {/* Filtering and paging are both server-side, so the list is a page, not
+          the library. Without this control a GM with 60 assets silently never
+          sees 10 of them — and "make one sound findable among hundreds" is the
+          feature's stated goal. Rendered below the rows so it reads as "there
+          is more after this", and only when the caller says another page
+          exists. */}
+      {hasMore && onLoadMore && !loading && (
+        <div className="border-t border-white/[0.06] p-3">
+          <button
+            type="button"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            className="w-full rounded border border-white/[0.07] bg-white/[0.02] px-3 py-2 font-sans text-xs uppercase tracking-widest text-slate-300 transition-colors hover:bg-white/[0.05] hover:text-blue-400 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {loadingMore ? 'Loading…' : 'Load more'}
+          </button>
+        </div>
       )}
     </section>
   );

@@ -10,12 +10,20 @@ const bulkTagAudioAssetsFn = vi.fn();
 const updateAudioAssetFn = vi.fn();
 const deleteAudioAssetFn = vi.fn();
 
+const retryAudioAssetFn = vi.fn();
+
 vi.mock('~/utils/audio-server-fns', () => ({
   listAudioAssetsFn: (...args: unknown[]) => listAudioAssetsFn(...args),
   bulkTagAudioAssetsFn: (...args: unknown[]) => bulkTagAudioAssetsFn(...args),
   updateAudioAssetFn: (...args: unknown[]) => updateAudioAssetFn(...args),
   deleteAudioAssetFn: (...args: unknown[]) => deleteAudioAssetFn(...args),
+  retryAudioAssetFn: (...args: unknown[]) => retryAudioAssetFn(...args),
 }));
+
+// Topbar reads the session through useAuth; stub it so the route can render it
+// without a router/auth provider.
+const useAuth = vi.fn(() => ({ user: { id: 'u1', name: 'GM' }, logout: vi.fn() }));
+vi.mock('~/hooks/useAuth', () => ({ useAuth: () => useAuth() }));
 
 const getMe = vi.fn();
 vi.mock('~/server/functions/rpc', () => ({ getMe: (...args: unknown[]) => getMe(...args) }));
@@ -29,6 +37,13 @@ vi.mock('~/utils/telemetry-client', () => ({
 vi.mock('@tanstack/react-router', () => ({
   createFileRoute: () => (options: unknown) => options,
   redirect: (opts: unknown) => opts,
+  // Topbar/UserMenu render <Link>s; a plain anchor is enough to assert the nav
+  // chrome mounted without standing up a real router.
+  Link: ({ to, children, ...rest }: { to: string; children: React.ReactNode }) => (
+    <a href={to} {...rest}>
+      {children}
+    </a>
+  ),
 }));
 
 // Replaces the real AudioWaveform (up to ~400 <rect>s per row) with a call
@@ -38,7 +53,13 @@ vi.mock('@tanstack/react-router', () => ({
 const { waveformSpy } = vi.hoisted(() => ({ waveformSpy: vi.fn(() => null) }));
 vi.mock('~/components/audio/AudioWaveform', () => ({ AudioWaveform: waveformSpy }));
 
-import { AudioLibraryPage, shouldPoll, audioBeforeLoad, pickPlaybackSources } from '~/routes/audio';
+import {
+  AudioLibraryPage,
+  shouldPoll,
+  audioBeforeLoad,
+  pickPlaybackSources,
+  flattenAudioPages,
+} from '~/routes/audio';
 
 function mkAsset(overrides: Partial<AudioAssetData> = {}): AudioAssetData {
   return {
@@ -78,9 +99,41 @@ beforeEach(() => {
   bulkTagAudioAssetsFn.mockReset();
   updateAudioAssetFn.mockReset();
   deleteAudioAssetFn.mockReset();
+  retryAudioAssetFn.mockReset();
   captureException.mockReset();
   getMe.mockReset();
   listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+});
+
+describe('flattenAudioPages', () => {
+  it('concatenates every loaded page in order', () => {
+    const p1 = mkAsset({ id: 'a1' });
+    const p2 = mkAsset({ id: 'a2' });
+    expect(
+      flattenAudioPages({
+        pages: [
+          { items: [p1], nextCursor: 'c' },
+          { items: [p2], nextCursor: null },
+        ],
+      })
+    ).toEqual([p1, p2]);
+  });
+
+  it('returns an empty list before anything has loaded', () => {
+    expect(flattenAudioPages(undefined)).toEqual([]);
+  });
+
+  it('keeps the poll alive for an in-flight asset on a later page', () => {
+    // A naive `pages[0].items` would go quiet the moment the user loaded a
+    // second page containing the only unfinished asset.
+    const flat = flattenAudioPages({
+      pages: [
+        { items: [mkAsset({ id: 'a1', status: 'ready' })], nextCursor: 'c' },
+        { items: [mkAsset({ id: 'a2', status: 'pending' })], nextCursor: null },
+      ],
+    });
+    expect(shouldPoll(flat)).toBe(true);
+  });
 });
 
 describe('shouldPoll', () => {
@@ -341,6 +394,102 @@ describe('AudioLibraryPage', () => {
       // the one that changed, doubling the waveform call count instead of
       // adding exactly one more.
       expect(waveformSpy.mock.calls.length).toBe(initialCalls + 1);
+    });
+  });
+
+  describe('nav chrome', () => {
+    it('renders the shared Topbar so the page is escapable without browser back', async () => {
+      listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+      renderPage();
+      await screen.findByText(/audio library/i);
+      expect(screen.getByRole('link', { name: 'CARTYX' })).toHaveAttribute('href', '/campaigns');
+    });
+  });
+
+  describe('pagination', () => {
+    it('requests the first page with no cursor', async () => {
+      listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+      renderPage();
+      await waitFor(() => expect(listAudioAssetsFn).toHaveBeenCalled());
+      const data = listAudioAssetsFn.mock.calls[0][0].data as Record<string, unknown>;
+      expect(data.cursor).toBeUndefined();
+      expect(data.limit).toBe(50);
+    });
+
+    it('offers no Load more control when the server reports no next page', async () => {
+      listAudioAssetsFn.mockResolvedValue({
+        items: [mkAsset({ id: 'a1', title: 'Storm' })],
+        nextCursor: null,
+      });
+      renderPage();
+      await screen.findByText('Storm');
+      expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
+    });
+
+    it('fetches the next page with the returned cursor and appends its rows', async () => {
+      listAudioAssetsFn
+        .mockResolvedValueOnce({
+          items: [mkAsset({ id: 'a1', title: 'Storm' })],
+          nextCursor: 'cursor-1',
+        })
+        .mockResolvedValueOnce({
+          items: [mkAsset({ id: 'a2', title: 'Tavern' })],
+          nextCursor: null,
+        });
+      renderPage();
+      await screen.findByText('Storm');
+
+      // Before this, the route hardcoded limit: 50 and never read nextCursor —
+      // encodeAudioCursor/decodeAudioCursor had zero production callers and a
+      // GM with 60 assets silently never saw 10 of them.
+      await userEvent.click(await screen.findByRole('button', { name: /load more/i }));
+
+      expect(await screen.findByText('Tavern')).toBeInTheDocument();
+      // The first page's rows are still on screen — this appends, not replaces.
+      expect(screen.getByText('Storm')).toBeInTheDocument();
+      const secondCall = listAudioAssetsFn.mock.calls[1][0].data as Record<string, unknown>;
+      expect(secondCall.cursor).toBe('cursor-1');
+      // Control disappears once the last page reports no further cursor.
+      await waitFor(() =>
+        expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument()
+      );
+    });
+  });
+
+  describe('retry', () => {
+    it('requeues a failed asset and refetches the list', async () => {
+      listAudioAssetsFn
+        .mockResolvedValueOnce({
+          items: [
+            mkAsset({ id: 'a1', title: 'Storm', status: 'failed', lastError: 'ffmpeg exploded' }),
+          ],
+          nextCursor: null,
+        })
+        .mockResolvedValue({
+          items: [mkAsset({ id: 'a1', title: 'Storm', status: 'pending' })],
+          nextCursor: null,
+        });
+      retryAudioAssetFn.mockResolvedValue(mkAsset({ id: 'a1', status: 'pending' }));
+      renderPage();
+
+      await userEvent.click(await screen.findByRole('button', { name: /retry storm/i }));
+
+      await waitFor(() => expect(retryAudioAssetFn).toHaveBeenCalledWith({ data: { id: 'a1' } }));
+      // The row leaves the failed state once the refetched list lands.
+      await waitFor(() => expect(screen.getByText(/queued — waiting to process/i)).toBeVisible());
+    });
+
+    it('surfaces an error when the retry fails, leaving the row failed', async () => {
+      listAudioAssetsFn.mockResolvedValue({
+        items: [mkAsset({ id: 'a1', title: 'Storm', status: 'failed', lastError: 'boom' })],
+        nextCursor: null,
+      });
+      retryAudioAssetFn.mockRejectedValue(new Error('retry boom'));
+      renderPage();
+
+      await userEvent.click(await screen.findByRole('button', { name: /retry storm/i }));
+      expect(await screen.findByText(/retry boom/i)).toBeInTheDocument();
+      expect(screen.getByText('boom')).toBeInTheDocument();
     });
   });
 

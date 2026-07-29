@@ -78,6 +78,12 @@ export const Processing: Story = {
   },
 };
 
+/**
+ * Failed rows carry a Retry action alongside the reason. The source object
+ * survives everything but delete, so a transcode that lost to a transient
+ * fault is recoverable without re-uploading — otherwise the only recovery for
+ * a 50-file bulk import is re-dropping the whole folder.
+ */
 export const Failed: Story = {
   args: {
     asset: {
@@ -89,6 +95,7 @@ export const Failed: Story = {
     },
     onEdit: () => {},
     onDelete: () => {},
+    onRetry: () => {},
   },
 };
 
@@ -97,6 +104,7 @@ export const FailedNoMessage: Story = {
     asset: { ...base, status: 'failed', lastError: null, peaks: [], durationMs: null },
     onEdit: () => {},
     onDelete: () => {},
+    onRetry: () => {},
   },
 };
 

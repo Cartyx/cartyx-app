@@ -14,6 +14,7 @@ import type {
   updateAudioAssetSchema,
   bulkTagAudioAssetsSchema,
   deleteAudioAssetSchema,
+  retryAudioAssetSchema,
 } from '~/types/schemas/audio';
 
 async function ensureDb() {
@@ -337,6 +338,57 @@ export async function bulkTagAudioAssets({
     return { modified: res.modifiedCount ?? 0 };
   } catch (e) {
     serverCaptureException(e, userId, { action: 'bulkTagAudioAssets' });
+    throw e;
+  }
+}
+
+/**
+ * Requeue a `failed` asset for another run through the transcode pipeline.
+ *
+ * The source object is still in R2 (delete is the only thing that removes it),
+ * so a failure caused by a transient fault — an R2 blip, a brief Atlas
+ * failover, a worker OOM — is entirely recoverable. Without this the only
+ * recovery is delete-and-re-upload, which for a 50-file bulk import means
+ * re-dropping the whole folder.
+ *
+ * Resets the full queue state, not just `status`: `attempts` is back to 0 (the
+ * row exhausted its budget, and a retry that immediately re-failed at the cap
+ * would be no retry at all), `nextAttemptAt` is cleared so the worker can claim
+ * it on the next pass, and the claim fields are cleared so it can't look
+ * in-flight. Scoped to `status: 'failed'` so this can never be used to yank a
+ * `ready` asset back through the worker — that is the abuse
+ * `confirmAudioUpload`'s own precondition closes.
+ */
+export async function retryAudioAsset({
+  data,
+  userId,
+}: {
+  data: z.infer<typeof retryAudioAssetSchema>;
+  userId: string;
+}): Promise<AudioAssetData> {
+  try {
+    await ensureDb();
+    const doc = await AudioAsset.findOneAndUpdate(
+      { _id: data.id, ownerId: userId, status: 'failed' },
+      {
+        $set: {
+          status: 'pending',
+          attempts: 0,
+          lastError: null,
+          nextAttemptAt: null,
+          claimedAt: null,
+          claimedBy: null,
+          updatedAt: new Date(),
+        },
+      },
+      { new: true }
+      // `.lean()` for the same reason as updateAudioAsset — see that comment.
+    ).lean();
+    if (!doc) throw new Error('Audio asset not found or not in a failed state');
+    serverCaptureEvent(userId, 'audio_asset_retried', { assetId: data.id });
+    return serializeAudioAsset(doc as unknown as AudioDoc);
+  } catch (e) {
+    serverCaptureException(e, userId, { action: 'retryAudioAsset' });
     throw e;
   }
 }

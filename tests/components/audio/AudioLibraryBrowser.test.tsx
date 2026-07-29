@@ -50,6 +50,69 @@ describe('AudioLibraryBrowser', () => {
     expect(screen.getAllByRole('listitem')).toHaveLength(2);
   });
 
+  describe('load more', () => {
+    const rows = [mkAsset('1', 'Storm'), mkAsset('2', 'Tavern')];
+
+    it('offers Load more and calls back when another page exists', async () => {
+      const onLoadMore = vi.fn();
+      render(
+        <AudioLibraryBrowser
+          assets={rows}
+          filters={{}}
+          onFiltersChange={noop}
+          hasMore
+          onLoadMore={onLoadMore}
+        />
+      );
+      // Filtering and paging are both server-side, so the list is a page, not
+      // the library: with no control a GM with 60 assets never sees 10 of them.
+      await userEvent.click(screen.getByRole('button', { name: /load more/i }));
+      expect(onLoadMore).toHaveBeenCalledTimes(1);
+    });
+
+    it('renders no control when there is no next page', () => {
+      render(
+        <AudioLibraryBrowser
+          assets={rows}
+          filters={{}}
+          onFiltersChange={noop}
+          hasMore={false}
+          onLoadMore={vi.fn()}
+        />
+      );
+      expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
+    });
+
+    it('disables the control while the next page is in flight', () => {
+      render(
+        <AudioLibraryBrowser
+          assets={rows}
+          filters={{}}
+          onFiltersChange={noop}
+          hasMore
+          loadingMore
+          onLoadMore={vi.fn()}
+        />
+      );
+      expect(screen.getByRole('button', { name: /loading/i })).toBeDisabled();
+    });
+
+    it('forwards onRetry with the clicked asset', async () => {
+      const onRetry = vi.fn();
+      const failed = { ...mkAsset('3', 'Broken'), status: 'failed' as const };
+      render(
+        <AudioLibraryBrowser
+          assets={[...rows, failed]}
+          filters={{}}
+          onFiltersChange={noop}
+          onRetry={onRetry}
+        />
+      );
+      await userEvent.click(screen.getByRole('button', { name: 'Retry Broken' }));
+      expect(onRetry).toHaveBeenCalledWith(failed);
+    });
+  });
+
   it('shows the empty message when there are no assets', () => {
     render(
       <AudioLibraryBrowser

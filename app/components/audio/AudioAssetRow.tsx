@@ -1,5 +1,5 @@
 import { memo } from 'react';
-import { Play, Pencil, Trash2, Clock, Loader2, AlertTriangle } from 'lucide-react';
+import { Play, Pencil, Trash2, Clock, Loader2, AlertTriangle, RotateCw } from 'lucide-react';
 import { AudioWaveform } from './AudioWaveform';
 import type { AudioAssetData } from '~/types/audio';
 
@@ -35,6 +35,8 @@ export interface AudioAssetRowProps {
   onEdit?: (asset: AudioAssetData) => void;
   /** Called with the full asset when the delete button is clicked. Available regardless of status — a stuck `failed`/`pending` asset is exactly the kind of thing a GM most needs to be able to remove. */
   onDelete?: (asset: AudioAssetData) => void;
+  /** Called with the full asset when the retry button is clicked. Rendered for `failed` assets only — the source object is still in R2, so a transient transcode failure is recoverable without re-uploading. */
+  onRetry?: (asset: AudioAssetData) => void;
 }
 
 /**
@@ -68,6 +70,7 @@ function AudioAssetRowComponent({
   onPlay,
   onEdit,
   onDelete,
+  onRetry,
 }: AudioAssetRowProps) {
   return (
     <li className="flex items-center gap-3 border-b border-white/[0.06] px-3 py-2">
@@ -136,10 +139,25 @@ function AudioAssetRowComponent({
         </button>
 
         {asset.status === 'failed' ? (
-          <span className="flex items-center gap-1.5 text-xs text-red-400">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            {asset.lastError ?? 'Processing failed'}
-          </span>
+          <>
+            {/* The source object survives everything but delete, so a
+                transcode that lost to a transient fault (an R2 blip, a brief
+                Atlas failover) is recoverable without re-uploading. Without
+                this the only recovery is delete-and-re-upload — for a 50-file
+                bulk import, re-dropping the whole folder. */}
+            <button
+              type="button"
+              onClick={() => onRetry?.(asset)}
+              aria-label={`Retry ${asset.title}`}
+              className="rounded p-1.5 text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-blue-400"
+            >
+              <RotateCw className="h-4 w-4" />
+            </button>
+            <span className="flex items-center gap-1.5 text-xs text-red-400">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              {asset.lastError ?? 'Processing failed'}
+            </span>
+          </>
         ) : asset.status === 'pending' ? (
           // Queued but not yet claimed by a worker. Deliberately NOT a spinner:
           // if the worker is down, assets sit here indefinitely, and an

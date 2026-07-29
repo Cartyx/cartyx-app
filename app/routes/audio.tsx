@@ -1,8 +1,10 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { createFileRoute, redirect } from '@tanstack/react-router';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import type { InfiniteData, QueryKey } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { getMe } from '~/server/functions/rpc';
+import { Topbar } from '~/components/Topbar';
 import { AudioLibraryBrowser } from '~/components/audio/AudioLibraryBrowser';
 import { AudioUploadDropzone } from '~/components/audio/AudioUploadDropzone';
 import { AudioBulkTagBar } from '~/components/audio/AudioBulkTagBar';
@@ -17,12 +19,33 @@ import {
   bulkTagAudioAssetsFn,
   updateAudioAssetFn,
   deleteAudioAssetFn,
+  retryAudioAssetFn,
 } from '~/utils/audio-server-fns';
 import { queryKeys } from '~/utils/queryKeys';
 import { captureException } from '~/utils/telemetry-client';
 import type { AudioAssetData, AudioEnvironment, AudioMood } from '~/types/audio';
 
 const POLL_MS = 4000;
+
+/**
+ * Server-side page size. The server caps `limit` at 200; 50 keeps the first
+ * paint small while making "Load more" a rare click for a normal library.
+ */
+const PAGE_SIZE = 50;
+
+/** One server page of the library: the rows plus the cursor to the next page. */
+export type AudioPage = { items: AudioAssetData[]; nextCursor: string | null };
+
+/**
+ * Flattens the infinite query's page structure into the single list the UI
+ * renders. Exported so `shouldPoll`'s "across pages" behaviour is directly
+ * testable: a `pending` asset on page 2 must keep the poll alive exactly like
+ * one on page 1, and a naive `pages[0].items` would silently stop polling as
+ * soon as the user loaded a second page.
+ */
+export function flattenAudioPages(data: { pages: AudioPage[] } | undefined): AudioAssetData[] {
+  return data?.pages.flatMap((p) => p.items) ?? [];
+}
 
 /** Stop polling once nothing is in flight — a settled library must go quiet. */
 export function shouldPoll(assets: Pick<AudioAssetData, 'status'>[]): boolean {
@@ -83,12 +106,23 @@ export function AudioLibraryPage() {
   const [editingAssetId, setEditingAssetId] = useState<string | null>(null);
   const [nowPlaying, setNowPlaying] = useState<AudioAssetData | null>(null);
 
-  const query = useQuery({
+  // Generics pinned explicitly: without them TS widens the page type to
+  // `unknown` (server-fn return inference doesn't survive useInfiniteQuery's
+  // five-parameter inference), and every read off `query.data` silently loses
+  // its type.
+  const query = useInfiniteQuery<
+    AudioPage,
+    Error,
+    InfiniteData<AudioPage>,
+    QueryKey,
+    string | null
+  >({
     queryKey: queryKeys.audio.list(filters),
-    queryFn: () =>
+    queryFn: ({ pageParam }) =>
       listAudioAssetsFn({
         data: {
           ...filters,
+          cursor: pageParam ?? undefined,
           // AudioFilterBar's `AudioFilters.environment`/`.mood` are declared
           // as plain `string[]` even though every value that ever lands in
           // them comes from `AUDIO_ENVIRONMENTS`/`AUDIO_MOODS` (that
@@ -99,13 +133,18 @@ export function AudioLibraryPage() {
           // boundary regardless of this cast.
           environment: filters.environment as AudioEnvironment[] | undefined,
           mood: filters.mood as AudioMood[] | undefined,
-          limit: 50,
+          limit: PAGE_SIZE,
         },
       }),
-    refetchInterval: (q) => (shouldPoll(q.state.data?.items ?? []) ? POLL_MS : false),
+    initialPageParam: null,
+    getNextPageParam: (lastPage) => lastPage.nextCursor,
+    // Across every loaded page, not just the first: a `pending` asset the
+    // user has paged down to must keep the poll alive, and a settled library
+    // must still go quiet.
+    refetchInterval: (q) => (shouldPoll(flattenAudioPages(q.state.data)) ? POLL_MS : false),
   });
 
-  const assets = query.data?.items ?? [];
+  const assets = useMemo(() => flattenAudioPages(query.data), [query.data]);
   // The live record for whichever asset is being edited — not the snapshot
   // captured when Edit was clicked. AudioAssetDetail's reset effect keys off
   // `asset.id`, not object identity, specifically so this 4s poll can keep
@@ -138,6 +177,12 @@ export function AudioLibraryPage() {
       invalidateAudio();
     },
     onError: (e) => captureException(e, { action: 'AudioLibraryPage.updateAsset' }),
+  });
+
+  const retry = useMutation({
+    mutationFn: (asset: AudioAssetData) => retryAudioAssetFn({ data: { id: asset.id } }),
+    onSuccess: invalidateAudio,
+    onError: (e) => captureException(e, { action: 'AudioLibraryPage.retryAsset' }),
   });
 
   const deleteMutation = useMutation({
@@ -187,111 +232,140 @@ export function AudioLibraryPage() {
     requestDeleteRef.current(asset);
   }, []);
 
+  // Same stable-reference discipline as handleDelete above — AudioAssetRow is
+  // React.memo'd and only bails out when every callback it receives is
+  // referentially stable.
+  const retryRef = useRef(retry.mutate);
+  retryRef.current = retry.mutate;
+  const handleRetry = useCallback((asset: AudioAssetData) => {
+    retryRef.current(asset);
+  }, []);
+
+  const { fetchNextPage } = query;
+  const handleLoadMore = useCallback(() => {
+    void fetchNextPage();
+  }, [fetchNextPage]);
+
   const handleClearSelection = useCallback(() => setSelectedIds([]), []);
 
   const playbackSources = nowPlaying ? pickPlaybackSources(nowPlaying) : [];
 
   return (
-    <main className="min-h-screen bg-[#0D1117] px-4 py-6 text-slate-200">
-      <div className="mx-auto max-w-4xl">
-        <h1 className="mb-4 font-sans text-sm font-bold uppercase tracking-widest text-blue-400">
-          Audio library
-        </h1>
+    <div className="min-h-screen bg-[#0D1117] text-slate-200">
+      {/* Matches dashboard.tsx: without it /audio has no nav chrome at all —
+          reachable only by typing the URL and escapable only via browser back. */}
+      <Topbar />
+      <main className="px-4 py-6">
+        <div className="mx-auto max-w-4xl">
+          <h1 className="mb-4 font-sans text-sm font-bold uppercase tracking-widest text-blue-400">
+            Audio library
+          </h1>
 
-        <AudioUploadDropzone onUploaded={invalidateAudio} />
+          <AudioUploadDropzone onUploaded={invalidateAudio} />
 
-        {nowPlaying && playbackSources.length > 0 && (
-          <div className="mt-4 flex items-center gap-3 rounded border border-white/[0.07] bg-white/[0.02] p-3">
-            <span className="min-w-0 flex-1 truncate text-sm text-slate-300">
-              Now playing: {nowPlaying.title}
-            </span>
-            {/* eslint-disable-next-line jsx-a11y/media-has-caption -- this
+          {nowPlaying && playbackSources.length > 0 && (
+            <div className="mt-4 flex items-center gap-3 rounded border border-white/[0.07] bg-white/[0.02] p-3">
+              <span className="min-w-0 flex-1 truncate text-sm text-slate-300">
+                Now playing: {nowPlaying.title}
+              </span>
+              {/* eslint-disable-next-line jsx-a11y/media-has-caption -- this
                 is an ambience/music/one-shot SFX preview, not spoken
                 dialogue; there's no caption track to attach. */}
-            <audio
-              key={nowPlaying.id}
-              controls
-              autoPlay
-              className="h-8 max-w-xs"
-              onEnded={() => setNowPlaying(null)}
-            >
-              {playbackSources.map((s) => (
-                <source key={s.type} src={s.src} type={s.type} />
-              ))}
-            </audio>
-            <button
-              type="button"
-              onClick={() => setNowPlaying(null)}
-              aria-label="Stop preview"
-              className="rounded p-1 text-slate-500 transition-colors hover:text-slate-200"
-            >
-              <X className="h-4 w-4" />
-            </button>
+              <audio
+                key={nowPlaying.id}
+                controls
+                autoPlay
+                className="h-8 max-w-xs"
+                onEnded={() => setNowPlaying(null)}
+              >
+                {playbackSources.map((s) => (
+                  <source key={s.type} src={s.src} type={s.type} />
+                ))}
+              </audio>
+              <button
+                type="button"
+                onClick={() => setNowPlaying(null)}
+                aria-label="Stop preview"
+                className="rounded p-1 text-slate-500 transition-colors hover:text-slate-200"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+
+          <div className="mt-4 rounded border border-white/[0.07]">
+            <AudioLibraryBrowser
+              assets={assets}
+              loading={query.isLoading}
+              filters={filters}
+              onFiltersChange={setFilters}
+              selectable
+              selectedIds={selectedIds}
+              onToggleSelect={handleToggleSelect}
+              onPlay={handlePlay}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+              onRetry={handleRetry}
+              hasMore={query.hasNextPage}
+              loadingMore={query.isFetchingNextPage}
+              onLoadMore={handleLoadMore}
+              actionsSlot={
+                <div>
+                  <AudioBulkTagBar
+                    selectedCount={selectedIds.length}
+                    onApply={(p) => bulk.mutate(p)}
+                    onClear={handleClearSelection}
+                  />
+                  {bulk.isPending && (
+                    <p className="px-3 pb-2 font-sans text-xs text-slate-400">
+                      Applying to {selectedIds.length} asset{selectedIds.length === 1 ? '' : 's'}…
+                    </p>
+                  )}
+                  {bulk.error && (
+                    <p role="alert" className="px-3 pb-2 font-sans text-xs text-red-400">
+                      {errorMessage(bulk.error, 'Failed to apply tags. Please try again.')}
+                    </p>
+                  )}
+                </div>
+              }
+            />
           </div>
-        )}
 
-        <div className="mt-4 rounded border border-white/[0.07]">
-          <AudioLibraryBrowser
-            assets={assets}
-            loading={query.isLoading}
-            filters={filters}
-            onFiltersChange={setFilters}
-            selectable
-            selectedIds={selectedIds}
-            onToggleSelect={handleToggleSelect}
-            onPlay={handlePlay}
-            onEdit={handleEdit}
-            onDelete={handleDelete}
-            actionsSlot={
-              <div>
-                <AudioBulkTagBar
-                  selectedCount={selectedIds.length}
-                  onApply={(p) => bulk.mutate(p)}
-                  onClear={handleClearSelection}
-                />
-                {bulk.isPending && (
-                  <p className="px-3 pb-2 font-sans text-xs text-slate-400">
-                    Applying to {selectedIds.length} asset{selectedIds.length === 1 ? '' : 's'}…
-                  </p>
-                )}
-                {bulk.error && (
-                  <p role="alert" className="px-3 pb-2 font-sans text-xs text-red-400">
-                    {errorMessage(bulk.error, 'Failed to apply tags. Please try again.')}
-                  </p>
-                )}
-              </div>
-            }
-          />
+          {editingAsset && (
+            <AudioAssetDetail
+              asset={editingAsset}
+              onSave={(payload: AudioAssetDetailPayload) =>
+                update.mutate({ id: editingAsset.id, ...payload })
+              }
+              onClose={() => {
+                update.reset();
+                setEditingAssetId(null);
+              }}
+              saving={update.isPending}
+              error={update.error ? errorMessage(update.error, 'Failed to save changes.') : null}
+            />
+          )}
+
+          {pendingDelete && (
+            <ConfirmDialog
+              title="Delete audio asset"
+              message={`Delete "${pendingDelete.title}"? This removes the file from storage and cannot be undone.`}
+              confirmLabel="Delete"
+              danger
+              isLoading={deleteMutation.isPending}
+              error={deleteError}
+              onConfirm={confirmDelete}
+              onCancel={cancelDelete}
+            />
+          )}
+
+          {retry.error && (
+            <p role="alert" className="mt-3 font-sans text-xs text-red-400">
+              {errorMessage(retry.error, 'Failed to retry processing. Please try again.')}
+            </p>
+          )}
         </div>
-
-        {editingAsset && (
-          <AudioAssetDetail
-            asset={editingAsset}
-            onSave={(payload: AudioAssetDetailPayload) =>
-              update.mutate({ id: editingAsset.id, ...payload })
-            }
-            onClose={() => {
-              update.reset();
-              setEditingAssetId(null);
-            }}
-            saving={update.isPending}
-            error={update.error ? errorMessage(update.error, 'Failed to save changes.') : null}
-          />
-        )}
-
-        {pendingDelete && (
-          <ConfirmDialog
-            title="Delete audio asset"
-            message={`Delete "${pendingDelete.title}"? This removes the file from storage and cannot be undone.`}
-            confirmLabel="Delete"
-            danger
-            isLoading={deleteMutation.isPending}
-            error={deleteError}
-            onConfirm={confirmDelete}
-            onCancel={cancelDelete}
-          />
-        )}
-      </div>
-    </main>
+      </main>
+    </div>
   );
 }

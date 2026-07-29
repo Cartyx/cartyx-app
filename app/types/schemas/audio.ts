@@ -57,3 +57,5 @@ export const bulkTagAudioAssetsSchema = z.object({
 });
 
 export const deleteAudioAssetSchema = z.object({ id: z.string().min(1) });
+
+export const retryAudioAssetSchema = z.object({ id: z.string().min(1) });

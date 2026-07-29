@@ -107,6 +107,33 @@ function SelectableExample(args: React.ComponentProps<typeof AudioLibraryBrowser
   );
 }
 
+/**
+ * Paging is server-side, so the list is a page and not the library. Without a
+ * "Load more" control a GM with 60 assets silently never sees 10 of them.
+ */
+export const WithMorePages: Story = {
+  render: (args) => <Controlled {...args} />,
+  args: {
+    assets,
+    filters: {},
+    onFiltersChange: () => {},
+    hasMore: true,
+    onLoadMore: () => {},
+  },
+};
+
+export const LoadingMorePages: Story = {
+  render: (args) => <Controlled {...args} />,
+  args: {
+    assets,
+    filters: {},
+    onFiltersChange: () => {},
+    hasMore: true,
+    loadingMore: true,
+    onLoadMore: () => {},
+  },
+};
+
 export const SelectableWithActionsSlot: Story = {
   render: (args) => <SelectableExample {...args} />,
   args: { assets, filters: {}, onFiltersChange: () => {}, onDelete: () => {} },

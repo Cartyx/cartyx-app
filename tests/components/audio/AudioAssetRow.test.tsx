@@ -87,6 +87,29 @@ describe('AudioAssetRow', () => {
     expect(screen.getByText(/bad codec/i)).toBeInTheDocument();
   });
 
+  describe('retry', () => {
+    it('offers Retry on a failed asset and calls back with that asset', async () => {
+      const onRetry = vi.fn();
+      const failed = { ...asset, status: 'failed' as const, lastError: 'bad codec' };
+      renderRow(<AudioAssetRow asset={failed} onRetry={onRetry} />);
+
+      // Without this the only recovery from one transient transcode failure is
+      // delete-and-re-upload — for a 50-file bulk import, the whole folder.
+      await userEvent.click(screen.getByRole('button', { name: 'Retry Storm' }));
+      expect(onRetry).toHaveBeenCalledWith(failed);
+    });
+
+    it.each(['ready', 'pending', 'processing', 'uploading'] as const)(
+      'does not offer Retry when status is %s',
+      (status) => {
+        renderRow(<AudioAssetRow asset={{ ...asset, status }} onRetry={vi.fn()} />);
+        // Retrying anything but a failed row is meaningless, and the server fn
+        // is scoped to `failed` — offering the button would just error.
+        expect(screen.queryByRole('button', { name: /^Retry/ })).not.toBeInTheDocument();
+      }
+    );
+  });
+
   it('falls back to a generic message when a failed asset has no lastError', () => {
     renderRow(<AudioAssetRow asset={{ ...asset, status: 'failed', lastError: null }} />);
     expect(screen.getByText(/fail/i)).toBeInTheDocument();

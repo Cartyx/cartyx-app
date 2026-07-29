@@ -199,6 +199,49 @@ describe('bulkTagAudioAssets', () => {
   });
 });
 
+describe('retryAudioAsset', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('requeues a failed asset and resets the entire queue state', async () => {
+    mockUpdateResult({
+      _id: 'a1',
+      ownerId: 'u1',
+      status: 'pending',
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    });
+    const { retryAudioAsset } = await import('~/server/functions/audio');
+    const res = await retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' });
+
+    const [filter, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0] as unknown as [
+      Record<string, unknown>,
+      { $set: Record<string, unknown> },
+    ];
+    // Scoped to `failed`: this must never be usable to yank a `ready` asset
+    // back through the worker.
+    expect(filter).toEqual({ _id: 'a1', ownerId: 'u1', status: 'failed' });
+    expect(update.$set.status).toBe('pending');
+    // The row exhausted its budget — a retry that re-failed at the cap would be
+    // no retry at all.
+    expect(update.$set.attempts).toBe(0);
+    expect(update.$set.lastError).toBeNull();
+    // Cleared so the worker's claim query (which gates on nextAttemptAt) can
+    // pick it up on the very next pass instead of waiting out a stale backoff.
+    expect(update.$set.nextAttemptAt).toBeNull();
+    expect(update.$set.claimedAt).toBeNull();
+    expect(update.$set.claimedBy).toBeNull();
+    expect(res.status).toBe('pending');
+  });
+
+  it('refuses an asset that is not failed (or belongs to another owner)', async () => {
+    mockUpdateResult(null);
+    const { retryAudioAsset } = await import('~/server/functions/audio');
+    await expect(retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' })).rejects.toThrow(
+      /not found or not in a failed state/i
+    );
+  });
+});
+
 describe('deleteAudioAsset', () => {
   beforeEach(() => vi.clearAllMocks());
 
