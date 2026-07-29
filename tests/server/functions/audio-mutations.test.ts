@@ -21,6 +21,7 @@ vi.mock('~/server/db/models/AudioAsset', () => ({
 }));
 
 import { AudioAsset } from '~/server/db/models/AudioAsset';
+import { serverCaptureException } from '~/server/utils/telemetry';
 
 /**
  * `updateAudioAsset` chains `.lean()` off `findOneAndUpdate(...)` (returning a
@@ -249,28 +250,42 @@ describe('deleteAudioAsset', () => {
     expect(keys).toEqual(['opus-key', 'src-key']);
   });
 
-  it('does not delete the row if an R2 delete fails partway through the loop', async () => {
+  it('still deletes the row (and the remaining objects) when an R2 delete fails', async () => {
     vi.mocked(AudioAsset.findOne).mockResolvedValue({
       _id: 'a1',
       ownerId: 'u1',
       sourceKey: 'src-key',
       renditions: { opus: { key: 'opus-key' }, aac: { key: 'aac-key' } },
     } as never);
+    vi.mocked(AudioAsset.deleteOne).mockResolvedValue({ deletedCount: 1 } as never);
     send
       .mockResolvedValueOnce(undefined) // sourceKey succeeds
-      .mockRejectedValueOnce(new Error('R2 unavailable')); // opus-key fails, loop aborts
+      .mockRejectedValueOnce(new Error('R2 unavailable')) // opus-key fails
+      .mockResolvedValueOnce(undefined); // aac-key must still be attempted
 
     const { deleteAudioAsset } = await import('~/server/functions/audio');
-    await expect(deleteAudioAsset({ data: { id: 'a1' }, userId: 'u1' })).rejects.toThrow(
-      /R2 unavailable/
-    );
+    const res = await deleteAudioAsset({ data: { id: 'a1' }, userId: 'u1' });
 
-    // Only the two attempted sends happened (source succeeded, opus rejected, aac
-    // never reached) — and critically, the row must never be deleted when R2
-    // cleanup didn't finish, or a later refactor that reordered delete-row-first
-    // could orphan objects with nothing in the DB pointing at them.
-    expect(send).toHaveBeenCalledTimes(2);
-    expect(AudioAsset.deleteOne).not.toHaveBeenCalled();
+    // R2 deletion is best-effort: one failing object must neither abort the
+    // remaining deletes nor reject the mutation. Without this the CI E2E job —
+    // which runs with deliberately fake R2 credentials, so every
+    // DeleteObjectCommand dies on the TLS handshake — can never delete an
+    // asset at all, and the confirm dialog hangs open forever.
+    expect(res).toEqual({ deleted: true });
+    expect(send).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(AudioAsset.deleteOne).mock.calls[0][0]).toEqual({ _id: 'a1', ownerId: 'u1' });
+
+    // The failure is still reported — a systematically failing R2 delete must be
+    // visible, not silently swallowed into storage cost.
+    const reported = vi
+      .mocked(serverCaptureException)
+      .mock.calls.find(
+        ([, , props]) =>
+          (props as Record<string, unknown> | undefined)?.action === 'deleteAudioAsset.r2Object'
+      );
+    expect(reported).toBeDefined();
+    expect((reported?.[0] as Error).message).toMatch(/R2 unavailable/);
+    expect(reported?.[2]).toMatchObject({ key: 'opus-key', assetId: 'a1' });
   });
 
   it("does not touch R2 or delete the row for another owner's asset", async () => {

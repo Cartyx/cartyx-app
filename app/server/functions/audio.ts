@@ -345,11 +345,26 @@ export async function deleteAudioAsset({
       (k): k is string => Boolean(k)
     );
 
-    // Delete every R2 object before the row: if the row went first and this loop
-    // then failed partway, the remaining objects would be orphaned with nothing
-    // in the DB pointing at them.
+    // R2 deletion is BEST-EFFORT: a failing object delete must not block the row
+    // delete. The user asked for this asset to be gone, and leaving the row
+    // behind because a bucket was briefly unreachable produces a library entry
+    // the UI still shows, still polls, and still offers Delete for — a worse
+    // outcome than a stranded object. Task 8's orphan scanner
+    // (`collectInUseKeys` in `~/server/functions/cleanup.ts`) now collects audio
+    // `sourceKey`/rendition keys, so anything left behind here is visible to
+    // that scan and reclaimable; it is the backstop that makes this ordering
+    // safe. Each failure is still reported so a systematically failing R2 delete
+    // shows up in GlitchTip rather than silently accruing storage cost.
     for (const Key of keys) {
-      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key }));
+      try {
+        await client.send(new DeleteObjectCommand({ Bucket: bucket, Key }));
+      } catch (e) {
+        void serverCaptureException(e, userId, {
+          action: 'deleteAudioAsset.r2Object',
+          assetId: data.id,
+          key: Key,
+        });
+      }
     }
 
     await AudioAsset.deleteOne({ _id: data.id, ownerId: userId });
