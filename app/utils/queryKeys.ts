@@ -224,6 +224,11 @@ export const queryKeys = {
       ['events', 'linked', campaignId, kind, id] as const,
     epic: (campaignId: string) => ['events', 'epic', campaignId] as const,
   },
+  audio: {
+    all: ['audio'] as const,
+    list: (filters: Record<string, unknown>) => ['audio', 'list', filters] as const,
+    detail: (id: string) => ['audio', 'detail', id] as const,
+  },
   monsters: {
     all: ['monsters'] as const,
     list: (
