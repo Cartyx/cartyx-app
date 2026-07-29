@@ -218,8 +218,14 @@ describe('retryAudioAsset', () => {
       { $set: Record<string, unknown> },
     ];
     // Scoped to `failed`: this must never be usable to yank a `ready` asset
-    // back through the worker.
-    expect(filter).toEqual({ _id: 'a1', ownerId: 'u1', status: 'failed' });
+    // back through the worker. And to `sourceBytes != null`: see the
+    // unconfirmed-upload test below.
+    expect(filter).toEqual({
+      _id: 'a1',
+      ownerId: 'u1',
+      status: 'failed',
+      sourceBytes: { $ne: null },
+    });
     expect(update.$set.status).toBe('pending');
     // The row exhausted its budget — a retry that re-failed at the cap would be
     // no retry at all.
@@ -237,8 +243,39 @@ describe('retryAudioAsset', () => {
     mockUpdateResult(null);
     const { retryAudioAsset } = await import('~/server/functions/audio');
     await expect(retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' })).rejects.toThrow(
-      /not found or not in a failed state/i
+      /cannot be retried/i
     );
+  });
+
+  /**
+   * A `failed` row with null `sourceBytes` never passed `confirmAudioUpload`'s
+   * HeadObject — the only real enforcement of AUDIO_MAX_BYTES in the system,
+   * since a presigned PUT cannot constrain Content-Length. Two paths produce
+   * one: the worker's upload reaper aging out an abandoned `uploading` row, and
+   * a confirm that rejected the file (whose object confirm already deleted).
+   *
+   * Requeueing either hands the worker an object nobody has measured, which it
+   * buffers whole into memory in a pod capped at 768Mi. Declare `bytes: 1MB`,
+   * PUT 1GB, never confirm, wait out the reaper, click Retry → OOM → requeue →
+   * OOM ×3 → failed → Retry again, indefinitely.
+   *
+   * The DB filter is what closes this; asserting only on the mocked return
+   * value would pass no matter what the filter said, so this pins the clause
+   * itself.
+   */
+  it('refuses a failed row whose upload never passed the confirm size check', async () => {
+    mockUpdateResult(null);
+    const { retryAudioAsset } = await import('~/server/functions/audio');
+    await expect(retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' })).rejects.toThrow(
+      /cannot be retried/i
+    );
+
+    const [filter] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0] as unknown as [
+      Record<string, unknown>,
+    ];
+    // `sourceBytes` is written from confirm's HeadObject result, so `!= null`
+    // is exactly "this object was measured against the cap".
+    expect(filter.sourceBytes).toEqual({ $ne: null });
   });
 });
 

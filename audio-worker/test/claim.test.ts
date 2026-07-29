@@ -17,8 +17,15 @@ describe('claimNext', () => {
     const doc = await claimNext(model, 'worker-1');
     expect(doc).toEqual({ _id: 'a1' });
 
+    // Exact shape, not just `filter.status`: a loosened assertion would let a
+    // future extra clause silently narrow (or widen) what gets claimed. The
+    // `$or` dates can't be literal, so they're matched by type — everything
+    // else is pinned, including that there are no other keys.
     const [filter, update, opts] = findOneAndUpdate.mock.calls[0];
-    expect(filter.status).toBe('pending');
+    expect(filter).toEqual({
+      status: 'pending',
+      $or: [{ nextAttemptAt: null }, { nextAttemptAt: { $lte: expect.any(Date) } }],
+    });
     expect(update.$set.status).toBe('processing');
     expect(update.$set.claimedBy).toBe('worker-1');
     expect(update.$inc).toEqual({ attempts: 1 });
@@ -118,6 +125,22 @@ describe('reapStale', () => {
     const secondCall = updateMany.mock.calls[1];
     expect(secondCall[0].attempts.$gte).toBe(3);
     expect(secondCall[1].$set.status).toBe('failed');
+  });
+
+  it('bumps updatedAt on every clause — these are real status transitions', async () => {
+    const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 1 });
+    const model = { updateMany } as never;
+    await reapStale(model, 600_000, UPLOAD_STALE_MS);
+
+    // The UI reads updatedAt as "when did this row last change". Reaped rows
+    // are by definition hours stale by the time this runs, so omitting it makes
+    // them claim to have last changed when they were created — most misleading
+    // for exactly the rows this function produces. markFailed and
+    // requeueForRetry (process.ts) already do this.
+    expect(updateMany).toHaveBeenCalledTimes(3);
+    for (const [, update] of updateMany.mock.calls) {
+      expect(update.$set.updatedAt).toBeInstanceOf(Date);
+    }
   });
 
   it('fails rows abandoned in `uploading` past the upload timeout', async () => {

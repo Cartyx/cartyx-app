@@ -355,9 +355,26 @@ export async function bulkTagAudioAssets({
  * row exhausted its budget, and a retry that immediately re-failed at the cap
  * would be no retry at all), `nextAttemptAt` is cleared so the worker can claim
  * it on the next pass, and the claim fields are cleared so it can't look
- * in-flight. Scoped to `status: 'failed'` so this can never be used to yank a
- * `ready` asset back through the worker — that is the abuse
- * `confirmAudioUpload`'s own precondition closes.
+ * in-flight.
+ *
+ * The filter carries TWO preconditions, and both are load-bearing:
+ *
+ * - `status: 'failed'` — this can never be used to yank a `ready` asset back
+ *   through the worker; that is the same abuse `confirmAudioUpload`'s own
+ *   precondition closes.
+ * - `sourceBytes: { $ne: null }` — the row must have **passed confirm**.
+ *   `confirmAudioUpload`'s `HeadObject` is the only real enforcement of
+ *   `AUDIO_MAX_BYTES` in the system (a presigned PUT cannot constrain
+ *   Content-Length; the dropzone's check is a courtesy), and `sourceBytes` is
+ *   written from that `HeadObject` result — so a null `sourceBytes` means
+ *   nobody has ever measured this object. Two kinds of row are in that state:
+ *   one the worker's `reapStale` aged out of `uploading`, and one confirm
+ *   rejected (whose R2 object confirm already deleted, making a requeue
+ *   pointless anyway). Without this clause, declaring `bytes: 1MB`, PUTting a
+ *   1 GB body, never confirming, waiting out the upload reaper and clicking
+ *   Retry hands the worker an unmeasured object to buffer whole into memory
+ *   (`transformToByteArray`) in a pod capped at 768Mi — OOM, requeue, OOM,
+ *   fail, Retry, repeat, on a single-node cluster.
  */
 export async function retryAudioAsset({
   data,
@@ -369,7 +386,7 @@ export async function retryAudioAsset({
   try {
     await ensureDb();
     const doc = await AudioAsset.findOneAndUpdate(
-      { _id: data.id, ownerId: userId, status: 'failed' },
+      { _id: data.id, ownerId: userId, status: 'failed', sourceBytes: { $ne: null } },
       {
         $set: {
           status: 'pending',
@@ -384,7 +401,11 @@ export async function retryAudioAsset({
       { new: true }
       // `.lean()` for the same reason as updateAudioAsset — see that comment.
     ).lean();
-    if (!doc) throw new Error('Audio asset not found or not in a failed state');
+    if (!doc) {
+      throw new Error(
+        'Audio asset cannot be retried (not found, not failed, or its upload never completed)'
+      );
+    }
     serverCaptureEvent(userId, 'audio_asset_retried', { assetId: data.id });
     return serializeAudioAsset(doc as unknown as AudioDoc);
   } catch (e) {

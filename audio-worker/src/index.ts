@@ -2,15 +2,15 @@ import mongoose from 'mongoose';
 import { randomUUID } from 'node:crypto';
 import { logger } from './logger.js';
 import { claimNext, reapStale, type ClaimModel } from './claim.js';
+import { readWorkerTimings } from './config.js';
 import { processAsset, type Model } from './process.js';
 
 const WORKER_ID = `worker-${randomUUID().slice(0, 8)}`;
-const POLL_MS = Number(process.env.POLL_INTERVAL_MS ?? 5000);
-const STALE_MS = Number(process.env.CLAIM_TIMEOUT_MS ?? 600_000);
-// Presigned PUT URLs expire after 300s (app/server/functions/uploads.ts), so a
-// row still `uploading` 15 minutes after creation can never be confirmed —
-// nothing will ever move it again. See reapStale's doc comment.
-const UPLOAD_STALE_MS = Number(process.env.UPLOAD_TIMEOUT_MS ?? 900_000);
+// Parsed in config.ts, not inline here: this module calls main() at import
+// time, so anything read inline is untestable — and the naive
+// `Number(process.env.X ?? default)` silently yields 0 for the empty string
+// Helm renders for a missing values.yaml key. See envMs.
+const { pollMs: POLL_MS, staleMs: STALE_MS, uploadStaleMs: UPLOAD_STALE_MS } = readWorkerTimings();
 
 let running = true;
 process.on('SIGTERM', () => {

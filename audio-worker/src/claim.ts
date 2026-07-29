@@ -1,3 +1,5 @@
+import { envMs } from './config.js';
+
 export const MAX_ATTEMPTS = 3;
 
 /** Default base retry delay: the first requeue waits this long, each further attempt doubles it. */
@@ -5,11 +7,6 @@ export const DEFAULT_RETRY_BASE_MS = 30_000;
 
 /** Default upper bound on a single backoff step, so a misconfigured base can't park a row for hours. */
 export const DEFAULT_RETRY_MAX_MS = 300_000;
-
-function envMs(name: string, fallback: number): number {
-  const raw = Number(process.env[name]);
-  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
-}
 
 /**
  * Exponential backoff for the Nth attempt. `attempts` is the value AFTER
@@ -96,9 +93,23 @@ export async function reapStale(
   const now = Date.now();
   const cutoff = new Date(now - timeoutMs);
 
+  // Every clause bumps `updatedAt`: these are real status transitions, and the
+  // UI reads that timestamp as "when did this row last change". Without it a
+  // reaped row claims to have last changed whenever it was created — which is
+  // most misleading for exactly the rows the reaper produces, since those are
+  // by definition hours stale by the time it touches them. `markFailed` and
+  // `requeueForRetry` in process.ts already do this.
   const requeued = await model.updateMany(
     { status: 'processing', claimedAt: { $lt: cutoff }, attempts: { $lt: MAX_ATTEMPTS } },
-    { $set: { status: 'pending', claimedAt: null, claimedBy: null, nextAttemptAt: null } }
+    {
+      $set: {
+        status: 'pending',
+        claimedAt: null,
+        claimedBy: null,
+        nextAttemptAt: null,
+        updatedAt: new Date(),
+      },
+    }
   );
 
   await model.updateMany(
@@ -109,6 +120,7 @@ export async function reapStale(
         lastError: 'Processing timed out',
         claimedAt: null,
         claimedBy: null,
+        updatedAt: new Date(),
       },
     }
   );
@@ -121,6 +133,7 @@ export async function reapStale(
         lastError: 'Upload never completed',
         claimedAt: null,
         claimedBy: null,
+        updatedAt: new Date(),
       },
     }
   );
