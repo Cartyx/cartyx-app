@@ -264,11 +264,19 @@ export async function updateAudioAsset({
     if (data.intensity !== undefined) set.intensity = data.intensity;
     if (data.tags !== undefined) set.tags = normalizeTags(data.tags);
 
+    // `.lean()` is required, not just a perf nicety: without it `doc` is a hydrated
+    // Mongoose Document whose array/subdocument fields (`environment`, `tags`,
+    // `renditions`, ...) are Mongoose-native (DocumentArray/EmbeddedDocument)
+    // wrapper types, not plain arrays/objects — `serializeAudioAsset` copies them
+    // by reference into the fields it returns, and TanStack Start's server-fn
+    // response serializer can't serialize those wrapper types ("The value [object
+    // Object] of type \"object\" cannot be parsed/serialized", a real HTTP 500 this
+    // caught end-to-end). `listAudioAssets` already does this correctly below.
     const doc = await AudioAsset.findOneAndUpdate(
       { _id: data.id, ownerId: userId },
       { $set: set },
       { new: true }
-    );
+    ).lean();
     if (!doc) throw new Error('Audio asset not found');
     return serializeAudioAsset(doc as unknown as AudioDoc);
   } catch (e) {

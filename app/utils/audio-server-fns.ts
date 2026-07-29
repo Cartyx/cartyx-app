@@ -31,11 +31,28 @@ import {
 // browser. This mirrors the existing pattern in ~/utils/uploadToR2.ts and
 // ~/server/functions/rpc.ts, which dynamically import their server-only
 // implementation modules the same way.
+//
+// `SessionUser.id` is the OAuth provider's subject id (see
+// `toSessionUser`/`upsertUser` in `~/server/utils/oauth.ts`), not this app's
+// Mongo `_id` — but `AudioAsset.ownerId` is a Mongoose `ObjectId` `ref:
+// 'User'` (`~/server/db/models/AudioAsset.ts`), same as every other
+// per-user-scoped collection (e.g. `Campaign.gameMasterId`). Every other
+// caller that scopes a query this way resolves the real id first via
+// `User.findOne({ providerId: user.id })` (see `~/server/functions/
+// campaigns.ts`); skipping that step here and handing `AudioAsset.find`/
+// `.create` the provider id string instead throws a Mongoose `CastError` on
+// every call, for every user — caught by this task's E2E suite hitting a
+// genuinely seeded, real `ownerId`.
 async function requireUserId(): Promise<string> {
   const { getSession } = await import('~/server/session');
-  const user = await getSession();
-  if (!user) throw new Error('Not authenticated');
-  return user.id;
+  const { connectDB } = await import('~/server/db/connection');
+  const { User } = await import('~/server/db/models/User');
+  const session = await getSession();
+  if (!session) throw new Error('Not authenticated');
+  await connectDB();
+  const dbUser = await User.findOne({ providerId: session.id }).select('_id').lean();
+  if (!dbUser) throw new Error('User not found');
+  return String(dbUser._id);
 }
 
 export const createAudioUploadFn = createServerFn({ method: 'POST' })

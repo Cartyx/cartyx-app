@@ -26,6 +26,21 @@ vi.mock('~/server/session', () => ({
   getSession: vi.fn(),
 }));
 
+// `requireUserId()` resolves `SessionUser.id` (the OAuth provider's subject
+// id) to this app's Mongo `_id` via `User.findOne({ providerId })` before
+// handing it to `~/server/functions/audio` — `AudioAsset.ownerId` is a
+// Mongoose `ObjectId`, and a provider id like `'user-1'`/`'google_...'`
+// doesn't cast to one. Per this repo's "unit tests mock mongoose" convention
+// (no in-memory Mongo), `User.findOne` is mocked per-test rather than hit
+// for real.
+vi.mock('~/server/db/connection', () => ({
+  connectDB: vi.fn(),
+}));
+
+vi.mock('~/server/db/models/User', () => ({
+  User: { findOne: vi.fn() },
+}));
+
 vi.mock('~/server/functions/audio', () => ({
   createAudioUpload: vi.fn(),
   confirmAudioUpload: vi.fn(),
@@ -36,6 +51,7 @@ vi.mock('~/server/functions/audio', () => ({
 }));
 
 import { getSession } from '~/server/session';
+import { User } from '~/server/db/models/User';
 import {
   createAudioUpload,
   confirmAudioUpload,
@@ -62,6 +78,16 @@ const SESSION_USER = {
   role: 'gm',
   tokenIssuedAt: 0,
 };
+
+/** The resolved Mongo `_id` string `requireUserId()` should hand downstream — deliberately distinct from `SESSION_USER.id` so a test that accidentally asserts on the provider id (the bug this fix corrects) fails loudly. */
+const DB_USER_ID = 'mongo-user-1';
+
+/** Stubs `User.findOne(...).select(...).lean()` — mirrors requireUserId's chain. */
+function mockDbUser(id: string | null) {
+  vi.mocked(User.findOne).mockReturnValue({
+    select: () => ({ lean: () => Promise.resolve(id ? { _id: id } : null) }),
+  } as unknown as ReturnType<typeof User.findOne>);
+}
 
 const FAKE_ASSET = {
   id: 'a1',
@@ -103,8 +129,9 @@ describe('createAudioUploadFn', () => {
     expect(createAudioUpload).not.toHaveBeenCalled();
   });
 
-  it('calls createAudioUpload with the data and resolved userId once authenticated', async () => {
+  it("calls createAudioUpload with the data and the resolved Mongo userId (not the session's provider id) once authenticated", async () => {
     vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(DB_USER_ID);
     vi.mocked(createAudioUpload).mockResolvedValue({
       assetId: 'a1',
       uploadUrl: 'https://put',
@@ -112,8 +139,15 @@ describe('createAudioUploadFn', () => {
     });
     const r = await createAudioUploadFn({ data });
     expect(createAudioUpload).toHaveBeenCalledTimes(1);
-    expect(createAudioUpload).toHaveBeenCalledWith({ data, userId: 'user-1' });
+    expect(createAudioUpload).toHaveBeenCalledWith({ data, userId: DB_USER_ID });
     expect(r).toEqual({ assetId: 'a1', uploadUrl: 'https://put', key: 'k' });
+  });
+
+  it('rejects with "User not found" and never calls createAudioUpload when the session has no matching User doc', async () => {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(null);
+    await expect(createAudioUploadFn({ data })).rejects.toThrow('User not found');
+    expect(createAudioUpload).not.toHaveBeenCalled();
   });
 });
 
@@ -128,10 +162,11 @@ describe('confirmAudioUploadFn', () => {
 
   it('calls confirmAudioUpload with the data and resolved userId once authenticated', async () => {
     vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(DB_USER_ID);
     vi.mocked(confirmAudioUpload).mockResolvedValue({ assetId: 'a1', status: 'pending' });
     const r = await confirmAudioUploadFn({ data });
     expect(confirmAudioUpload).toHaveBeenCalledTimes(1);
-    expect(confirmAudioUpload).toHaveBeenCalledWith({ data, userId: 'user-1' });
+    expect(confirmAudioUpload).toHaveBeenCalledWith({ data, userId: DB_USER_ID });
     expect(r).toEqual({ assetId: 'a1', status: 'pending' });
   });
 });
@@ -147,10 +182,11 @@ describe('listAudioAssetsFn', () => {
 
   it('calls listAudioAssets with the data and resolved userId once authenticated', async () => {
     vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(DB_USER_ID);
     vi.mocked(listAudioAssets).mockResolvedValue({ items: [FAKE_ASSET], nextCursor: null });
     const r = await listAudioAssetsFn({ data });
     expect(listAudioAssets).toHaveBeenCalledTimes(1);
-    expect(listAudioAssets).toHaveBeenCalledWith({ data, userId: 'user-1' });
+    expect(listAudioAssets).toHaveBeenCalledWith({ data, userId: DB_USER_ID });
     expect(r).toEqual({ items: [FAKE_ASSET], nextCursor: null });
   });
 });
@@ -166,10 +202,11 @@ describe('updateAudioAssetFn', () => {
 
   it('calls updateAudioAsset with the data and resolved userId once authenticated', async () => {
     vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(DB_USER_ID);
     vi.mocked(updateAudioAsset).mockResolvedValue(FAKE_ASSET);
     const r = await updateAudioAssetFn({ data });
     expect(updateAudioAsset).toHaveBeenCalledTimes(1);
-    expect(updateAudioAsset).toHaveBeenCalledWith({ data, userId: 'user-1' });
+    expect(updateAudioAsset).toHaveBeenCalledWith({ data, userId: DB_USER_ID });
     expect(r).toEqual(FAKE_ASSET);
   });
 });
@@ -185,10 +222,11 @@ describe('bulkTagAudioAssetsFn', () => {
 
   it('calls bulkTagAudioAssets with the data and resolved userId once authenticated', async () => {
     vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(DB_USER_ID);
     vi.mocked(bulkTagAudioAssets).mockResolvedValue({ modified: 2 });
     const r = await bulkTagAudioAssetsFn({ data });
     expect(bulkTagAudioAssets).toHaveBeenCalledTimes(1);
-    expect(bulkTagAudioAssets).toHaveBeenCalledWith({ data, userId: 'user-1' });
+    expect(bulkTagAudioAssets).toHaveBeenCalledWith({ data, userId: DB_USER_ID });
     expect(r).toEqual({ modified: 2 });
   });
 });
@@ -204,10 +242,11 @@ describe('deleteAudioAssetFn', () => {
 
   it('calls deleteAudioAsset with the data and resolved userId once authenticated', async () => {
     vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(DB_USER_ID);
     vi.mocked(deleteAudioAsset).mockResolvedValue({ deleted: true });
     const r = await deleteAudioAssetFn({ data });
     expect(deleteAudioAsset).toHaveBeenCalledTimes(1);
-    expect(deleteAudioAsset).toHaveBeenCalledWith({ data, userId: 'user-1' });
+    expect(deleteAudioAsset).toHaveBeenCalledWith({ data, userId: DB_USER_ID });
     expect(r).toEqual({ deleted: true });
   });
 });

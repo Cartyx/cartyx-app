@@ -22,16 +22,29 @@ vi.mock('~/server/db/models/AudioAsset', () => ({
 
 import { AudioAsset } from '~/server/db/models/AudioAsset';
 
+/**
+ * `updateAudioAsset` chains `.lean()` off `findOneAndUpdate(...)` (returning a
+ * plain object, not a hydrated Mongoose Document — required so its
+ * array/subdocument fields serialize over the server-fn boundary; see that
+ * function's doc comment). Mirrors the shape of a real Mongoose Query here so
+ * the mock stays a faithful stand-in for `.findOneAndUpdate(...).lean()`.
+ */
+function mockUpdateResult(doc: Record<string, unknown> | null) {
+  vi.mocked(AudioAsset.findOneAndUpdate).mockReturnValue({
+    lean: () => Promise.resolve(doc),
+  } as never);
+}
+
 describe('updateAudioAsset', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('scopes the update to the owner', async () => {
-    vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+    mockUpdateResult({
       _id: 'a1',
       ownerId: 'u1',
       createdAt: new Date(0),
       updatedAt: new Date(0),
-    } as never);
+    });
     const { updateAudioAsset } = await import('~/server/functions/audio');
     await updateAudioAsset({ data: { id: 'a1', title: 'New' }, userId: 'u1' });
     expect(vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0][0]).toEqual({
@@ -41,12 +54,12 @@ describe('updateAudioAsset', () => {
   });
 
   it('sets only the fields actually provided, leaving the rest untouched', async () => {
-    vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+    mockUpdateResult({
       _id: 'a1',
       ownerId: 'u1',
       createdAt: new Date(0),
       updatedAt: new Date(0),
-    } as never);
+    });
     const { updateAudioAsset } = await import('~/server/functions/audio');
     await updateAudioAsset({ data: { id: 'a1', title: 'New Title' }, userId: 'u1' });
     const [, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0] as [
@@ -62,12 +75,12 @@ describe('updateAudioAsset', () => {
   });
 
   it('normalizes tags when tags are provided', async () => {
-    vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+    mockUpdateResult({
       _id: 'a1',
       ownerId: 'u1',
       createdAt: new Date(0),
       updatedAt: new Date(0),
-    } as never);
+    });
     const { updateAudioAsset } = await import('~/server/functions/audio');
     await updateAudioAsset({
       data: { id: 'a1', tags: [' Storm ', '#storm', 'RAIN'] },
@@ -81,7 +94,7 @@ describe('updateAudioAsset', () => {
   });
 
   it('throws when the asset does not exist (or belongs to another owner)', async () => {
-    vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue(null as never);
+    mockUpdateResult(null);
     const { updateAudioAsset } = await import('~/server/functions/audio');
     await expect(
       updateAudioAsset({ data: { id: 'a1', title: 'X' }, userId: 'u2' })

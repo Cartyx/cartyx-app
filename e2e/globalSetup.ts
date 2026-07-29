@@ -8,13 +8,18 @@
  * 4. Idempotently ensures lightbox prerequisites exist: the seeded location has
  *    at least one image and a tabletop screen exists with that location opened
  *    as a window. Lets the lightbox spec navigate straight to the Tabletop tab.
- * 5. Writes the cookie to `e2e/.auth/storageState.json` so every test starts authed.
- * 6. Writes campaign/location/screen ids to `e2e/.auth/seed-data.json` for fixtures.
+ * 5. Idempotently upserts the audio-library E2E fixtures (`e2e/fixtures/audio-
+ *    fixtures.ts`) owned by that GM user, so `audio-library.spec.ts` has real
+ *    rows — including `ready` ones — without depending on the transcode
+ *    worker, which does not run in E2E.
+ * 6. Writes the cookie to `e2e/.auth/storageState.json` so every test starts authed.
+ * 7. Writes campaign/location/screen ids to `e2e/.auth/seed-data.json` for fixtures.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SignJWT } from 'jose';
 import mongoose from 'mongoose';
+import { AUDIO_FIXTURE_TITLES } from './fixtures/audio-fixtures';
 
 // Image titled to be stable across runs — the lightbox spec asserts on this alt text.
 const E2E_IMAGE_TITLE = 'E2E Lightbox Fixture';
@@ -23,6 +28,131 @@ const E2E_SCREEN_NAME = 'E2E Test Screen';
 const AUTH_DIR = join(process.cwd(), 'e2e', '.auth');
 const STORAGE_STATE_PATH = join(AUTH_DIR, 'storageState.json');
 const SEED_DATA_PATH = join(AUTH_DIR, 'seed-data.json');
+
+/** A fake but well-formed rendition — enough for `pickPlaybackSources` (app/routes/audio.tsx)
+ *  to treat the asset as playable, without any real transcoded bytes existing in R2. */
+function fakeRendition(sourceKey: string, ext: 'opus' | 'aac') {
+  return {
+    key: `${sourceKey}.${ext}`,
+    url: `https://cdn.example.com/${sourceKey}.${ext}`,
+    bytes: 123_456,
+  };
+}
+
+/** Deterministic 0..1 peak buckets — shape doesn't matter, only that peaks.length > 0 so AudioWaveform renders bars instead of its "no peaks yet" placeholder. */
+function fakePeaks(count = 40): number[] {
+  return Array.from(
+    { length: count },
+    (_, i) => Math.round(((Math.sin(i / 3) + 1) / 2) * 100) / 100
+  );
+}
+
+type AudioFixtureDef = {
+  title: string;
+  kind: 'music' | 'ambience' | 'one-shot';
+  status: 'ready' | 'processing';
+  environment?: string[];
+  mood?: string[];
+  tags?: string[];
+  intensity?: number | null;
+};
+
+/**
+ * Idempotently upserts one `AudioAsset` document per `e2e/fixtures/audio-
+ * fixtures.ts` entry, owned by `ownerId`, matched on a stable `sourceKey`
+ * (not `title` — the edit-modal spec renames its fixture, so title can't be
+ * the natural key or a rename would orphan the original doc from future
+ * upserts). Every mutable field is reset via `$set` on every run so a
+ * previous run's edits/bulk-tags don't leak into the next; `createdAt` is
+ * preserved via `$setOnInsert` so list ordering stays stable across runs.
+ * Talks to `audioassets` via the raw driver (matching this file's existing
+ * location/screen seeding), not the Mongoose model, so globalSetup doesn't
+ * need to import application server code.
+ */
+async function seedAudioFixtures(
+  db: NonNullable<typeof mongoose.connection.db>,
+  ownerId: unknown
+): Promise<void> {
+  const defs: AudioFixtureDef[] = [
+    {
+      title: AUDIO_FIXTURE_TITLES.ambienceReady,
+      kind: 'ambience',
+      status: 'ready',
+      environment: ['forest'],
+      mood: ['calm'],
+      tags: ['storm'],
+      intensity: 3,
+    },
+    {
+      title: AUDIO_FIXTURE_TITLES.musicUntagged,
+      kind: 'music',
+      status: 'ready',
+      environment: [],
+      mood: [],
+      tags: [],
+      intensity: null,
+    },
+    {
+      title: AUDIO_FIXTURE_TITLES.oneShotProcessing,
+      kind: 'one-shot',
+      status: 'processing',
+    },
+    {
+      title: AUDIO_FIXTURE_TITLES.editMe,
+      kind: 'ambience',
+      status: 'ready',
+    },
+    {
+      title: AUDIO_FIXTURE_TITLES.deleteMe,
+      kind: 'one-shot',
+      status: 'ready',
+    },
+  ];
+
+  for (const def of defs) {
+    const sourceKey = `e2e/fixtures/audio/${def.title.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.wav`;
+    const isReady = def.status === 'ready';
+
+    const set: Record<string, unknown> = {
+      ownerId,
+      title: def.title,
+      kind: def.kind,
+      environment: def.environment ?? [],
+      mood: def.mood ?? [],
+      intensity: def.intensity ?? null,
+      tags: def.tags ?? [],
+      sourceKey,
+      sourceBytes: 654_321,
+      status: def.status,
+      attempts: isReady ? 1 : 0,
+      lastError: null,
+      claimedAt: null,
+      claimedBy: null,
+      durationMs: isReady ? 42_000 : null,
+      loudnessLufs: isReady ? -20 : null,
+      sampleRate: isReady ? 48_000 : null,
+      channels: isReady ? 2 : null,
+      peaks: isReady ? fakePeaks() : [],
+      updatedAt: new Date(),
+    };
+    if (isReady) {
+      set.renditions = {
+        opus: fakeRendition(sourceKey, 'opus'),
+        aac: fakeRendition(sourceKey, 'aac'),
+      };
+    } else {
+      set.renditions = {};
+    }
+
+    await db
+      .collection('audioassets')
+      .findOneAndUpdate(
+        { ownerId, sourceKey },
+        { $set: set, $setOnInsert: { createdAt: new Date() } },
+        { upsert: true }
+      );
+  }
+}
 
 export default async function globalSetup(): Promise<void> {
   try {
@@ -171,6 +301,8 @@ export default async function globalSetup(): Promise<void> {
     });
     screenId = inserted.insertedId;
   }
+
+  await seedAudioFixtures(db, user._id);
 
   // Mirror SessionUser shape from app/server/session.ts
   const sessionUser = {
