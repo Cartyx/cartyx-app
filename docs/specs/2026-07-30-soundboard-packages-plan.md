@@ -1015,6 +1015,34 @@ git commit -m "feat(soundboard): package-scoped asset readability for the board"
 
 ---
 
+## Task 22: Create a package, and name a clone
+
+**Added 2026-07-30, found by the E2E.** Task 19 went to drive "create a package" and discovered there is **no create-package UI at all**. `createPackageFn` exists, is wrapped, and is unit-tested — and **nothing in `app/` calls it**. Tasks 13 and 14 built list and edit affordances; neither brief asked for create, so nobody built it.
+
+The consequence is that the design's **first stated goal** — _"author a themed package once and reuse it across every campaign"_ — is unreachable by a real user. The only path to a package is Clone, and system packages do not exist until phase 3, so a fresh GM has nothing to clone. This is the clearest example in the phase of a gap no unit test could see: every layer below the UI works and is tested.
+
+The same spec found a second defect on the only path that _does_ work: **a clone copies its source's `name` verbatim, and there is no rename affordance anywhere**. So a cloned package is indistinguishable from its source in the package list _and_ in the board's package picker — which is the primary authoring path today.
+
+**Files:**
+
+- Modify: `app/components/soundboard/PackageList.tsx` (+ stories), `app/routes/audio_.packages.tsx`
+- Modify: `app/components/soundboard/PackageEditor.tsx` (+ stories), `app/routes/audio_.packages_.$packageId.tsx`
+- Test: extend `tests/components/soundboard/PackageList.test.tsx`, `PackageEditor.test.tsx`, and the route tests
+
+**Interfaces:** consumes `createPackageFn` and `updatePackageFn` — both already exist. **Add no server code.** If you find yourself editing `app/server/`, stop: the gap is entirely in the UI layer.
+
+- [ ] **Create.** A "New package" affordance on `/audio/packages` that calls `createPackageFn` and navigates to the editor. `createPackageSchema` already defines the shape; use it rather than a structural literal.
+- [ ] **Rename.** A name field in the editor, saved through the existing `updatePackageFn` call — Task 15 established that the route sends `items` and `moods` in **one** save; the name goes in the same payload, not a second write path.
+- [ ] **Distinguish a clone at creation.** Decide whether `clonePackage` should suffix the copy (`"Tavern (copy)"`) or whether the rename field alone is sufficient, and say which and why. A suffix is a server change to Task 5's function — if you choose it, that is the one exception to "add no server code", and it needs Task 5's test updated.
+
+**Test hygiene:** the create test must assert the **actual argument** passed to `createPackageFn`, not merely that it was called. The rename test must assert the name reaches the same single `updatePackageFn` call that carries `items`/`moods` — a second, racing write to the same document is the defect Task 15 was warned about and avoided.
+
+```bash
+git commit -m "feat(soundboard): create a package and rename a clone"
+```
+
+---
+
 ## Final gate
 
 - [ ] **Run the whole gate before opening the PR:**
