@@ -87,7 +87,14 @@ Tasks 13 and 14 are the risk: adding a directory `app/routes/audio/` beside the 
 
 **RESOLVED IN TASK 13 (2026-07-30).** This section originally suggested the flat dotted form `app/routes/audio.packages.tsx` as the non-nesting fallback. **That suggestion was wrong** — Task 13 built it, inspected the generated tree, and found `getParentRoute: () => AudioRoute`. A dot is a path separator in TanStack Router's flat convention, so it nests exactly like a directory does.
 
-The correct non-nesting convention is a **trailing underscore on the parent segment**: `app/routes/audio_.packages.tsx`, `app/routes/audio_.packages.$packageId.tsx`. Verified: `AudioRoute` came back a plain childless leaf and `app/routes/audio.tsx` has zero diff. **Task 14 must use `audio_.` too** — repeating the dotted form silently turns the library page into a layout.
+The correct non-nesting convention is a **trailing underscore on the parent segment**. The rule applies at **every** level, which Task 14 then discovered the same way:
+
+| Route          | File                                         |
+| -------------- | -------------------------------------------- |
+| Package list   | `app/routes/audio_.packages.tsx`             |
+| Package editor | `app/routes/audio_.packages_.$packageId.tsx` |
+
+One underscore was not enough for the editor — it stopped nesting under `audio.tsx` but then nested under the _list_ route instead, for exactly the same reason. **Each segment you do not want to nest under needs its own trailing underscore.** Verified in both tasks by building and reading `routeTree.gen.ts`: `AudioRoute` and `AudioPackagesRoute` are both plain childless leaves, and `audio.tsx` has zero diff.
 
 ---
 
