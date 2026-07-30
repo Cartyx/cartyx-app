@@ -150,11 +150,19 @@ export interface BoardPadProps {
  * stable `onPlay`/`onStop`/`onVolumeChange` (`useCallback`, not inline
  * arrows) and a stable `item`/`asset` reference per item — phase 1's
  * `useDeleteConfirm` silently defeated an identical memo by returning a
- * fresh closure every render. `BoardPad.test.tsx` confirms this is wrapped
- * with `memo()`'s DEFAULT shallow comparator (not a custom one that could
- * mask a real change); a render-count proof of the bail-out itself was
- * attempted with `Profiler` and abandoned as a false signal — see the task
- * report's "Memo verification" section for the repro.
+ * fresh closure every render. `BoardPad.test.tsx` confirms both that this
+ * is wrapped with `memo()`'s DEFAULT shallow comparator (not a custom one
+ * that could mask a real change) AND, separately, that the bail-out itself
+ * actually happens: it spies on the memo object's `.type` (the inner render
+ * function React calls when it decides a re-render is needed) and asserts
+ * the spy is called once, not twice, across a re-render with shallow-equal
+ * props — proven to have teeth by swapping in a fresh inline arrow prop and
+ * confirming that assertion fails. An earlier attempt at this same proof
+ * used `Profiler` and was abandoned: `Profiler.onRender` fires once per
+ * commit reaching its subtree regardless of a memoized descendant's
+ * bail-out, so it could not distinguish "bailed out" from "re-rendered
+ * with identical output" — see the task report's "Memo verification"
+ * section for the repro and the correction.
  */
 export const BoardPad = memo(function BoardPad({
   item,

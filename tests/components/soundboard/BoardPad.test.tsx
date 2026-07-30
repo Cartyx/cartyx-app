@@ -1,7 +1,9 @@
+import type { ReactElement } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { BoardPad, sortItemsBySortIndex } from '~/components/soundboard/BoardPad';
+import type { BoardPadProps } from '~/components/soundboard/BoardPad';
 import type { AudioAssetData } from '~/types/audio';
 import type { PackageItemData } from '~/types/soundboard';
 
@@ -397,6 +399,56 @@ describe('BoardPad', () => {
     const memoComponent = BoardPad as unknown as { $$typeof: symbol; compare: unknown };
     expect(memoComponent.$$typeof).toBe(Symbol.for('react.memo'));
     expect(memoComponent.compare == null).toBe(true);
+  });
+
+  // The structural test above proves the wrapper EXISTS; it does not prove
+  // the memo actually BAILS OUT on a re-render. This one does, by spying on
+  // `BoardPad`'s inner render function (the `.type` property `memo()` stores
+  // on the object it returns — the function React actually invokes when it
+  // decides a re-render is needed) and counting calls across a re-render
+  // with shallow-equal props. If the memo bails out, the spy is called once;
+  // if a prop reference is unstable (the `useDeleteConfirm` failure mode the
+  // brief names), it's called twice. See the task report's "Memo
+  // verification" section for why the earlier `Profiler`-based attempt at
+  // this same proof was abandoned as a false signal, and why this technique
+  // is the correct replacement.
+  it('does not call the wrapped render function again on a re-render with shallow-equal props (memo bails out)', () => {
+    const memoComponent = BoardPad as unknown as {
+      type: (props: BoardPadProps) => ReactElement;
+    };
+    const originalType = memoComponent.type;
+    const renderSpy = vi.fn(originalType);
+    memoComponent.type = renderSpy;
+
+    try {
+      const item = mkItem();
+      const asset = mkAsset();
+      const onPlay = () => {};
+      const onStop = () => {};
+      const onVolumeChange = () => {};
+      const props: BoardPadProps = {
+        item,
+        asset,
+        playing: false,
+        volume: 0.7,
+        onPlay,
+        onStop,
+        onVolumeChange,
+      };
+
+      const { rerender } = render(<BoardPad {...props} />);
+      expect(renderSpy).toHaveBeenCalledTimes(1);
+
+      // Same references for every prop — a correctly memoized component
+      // must bail out here, not call its render function a second time.
+      rerender(<BoardPad {...props} />);
+      expect(renderSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      // Restore, whether the assertions above passed or threw — a failure
+      // here must not leak a spied `.type` into every other test in this
+      // file (each of which renders the same imported `BoardPad`).
+      memoComponent.type = originalType;
+    }
   });
 });
 
