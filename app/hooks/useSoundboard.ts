@@ -218,6 +218,21 @@ export type UseSoundboardOptions = {
    */
   initialState?: BoardStateData | null | 'pending';
   /**
+   * True while the caller's package query is still in flight — i.e. `pkg ===
+   * null` means "not yet", not "there is none".
+   *
+   * Only consulted when a persisted board names a package that has not
+   * arrived. Defaults to **`false`**, and the direction of that default is
+   * deliberate: a caller who forgets this flag on a slow query loses the
+   * restored item states (visible, recoverable, the board just shows nothing
+   * playing), whereas defaulting to `true` would mean a persisted board naming
+   * a DELETED package waits forever, and a hook that never hydrates never
+   * saves. Task 4 deletes packages, so that is an ordinary outcome, not an
+   * edge case. Failing toward "lose a little, loudly" beats "lose everything,
+   * silently".
+   */
+  packagePending?: boolean;
+  /**
    * `false` disables persistence entirely. `saveBoardState` requires the
    * caller to be **GM** (`loadBoardState` only requires membership), so a
    * non-GM board would otherwise emit a guaranteed-rejected write — and a
@@ -310,6 +325,8 @@ export function useSoundboard(
   const ctxRef = useRef<AudioContext | null>(null);
   const engineRef = useRef<SoundboardEngine | null>(null);
   const schedulerRef = useRef<Scheduler | null>(null);
+  /** The in-flight `enableAudio()` attempt, shared by concurrent callers. */
+  const enablingRef = useRef<Promise<void> | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deadlineRef = useRef<number | null>(null);
@@ -352,24 +369,31 @@ export function useSoundboard(
     inFlightRef.current = true;
 
     const id = campaignIdRef.current;
-    void saveBoardStateFn({ data: toBoardStatePayload(id, stateRef.current) })
-      .then(() => {
+    // `try/catch/finally` rather than `.then().catch().finally()`: a
+    // SYNCHRONOUS throw from `saveBoardStateFn` never reaches a promise chain,
+    // so the chain's `finally` would not run, `inFlightRef` would stay stuck
+    // `true`, and every later save would queue behind a request that no longer
+    // exists — persistence silently dead for the session. Unlikely (server fns
+    // return promises) but total, and this shape costs nothing.
+    void (async () => {
+      try {
+        await saveBoardStateFn({ data: toBoardStatePayload(id, stateRef.current) });
         if (mountedRef.current) setSaveError(null);
-      })
-      .catch((error: unknown) => {
+      } catch (error: unknown) {
         // The engine keeps playing. This is a mirror falling behind, not an
         // audio failure, and treating it as one would silence a live table.
         captureException(error, { area: 'soundboard', campaignId: id });
         if (mountedRef.current) {
           setSaveError(error instanceof Error ? error.message : String(error));
         }
-      })
-      .finally(() => {
+      } finally {
         inFlightRef.current = false;
-        if (!resaveRef.current) return;
-        resaveRef.current = false;
-        save();
-      });
+        if (resaveRef.current) {
+          resaveRef.current = false;
+          save();
+        }
+      }
+    })();
   }, []);
 
   const scheduleSave = useCallback(
@@ -493,7 +517,7 @@ export function useSoundboard(
     ctxRef.current = null;
   }, []);
 
-  const enableAudio = useCallback(async (): Promise<void> => {
+  const runEnableAudio = useCallback(async (): Promise<void> => {
     const fail = (message: string, error?: unknown) => {
       captureException(error ?? new Error(message), {
         area: 'soundboard',
@@ -594,11 +618,43 @@ export function useSoundboard(
     setAudioError(null);
   }, [dispatch, loadAsset, teardownAudio]);
 
+  /**
+   * Concurrent callers share ONE attempt.
+   *
+   * This guard is not optional politeness. `ctxRef.current` is deliberately
+   * assigned only AFTER `await resume()` (that ordering is what makes a failed
+   * gesture recoverable), which means it can no longer double as the mutual
+   * exclusion it used to accidentally provide: two clicks during a pending
+   * `resume()` would both see a null ref, both `create()`, and both build an
+   * engine. `engineRef`/`ctxRef` would keep only the second — while the first
+   * engine has already had `apply(stateRef.current)` run against it, so with
+   * hydration restoring `playing: true` items it starts sound that no later
+   * `dispatch` can reach and `teardownAudio` can never dispose.
+   *
+   * A double-tap is the ordinary trigger, and it is most likely on iOS, where
+   * `resume()` is slowest and the affordance is deliberately left clickable so
+   * a failed gesture can be retried.
+   *
+   * `enablingRef` is assigned synchronously, before control can return to any
+   * other caller: `runEnableAudio()` runs to its first `await` without
+   * yielding, so there is no window in which a second call can see it unset.
+   */
+  const enableAudio = useCallback((): Promise<void> => {
+    const inFlight = enablingRef.current;
+    if (inFlight) return inFlight;
+    const attempt = runEnableAudio().finally(() => {
+      if (enablingRef.current === attempt) enablingRef.current = null;
+    });
+    enablingRef.current = attempt;
+    return attempt;
+  }, [runEnableAudio]);
+
   // ---------------------------------------------------------------------
   // Hydration, reconciliation and lifecycle
   // ---------------------------------------------------------------------
 
   const initialState = options.initialState;
+  const packagePending = options.packagePending ?? false;
 
   // Declared BEFORE the `[pkg]` effect on purpose: in the commit where `pkg`
   // first arrives, this runs first and claims the package id, so the `[pkg]`
@@ -607,10 +663,25 @@ export function useSoundboard(
   useEffect(() => {
     if (hydratedRef.current) return;
     if (initialState === 'pending') return;
-    // The persisted board names a package that has not arrived yet. Consuming
-    // hydration now would drop every item state (there are no items to overlay
-    // onto), so wait for the route to resolve it.
-    if (initialState && initialState.packageId !== null && pkg === null) return;
+
+    if (initialState && initialState.packageId !== null && pkg === null) {
+      // Still loading: wait. Consuming hydration now would drop every item
+      // state, since there are no items to overlay onto yet.
+      if (packagePending) return;
+      // Settled: the package is GONE — deleted (Task 4), or unreadable by this
+      // caller. Waiting forever here would never flip `hydratedRef`, and
+      // `scheduleSave`'s gate would then silently discard every save for the
+      // whole session while `hydrated` never went true. Fall through instead
+      // and let `hydrateBoardState`'s package-mismatch branch keep
+      // `masterVolume` and nothing else — the board resolves to "no package
+      // loaded", which is both true and something Task 17 already renders.
+      captureException(
+        new Error(
+          `Soundboard: persisted board names package ${initialState.packageId}, which did not resolve`
+        ),
+        { area: 'soundboard', campaignId: campaignIdRef.current, stage: 'hydrate' }
+      );
+    }
 
     hydratedRef.current = true;
     pkgIdRef.current = pkg?.id ?? null;
@@ -621,7 +692,7 @@ export function useSoundboard(
       rawDispatch({ type: '@@hydrate', state: hydrateBoardState(pkg, initialState) });
     }
     setHydrated(true);
-  }, [initialState, pkg]);
+  }, [initialState, pkg, packagePending]);
 
   useEffect(() => {
     stateRef.current = state;

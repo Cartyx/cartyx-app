@@ -121,6 +121,8 @@ type CtxBehaviour = {
   resumeRejects?: string;
   /** `resume()` RESOLVES but the context never reaches `running` (iOS Safari). */
   staysSuspended?: boolean;
+  /** `resume()` blocks on this until the test releases it — the double-tap window. */
+  resumeGate?: Promise<void>;
 };
 
 type FakeCtx = {
@@ -136,6 +138,7 @@ function makeCtx(behaviour: CtxBehaviour = {}): FakeCtx {
     state: 'suspended',
     currentTime: 0,
     resume: vi.fn(async () => {
+      if (behaviour.resumeGate) await behaviour.resumeGate;
       if (behaviour.resumeRejects) throw new Error(behaviour.resumeRejects);
       if (behaviour.staysSuspended) return;
       ctx.state = 'running';
@@ -208,6 +211,7 @@ type Props = {
    */
   withInitialState?: boolean;
   initialState?: BoardStateData | null | 'pending';
+  packagePending?: boolean;
 };
 
 function renderBoard(initialProps: Props = {}) {
@@ -216,6 +220,7 @@ function renderBoard(initialProps: Props = {}) {
       const opts: UseSoundboardOptions = {
         assets: 'assets' in props ? props.assets : defaultAssets,
         persist: props.persist,
+        packagePending: props.packagePending,
         createAudioContext: ctxFactory,
         ...(props.withInitialState ? { initialState: props.initialState } : {}),
       };
@@ -419,6 +424,39 @@ describe('useSoundboard', () => {
     expect(lastSaved().masterVolume).toBe(0.42);
   });
 
+  it('keeps persisting after the save function throws synchronously', async () => {
+    const { result } = renderBoard();
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    saveBoardStateFn.mockClear();
+    captureException.mockClear();
+    // A synchronous throw never reaches a promise chain's `.finally`, so the
+    // in-flight flag would stay stuck and every later save would queue behind
+    // a request that does not exist.
+    saveBoardStateFn.mockImplementationOnce(() => {
+      throw new Error('server fn exploded');
+    });
+
+    act(() => {
+      result.current.dispatch({ type: 'play', itemId: 'itemA' });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_FLUSH_MS + 1);
+    });
+    expect(captureException).toHaveBeenCalledTimes(1);
+    expect(result.current.saveError).toBe('server fn exploded');
+
+    saveBoardStateFn.mockClear();
+    act(() => {
+      result.current.dispatch({ type: 'play', itemId: 'itemB' });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_FLUSH_MS + 1);
+    });
+    expect(saveBoardStateFn).toHaveBeenCalledTimes(1);
+  });
+
   it('keeps playing when the save rejects', async () => {
     saveBoardStateFn.mockRejectedValue(new Error('not the GM'));
     const { result } = renderBoard();
@@ -597,6 +635,62 @@ describe('useSoundboard', () => {
     expect(result.current.audioError).toContain('suspended');
     expect(createEngine).not.toHaveBeenCalled();
     expect(stuck.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds exactly one engine when the enable affordance is double-tapped', async () => {
+    const gate = deferred<void>();
+    const slow = makeCtx({ resumeGate: gate.promise });
+    const second = makeCtx();
+    ctxQueue = [slow, second];
+    const { result } = renderBoard();
+
+    let first: Promise<void>;
+    let repeat: Promise<void>;
+    await act(async () => {
+      first = result.current.enableAudio();
+      // The second tap lands while the first resume() is still pending — the
+      // exact window in which both calls used to see a null ctxRef, both
+      // create(), and both build an engine. The loser's engine has already had
+      // apply() run against it, so it starts sound no dispatch can reach and
+      // teardownAudio can never dispose.
+      repeat = result.current.enableAudio();
+      gate.resolve();
+      await Promise.all([first, repeat]);
+    });
+
+    // The outcome assertions come FIRST, deliberately: these are the defect
+    // (two engines, an orphan graph), and a teeth-proof must fail on them
+    // rather than on the promise-identity check below, which is only evidence
+    // of the mechanism.
+    expect(createEngine).toHaveBeenCalledTimes(1);
+    expect(createScheduler).toHaveBeenCalledTimes(1);
+    // Only one context was ever constructed — the spare is untouched in the queue.
+    expect(ctxQueue).toEqual([second]);
+    expect(second.resume).not.toHaveBeenCalled();
+    // No orphan graph was handed board state.
+    expect(engine.apply).toHaveBeenCalledTimes(1);
+    expect(result.current.audioReady).toBe(true);
+    // Both callers observed the same single attempt.
+    expect(repeat!).toBe(first!);
+  });
+
+  it('allows a fresh attempt after an in-flight one settles', async () => {
+    const bad = makeCtx({ resumeRejects: 'gesture expired' });
+    const good = makeCtx();
+    ctxQueue = [bad, good];
+    const { result } = renderBoard();
+
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    expect(result.current.audioReady).toBe(false);
+
+    // The guard must release on failure too, or the affordance is dead.
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    expect(createEngine).toHaveBeenCalledTimes(1);
+    expect(result.current.audioReady).toBe(true);
   });
 
   it('refuses to build the engine while the asset list has not settled', async () => {
@@ -868,6 +962,7 @@ describe('useSoundboard', () => {
     // Board state settles first, package still resolving.
     const { result, rerender } = renderBoard({
       pkg: null,
+      packagePending: true,
       withInitialState: true,
       initialState: persisted,
     });
@@ -886,6 +981,45 @@ describe('useSoundboard', () => {
       vi.advanceTimersByTime(SAVE_SETTLE_MS * 4);
     });
     expect(saveBoardStateFn).not.toHaveBeenCalled();
+  });
+
+  it('does not wedge saving when the persisted package cannot be resolved', async () => {
+    const persisted: BoardStateData = {
+      campaignId: CAMPAIGN,
+      packageId: '507f1f77bcf86cd799439066',
+      moodId: 'storm',
+      items: [{ itemId: 'itemA', playing: true, volume: 0.9 }],
+      masterVolume: 0.45,
+    };
+    // The package was deleted (Task 4) — an ordinary outcome, not an edge
+    // case. `packagePending` defaults to false, so a null `pkg` here means
+    // "gone", not "not yet".
+    const { result } = renderBoard({ pkg: null, withInitialState: true, initialState: persisted });
+
+    // It must CONCLUDE, not wait forever: an un-flipped `hydrated` silently
+    // discards every save for the whole session and hangs the board UI.
+    expect(result.current.hydrated).toBe(true);
+    expect(result.current.state.pkg).toBeNull();
+    // The mismatch branch keeps the board/output property and nothing tied to
+    // a package that no longer exists.
+    expect(result.current.state.masterVolume).toBe(0.45);
+    expect(result.current.state.moodId).toBeNull();
+    // Not silent.
+    expect(captureException).toHaveBeenCalledTimes(1);
+    expect(captureException).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('did not resolve') }),
+      expect.objectContaining({ stage: 'hydrate' })
+    );
+
+    // And persistence is live rather than wedged.
+    act(() => {
+      result.current.dispatch({ type: 'setMasterVolume', volume: 0.6 });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_SETTLE_MS + 1);
+    });
+    expect(saveBoardStateFn).toHaveBeenCalledTimes(1);
+    expect(lastSaved().masterVolume).toBe(0.6);
   });
 
   it('hydrates immediately when nothing was persisted', async () => {
