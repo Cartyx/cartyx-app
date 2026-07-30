@@ -545,6 +545,26 @@ describe('reapStale handles once-variant attaches separately (Task 18 review Cri
  * still not a real MongoDB — no indexes, no `$or`, no type coercion beyond
  * what these two reapers' queries actually use — but it is evaluated
  * rather than routed, which is the property the review asked for.
+ *
+ * TWO KNOWN FIDELITY GAPS, called out explicitly so nobody over-trusts this
+ * fake later:
+ *
+ * - `find`'s `projection` option (the second arg's `.projection`) is
+ *   IGNORED — every matched document comes back in full, whatever fields
+ *   the real query actually asked for. A bug where `reapAbandonedUploads`/
+ *   `reapAbandonedOnceUploads` requested the wrong projection (e.g. forgot
+ *   `onceSourceKey`) would be INVISIBLE here: the row would still carry the
+ *   field in this fake's response, masking exactly the class of bug a real
+ *   driver's projection would expose.
+ * - `$lt` returns `false` for anything that isn't a `Date` (see
+ *   `matchesFilter` below) — correct for every clause the TWO reapers
+ *   tested here actually use (`createdAt`/`updatedAt`/`claimedAt`, all
+ *   Dates), but `reapStale`'s OTHER two `updateMany` clauses use `$lt`/
+ *   `$gte` on `attempts` (a NUMBER). Nothing in this describe block drives
+ *   those branches through `makeRealFilterCollection`, so this gap is
+ *   dormant, not exercised — a future test that does route the
+ *   `processing`-timeout path through this fake would need `$lt` to handle
+ *   numbers too, or it would silently under-match.
  */
 function matchesFilter(doc: Record<string, unknown>, filter: Record<string, unknown>): boolean {
   return Object.entries(filter).every(([key, cond]) => {

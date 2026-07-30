@@ -263,7 +263,22 @@ describe('confirmOnceVariantUpload', () => {
     );
   });
 
-  it('fails and deletes the object when the once-variant file is too large, without touching the main asset fields', async () => {
+  /**
+   * Task 18 round 3 review, Important: this test used to assert
+   * `status: 'failed'` + `permanentFailure: true` — pinning the exact bug
+   * the review found. That write lands on the MAIN asset's own row (this
+   * function attaches to an existing, previously-`ready` document, not a
+   * fresh one), and `permanentFailure: true` is a dead end:
+   * `retryAudioAsset` refuses it and `createOnceVariantUpload` refuses a
+   * non-`ready` row, so a fully-transcoded music asset would go dark on
+   * every board, permanently, because a SECOND file was rejected. Fixed to
+   * match `markOnceFailed`'s guarantee (audio-worker/src/process.ts): the
+   * row reverts to a fully playable `ready`/`main` asset, with the reason
+   * recorded in `onceLastError` instead. The R2 delete of the oversized
+   * object is UNCHANGED — that object must still go regardless of how the
+   * row is written, or storage is paid for a file that was refused.
+   */
+  it('reverts to ready/main and deletes the object when the once-variant file is too large, without touching the main asset fields', async () => {
     vi.mocked(AudioAsset.findOne).mockResolvedValue({
       _id: 'a1',
       ownerId: 'u1',
@@ -279,16 +294,49 @@ describe('confirmOnceVariantUpload', () => {
       confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' })
     ).rejects.toThrow(/too large/i);
 
+    // The oversized object is still deleted — that half of the original
+    // behavior is correct and untouched.
     const deleteCall = send.mock.calls[1][0] as DeleteObjectCommand;
     expect(deleteCall).toBeInstanceOf(DeleteObjectCommand);
     expect(deleteCall.input).toEqual({ Bucket: 'b', Key: 'uploads/audio/prefix/once-src.wav' });
 
     const [, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
     const set = (update as { $set: Record<string, unknown> }).$set;
-    expect(set.status).toBe('failed');
-    expect(set.permanentFailure).toBe(true);
+    // The load-bearing assertions: never 'failed', never permanentFailure.
+    expect(set.status).toBe('ready');
+    expect(set.variant).toBe('main');
+    expect(set.onceSourceKey).toBeNull();
+    expect(set.onceLastError).toMatch(/too large/i);
+    expect('permanentFailure' in set).toBe(false);
+    expect('lastError' in set).toBe(false);
+    // The main asset's own content is completely untouched by this write.
     expect('renditions' in set).toBe(false);
     expect('onceRenditions' in set).toBe(false);
+    expect('durationMs' in set).toBe(false);
+    expect('sourceKey' in set).toBe(false);
+  });
+
+  it('reverts to ready/main and deletes the object when the once-variant file is the wrong type', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      _id: 'a1',
+      ownerId: 'u1',
+      status: 'uploading',
+      variant: 'once',
+      onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+    } as never);
+    send.mockResolvedValue({ ContentLength: 1024, ContentType: 'video/mp4' });
+    vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({ _id: 'a1' } as never);
+
+    const { confirmOnceVariantUpload } = await import('~/server/functions/audio');
+    await expect(
+      confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' })
+    ).rejects.toThrow(/unsupported/i);
+
+    const [, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
+    const set = (update as { $set: Record<string, unknown> }).$set;
+    expect(set.status).toBe('ready');
+    expect(set.variant).toBe('main');
+    expect('permanentFailure' in set).toBe(false);
   });
 
   it('refuses to confirm a row that is not an in-flight once-variant upload', async () => {

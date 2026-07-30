@@ -210,6 +210,34 @@ describe('confirmAudioUpload', () => {
     expect(AudioAsset.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
+  /**
+   * Task 18 nit fix: this function measures/confirms `sourceKey` only — it
+   * has no idea `onceSourceKey` exists. A row `createOnceVariantUpload`
+   * flipped to `uploading` (`variant: 'once'`) is not a main upload
+   * awaiting confirmation, and confirming it here would hand the worker a
+   * `pending` row whose once pipeline may not have a real `onceSourceKey`
+   * yet. Symmetric with `reapAbandonedUploads`'s `variant: { $ne: 'once' }`
+   * split in the worker.
+   */
+  it('refuses to confirm a row mid-once-attach — that belongs to confirmOnceVariantUpload', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      _id: 'a1',
+      ownerId: 'u1',
+      sourceKey: 'k',
+      status: 'uploading',
+      variant: 'once',
+    } as never);
+
+    const { confirmAudioUpload } = await import('~/server/functions/audio');
+    await expect(confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' })).rejects.toThrow(
+      /not awaiting confirmation/i
+    );
+    // Refused before ever touching R2 — same as every other precondition
+    // failure in this function.
+    expect(send).not.toHaveBeenCalled();
+    expect(AudioAsset.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
   it('scopes the pending flip to status uploading so a concurrent confirm cannot double-apply', async () => {
     vi.mocked(AudioAsset.findOne).mockResolvedValue({
       _id: 'a1',
@@ -229,6 +257,10 @@ describe('confirmAudioUpload', () => {
       _id: 'a1',
       ownerId: 'u1',
       status: 'uploading',
+      // Task 18 nit fix: symmetric with the reaper's `variant: { $ne: 'once' }`
+      // split — confirmAudioUpload must never confirm a row a concurrent
+      // createOnceVariantUpload has claimed for the once pipeline.
+      variant: { $ne: 'once' },
     });
   });
 

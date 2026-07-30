@@ -149,7 +149,24 @@ export async function confirmAudioUpload({
     // never be able to delete the R2 object of a finished asset. The
     // `failed -> pending` transition belongs to `retryAudioAsset`, which owns
     // resetting the attempt budget with it.
-    if (asset.status !== 'uploading') {
+    //
+    // `variant !== 'once'` too — Task 18 nit fix, symmetric with the
+    // worker's reaper split (`reapAbandonedUploads` vs
+    // `reapAbandonedOnceUploads` in audio-worker/src/claim.ts). Without it
+    // this precondition alone can't tell a genuine main upload apart from a
+    // row that's `status: 'uploading'` because `createOnceVariantUpload`
+    // put it there — this function only ever measures/confirms
+    // `sourceKey`, never `onceSourceKey`, so confirming a once-attach here
+    // would flip a row still carrying `variant: 'once'` to `pending`, and
+    // the worker's `processAsset` would then run the ONCE pipeline against
+    // whatever `onceSourceKey` happens to be at that moment — possibly
+    // unset, if the browser's PUT to the once URL hasn't landed yet. Not a
+    // data-loss path (an empty/wrong `onceSourceKey` fails through
+    // `markOnceFailed` back to `ready`, same as any other once-variant
+    // failure) and not reachable from the UI (nothing calls
+    // `confirmAudioUpload` for an assetId mid-once-attach), but there is no
+    // reason for this function to accept a row it was never meant to touch.
+    if (asset.status !== 'uploading' || asset.variant === 'once') {
       throw new Error('Audio asset is not awaiting confirmation');
     }
 
@@ -196,9 +213,12 @@ export async function confirmAudioUpload({
 
     // `status: 'uploading'` again, and atomically this time: the read above can
     // race a concurrent confirm for the same asset, and only the filter on the
-    // write makes exactly one of them win.
+    // write makes exactly one of them win. `variant: { $ne: 'once' }` closes
+    // the same race the JS-level check above closes for the READ: a
+    // concurrent `createOnceVariantUpload` could flip `variant` to `'once'`
+    // in the window between this function's `findOne` and this write.
     const updated = await AudioAsset.findOneAndUpdate(
-      { _id: data.assetId, ownerId: userId, status: 'uploading' },
+      { _id: data.assetId, ownerId: userId, status: 'uploading', variant: { $ne: 'once' } },
       {
         $set: {
           status: 'pending',
@@ -376,7 +396,30 @@ export async function confirmOnceVariantUpload({
 
     if (tooLarge || badType) {
       // Same reasoning as confirmAudioUpload's own reject path: the object
-      // must go, or storage is paid for a file that was refused.
+      // must go, or storage is paid for a file that was refused. THAT part
+      // is unchanged. What must NOT be unchanged is the row write below it:
+      // confirmAudioUpload's version writes `status: 'failed',
+      // permanentFailure: true` onto a row that only ever describes a
+      // NEW asset with nothing else at stake. This function's row is the
+      // MAIN asset's own document — writing the same shape here bricks a
+      // fully-transcoded, previously-`ready` music asset over a bad SECOND
+      // file: `retryAudioAsset` refuses `permanentFailure: true`, and
+      // `createOnceVariantUpload` refuses a non-`ready` row, so there is no
+      // path back. Exactly the failure `markOnceFailed` (audio-
+      // worker/src/process.ts) exists to prevent — this is that same
+      // guarantee, applied here because this rejection happens in
+      // `app/server/functions/`, not in the worker, so `markOnceFailed`
+      // itself can't reach it.
+      //
+      // Reachable only by a client that under-declares `bytes` at
+      // `createOnceVariantUpload` time and then PUTs a larger body — the
+      // presigned PUT can't enforce Content-Length, which is the same
+      // abuse `retryAudioAsset`'s `confirmedAt` gate treats as live
+      // (see that function's doc comment). An honest client can't hit
+      // `tooLarge` (the schema caps declared `bytes`) or `badType` (the
+      // presign signs `ContentType`), but "clients are honest" is not a
+      // safety property this codebase relies on anywhere else, so it isn't
+      // relied on here either.
       await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.onceSourceKey }));
       const reason = tooLarge
         ? `File too large: ${bytes} bytes exceeds ${AUDIO_MAX_BYTES}`
@@ -385,9 +428,10 @@ export async function confirmOnceVariantUpload({
         { _id: data.assetId, ownerId: userId },
         {
           $set: {
-            status: 'failed',
-            lastError: reason,
-            permanentFailure: true,
+            status: 'ready',
+            variant: 'main',
+            onceSourceKey: null,
+            onceLastError: reason,
             updatedAt: new Date(),
           },
         }
