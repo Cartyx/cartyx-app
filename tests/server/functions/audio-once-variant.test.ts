@@ -300,7 +300,22 @@ describe('confirmOnceVariantUpload', () => {
     expect(deleteCall).toBeInstanceOf(DeleteObjectCommand);
     expect(deleteCall.input).toEqual({ Bucket: 'b', Key: 'uploads/audio/prefix/once-src.wav' });
 
-    const [, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
+    const [filter, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
+    // FINAL REVIEW, blocking item 4. This reject write CANCELS a once-attach
+    // (`status: 'ready', variant: 'main', onceSourceKey: null`), and it used
+    // to carry only `{ _id, ownerId }` — the sole unfenced `findOneAndUpdate`
+    // in a file where every other write is fenced. A stale reject landing
+    // after the user started a SECOND attach matched that fresh row and
+    // silently reverted it, stranding its uploaded object with nothing said.
+    // Asserted with `toEqual`, not a subset check: a filter that regained
+    // `_id`/`ownerId` while losing the status/variant clauses is exactly the
+    // regression, and a subset assertion would not see it.
+    expect(filter).toEqual({
+      _id: 'a1',
+      ownerId: 'u1',
+      status: 'uploading',
+      variant: 'once',
+    });
     const set = (update as { $set: Record<string, unknown> }).$set;
     // The load-bearing assertions: never 'failed', never permanentFailure.
     expect(set.status).toBe('ready');

@@ -83,6 +83,14 @@ export const Playing: Story = {
   args: { item: mkItem(), asset: mkAsset(), playing: true, volume: 0.7 },
 };
 
+/**
+ * An asset that HAS an attached once-variant still renders as an ordinary
+ * pad — no ∞/1× control. Task 16 shipped one; the final whole-branch review
+ * removed it because nothing downstream could play the variant (see
+ * `BoardPad`'s own doc comment). Kept as a story precisely so the "no
+ * difference" is visible: if a future phase wires the variant channel, this
+ * is the story that should start looking different.
+ */
 export const WithOnceVariant: Story = {
   render: (args) => <Controlled {...args} />,
   args: {

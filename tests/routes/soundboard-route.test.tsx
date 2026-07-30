@@ -290,7 +290,11 @@ beforeEach(() => {
   loadBoardStateFn.mockResolvedValue(persisted);
   saveBoardStateFn.mockResolvedValue({});
   useCampaign.mockReturnValue({
-    campaign: { id: CAMPAIGN, isOwner: true },
+    // `isGM`, not `isOwner`: `persist` reads `isGM` (final-review fix — it is
+    // the field that mirrors `saveBoardState`'s own `requireCampaignMember`
+    // predicate). Both are set here because the owning GM really does have
+    // both; the co-GM case, where they diverge, gets its own test below.
+    campaign: { id: CAMPAIGN, isOwner: true, isGM: true },
     isLoading: false,
     error: null,
   });
@@ -762,6 +766,50 @@ describe('SoundboardPage — the campaign query', () => {
     expect(saveBoardStateFn).not.toHaveBeenCalled();
   });
 
+  /**
+   * FINAL REVIEW, blocking item 3. `persist` used to read `campaign.isOwner`
+   * — strictly `gameMasterId === userId` — while the server's
+   * `saveBoardState` authorizes on `requireCampaignMember`'s `isGM`, which
+   * ALSO admits a member row with `role: 'gm'`. A co-GM was therefore
+   * client-side gated out of a write the server would have accepted, and
+   * silently: `persist: false` suppresses the call with `saveError` left
+   * `null`, so their board simply never survived a reload with nothing on
+   * screen to explain it. `serializeCampaign` emits both fields from the
+   * same document; `isGM` is the one that mirrors the server predicate.
+   *
+   * This fixture is the ONLY shape that can tell the two apart: `isGM: true`
+   * with `isOwner: false`. Teeth: reverting `soundboard.tsx` to
+   * `campaign?.isOwner === true` makes the `saveBoardStateFn` assertion
+   * below fail (never called), while every other test in this file — all of
+   * which use an owner who is also a GM — stays green.
+   */
+  it('persists for a co-GM (isGM without isOwner), matching what the server will accept', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    useCampaign.mockReturnValue({
+      campaign: { id: CAMPAIGN, isOwner: false, isGM: true },
+      isLoading: false,
+      error: null,
+    });
+    renderBoard();
+
+    const button = await enabledEnableAudioButton();
+    await act(async () => {
+      fireEvent.click(button);
+    });
+    await waitFor(() => expect(createEngine).toHaveBeenCalledTimes(1));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play Rain' }));
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+
+    await waitFor(() => expect(saveBoardStateFn).toHaveBeenCalled());
+    // ...and it is the co-GM's actual change that got written, not an empty
+    // hydration echo that would pass this test with the command dropped.
+    const saved = saveBoardStateFn.mock.calls.at(-1)![0].data as BoardStateData;
+    expect(saved.items.find((i) => i.itemId === 'itemA')?.playing).toBe(true);
+  });
+
   it('says so out loud when it fails, rather than silently never saving', async () => {
     useCampaign.mockReturnValue({
       campaign: null,
@@ -835,7 +883,7 @@ describe('SoundboardPage — a campaign refetch that fails mid-session', () => {
 
     // A background refetch fails. `data` survives, per query-core.
     useCampaign.mockReturnValue({
-      campaign: { id: CAMPAIGN, isOwner: true },
+      campaign: { id: CAMPAIGN, isOwner: true, isGM: true },
       isLoading: false,
       error: 'Network request failed',
     });

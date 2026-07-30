@@ -174,6 +174,46 @@ describe('PackageEditor', () => {
     expect(next[0].fadeSeconds).toBe(2);
   });
 
+  /**
+   * FINAL REVIEW, item 8. `PackageItemRow.toNumber` was
+   * `Number.isNaN(Number(raw)) ? null : Number(raw)` — but `Number('') === 0`,
+   * not `NaN`, so an EMPTIED field parsed as a real `0`. Two consequences,
+   * both silent: backspacing Fade wrote a 0-second (instant-cut) fade onto
+   * the item, and the `parsed !== null` guard at every call site was dead
+   * code that looked like it handled exactly this. Unlike a mood override
+   * these fields are required on `PackageItemData`, so the correct response
+   * to an empty input is to emit NOTHING and leave the value alone until the
+   * user types a number.
+   *
+   * Teeth: dropping the `if (raw === '') return null` line makes this fail
+   * on `toHaveBeenCalledTimes(0)` with one call carrying `fadeSeconds: 0`.
+   */
+  it('emptying the fade field emits nothing rather than writing a 0-second fade', () => {
+    const onItemsChange = vi.fn();
+    const items = [mkItem({ id: 'i0', label: 'First', fadeSeconds: 2, sortIndex: 0 })];
+
+    render(
+      <PackageEditor
+        items={items}
+        onItemsChange={onItemsChange}
+        assets={[]}
+        filters={{}}
+        onFiltersChange={noop}
+      />
+    );
+
+    const fade = screen.getByRole('spinbutton', { name: /fade seconds for first/i });
+    fireEvent.change(fade, { target: { value: '' } });
+
+    expect(onItemsChange).toHaveBeenCalledTimes(0);
+
+    // Positive control: a real number still gets through, so the guard
+    // narrows the empty case rather than deadening the input.
+    fireEvent.change(fade, { target: { value: '4' } });
+    expect(onItemsChange).toHaveBeenCalledTimes(1);
+    expect((onItemsChange.mock.calls[0][0] as PackageItemData[])[0].fadeSeconds).toBe(4);
+  });
+
   it('read-only mode hides the picker and item mutation controls', () => {
     const items = [mkItem({ id: 'i0', label: 'First' })];
     render(

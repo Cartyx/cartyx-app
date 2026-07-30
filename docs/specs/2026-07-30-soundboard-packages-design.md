@@ -254,13 +254,34 @@ the asset, so it belongs with the asset.
 failure.** The engine owns sound; the server is a mirror. A failed snapshot
 write degrades reload-restore, never playback.
 
-| Failure                      | Handling                                                                                                                                                                     |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AudioContext` suspended     | An explicit "enable audio" affordance, not a hidden resume. Without it the GM's first pad press silently does nothing — the worst possible failure for a live tool.          |
-| Referenced asset not `ready` | Pad renders unavailable with the reason. Dangling references are expected: packages reference assets, and assets can be deleted.                                             |
-| Rendition URL 404s           | Decode failure disables that pad; it must not throw into the graph. Phase 1's delete path is best-effort by design.                                                          |
-| Decode cost                  | The current mood's items are pre-decoded; the rest decode lazily and cache, as the POC does. Decoding 40 buffers on load is slow; decoding on click stalls the GM mid-scene. |
-| Two GMs, one board           | Last-write-wins with `updatedBy`, surfaced honestly in the UI. A locking scheme is more machinery than a two-GM table justifies.                                             |
+| Failure                      | Handling                                                                                                                                                                 |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AudioContext` suspended     | An explicit "enable audio" affordance, not a hidden resume. Without it the GM's first pad press silently does nothing — the worst possible failure for a live tool.      |
+| Referenced asset not `ready` | Pad renders unavailable with the reason. Dangling references are expected: packages reference assets, and assets can be deleted.                                         |
+| Rendition URL 404s           | Decode failure disables that pad; it must not throw into the graph. Phase 1's delete path is best-effort by design.                                                      |
+| Decode cost                  | **DEFERRED past 2a — see below.** Everything decodes lazily and caches, as the POC does. Decoding 40 buffers on load is slow; decoding on click stalls the GM mid-scene. |
+| Two GMs, one board           | **PARTIALLY SHIPPED in 2a — see below.** Last-write-wins is real; `updatedBy` is stamped but not surfaced, so an overwrite is currently silent.                          |
+
+Two rows above were written as decisions and shipped as something else. Recorded
+here rather than quietly left as aspirations, because a failure-modes table that
+describes behaviour the code does not have is worse than one that admits the gap:
+
+- **Pre-decoding the current mood's items did not ship.** `useSoundboard`'s
+  `ensureAsset` is reached only from `if (item.playing)` inside `reconcile` and
+  from `fireOneShot`, so decoding is purely lazy — a mood switch decodes the
+  items it starts, and a pad that is merely _visible_ in the current mood is not
+  decoded until it is pressed. The first press of each pad therefore pays the
+  fetch + `decodeAudioData` cost mid-scene, which is exactly the cost this row
+  set out to avoid. Deferred rather than dropped: the fix is a prefetch pass over
+  the current mood's items, and it needs its own thinking about cancellation and
+  about not stampeding R2 on load.
+- **`updatedBy` is written but never surfaced.** The `SoundboardState` model
+  carries it and `saveBoardState` stamps it, but `serializeBoardState` drops it
+  and `BoardStateData` has no field for it, so the client cannot see it even in
+  principle. Last-write-wins is genuinely what happens; the "surfaced honestly in
+  the UI" half is not built, and a second GM's overwrite is completely silent.
+  Deferred to the two-GM story, which also owns `refetchOnWindowFocus` swapping
+  the package mid-session — the same problem seen from the other end.
 
 ## Testing
 

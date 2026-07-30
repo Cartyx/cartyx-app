@@ -1,4 +1,4 @@
-import { memo, useState } from 'react';
+import { memo } from 'react';
 import { Play, Square, AlertTriangle, Clock, Loader2 } from 'lucide-react';
 import type { AudioAssetData } from '~/types/audio';
 import type { PackageItemData } from '~/types/soundboard';
@@ -130,18 +130,25 @@ export interface BoardPadProps {
  * edit/delete affordances that make no sense mid-session (see the design
  * doc's "Board pads are purpose-built" note and this task's brief).
  *
- * Renders: the item's label, whether it's playing, its volume, the ∞/1×
- * once-variant toggle where the asset actually has one, and — this is the
- * load-bearing part — an unavailable state with a SPECIFIC reason whenever
- * the asset isn't `ready` or its rendition couldn't be decoded, instead of
- * either throwing on a dangling reference or rendering a mute blank.
+ * Renders: the item's label, whether it's playing, its volume, and — this is
+ * the load-bearing part — an unavailable state with a SPECIFIC reason
+ * whenever the asset isn't `ready` or its rendition couldn't be decoded,
+ * instead of either throwing on a dangling reference or rendering a mute
+ * blank.
  *
- * The ∞/1× selection is ephemeral session UI, not board data: nothing in
- * `BoardState`/`SoundboardCommand` (Task 9) tracks which variant a pad is
- * set to, the same way `MoodEditor`'s `selectedMoodId` is local state rather
- * than a prop. It resets to ∞ (loop) on remount, which is the same "GM
- * presses play again" cost as any other page-reload-loses-transient-UI
- * state in this app.
+ * NO ∞/1× once-variant control, deliberately. Task 16 shipped one as local
+ * `useState`; the final whole-branch review removed it because it was wired
+ * to nothing and could not be wired without changes this phase does not
+ * make. `SoundboardCommand` (Task 9) carries no variant, `BoardState` has no
+ * field for one, and `useSoundboard`'s `loadAsset` picks a rendition from
+ * `asset.renditions` only — never `asset.onceRenditions` — so pressing the
+ * toggle changed a glyph and nothing else. Rendering a control that cannot
+ * affect what the table hears is worse than rendering none: a GM sets it to
+ * 1×, hears a loop, and has no way to tell the control is inert. The variant
+ * is still uploaded, transcoded and stored (Task 18); playing it needs a
+ * variant channel through `SoundboardCommand` -> `BoardItemState` ->
+ * `loadAsset`, which is phase 2b's. `AudioAssetDetail`'s attach copy says
+ * exactly that, and must keep saying it until this control comes back.
  *
  * Memoized: a mood with many pads re-renders every pad on nearly every
  * board interaction (a single volume drag re-renders the whole list via
@@ -174,12 +181,9 @@ export const BoardPad = memo(function BoardPad({
   onStop,
   onVolumeChange,
 }: BoardPadProps) {
-  const [once, setOnce] = useState(false);
-
   const label = displayLabel(item);
   const reason = unavailableReason(asset, decodeFailed);
   const unavailable = reason !== null;
-  const hasOnceVariant = Boolean(asset?.onceRenditions?.opus ?? asset?.onceRenditions?.aac);
 
   return (
     <div
@@ -195,18 +199,6 @@ export const BoardPad = memo(function BoardPad({
     >
       <div className="flex items-center justify-between gap-2">
         <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-200">{label}</span>
-        {hasOnceVariant && !unavailable && (
-          <button
-            type="button"
-            onClick={() => setOnce((prev) => !prev)}
-            aria-pressed={once}
-            aria-label={once ? `Switch ${label} to loop` : `Switch ${label} to play once`}
-            title={once ? 'Plays once, then stops' : 'Loops continuously'}
-            className="shrink-0 rounded border border-white/10 px-1.5 py-0.5 text-xs font-semibold text-slate-300 hover:border-blue-500/50 hover:text-blue-300"
-          >
-            {once ? '1×' : '∞'}
-          </button>
-        )}
       </div>
 
       <button

@@ -84,6 +84,27 @@ describe('soundboard schemas', () => {
     expect(r.success).toBe(true);
   });
 
+  /**
+   * The other half of the two above, and the reason they are safe: making
+   * `packageId` `.nullable().optional()` must not have made it unvalidated.
+   * Task 6 chained those onto the existing `objectId` schema; nothing pinned
+   * that the ObjectId check survived, so replacing it with a bare
+   * `z.string().nullable().optional()` — or dropping the field entirely —
+   * would have been green. Same idiom as the `assetId` test above: one
+   * invalid field, plus a positive control on the identical payload so the
+   * rejection is attributable to `packageId` and not to the fixture.
+   */
+  it('still rejects a non-ObjectId packageId after .nullable().optional()', async () => {
+    const { saveBoardStateSchema } = await import('~/types/schemas/soundboard');
+    const save = (packageId: string) => ({
+      campaignId: '507f1f77bcf86cd799439011',
+      packageId,
+      masterVolume: 0.8,
+    });
+    expect(saveBoardStateSchema.safeParse(save('nope')).success).toBe(false);
+    expect(saveBoardStateSchema.safeParse(save('507f1f77bcf86cd799439012')).success).toBe(true);
+  });
+
   it('loadBoardStateSchema parses campaignId alone, with no packageId/moodId defect to trigger', async () => {
     const { loadBoardStateSchema } = await import('~/types/schemas/soundboard');
     const r = loadBoardStateSchema.safeParse({ campaignId: '507f1f77bcf86cd799439011' });

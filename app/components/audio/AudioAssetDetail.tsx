@@ -209,9 +209,11 @@ export function AudioAssetDetail({
   const fieldClass =
     'w-full rounded border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-sm text-slate-200 focus:border-blue-500/50 focus:outline-none disabled:opacity-50';
 
-  // Matches BoardPad's exact gating expression (Task 16) — that component
-  // shows the ∞/1× control on precisely this condition, so "attached" here
-  // must mean the same thing it means there.
+  // "A once-variant exists on this asset": at least one composed once
+  // rendition came back from the worker. This was written to match
+  // `BoardPad`'s gating for its ∞/1× control; that control no longer exists
+  // (final review — it could not play the variant), so this expression now
+  // stands alone and governs only THIS dialog's copy and replace affordance.
   const hasOnceVariant = Boolean(asset.onceRenditions?.opus ?? asset.onceRenditions?.aac);
 
   return createPortal(
@@ -381,9 +383,20 @@ export function AudioAssetDetail({
                 Once-variant (1× ending)
               </span>
               <p className="text-xs text-slate-500">
+                {/*
+                 * Says "stored", NOT "played". The board cannot play a
+                 * once-variant on this branch: `BoardPad` has no ∞/1×
+                 * control (the one Task 16 shipped was wired to nothing and
+                 * the final review removed it), `SoundboardCommand` carries
+                 * no variant, and `useSoundboard`'s `loadAsset` picks only
+                 * from `asset.renditions`. The upload, the transcode and the
+                 * R2 object are all real and are what a later phase will
+                 * play; promising playback today would have a GM pay for all
+                 * three for a file that cannot sound.
+                 */}
                 {hasOnceVariant
-                  ? 'A once-variant is attached. Choose a new file to replace it.'
-                  : "Optional. The board's ∞/1× control plays this file instead of looping when set to 1×."}
+                  ? 'A once-variant is attached and stored. Choose a new file to replace it.'
+                  : 'Optional. A 1× (non-looping) ending for this music track. It is uploaded and transcoded now; the board plays the looping version until once-playback ships.'}
               </p>
               {onceVariantError && (
                 <p role="alert" className="mt-1 text-xs text-red-400">

@@ -214,7 +214,10 @@ describe('reapStale', () => {
     expect(cutoff.getTime()).toBeLessThanOrEqual(before - UPLOAD_STALE_MS + 1);
 
     const [filter, update] = model.updateOne.mock.calls[0];
-    expect(filter).toEqual({ _id: 'u1', status: 'uploading' });
+    // Exact shape. The `variant` clause is not decoration: it re-asserts the
+    // `find`'s own exclusion at write time (final-review fix — see the
+    // interleave test at the bottom of this file for the failure it closes).
+    expect(filter).toEqual({ _id: 'u1', status: 'uploading', variant: { $ne: 'once' } });
     expect(update.$set.status).toBe('failed');
     expect(update.$set.lastError).toBe('Upload never completed');
   });
@@ -705,5 +708,90 @@ describe('reapStale against a real filter-evaluating collection (Task 18 re-revi
       variant: 'main',
       onceSourceKey: null,
     });
+  });
+
+  /**
+   * FINAL REVIEW, nit #9 promoted to a fix. `reapAbandonedUploads`' `find`
+   * excludes `variant: 'once'`, but its fenced `updateOne` used to be only
+   * `{ _id, status: 'uploading' }` — asymmetric with
+   * `reapAbandonedOnceUploads`, whose write has always re-asserted its own
+   * `variant: 'once'`.
+   *
+   * The window: this reaper lists a bounded page, then writes row-at-a-time
+   * with a `beat()` and an Atlas round trip per row, so a pass takes real
+   * time. A row listed as an abandoned MAIN upload can, before its turn
+   * comes, complete confirm -> transcode -> once-attach and become
+   * `status: 'uploading', variant: 'once'`. The unfenced write matched that
+   * row, failed it, and pushed `row.sourceKey` — the MAIN source, captured
+   * by the projection BEFORE the attach existed — into a real
+   * `DeleteObjects`. That is Task 18's Critical 1 data loss, reached through
+   * timing rather than by design.
+   *
+   * Reproduced literally rather than by asserting on a filter shape: the
+   * interleave is staged by mutating the collection between the reaper's
+   * first and second fenced writes, so the assertion is on the KEYS ACTUALLY
+   * DELETED. Teeth: dropping `variant: { $ne: 'once' }` from claim.ts's
+   * `updateOne` filter makes this fail on the `not.toContain(main.wav)` line
+   * — and only this test; the shape assertion above catches it too, but this
+   * one demonstrates the consequence.
+   */
+  it('does not delete a main sourceKey for a row that became a once-attach mid-pass', async () => {
+    const now = Date.now();
+    const yesterday = new Date(now - 24 * 60 * 60 * 1000);
+
+    const collection = makeRealFilterCollection([
+      // Reaped normally. Its write is what we hang the interleave off — it
+      // stands in for "any work at all happening before row B's turn".
+      {
+        _id: 'a-abandoned',
+        status: 'uploading',
+        createdAt: yesterday,
+        updatedAt: yesterday,
+        sourceKey: 'uploads/audio/p/a.wav',
+      },
+      // Listed by the same `find` (a plain abandoned main upload at list
+      // time), then flipped to a once-attach before its own write runs.
+      {
+        _id: 'b-races',
+        status: 'uploading',
+        createdAt: yesterday,
+        updatedAt: yesterday,
+        sourceKey: 'uploads/audio/p/b-main.wav',
+      },
+    ]);
+
+    const realUpdateOne = collection.updateOne.getMockImplementation()!;
+    let writes = 0;
+    collection.updateOne.mockImplementation(async (filter, update) => {
+      if (writes++ === 0) {
+        // Between row A's write and row B's: B's owner confirmed, the worker
+        // transcoded, and the browser started a once-variant attach.
+        Object.assign(collection.docs.get('b-races')!, {
+          status: 'uploading',
+          variant: 'once',
+          onceSourceKey: 'uploads/audio/p/b-once.wav',
+          updatedAt: new Date(now), // fresh: not stale for the once reaper
+        });
+      }
+      return realUpdateOne(filter, update);
+    });
+
+    const deleteSource = vi.fn().mockResolvedValue(undefined);
+    await reapStale(collection as never, 600_000, UPLOAD_STALE_MS, deleteSource);
+
+    const deletedKeys = deleteSource.mock.calls.flatMap(([keys]) => keys as string[]);
+    expect(deletedKeys).not.toContain('uploads/audio/p/b-main.wav');
+    expect(deletedKeys).not.toContain('uploads/audio/p/b-once.wav');
+    // The in-flight attach survives untouched — still `uploading`/`once`,
+    // never stamped `failed`.
+    expect(collection.docs.get('b-races')).toMatchObject({
+      status: 'uploading',
+      variant: 'once',
+      onceSourceKey: 'uploads/audio/p/b-once.wav',
+    });
+    // Positive control: the genuinely-abandoned row was still reaped, so the
+    // fence narrowed the write rather than disabling the reaper.
+    expect(deletedKeys).toContain('uploads/audio/p/a.wav');
+    expect(collection.docs.get('a-abandoned')).toMatchObject({ status: 'failed' });
   });
 });

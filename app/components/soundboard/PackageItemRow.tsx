@@ -17,7 +17,21 @@ function displayLabel(item: PackageItemData): string {
   return item.label ?? `Asset ${item.assetId.slice(-6)}`;
 }
 
+/**
+ * `null` means "this input does not currently hold a number" — which
+ * includes the EMPTY string. `Number('')` is `0`, not `NaN`, so a bare
+ * `Number.isNaN` check let a cleared field through as a real `0`: clearing
+ * Volume muted the item and clearing Fade set an instant cut, and the
+ * `parsed !== null` guard at every call site was dead code. Final-review
+ * fix; the intent it restores is the one `handleRandomInterval` has always
+ * had, and the same one `MoodEditor`'s `toNumberOrUndefined` encodes.
+ *
+ * Unlike a mood override, these fields are REQUIRED on `PackageItemData`,
+ * so an emptied input cannot emit `undefined` — it emits nothing at all and
+ * the item keeps its current value until the user types a new one.
+ */
 function toNumber(raw: string): number | null {
+  if (raw === '') return null;
   const parsed = Number(raw);
   return Number.isNaN(parsed) ? null : parsed;
 }

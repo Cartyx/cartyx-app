@@ -286,7 +286,20 @@ async function reapAbandonedUploads(
     if (shouldContinue && !shouldContinue()) break;
 
     const result = await model.updateOne(
-      { _id: row._id, status: 'uploading' },
+      // `variant: { $ne: 'once' }` is re-asserted here, NOT just in the
+      // `find` above — final-review fix, symmetric with
+      // `reapAbandonedOnceUploads`'s own fenced write, which has always
+      // carried its `variant: 'once'`. The window is real if narrow: this
+      // loop can run for seconds (bounded batch, `beat()` per row, an
+      // Atlas round trip each), and a row listed as an abandoned MAIN
+      // upload can complete confirm -> transcode -> once-attach before its
+      // turn comes. Without this clause that write matches the now-`once`
+      // row, and `row.sourceKey` — the MAIN source, projected before the
+      // attach existed — goes into a real `DeleteObjects`. That is Task
+      // 18's Critical 1 data loss reached through timing instead of by
+      // design. `$ne` (not `!=`) for the same reason the `find` uses it:
+      // rows predating the field have no `variant` and must still match.
+      { _id: row._id, status: 'uploading', variant: { $ne: 'once' } },
       {
         $set: {
           status: 'failed',

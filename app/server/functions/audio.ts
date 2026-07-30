@@ -427,8 +427,20 @@ export async function confirmOnceVariantUpload({
       const reason = tooLarge
         ? `File too large: ${bytes} bytes exceeds ${AUDIO_MAX_BYTES}`
         : `Unsupported audio type: ${type}`;
+      // Fenced on `status: 'uploading', variant: 'once'` — final-review fix.
+      // This was the one `findOneAndUpdate` in this file with only an
+      // identity filter, and it CANCELS a once-attach: it writes `status:
+      // 'ready', variant: 'main', onceSourceKey: null`. A stale reject
+      // (this handler resumed after an await while the user, seeing the
+      // first attach fail, already started a SECOND one) matched the fresh
+      // attach's row and silently reverted it — the worker's claim query
+      // never sees it, the browser's PUT lands on an object nothing
+      // references, and the GM is told nothing. The fence makes it a no-op
+      // instead: the row it means to revert is by definition still
+      // `uploading`/`once`, so a narrower filter cannot cost this path
+      // anything it should have done.
       await AudioAsset.findOneAndUpdate(
-        { _id: data.assetId, ownerId: userId },
+        { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
         {
           $set: {
             status: 'ready',

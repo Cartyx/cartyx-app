@@ -378,10 +378,27 @@ describe('BoardPad', () => {
   });
 
   // ---------------------------------------------------------------------
-  // The ∞/1× once-variant control.
+  // The ∞/1× once-variant control: REMOVED by the final whole-branch review.
+  //
+  // Task 16 shipped it as local `useState`, and the review found it wired to
+  // nothing — the click handler flipped a glyph, `SoundboardCommand` carries
+  // no variant, and `useSoundboard`'s `loadAsset` reads `asset.renditions`
+  // only. These three tests previously asserted the control's presence and
+  // its toggle; they now pin its ABSENCE, including for the one case that
+  // used to render it (an asset that genuinely has an attached once
+  // rendition). If a future phase wires a variant channel through the
+  // command/state/loadAsset seam, the third test is the one to invert —
+  // deliberately kept as its own case, with the same fixture, so the
+  // re-introduction is a one-test edit rather than a rewrite.
+  //
+  // No `role: 'button'` name query would be stable here (the removed
+  // control's accessible name was the only thing distinguishing it from the
+  // transport button), so these assert on the RENDERED GLYPHS instead: '∞'
+  // and '1×' appear nowhere else in the pad, so their absence is exactly the
+  // absence of that control.
   // ---------------------------------------------------------------------
 
-  it('does not render the once-variant control when the asset has no onceRenditions', () => {
+  it('renders no once-variant control when the asset has no onceRenditions', () => {
     render(
       <BoardPad
         item={mkItem()}
@@ -394,6 +411,7 @@ describe('BoardPad', () => {
       />
     );
     expect(screen.queryByRole('button', { name: /switch rain to/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/∞|1×/)).not.toBeInTheDocument();
   });
 
   /**
@@ -403,7 +421,7 @@ describe('BoardPad', () => {
    * `onceRenditions: {}` when nothing is attached (mirroring `renditions`'s
    * existing default). Nothing asserted that shape before; this does.
    */
-  it('does not render the once-variant control when onceRenditions is {} (the real server shape)', () => {
+  it('renders no once-variant control when onceRenditions is {} (the real server shape)', () => {
     render(
       <BoardPad
         item={mkItem()}
@@ -416,10 +434,10 @@ describe('BoardPad', () => {
       />
     );
     expect(screen.queryByRole('button', { name: /switch rain to/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/∞|1×/)).not.toBeInTheDocument();
   });
 
-  it('renders the once-variant control when the asset has an onceRenditions rendition, and toggling flips it', async () => {
-    const user = userEvent.setup();
+  it('renders no once-variant control even when the asset HAS an attached once rendition', () => {
     render(
       <BoardPad
         item={mkItem()}
@@ -433,10 +451,11 @@ describe('BoardPad', () => {
         onVolumeChange={noop}
       />
     );
-    const toggle = screen.getByRole('button', { name: /switch rain to play once/i });
-    expect(toggle).toHaveTextContent('∞');
-    await user.click(toggle);
-    expect(screen.getByRole('button', { name: /switch rain to loop/i })).toHaveTextContent('1×');
+    expect(screen.queryByRole('button', { name: /switch rain to/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/∞|1×/)).not.toBeInTheDocument();
+    // Positive control: the pad still renders normally for this asset — the
+    // fix removed one control, not the pad's transport.
+    expect(screen.getByRole('button', { name: /play rain/i })).toBeEnabled();
   });
 
   // ---------------------------------------------------------------------

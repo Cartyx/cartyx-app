@@ -32,10 +32,29 @@ import { join } from 'node:path';
 
 export const SOUNDBOARD_FIXTURES = {
   /**
-   * `ownerId: null`. Cloneable by anyone, editable by no one. Its clone
-   * inherits this name verbatim (`clonePackage` copies `name` when the caller
-   * sends none, and `PackagesListPage` sends none), so the spec tells the two
-   * apart by the `system-badge` testid, never by name.
+   * `ownerId: null`. Cloneable by anyone, editable by no one.
+   *
+   * Its clone does NOT inherit this name verbatim, and the spec DOES tell
+   * the two apart by name. Both halves of this comment were true until Task
+   * 22 and are corrected here in the final review:
+   *
+   * - `PackagesListPage` now passes `cloneDisplayName(pkg.name)` to
+   *   `clonePackage`, so a clone lands as `"<name> (copy)"`. The spec asserts
+   *   that string directly (`toContainText(cloneName)`) and uses it to build
+   *   the clone row's `"<name> actions"` overflow label and the package
+   *   editor's `Package name` value — none of which would match the source's
+   *   name. The reason the suffix exists at all is that the board's package
+   *   picker is a bare `<select><option>{name}</option></select>` with no
+   *   `system-badge` available to discriminate on.
+   * - `globalSetup`'s per-run reset DEPENDS on the suffix: it deletes system
+   *   packages by PREFIX regex (`^<systemPackageName>`) precisely so a
+   *   leftover `"<name> (copy)"` from a previous run is cleaned up too. An
+   *   exact-name delete would leave clones accumulating.
+   *
+   * The `system-badge` testid is still what locates each row unambiguously
+   * on the list page (a real package could legitimately be named "…
+   * (copy)"), so both discriminators are live — the badge for locating, the
+   * name for asserting.
    */
   systemPackageName: 'E2E System Package',
   /** Owned by `FOREIGN_OWNER_ID`. Must never appear in the E2E GM's package list. */

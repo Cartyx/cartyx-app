@@ -167,7 +167,14 @@ function MoodItemStateRow({ item, moodState, onChange, readOnly }: MoodItemState
         step={0.01}
         type="range"
         readOnly={readOnly}
-        onOverride={(raw) => onChange({ volume: toNumberOrUndefined(raw) ?? 0 })}
+        // NOT `?? 0`. `toNumberOrUndefined` returns `undefined` for an
+        // emptied field, and `?? 0` turned that into a silent 0-volume
+        // override — a muted item, indistinguishable from a deliberate one,
+        // reachable by backspacing the field rather than pressing Clear.
+        // `undefined` is the mood-state vocabulary for "no override": the
+        // random-interval siblings below have always passed it straight
+        // through, and `onClear` sends exactly the same value.
+        onOverride={(raw) => onChange({ volume: toNumberOrUndefined(raw) })}
         onClear={() => onChange({ volume: undefined })}
       />
 
@@ -182,7 +189,10 @@ function MoodItemStateRow({ item, moodState, onChange, readOnly }: MoodItemState
         max={30}
         step={0.5}
         readOnly={readOnly}
-        onOverride={(raw) => onChange({ fadeSeconds: toNumberOrUndefined(raw) ?? 0 })}
+        // Same fix as `volume` above — recorded as a Task 15 deferred minor:
+        // `?? 0` on an emptied field wrote a 0-second override, i.e. an
+        // instant cut, which `moodStateSchema` accepts as a legitimate value.
+        onOverride={(raw) => onChange({ fadeSeconds: toNumberOrUndefined(raw) })}
         onClear={() => onChange({ fadeSeconds: undefined })}
       />
 

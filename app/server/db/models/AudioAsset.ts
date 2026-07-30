@@ -96,6 +96,22 @@ const audioAssetSchema = new mongoose.Schema({
   // play gate, listAudioAssets, the library row). A genuine per-variant
   // queue (`onceStatus`/`onceAttempts`/...) is the real fix for that,
   // still out of scope here.
+  //
+  // "BRIEFLY" IS NOT THE WHOLE COST, and the exception is worth knowing
+  // before anyone reads this consequence as cosmetic. On the GM's live
+  // board the window is transient in Atlas but TERMINAL for that pad:
+  // `useSoundboard`'s `loadAsset` THROWS for a pending/uploading/processing
+  // asset, and `app/lib/soundboard/engine.ts`'s `ensureAsset` catches that
+  // by adding the asset to its `unplayable` set — which nothing ever
+  // clears for the engine's lifetime. So a GM who attaches a once-variant
+  // to a track already loaded on a board loses that pad for the rest of the
+  // session, even though the attach finishes seconds later and the main
+  // renditions were never touched; only a reload (or a re-enable, which
+  // builds a fresh engine) brings it back. It is not literally silent — the
+  // pad renders "Failed to decode this rendition" via `onLoadError` — but
+  // that reason is wrong, and it never goes away on its own. The same
+  // per-variant queue fixes this; so, more cheaply, would clearing
+  // `unplayable` when an asset is seen `ready` again.
   variant: { type: String, enum: ['main', 'once'], default: 'main' },
   // The once job's own error, kept separate from `lastError` (which
   // describes the MAIN pipeline and must never be overwritten by a once

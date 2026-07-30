@@ -306,7 +306,19 @@ export function SoundboardPage() {
               cleared={clearedByGM}
               initialState={initialState}
               packagePending={packagePending}
-              persist={campaign?.isOwner === true}
+              // `isGM`, NOT `isOwner`. `saveBoardState` authorizes through
+              // `requireCampaignMember`'s `isGM` — `gameMasterId === userId`
+              // OR a member row with `role: 'gm'` — while `isOwner` is
+              // strictly the first of those. `serializeCampaign` computes
+              // both from the same document, and `isGM` mirrors the server
+              // predicate exactly, so this is the field that belongs here.
+              // Latent today (`joinCampaign` only ever writes `role:
+              // 'player'`), but the failure mode for a co-GM is silent:
+              // `persist: false` suppresses every write with `saveError`
+              // left `null`, so their board never survives a reload and
+              // nothing tells them why. Still `=== true` — an unsettled or
+              // failed campaign query means "not proven GM", not "GM".
+              persist={campaign?.isGM === true}
               boardUnavailable={Boolean(packageQuery.error ?? assetsQuery.error)}
               boardStatePending={boardQuery.isPending}
             />

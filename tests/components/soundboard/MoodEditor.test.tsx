@@ -108,6 +108,39 @@ describe('MoodEditor', () => {
     expect(screen.queryByTestId('override-marker-volume-i1')).not.toBeInTheDocument();
   });
 
+  /**
+   * The OTHER way to clear an override, and the one Task 15's review flagged
+   * as deferred and the final review closed: backspacing the field to empty
+   * rather than pressing Clear. `onOverride` used to fall back
+   * `toNumberOrUndefined(raw) ?? 0`, so an emptied Fade field wrote a
+   * 0-second override — an instant cut, which `moodStateSchema` accepts as a
+   * perfectly legal value, so nothing downstream could tell it from a
+   * deliberate one. `volume`'s handler had the identical shape (its input is
+   * `type="range"`, which cannot emit an empty string through a real
+   * browser, so the fix there is symmetry rather than a live path).
+   *
+   * Teeth: restoring `?? 0` on `fadeSeconds` makes the `toBeUndefined`
+   * assertion fail with `0`.
+   */
+  it('emptying an override field clears it to undefined rather than writing a 0 override', () => {
+    const onMoodsChange = vi.fn();
+    const item = mkItem({ fadeSeconds: 2 });
+    const moods = [mkMood({ states: [{ itemId: 'i1', playing: true, fadeSeconds: 5 }] })];
+
+    render(<MoodEditor items={[item]} moods={moods} onMoodsChange={onMoodsChange} />);
+
+    const fade = screen.getByRole('spinbutton', { name: /fade seconds for rain in this mood/i });
+    fireEvent.change(fade, { target: { value: '' } });
+
+    expect(onMoodsChange).toHaveBeenCalledTimes(1);
+    const next = onMoodsChange.mock.calls[0][0] as MoodData[];
+    const state = next[0].states.find((s) => s.itemId === 'i1');
+    expect(state?.fadeSeconds).toBeUndefined();
+    expect(state?.fadeSeconds).not.toBe(0);
+    // The rest of the state survives — this clears one field, not the entry.
+    expect(state?.playing).toBe(true);
+  });
+
   it('setting an override calls onMoodsChange with the new value on the right item, preserving other fields', () => {
     const onMoodsChange = vi.fn();
     const item = mkItem({ id: 'i1', volume: 0.7 });

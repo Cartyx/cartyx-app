@@ -223,13 +223,26 @@ export type UseSoundboardOptions = {
    *
    * Only consulted when a persisted board names a package that has not
    * arrived. Defaults to **`false`**, and the direction of that default is
-   * deliberate: a caller who forgets this flag on a slow query loses the
-   * restored item states (visible, recoverable, the board just shows nothing
-   * playing), whereas defaulting to `true` would mean a persisted board naming
-   * a DELETED package waits forever, and a hook that never hydrates never
-   * saves. Task 4 deletes packages, so that is an ordinary outcome, not an
-   * edge case. Failing toward "lose a little, loudly" beats "lose everything,
-   * silently".
+   * deliberate — but NOT because forgetting it is cheap. Be precise about
+   * what each direction costs, because an earlier version of this comment
+   * called the forgotten-flag case "visible, recoverable" and it is neither:
+   *
+   * - Forgotten (`false` on a still-loading query): hydration concludes with
+   *   `pkgIdRef` null, then the `[pkg]` effect dispatches `loadPackage` and
+   *   the debounced save DURABLY writes a blank board to Atlas ~200ms later,
+   *   destroying the persisted `moodId` and every item's playing/volume. The
+   *   GM sees a board that looks freshly loaded and has no way to tell
+   *   anything was lost. Bounded (one board's state) and re-authorable, but
+   *   silent and permanent.
+   * - Defaulting to `true`: a persisted board naming a DELETED package waits
+   *   forever, `hydratedRef` never flips, EVERY save for the session is
+   *   discarded, and `hydrated` never settles so the route hangs. Task 4
+   *   deletes packages, so that is an ordinary outcome, not an edge case.
+   *
+   * `false` wins on blast radius (one board's restored state, once, versus
+   * every write for the whole session plus a hung route), not because the
+   * loss is mild. Task 17's contract note says the same thing from the
+   * caller's side: an absent `initialState` is the silent one.
    */
   packagePending?: boolean;
   /**
