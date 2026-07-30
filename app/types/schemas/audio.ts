@@ -68,6 +68,24 @@ export const confirmAudioUploadSchema = z.object({
   assetId: objectId,
 });
 
+/**
+ * Task 18: attach a `∞`/`1×` once-variant to an EXISTING `music` asset.
+ * Deliberately mirrors `createAudioUploadSchema` minus the classification
+ * fields (`kind`/`environment`/`mood`/`intensity`/`tags`/`title`) — those
+ * describe the asset as a whole and the once-variant doesn't get its own
+ * copy, only its own audio object.
+ */
+export const attachOnceVariantUploadSchema = z.object({
+  assetId: objectId,
+  filename: z.string().min(1).max(255),
+  contentType: z.string().min(1),
+  bytes: z.number().int().positive().max(AUDIO_MAX_BYTES),
+});
+
+export const confirmOnceVariantUploadSchema = z.object({
+  assetId: objectId,
+});
+
 export const listAudioAssetsSchema = z.object({
   kind: kind.optional(),
   environment: z.array(z.enum(AUDIO_ENVIRONMENTS)).optional(),

@@ -2,6 +2,8 @@ import { createServerFn } from '@tanstack/react-start';
 import {
   createAudioUploadSchema,
   confirmAudioUploadSchema,
+  attachOnceVariantUploadSchema,
+  confirmOnceVariantUploadSchema,
   listAudioAssetsSchema,
   updateAudioAssetSchema,
   bulkTagAudioAssetsSchema,
@@ -78,6 +80,26 @@ export const confirmAudioUploadFn = createServerFn({ method: 'POST' })
     const { confirmAudioUpload } = await import('~/server/functions/audio');
     const { requireActor } = await import('~/utils/require-actor');
     return confirmAudioUpload({ data, ...(await requireActor()) });
+  });
+
+// Task 18: attach a `∞`/`1×` once-variant to an existing `music` asset.
+// Same presign -> PUT -> confirm shape as createAudioUploadFn/
+// confirmAudioUploadFn above, just targeting an existing row instead of
+// creating one.
+export const createOnceVariantUploadFn = createServerFn({ method: 'POST' })
+  .inputValidator(attachOnceVariantUploadSchema)
+  .handler(async ({ data }) => {
+    const { createOnceVariantUpload } = await import('~/server/functions/audio');
+    const { requireActor } = await import('~/utils/require-actor');
+    return createOnceVariantUpload({ data, ...(await requireActor()) });
+  });
+
+export const confirmOnceVariantUploadFn = createServerFn({ method: 'POST' })
+  .inputValidator(confirmOnceVariantUploadSchema)
+  .handler(async ({ data }) => {
+    const { confirmOnceVariantUpload } = await import('~/server/functions/audio');
+    const { requireActor } = await import('~/utils/require-actor');
+    return confirmOnceVariantUpload({ data, ...(await requireActor()) });
   });
 
 export const listAudioAssetsFn = createServerFn({ method: 'POST' })

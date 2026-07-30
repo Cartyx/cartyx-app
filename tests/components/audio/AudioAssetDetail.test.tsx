@@ -328,3 +328,102 @@ describe('AudioAssetDetail', () => {
     expect(screen.getByRole('button', { name: /saving/i })).toBeDisabled();
   });
 });
+
+/**
+ * Task 18: the once-variant attach control. `asset` above is `kind:
+ * 'ambience'`, so every test here supplies its own `kind: 'music'` fixture
+ * — the control must not appear for any other kind, matching the design
+ * doc's "Optional second set, `kind: 'music'` only".
+ */
+describe('AudioAssetDetail once-variant control', () => {
+  const musicAsset: AudioAssetData = { ...asset, kind: 'music' };
+
+  it('does not render when the caller omits onAttachOnceVariant, even for a music asset', () => {
+    render(<AudioAssetDetail asset={musicAsset} onSave={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.queryByLabelText(/attach once-variant/i)).not.toBeInTheDocument();
+  });
+
+  it('does not render for a non-music asset even when onAttachOnceVariant is supplied', () => {
+    render(
+      <AudioAssetDetail
+        asset={asset}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        onAttachOnceVariant={vi.fn()}
+      />
+    );
+    expect(screen.queryByLabelText(/attach once-variant/i)).not.toBeInTheDocument();
+  });
+
+  it('fires onAttachOnceVariant with the picked file for a ready music asset', async () => {
+    const onAttachOnceVariant = vi.fn();
+    render(
+      <AudioAssetDetail
+        asset={musicAsset}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        onAttachOnceVariant={onAttachOnceVariant}
+      />
+    );
+    const input = screen.getByLabelText(/attach once-variant/i) as HTMLInputElement;
+    expect(input).toBeEnabled();
+    const file = new File(['ending'], 'ending.wav', { type: 'audio/wav' });
+    await userEvent.upload(input, file);
+    expect(onAttachOnceVariant).toHaveBeenCalledTimes(1);
+    expect(onAttachOnceVariant).toHaveBeenCalledWith(file);
+  });
+
+  it('disables the control while the main asset has not finished processing', () => {
+    render(
+      <AudioAssetDetail
+        asset={{ ...musicAsset, status: 'processing', durationMs: null, peaks: [] }}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        onAttachOnceVariant={vi.fn()}
+      />
+    );
+    expect(screen.getByLabelText(/attach once-variant/i)).toBeDisabled();
+  });
+
+  it('disables the control while attachingOnceVariant', () => {
+    render(
+      <AudioAssetDetail
+        asset={musicAsset}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        onAttachOnceVariant={vi.fn()}
+        attachingOnceVariant
+      />
+    );
+    expect(screen.getByLabelText(/attach once-variant/i)).toBeDisabled();
+    expect(screen.getByText(/uploading/i)).toBeInTheDocument();
+  });
+
+  it('shows the once-variant error when attaching fails', () => {
+    render(
+      <AudioAssetDetail
+        asset={musicAsset}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        onAttachOnceVariant={vi.fn()}
+        onceVariantError="Unsupported audio type: video/mp4"
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Unsupported audio type: video/mp4');
+  });
+
+  it('indicates an already-attached once-variant instead of the generic hint', () => {
+    render(
+      <AudioAssetDetail
+        asset={{
+          ...musicAsset,
+          onceRenditions: { opus: { key: 'k', url: 'https://cdn.test/once.opus', bytes: 1 } },
+        }}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        onAttachOnceVariant={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/is attached/i)).toBeInTheDocument();
+  });
+});

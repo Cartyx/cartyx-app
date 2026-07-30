@@ -24,6 +24,7 @@ import {
   scanOrphanAudioFn,
   deleteOrphanAudioFn,
 } from '~/utils/audio-server-fns';
+import { uploadOnceVariantFile } from '~/utils/uploadAudio';
 import { queryKeys } from '~/utils/queryKeys';
 import { captureException } from '~/utils/telemetry-client';
 import type { AudioAssetData, AudioEnvironment, AudioMood } from '~/types/audio';
@@ -192,6 +193,18 @@ export function AudioLibraryPage() {
     mutationFn: (asset: AudioAssetData) => retryAudioAssetFn({ data: { id: asset.id } }),
     onSuccess: invalidateAudio,
     onError: (e) => captureException(e, { action: 'AudioLibraryPage.retryAsset' }),
+  });
+
+  // Task 18: attach a once-variant. Kept as its own mutation (not folded
+  // into `update`) because it's a file upload with a different
+  // presign/PUT/confirm shape, not a `updateAudioAssetFn` field edit — and
+  // because the two can legitimately be in flight at once (editing facets
+  // while the once-variant transcodes).
+  const attachOnceVariant = useMutation({
+    mutationFn: ({ assetId, file }: { assetId: string; file: File }) =>
+      uploadOnceVariantFile(assetId, file),
+    onSuccess: invalidateAudio,
+    onError: (e) => captureException(e, { action: 'AudioLibraryPage.attachOnceVariant' }),
   });
 
   const deleteMutation = useMutation({
@@ -387,10 +400,23 @@ export function AudioLibraryPage() {
               }
               onClose={() => {
                 update.reset();
+                attachOnceVariant.reset();
                 setEditingAssetId(null);
               }}
               saving={update.isPending}
               error={update.error ? errorMessage(update.error, 'Failed to save changes.') : null}
+              onAttachOnceVariant={(file) =>
+                attachOnceVariant.mutate({ assetId: editingAsset.id, file })
+              }
+              attachingOnceVariant={attachOnceVariant.isPending}
+              onceVariantError={
+                attachOnceVariant.error
+                  ? errorMessage(
+                      attachOnceVariant.error,
+                      'Failed to attach once-variant. Please try again.'
+                    )
+                  : null
+              }
             />
           )}
 

@@ -11,6 +11,8 @@ import type { AudioAssetData } from '~/types/audio';
 import type {
   createAudioUploadSchema,
   confirmAudioUploadSchema,
+  attachOnceVariantUploadSchema,
+  confirmOnceVariantUploadSchema,
   listAudioAssetsSchema,
   updateAudioAssetSchema,
   bulkTagAudioAssetsSchema,
@@ -222,6 +224,150 @@ export async function confirmAudioUpload({
   }
 }
 
+/**
+ * Task 18: presign a source upload for an EXISTING `music` asset's
+ * once-variant (the composed-ending encode the board's `1×` position plays
+ * — see the design doc's "Music variants"). Attaches to the SAME
+ * `AudioAsset` row rather than creating a new one, because `onceRenditions`
+ * has to land on the same document as `renditions` for `BoardPad`'s
+ * `asset.onceRenditions` check (Task 16) to ever see it — a second document
+ * could never be joined back to the first from the client's read model.
+ *
+ * Reuses the row's status/attempts/claim queue state for this second job
+ * (see `variant` on the model). The `status: 'ready'` filter on the write
+ * below does double duty: it refuses to attach onto audio that hasn't
+ * finished its own transcode yet (nothing to pair a once-variant with), and
+ * it is the replay guard — once this write flips status away from 'ready',
+ * a second, concurrent attach request's identical filter matches nothing,
+ * the same technique `confirmAudioUpload`'s `status: 'uploading'` filter
+ * uses.
+ */
+export async function createOnceVariantUpload({
+  data,
+  userId,
+  sessionUserId,
+}: {
+  data: z.infer<typeof attachOnceVariantUploadSchema>;
+} & Actor) {
+  try {
+    await ensureDb();
+    const asset = await AudioAsset.findOne({ _id: data.assetId, ownerId: userId });
+    if (!asset) throw new Error('Audio asset not found');
+    if (asset.kind !== 'music') {
+      throw new Error('Only music assets can have a once-variant attached');
+    }
+    if (asset.status !== 'ready') {
+      throw new Error('This asset must finish processing before a once-variant can be attached');
+    }
+
+    const storagePrefix = await resolveAudioStoragePrefix(userId);
+    const { uploadUrl, key } = await getAudioUploadUrl({
+      contentType: data.contentType,
+      bytes: data.bytes,
+      storagePrefix,
+      telemetryUserId: telemetryId({ userId, sessionUserId }),
+    });
+
+    const updated = await AudioAsset.findOneAndUpdate(
+      { _id: data.assetId, ownerId: userId, status: 'ready' },
+      {
+        $set: {
+          onceSourceKey: key,
+          variant: 'once',
+          status: 'uploading',
+          updatedAt: new Date(),
+        },
+      },
+      { new: true }
+    );
+    if (!updated) {
+      throw new Error('This asset is not ready to accept a once-variant right now');
+    }
+
+    return { assetId: data.assetId, uploadUrl, key };
+  } catch (e) {
+    reportAudioError(e, { userId, sessionUserId }, { action: 'createOnceVariantUpload' });
+    throw e;
+  }
+}
+
+/**
+ * Confirm step for the once-variant upload. Mirrors `confirmAudioUpload`
+ * exactly — same HeadObject size/type enforcement, for the same reason (a
+ * presigned PUT cannot constrain Content-Length). The only differences are
+ * WHICH key is measured (`onceSourceKey`, not `sourceKey`) and which
+ * transition it gates (`uploading` + `variant: 'once'` -> `pending`, so the
+ * worker's claim query picks the row back up).
+ */
+export async function confirmOnceVariantUpload({
+  data,
+  userId,
+  sessionUserId,
+}: {
+  data: z.infer<typeof confirmOnceVariantUploadSchema>;
+} & Actor) {
+  try {
+    await ensureDb();
+    const asset = await AudioAsset.findOne({ _id: data.assetId, ownerId: userId });
+    if (!asset) throw new Error('Audio asset not found');
+    if (asset.status !== 'uploading' || asset.variant !== 'once' || !asset.onceSourceKey) {
+      throw new Error('Once-variant asset is not awaiting confirmation');
+    }
+
+    const { client, bucket } = createR2();
+    const head = await client.send(
+      new HeadObjectCommand({ Bucket: bucket, Key: asset.onceSourceKey })
+    );
+
+    const bytes = head.ContentLength ?? 0;
+    const type = head.ContentType ?? '';
+    const tooLarge = bytes > AUDIO_MAX_BYTES;
+    const badType = !AUDIO_SOURCE_TYPES.has(type);
+
+    if (tooLarge || badType) {
+      // Same reasoning as confirmAudioUpload's own reject path: the object
+      // must go, or storage is paid for a file that was refused.
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.onceSourceKey }));
+      const reason = tooLarge
+        ? `File too large: ${bytes} bytes exceeds ${AUDIO_MAX_BYTES}`
+        : `Unsupported audio type: ${type}`;
+      await AudioAsset.findOneAndUpdate(
+        { _id: data.assetId, ownerId: userId },
+        {
+          $set: {
+            status: 'failed',
+            lastError: reason,
+            permanentFailure: true,
+            updatedAt: new Date(),
+          },
+        }
+      );
+      throw new Error(reason);
+    }
+
+    const updated = await AudioAsset.findOneAndUpdate(
+      { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
+      {
+        $set: {
+          status: 'pending',
+          confirmedAt: new Date(),
+          updatedAt: new Date(),
+        },
+      },
+      { new: true }
+    );
+    if (!updated) throw new Error('Once-variant asset is not awaiting confirmation');
+
+    serverCaptureEvent(telemetryId({ userId, sessionUserId }), 'audio_once_variant_confirmed', {
+      assetId: data.assetId,
+    });
+    return { assetId: data.assetId, status: updated.status ?? 'pending' };
+  } catch (e) {
+    reportAudioError(e, { userId, sessionUserId }, { action: 'confirmOnceVariantUpload' });
+    throw e;
+  }
+}
+
 type AudioDoc = Record<string, unknown>;
 
 export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
@@ -240,6 +386,7 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     loudnessTargetLufs?: number | null;
     peaks?: number[];
     renditions?: AudioAssetData['renditions'];
+    onceRenditions?: AudioAssetData['onceRenditions'];
     lastError?: string | null;
     permanentFailure?: boolean | null;
     confirmedAt?: Date | null;
@@ -261,6 +408,11 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     loudnessTargetLufs: d.loudnessTargetLufs ?? null,
     peaks: d.peaks ?? [],
     renditions: d.renditions ?? {},
+    // Task 18: the field genuinely starts as absent on every row (including
+    // every row that predates this task) and stays absent until an owner
+    // attaches a once-variant, so `{}` here — mirroring `renditions` above —
+    // is the honest "nothing attached yet" value, not a placeholder.
+    onceRenditions: d.onceRenditions ?? {},
     lastError: d.lastError ?? null,
     // Serialized so the UI can EXPLAIN a non-retryable row, not so it can
     // decide about one — `retryable` below is what decides. Absent (a row
@@ -622,12 +774,21 @@ export async function deleteAudioAsset({
     if (!asset) throw new Error('Audio asset not found');
 
     const { client, bucket } = createR2();
-    // onceRenditions is reserved for phase 2's infinite/one-shot music variants and
-    // is never written in phase 1 (see AudioAsset model comment), so there is
-    // nothing there to clean up yet.
-    const keys = [asset.sourceKey, asset.renditions?.opus?.key, asset.renditions?.aac?.key].filter(
-      (k): k is string => Boolean(k)
-    );
+    // Task 18 made onceRenditions/onceSourceKey real: an asset with a once-
+    // variant attached has THREE extra R2 objects beyond the main
+    // source+renditions (the once source, and its opus/aac renditions), and
+    // all three live under this owner's storage prefix same as the rest —
+    // deleting the row without deleting them would strand three objects the
+    // orphan scanner (audio-cleanup.ts) would only catch on a later manual
+    // sweep instead of immediately, same as every other key here.
+    const keys = [
+      asset.sourceKey,
+      asset.renditions?.opus?.key,
+      asset.renditions?.aac?.key,
+      asset.onceSourceKey,
+      asset.onceRenditions?.opus?.key,
+      asset.onceRenditions?.aac?.key,
+    ].filter((k): k is string => Boolean(k));
 
     // R2 deletion is BEST-EFFORT: a failing object delete must not block the row
     // delete. The user asked for this asset to be gone, and leaving the row

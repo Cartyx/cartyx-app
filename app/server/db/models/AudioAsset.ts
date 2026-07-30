@@ -36,11 +36,49 @@ const audioAssetSchema = new mongoose.Schema({
     opus: { type: renditionSchema, default: undefined },
     aac: { type: renditionSchema, default: undefined },
   },
-  // Reserved for phase 2's ∞/1× music variants. Never written in phase 1.
+  // The phase 2 ∞/1× music variant (`kind: 'music'` only) — the composed
+  // ending the board's `1×` position plays instead of looping. Written by
+  // Task 18's attach flow (`createOnceVariantUpload` -> confirm -> the
+  // worker), never at main ingest time. Every reader must still treat this
+  // as optional: an asset attached before Task 18, or one whose owner never
+  // attaches a once-variant, has it absent forever.
   onceRenditions: {
     opus: { type: renditionSchema, default: undefined },
     aac: { type: renditionSchema, default: undefined },
   },
+  // The once-variant's own uploaded source object key, mirroring `sourceKey`
+  // above. Null until `createOnceVariantUpload` presigns one. Kept
+  // separately from `sourceKey` rather than overwriting it: the main
+  // source must survive so the asset can still be re-transcoded from it,
+  // and the two need independent keys so their renditions can't collide
+  // (see `variant` below and `renditionKeyBase`'s callers in
+  // audio-worker/src/process.ts).
+  onceSourceKey: { type: String, default: null },
+  // Which pipeline pass the row's CURRENT status/attempts/claim state
+  // describes: 'main' for the ordinary source -> renditions pipeline (every
+  // asset, including every one that predates this field), 'once' while a
+  // Task 18 once-variant attach is queued/processing. The worker
+  // (`processAsset`) reads this to pick its source object
+  // (`sourceKey`/`onceSourceKey`) and its destination field
+  // (`renditions`/`onceRenditions`) — "same pipeline, different
+  // destination field," per the design doc's own framing.
+  //
+  // On a SUCCESSFUL once-variant run the worker resets this to 'main',
+  // since the once job is done. On a FAILED run it is left at 'once' on
+  // purpose, so a Retry click retries the SAME job instead of silently
+  // re-running the (already-ready) main transcode.
+  //
+  // Reusing one status/attempts/claim state for a second job type is the
+  // trade-off this collection's own design doc names explicitly ("if a
+  // second job type is ever added this should become a real queue rather
+  // than growing more status enums") — accepted here rather than building
+  // a second queue. The consequence: while a once-variant attach is
+  // in flight or failed, `status` no longer reads 'ready' for the WHOLE
+  // row, so the main rendition — already finished, and never touched by
+  // this job — is briefly reported as uploading/pending/processing/failed
+  // everywhere `status` is read (the board's play gate, listAudioAssets,
+  // the library row). See Task 18's report.
+  variant: { type: String, enum: ['main', 'once'], default: 'main' },
 
   durationMs: { type: Number, default: null },
   // Exact decoded length in samples per channel at 48 kHz (the rate every
