@@ -1,5 +1,10 @@
 import { execFile } from 'node:child_process';
-import { boundedDecodeFilters, COMPACT_OUTPUT_TIMELINE, childProcOptions } from './ffmpeg.js';
+import {
+  boundedDecodeFilters,
+  COMPACT_OUTPUT_TIMELINE,
+  childProcOptions,
+  SINGLE_THREAD,
+} from './ffmpeg.js';
 import { MAX_SOURCE_DURATION_MS } from './config.js';
 
 /** Mono s16 at this rate is what the peak decode below emits. */
@@ -80,6 +85,10 @@ export function extractPeaks(
       [
         '-v',
         'error',
+        // Decoder-side thread pool, pinned to 1. See `SINGLE_THREAD` in
+        // ffmpeg.ts for the measurements — this stage is not exempt: on a flac
+        // source it opened 37 threads by default against a 1-core cgroup.
+        ...SINGLE_THREAD,
         '-i',
         path,
         // `-map 0:a:0` for the same reason `transcode` needs it: an input with
@@ -99,6 +108,8 @@ export function extractPeaks(
         '1',
         '-ar',
         String(PEAK_DECODE_SAMPLE_RATE),
+        // Filter/encoder-side pool — a separate pool from the one before `-i`.
+        ...SINGLE_THREAD,
         '-f',
         's16le',
         '-',
