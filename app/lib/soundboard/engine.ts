@@ -95,14 +95,24 @@ type Track = {
   /** Content length in seconds of the buffer currently playing. */
   contentSeconds: number;
   /** True when this source came from `fireOneShot` rather than `playing: true`.
-   * `apply` must not stop these — a random thunder crack is not represented in
-   * `BoardState`, so every unrelated state change (a master-volume nudge, say)
-   * would otherwise cut it off mid-flight. */
+   * Transient tracks live in their own map (see `oneShots`) and are only
+   * flagged here so `clear` knows not to report an `onItemEnded` for a pad that
+   * was never lit. */
   transient: boolean;
-  /** True once an end-of-pass fade + `stop()` has been scheduled on this
-   * source. Volume changes have to re-schedule it (`cancelScheduledValues`
-   * wipes it), and flipping loop back on cannot un-schedule it. */
-  tailScheduled: boolean;
+  /**
+   * The audio-clock time at which this source's scheduled fade-out reaches
+   * zero, or `null` if no end has been scheduled.
+   *
+   * Stored rather than recomputed. `startedAt + contentSeconds` is right for a
+   * one-shot but WRONG for a loop flipped to `1×` mid-play, which ends at
+   * `startedAt + (k+1)·contentSeconds` for whichever pass was running. A volume
+   * change after such a flip calls `cancelScheduledValues`, wiping the tail; if
+   * the re-schedule recomputes an end time already in the past, `scheduleTail`
+   * writes nothing while `flipLoop`'s `source.stop()` still lands — a hard cut
+   * at full volume, in exactly the class of click the 15 ms ramp exists to
+   * prevent.
+   */
+  tailEndTime: number | null;
 };
 
 /**
@@ -125,13 +135,37 @@ export function createEngine(
   master.gain.value = 1;
   master.connect(ctx.destination);
 
+  /** Pad state, keyed by `itemId`. Only `apply` writes here. */
   const tracks = new Map<string, Track>();
+  /**
+   * Transient `fireOneShot` playback, keyed by `itemId`, kept in a SEPARATE map
+   * from the pads.
+   *
+   * If a random fire shared the pad's track, firing on an item that is also
+   * `playing: true` would stop the pad's source (that is `start`'s retrigger)
+   * and the next `apply` would then restart the loop from zero with a fresh
+   * fade-in — Task 11's scheduler chopping the very ambience it is decorating.
+   * Separate keys mean a thunder crack layers over a playing rain bed, which is
+   * the actual use case, and Task 11 gains no constraint it has to remember.
+   * Retrigger still works: a second fire on an item already cracking retriggers
+   * that one-shot, because it is the same key within this map.
+   */
+  const oneShots = new Map<string, Track>();
   const assets = new Map<string, EngineAsset>();
   const pending = new Map<string, Promise<void>>();
   /** Assets whose load returned `null` or threw — never retried. */
   const unplayable = new Set<string>();
-  /** Every source currently scheduled, so `dispose` can silence detached
-   * (already-stopped-but-still-fading) sources too. */
+  /**
+   * Every source that has been started and not yet ended — INCLUDING sources
+   * that are stopping but still fading out, which is why `stopTrack` replaces
+   * the auto-release handler with a bookkeeping one rather than nulling it.
+   *
+   * `dispose` stops all of them. That is resource release, not silencing:
+   * `master.disconnect()` is what makes dispose inaudible, and the effect of
+   * this set is therefore NOT observable in rendered output. It exists so a
+   * long-lived `AudioContext` does not accumulate scheduled sources across the
+   * lifetime of engines that come and go.
+   */
   const live = new Set<AudioBufferSourceNode>();
 
   let latest: BoardState | null = null;
@@ -162,8 +196,9 @@ export function createEngine(
     return Math.min(asset.durationSamples / AUDIO_RENDITION_SAMPLE_RATE, asset.buffer.duration);
   }
 
-  function trackFor(itemId: string): Track {
-    const existing = tracks.get(itemId);
+  function trackFor(itemId: string, transient: boolean): Track {
+    const map = transient ? oneShots : tracks;
+    const existing = map.get(itemId);
     if (existing) return existing;
     const created: Track = {
       gain: null,
@@ -173,48 +208,57 @@ export function createEngine(
       fadeSeconds: 0,
       loop: false,
       contentSeconds: 0,
-      transient: false,
-      tailScheduled: false,
+      transient,
+      tailEndTime: null,
     };
-    tracks.set(itemId, created);
+    map.set(itemId, created);
     return created;
   }
 
   /** Free the pad. Called only from the auto-release path (`onended` on a
    * source nobody deliberately stopped). */
   function clear(itemId: string, track: Track): void {
-    const wasTransient = track.transient;
     track.source = null;
     track.gain = null;
-    track.tailScheduled = false;
-    track.transient = false;
-    if (!wasTransient) options.onItemEnded?.(itemId);
+    track.tailEndTime = null;
+    if (track.transient) {
+      // A finished transient leaves nothing to remember, and reports nothing:
+      // it never lit a pad, so there is no "it stopped" for Task 12 to act on.
+      oneShots.delete(itemId);
+      return;
+    }
+    options.onItemEnded?.(itemId);
   }
 
   /**
    * Ramp down to zero at `endTime`, from the volume the envelope is currently
-   * targeting. Used for a one-shot's tail and for the final pass of a loop
-   * that was flipped to `1×`.
+   * targeting. Used for a one-shot's tail and for the final pass of a loop that
+   * was flipped to `1×`. Always records `endTime` on the track, even when there
+   * is no room to ramp, so a later re-schedule knows where the source really
+   * ends rather than recomputing it wrongly.
    *
-   * Clamped so the tail can never start before the fade-IN has finished: on a
-   * buffer shorter than twice the fade, the two ramps would otherwise cross and
-   * the second `setValueAtTime` would yank the gain back up mid fade-in.
+   * `notBefore` guards against writing a `setValueAtTime` on top of a ramp that
+   * is still in flight: the volume-change path re-schedules the tail 15 ms
+   * before its own slide has landed, and an event at the same instant would
+   * replace it and turn the slide into a step.
+   *
+   * `tailStart` is also clamped past the fade-IN's end — on a buffer shorter
+   * than twice the fade the two ramps would otherwise cross, and the tail's
+   * `setValueAtTime` would yank the gain up to full mid fade-in.
    */
-  function scheduleTail(track: Track, endTime: number): void {
+  function scheduleTail(track: Track, endTime: number, notBefore = ctx.currentTime): void {
+    track.tailEndTime = endTime;
     const gain = track.gain;
     if (!gain) return;
-    const now = ctx.currentTime;
-    const earliest = Math.max(now, track.startedAt + track.fadeSeconds);
+    // fade 0 is an instant cut by request; `stop()` at `endTime` does it.
+    if (track.fadeSeconds <= 0) return;
+    const earliest = Math.max(notBefore, track.startedAt + track.fadeSeconds);
     const tailStart = Math.max(earliest, endTime - track.fadeSeconds);
-    if (tailStart >= endTime) {
-      // No room for a tail (fade 0, or a buffer shorter than its own fade):
-      // the buffer simply ends. `stop()` at `endTime` still cuts the padding.
-      track.tailScheduled = true;
-      return;
-    }
+    // No room left at all (a change landing in the last few ms). Nothing to
+    // schedule; the source's own `stop()` ends it.
+    if (tailStart >= endTime) return;
     gain.gain.setValueAtTime(track.volume, tailStart);
     gain.gain.linearRampToValueAtTime(0, endTime);
-    track.tailScheduled = true;
   }
 
   /**
@@ -224,7 +268,7 @@ export function createEngine(
   function start(item: BoardItemState, transient: boolean): void {
     const asset = assets.get(item.assetId);
     if (!asset) return;
-    const track = trackFor(item.itemId);
+    const track = trackFor(item.itemId, transient);
     if (track.source) stopTrack(item.itemId, track, true);
 
     const now = ctx.currentTime;
@@ -254,8 +298,17 @@ export function createEngine(
       gain.gain.setValueAtTime(item.volume, now);
     }
 
-    // The identity check is the whole point. Without it, a fast off/on has the
-    // OLD source's `onended` clear the pad the NEW source is playing on.
+    // The auto-release path: a source that reaches its end frees the pad.
+    //
+    // `track.source === source` is DEFENCE IN DEPTH, not the load-bearing
+    // mechanism — it is paired with `stopTrack` replacing this handler before
+    // every deliberate stop, and with `start` always routing through `stopTrack`
+    // before it replaces a source. With that pairing intact the identity check
+    // is unreachable: removing it alone leaves the whole browser suite green
+    // (verified). It is kept because removing BOTH reproduces the POC's
+    // documented failure — a stale source releasing the pad the new source is
+    // playing on — and a future edit that drops the handler swap must not
+    // silently also drop the only remaining guard.
     source.onended = () => {
       live.delete(source);
       if (track.source === source) clear(item.itemId, track);
@@ -269,7 +322,7 @@ export function createEngine(
     track.loop = loop;
     track.contentSeconds = content;
     track.transient = transient;
-    track.tailScheduled = false;
+    track.tailEndTime = null;
 
     live.add(source);
     source.start(now);
@@ -310,14 +363,23 @@ export function createEngine(
     // Deliberate teardown must not run the auto-release path — `onItemEnded`
     // would tell Task 12 the pad released on its own, when in fact the caller
     // asked for it (or is about to start a replacement on the same pad).
-    source.onended = null;
-    live.delete(source);
+    //
+    // The POC sets `onended = null` here. This SWAPS it for a bookkeeping
+    // handler instead, which honours the same requirement (it never reaches
+    // `clear`) while keeping two things true that nulling it would break: the
+    // source stays in `live` until it has actually finished fading, so
+    // `dispose` can stop it; and the detached gain node — reachable from
+    // nothing but this dying source — gets an explicit `disconnect()` rather
+    // than waiting on graph GC.
+    source.onended = () => {
+      live.delete(source);
+      gain.disconnect();
+    };
     source.stop(now + fade);
 
     track.source = null;
     track.gain = null;
-    track.tailScheduled = false;
-    track.transient = false;
+    track.tailEndTime = null;
   }
 
   function ensureAsset(assetId: string): void {
@@ -347,7 +409,15 @@ export function createEngine(
 
     if (state.masterVolume !== masterVolume) {
       masterVolume = state.masterVolume;
-      master.gain.setValueAtTime(masterVolume, ctx.currentTime);
+      const now = ctx.currentTime;
+      // Ramped, not stepped. A GM dragging the master slider produces a stream
+      // of these, and `setValueAtTime` on every one is a stair of
+      // discontinuities — zipper noise. Same 15 ms slide the per-pad volume
+      // uses, and the same cancel → pin → ramp shape so consecutive drags
+      // compose instead of fighting.
+      master.gain.cancelScheduledValues(now);
+      master.gain.setValueAtTime(master.gain.value, now);
+      master.gain.linearRampToValueAtTime(masterVolume, now + IMMEDIATE_FADE_SECONDS);
     }
 
     const seen = new Set<string>();
@@ -356,12 +426,20 @@ export function createEngine(
       seen.add(item.itemId);
       const track = tracks.get(item.itemId);
 
+      // Refresh the fade BEFORE anything can consume it. A `setMood` can change
+      // an item's `fadeSeconds` while it is already playing, and the very next
+      // thing that reads it may be this same reconcile's stop branch below —
+      // which would otherwise fade out over the PREVIOUS mood's fade. The
+      // in-flight fade-in keeps its original schedule (re-timing a ramp already
+      // half-run has no meaningful "correct" answer); the new value governs the
+      // stop, the tail, and every later start.
+      if (track?.source && item.fadeSeconds !== track.fadeSeconds) {
+        track.fadeSeconds = item.fadeSeconds;
+      }
+
       if (item.playing) {
         ensureAsset(item.assetId);
-        // No source, or only a transient fire is sounding on this pad (which is
-        // not the pad being "on") — start the real thing. `start` handles the
-        // transient one already playing by stopping it first.
-        if (!track?.source || track.transient) {
+        if (!track?.source) {
           start(item, false);
           continue;
         }
@@ -378,17 +456,21 @@ export function createEngine(
             gain.gain.linearRampToValueAtTime(item.volume, now + IMMEDIATE_FADE_SECONDS);
           }
           track.volume = item.volume;
-          // `cancelScheduledValues` just wiped any pending tail; put it back.
-          if (track.tailScheduled) scheduleTail(track, track.startedAt + track.contentSeconds);
+          // `cancelScheduledValues` just wiped any pending tail. Put it back at
+          // the end time that was actually scheduled — NOT a recomputed
+          // `startedAt + contentSeconds`, which is wrong for a loop flipped to
+          // `1×` on any pass after the first. `notBefore` keeps it clear of the
+          // 15 ms slide just scheduled above.
+          if (track.tailEndTime !== null) {
+            scheduleTail(track, track.tailEndTime, now + IMMEDIATE_FADE_SECONDS);
+          }
         }
 
         if (item.loop !== track.loop) flipLoop(item, track);
         continue;
       }
 
-      // Not playing. A transient fire is not represented in `BoardState`, so
-      // `playing: false` is not an instruction to cut it short.
-      if (track?.source && !track.transient) stopTrack(item.itemId, track, false);
+      if (track?.source) stopTrack(item.itemId, track, false);
     }
 
     // Items that vanished from the package entirely (a `loadPackage` to a
@@ -397,6 +479,11 @@ export function createEngine(
       if (seen.has(itemId)) continue;
       if (track.source) stopTrack(itemId, track, false);
       tracks.delete(itemId);
+    }
+    // A transient fire on a vanished item is left to finish — it is already
+    // decoupled from the pad — but its bookkeeping entry is dropped once it has.
+    for (const [itemId, track] of oneShots) {
+      if (!seen.has(itemId) && !track.source) oneShots.delete(itemId);
     }
   }
 
@@ -420,7 +507,7 @@ export function createEngine(
       return;
     }
 
-    if (track.tailScheduled) {
+    if (track.tailEndTime !== null) {
       // A scheduled `stop()` cannot be un-scheduled, so the only way back to a
       // loop is a fresh source. Documented as an approximation: flipping
       // 1× → ∞ after already flipping ∞ → 1× mid-pass re-attacks the track.
@@ -479,6 +566,8 @@ export function createEngine(
       }
       live.clear();
       tracks.clear();
+      oneShots.clear();
+      // This, not the loop above, is what makes dispose silent.
       master.disconnect();
     },
   };

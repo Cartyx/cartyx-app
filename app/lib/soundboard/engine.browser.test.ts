@@ -378,6 +378,50 @@ describe('createEngine — looping', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(ended).toEqual(['chant']);
   });
+
+  it('keeps the final-pass fade-out when the volume changes after a mid-play flip to 1x', async () => {
+    const ctx = new OfflineAudioContext(1, 3 * SR, SR);
+    const engine = createEngine(ctx, {
+      loadAsset: loaderFor({ a1: { buffer: dcBuffer(ctx, 1), durationSamples: SR } }),
+    });
+    const item = boardItem({
+      itemId: 'chant',
+      assetId: 'a1',
+      playing: true,
+      volume: 1,
+      fadeSeconds: 1,
+      loop: true,
+    });
+
+    engine.apply(board([item]));
+    await engine.ready();
+
+    // Flip to 1x halfway through the SECOND pass: the source really ends at
+    // t = 2.0, which is `startedAt + 2 x contentSeconds`, not
+    // `startedAt + contentSeconds`.
+    void ctx.suspend(1.5).then(() => {
+      engine.apply(board([{ ...item, loop: false }]));
+      void ctx.resume();
+    });
+    // Then nudge the volume, which calls `cancelScheduledValues` and wipes the
+    // tail ramp. Re-scheduling it from a recomputed `startedAt + contentSeconds`
+    // yields t = 1.0 — already in the past — so nothing is written while
+    // `flipLoop`'s `stop(2.0)` still lands: a hard cut at full volume.
+    void ctx.suspend(1.7).then(() => {
+      engine.apply(board([{ ...item, loop: false, volume: 0.5 }]));
+      void ctx.resume();
+    });
+    const rendered = await ctx.startRendering();
+
+    // The pass still runs to 2.0 …
+    expect(at(rendered, 1.6)).toBeCloseTo(0.8, 2);
+    // … and still arrives there at zero rather than at the new volume.
+    expect(at(rendered, 1.85)).toBeGreaterThan(0.2);
+    expect(at(rendered, 1.85)).toBeLessThan(0.32);
+    expect(at(rendered, 1.99)).toBeLessThan(0.05);
+    expect(peakBetween(rendered, 1.95, 2)).toBeLessThan(0.1);
+    expect(at(rendered, 2.05)).toBeCloseTo(0, 5);
+  });
 });
 
 describe('createEngine — one-shots', () => {
@@ -483,6 +527,47 @@ describe('createEngine — one-shots', () => {
 
     expect(at(rendered, 1.5)).toBeCloseTo(1, 5);
   });
+
+  it('layers over a pad that is already playing instead of stealing it', async () => {
+    const ctx = new OfflineAudioContext(1, 3 * SR, SR);
+    const engine = createEngine(ctx, {
+      loadAsset: loaderFor({ a1: { buffer: dcBuffer(ctx, 1), durationSamples: SR } }),
+    });
+    // A looping rain bed that Task 11's scheduler will also fire one-shots on.
+    const rain = boardItem({
+      itemId: 'rain',
+      assetId: 'a1',
+      playing: true,
+      volume: 1,
+      fadeSeconds: 0.5,
+      loop: true,
+    });
+
+    engine.apply(board([rain]));
+    await engine.ready();
+    void ctx.suspend(1).then(() => {
+      engine.fireOneShot('rain');
+      void ctx.resume();
+    });
+    // A later reconcile, after the crack has finished. If the fire had taken the
+    // pad's own track, this would find no source and re-attack the loop from
+    // zero with a fresh fade-in — the scheduler chopping its own ambience.
+    void ctx.suspend(2.5).then(() => {
+      engine.apply(board([rain]));
+      void ctx.resume();
+    });
+    const rendered = await ctx.startRendering();
+
+    expect(at(rendered, 0.75)).toBeCloseTo(1, 5);
+    // Both sounding: the bed at 1, the crack riding its own 0.5 s envelope.
+    expect(at(rendered, 1.25)).toBeCloseTo(1.5, 3);
+    expect(at(rendered, 1.5)).toBeCloseTo(2, 3);
+    expect(at(rendered, 1.75)).toBeCloseTo(1.5, 3);
+    // Crack over, bed untouched — and still untouched by the later reconcile.
+    expect(at(rendered, 2.05)).toBeCloseTo(1, 5);
+    expect(at(rendered, 2.6)).toBeCloseTo(1, 5);
+    expect(at(rendered, 2.9)).toBeCloseTo(1, 5);
+  });
 });
 
 describe('createEngine — pad ownership', () => {
@@ -555,6 +640,67 @@ describe('createEngine — volume and teardown', () => {
     // Mid-ramp, halfway through the 15 ms slide.
     expect(at(rendered, 1.0075)).toBeCloseTo(0.5, 2);
     expect(at(rendered, 1.05)).toBeCloseTo(0.2, 5);
+  });
+
+  it('ramps the master volume too, so a slider drag does not zipper', async () => {
+    const ctx = new OfflineAudioContext(1, 2 * SR, SR);
+    const engine = createEngine(ctx, {
+      loadAsset: loaderFor({ a1: { buffer: dcBuffer(ctx, 2), durationSamples: 2 * SR } }),
+    });
+    const item = boardItem({
+      itemId: 'storm',
+      assetId: 'a1',
+      playing: true,
+      volume: 1,
+      fadeSeconds: 0,
+      loop: true,
+    });
+
+    engine.apply(board([item], 1));
+    await engine.ready();
+    void ctx.suspend(1).then(() => {
+      engine.apply(board([item], 0.25));
+      void ctx.resume();
+    });
+    const rendered = await ctx.startRendering();
+
+    expect(at(rendered, 0.9)).toBeCloseTo(1, 5);
+    // Halfway through the same 15 ms slide the per-pad volume uses. A
+    // `setValueAtTime` step would already read 0.25 here.
+    expect(at(rendered, 1.0075)).toBeCloseTo(0.625, 2);
+    expect(at(rendered, 1.05)).toBeCloseTo(0.25, 5);
+  });
+
+  it('fades out over the new fadeSeconds when a mood changed it mid-play', async () => {
+    const ctx = new OfflineAudioContext(1, 4 * SR, SR);
+    const engine = createEngine(ctx, {
+      loadAsset: loaderFor({ a1: { buffer: dcBuffer(ctx, 4), durationSamples: 4 * SR } }),
+    });
+    const item = boardItem({
+      itemId: 'storm',
+      assetId: 'a1',
+      playing: true,
+      volume: 1,
+      fadeSeconds: 2,
+      loop: true,
+    });
+
+    engine.apply(board([item]));
+    await engine.ready();
+    // A mood switch that both stops the item and shortens its fade, in one
+    // apply. The stop must use the NEW 0.5 s, not the 2 s it started with.
+    void ctx.suspend(1).then(() => {
+      engine.apply(board([{ ...item, fadeSeconds: 0.5, playing: false }]));
+      void ctx.resume();
+    });
+    const rendered = await ctx.startRendering();
+
+    // Interrupted mid fade-in at 0.5, then down to zero by t = 1.5.
+    expect(at(rendered, 1)).toBeCloseTo(0.5, 3);
+    expect(at(rendered, 1.25)).toBeCloseTo(0.25, 2);
+    expect(at(rendered, 1.55)).toBeCloseTo(0, 5);
+    // Under the previous fade the ramp would still be at ~0.25 here.
+    expect(peakBetween(rendered, 1.55, 4)).toBeCloseTo(0, 5);
   });
 
   it('dispose() silences everything immediately', async () => {
