@@ -26,6 +26,7 @@ import { Route as CampaignsCampaignIdSessionsRouteImport } from './routes/campai
 import { Route as CampaignsCampaignIdPlayRouteImport } from './routes/campaigns/$campaignId/play'
 import { Route as CampaignsCampaignIdEditRouteImport } from './routes/campaigns/$campaignId/edit'
 import { Route as AuthCallbackProviderRouteImport } from './routes/auth/callback/$provider'
+import { Route as AudioPackagesPackageIdRouteImport } from './routes/audio_.packages_.$packageId'
 import { Route as ApiAudioUploadsRouteImport } from './routes/api/audio/uploads'
 import { Route as ApiAudioUploadsIdConfirmRouteImport } from './routes/api/audio/uploads.$id.confirm'
 
@@ -115,6 +116,11 @@ const AuthCallbackProviderRoute = AuthCallbackProviderRouteImport.update({
   path: '/auth/callback/$provider',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AudioPackagesPackageIdRoute = AudioPackagesPackageIdRouteImport.update({
+  id: '/audio_/packages_/$packageId',
+  path: '/audio/packages/$packageId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiAudioUploadsRoute = ApiAudioUploadsRouteImport.update({
   id: '/api/audio/uploads',
   path: '/api/audio/uploads',
@@ -142,6 +148,7 @@ export interface FileRoutesByFullPath {
   '/campaigns/new': typeof CampaignsNewRoute
   '/campaigns/': typeof CampaignsIndexRoute
   '/api/audio/uploads': typeof ApiAudioUploadsRouteWithChildren
+  '/audio/packages/$packageId': typeof AudioPackagesPackageIdRoute
   '/auth/callback/$provider': typeof AuthCallbackProviderRoute
   '/campaigns/$campaignId/edit': typeof CampaignsCampaignIdEditRoute
   '/campaigns/$campaignId/play': typeof CampaignsCampaignIdPlayRoute
@@ -163,6 +170,7 @@ export interface FileRoutesByTo {
   '/campaigns/new': typeof CampaignsNewRoute
   '/campaigns': typeof CampaignsIndexRoute
   '/api/audio/uploads': typeof ApiAudioUploadsRouteWithChildren
+  '/audio/packages/$packageId': typeof AudioPackagesPackageIdRoute
   '/auth/callback/$provider': typeof AuthCallbackProviderRoute
   '/campaigns/$campaignId/edit': typeof CampaignsCampaignIdEditRoute
   '/campaigns/$campaignId/play': typeof CampaignsCampaignIdPlayRoute
@@ -185,6 +193,7 @@ export interface FileRoutesById {
   '/campaigns/new': typeof CampaignsNewRoute
   '/campaigns/': typeof CampaignsIndexRoute
   '/api/audio/uploads': typeof ApiAudioUploadsRouteWithChildren
+  '/audio_/packages_/$packageId': typeof AudioPackagesPackageIdRoute
   '/auth/callback/$provider': typeof AuthCallbackProviderRoute
   '/campaigns/$campaignId/edit': typeof CampaignsCampaignIdEditRoute
   '/campaigns/$campaignId/play': typeof CampaignsCampaignIdPlayRoute
@@ -208,6 +217,7 @@ export interface FileRouteTypes {
     | '/campaigns/new'
     | '/campaigns/'
     | '/api/audio/uploads'
+    | '/audio/packages/$packageId'
     | '/auth/callback/$provider'
     | '/campaigns/$campaignId/edit'
     | '/campaigns/$campaignId/play'
@@ -229,6 +239,7 @@ export interface FileRouteTypes {
     | '/campaigns/new'
     | '/campaigns'
     | '/api/audio/uploads'
+    | '/audio/packages/$packageId'
     | '/auth/callback/$provider'
     | '/campaigns/$campaignId/edit'
     | '/campaigns/$campaignId/play'
@@ -250,6 +261,7 @@ export interface FileRouteTypes {
     | '/campaigns/new'
     | '/campaigns/'
     | '/api/audio/uploads'
+    | '/audio_/packages_/$packageId'
     | '/auth/callback/$provider'
     | '/campaigns/$campaignId/edit'
     | '/campaigns/$campaignId/play'
@@ -272,6 +284,7 @@ export interface RootRouteChildren {
   CampaignsNewRoute: typeof CampaignsNewRoute
   CampaignsIndexRoute: typeof CampaignsIndexRoute
   ApiAudioUploadsRoute: typeof ApiAudioUploadsRouteWithChildren
+  AudioPackagesPackageIdRoute: typeof AudioPackagesPackageIdRoute
   AuthCallbackProviderRoute: typeof AuthCallbackProviderRoute
   CampaignsCampaignIdEditRoute: typeof CampaignsCampaignIdEditRoute
   CampaignsCampaignIdPlayRoute: typeof CampaignsCampaignIdPlayRoute
@@ -399,6 +412,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthCallbackProviderRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/audio_/packages_/$packageId': {
+      id: '/audio_/packages_/$packageId'
+      path: '/audio/packages/$packageId'
+      fullPath: '/audio/packages/$packageId'
+      preLoaderRoute: typeof AudioPackagesPackageIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/audio/uploads': {
       id: '/api/audio/uploads'
       path: '/api/audio/uploads'
@@ -443,6 +463,7 @@ const rootRouteChildren: RootRouteChildren = {
   CampaignsNewRoute: CampaignsNewRoute,
   CampaignsIndexRoute: CampaignsIndexRoute,
   ApiAudioUploadsRoute: ApiAudioUploadsRouteWithChildren,
+  AudioPackagesPackageIdRoute: AudioPackagesPackageIdRoute,
   AuthCallbackProviderRoute: AuthCallbackProviderRoute,
   CampaignsCampaignIdEditRoute: CampaignsCampaignIdEditRoute,
   CampaignsCampaignIdPlayRoute: CampaignsCampaignIdPlayRoute,

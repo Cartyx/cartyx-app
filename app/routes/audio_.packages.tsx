@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { createFileRoute, redirect } from '@tanstack/react-router';
+import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getMe } from '~/server/functions/rpc';
 import { Topbar } from '~/components/Topbar';
@@ -69,6 +69,7 @@ export const Route = createFileRoute('/audio_/packages')({
 
 export function PackagesListPage() {
   const qc = useQueryClient();
+  const navigate = useNavigate();
 
   const {
     data,
@@ -121,9 +122,9 @@ export function PackagesListPage() {
         {!isLoading && !listError && (
           <PackageList
             packages={packages}
-            // onEdit is intentionally unwired: /audio/packages/$packageId
-            // doesn't exist yet (Task 14 adds it). The affordance is
-            // correctly present on owned rows; Task 14 wires the navigation.
+            onEdit={(pkg) =>
+              navigate({ to: '/audio/packages/$packageId', params: { packageId: pkg.id } })
+            }
             onClone={(pkg) => cloneMutation.mutate(pkg)}
             onDelete={requestDelete}
             cloningId={cloneMutation.isPending ? (cloneMutation.variables?.id ?? null) : null}
