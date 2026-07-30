@@ -167,7 +167,27 @@ export async function confirmAudioUpload({
         : `Unsupported audio type: ${type}`;
       await AudioAsset.findOneAndUpdate(
         { _id: data.assetId, ownerId: userId },
-        { $set: { status: 'failed', lastError: reason, updatedAt: new Date() } }
+        {
+          $set: {
+            status: 'failed',
+            lastError: reason,
+            // PERMANENT, and it has to be stamped rather than inferred. Both
+            // rejections above are decisions about the OBJECT — it was
+            // HeadObject'd and measured, and it was refused for what it is.
+            // Re-uploading the same file produces the same two numbers and the
+            // same refusal, so this is exactly what `permanentFailure` means
+            // (see errors.ts in the worker).
+            //
+            // Without it the row reads as "never confirmed" — `retryable` is
+            // false either way because `confirmedAt` is null, but the UI's
+            // advice comes from `permanentFailure`, and the un-stamped row got
+            // "this upload never completed; upload the file again". That is
+            // wrong twice: the upload DID complete, and uploading it again
+            // fails identically.
+            permanentFailure: true,
+            updatedAt: new Date(),
+          },
+        }
       );
       throw new Error(reason);
     }

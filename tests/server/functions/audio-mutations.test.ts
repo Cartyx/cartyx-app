@@ -387,10 +387,14 @@ describe('retryAudioAsset', () => {
       const confirmed = new Date();
       const docs: Record<string, unknown>[] = [
         // The two shapes the old UI got wrong: `failed`, not permanent, but
-        // never confirmed. Written by the upload reaper and by confirm's
-        // reject path respectively — the commonest failures there are.
+        // never confirmed. Written by the upload reaper and by a legacy row
+        // respectively — the commonest failures there are.
         { status: 'failed', confirmedAt: null, permanentFailure: false },
         { status: 'failed', confirmedAt: null },
+        // Confirm's reject path: never confirmed, but the object WAS measured
+        // and refused, so it now carries `permanentFailure`. Non-retryable for
+        // the `confirmedAt` reason and the `permanentFailure` reason at once.
+        { status: 'failed', confirmedAt: null, permanentFailure: true },
         // The shape it got right.
         { status: 'failed', confirmedAt: confirmed, permanentFailure: true },
         // Genuinely retryable, including the legacy row with no field at all.
@@ -496,6 +500,50 @@ describe('retryAudioAsset', () => {
 
       expect(matchesFilter(neverConfirmed, retryFilter)).toBe(false);
       expect(matchesFilter(confirmedThenFailed, retryFilter)).toBe(true);
+    });
+
+    /**
+     * Confirm's REJECT path, which is a third shape and used to be
+     * indistinguishable from the second.
+     *
+     * `retryable` is false for both — neither has a `confirmedAt` — but the UI
+     * explains a non-retryable row from `permanentFailure`, and this path did
+     * not set it. So a file refused for its size or content type was described
+     * to its owner as "this upload never completed; upload the file again",
+     * which is wrong twice over: the upload completed and was MEASURED (by
+     * HeadObject, which is why the object could be deleted), and uploading the
+     * same file again fails at the same check with the same message.
+     */
+    it.each([
+      ['an oversized object', { ContentLength: 999_999_999, ContentType: 'audio/wav' }],
+      ['an unsupported content type', { ContentLength: 1024, ContentType: 'text/csv' }],
+    ])('stamps confirm’s rejection of %s as permanent', async (_label, head) => {
+      const { confirmAudioUpload, serializeAudioAsset } = await import('~/server/functions/audio');
+
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        sourceKey: 'uploads/audio/1-a.wav',
+        status: 'uploading',
+      } as never);
+      send.mockResolvedValue(head);
+      vi.mocked(AudioAsset.findOneAndUpdate).mockReset();
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({ _id: 'a1' } as never);
+
+      await expect(confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' })).rejects.toThrow();
+
+      const written = (
+        vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0][1] as { $set: Record<string, unknown> }
+      ).$set;
+      expect(written.status).toBe('failed');
+      expect(written.permanentFailure).toBe(true);
+
+      // And the UI therefore gets the "refused" advice rather than the
+      // "never completed" one. Driven through the real serializer, on the row
+      // the real reject path just wrote.
+      const row = { _id: 'a1', ownerId: 'u1', createdAt: new Date(0), ...written };
+      expect(serializeAudioAsset(row).retryable).toBe(false);
+      expect(serializeAudioAsset(row).permanentFailure).toBe(true);
     });
 
     /**

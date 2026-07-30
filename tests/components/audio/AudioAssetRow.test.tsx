@@ -170,14 +170,18 @@ describe('AudioAssetRow', () => {
         />
       );
       // The reason is known here, so state it here — the server function cannot.
-      expect(screen.getByText(/re-upload a corrected file/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/this file was refused; upload a corrected one/i)
+      ).toBeInTheDocument();
       expect(screen.getByText(/47 minutes long/i)).toBeInTheDocument();
     });
 
     it('says an unconfirmed upload needs uploading again, not correcting', () => {
-      // Different advice, because it is a different problem: nothing is wrong
-      // with the file, the transfer never finished and confirm has usually
-      // already deleted whatever partial object there was.
+      // Different advice, because it is a different problem: nothing is known
+      // to be wrong with the FILE — the transfer never finished, which is what
+      // `reapAbandonedUploads` writes. The confirm-reject rows that used to
+      // land here (measured by HeadObject, then refused) now carry
+      // `permanentFailure` and get the other message; see the next test.
       renderRow(
         <AudioAssetRow
           asset={{
@@ -190,7 +194,7 @@ describe('AudioAssetRow', () => {
         />
       );
       expect(screen.getByText(/upload the file again/i)).toBeInTheDocument();
-      expect(screen.queryByText(/re-upload a corrected file/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/this file was refused/i)).not.toBeInTheDocument();
     });
 
     it('still offers Retry on a transient failure', () => {

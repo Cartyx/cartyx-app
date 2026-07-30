@@ -176,14 +176,30 @@ function AudioAssetRowComponent({
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               {asset.lastError ?? 'Processing failed'}
               {/* Two different non-retryable rows, and the advice differs.
-                  `permanentFailure` means the worker read the file and refused
-                  it, so a different file is needed. Otherwise a non-retryable
-                  row is one that never passed confirm — the object was never
-                  measured and confirm's reject path has usually already deleted
-                  it — so the fix is to upload again, not to fix the file. */}
+
+                  `permanentFailure` means SOMETHING MEASURED THE FILE AND
+                  REFUSED IT — the worker decoded it (too long, silent, no
+                  samples, changes format part way through), or `confirmAudioUpload`
+                  HeadObject'd it and refused its size or content type. Either
+                  way the file itself is the problem, so a corrected one is
+                  needed.
+
+                  This used to say "the object was never measured" for the
+                  second of those, which was false: confirm's reject path
+                  measures the object and then deletes it, and re-uploading the
+                  same file fails at exactly the same check. It read that way
+                  because confirm did not stamp `permanentFailure`; it does now,
+                  so the two cases are actually distinguished rather than
+                  merely described as if they were.
+
+                  The remaining case — no `permanentFailure` — is a row that
+                  genuinely never completed its upload, which is what
+                  `reapAbandonedUploads` writes ("Upload never completed").
+                  Nothing is known to be wrong with the file, so uploading it
+                  again is the right advice. */}
               {!asset.retryable &&
                 (asset.permanentFailure
-                  ? ' — re-upload a corrected file to try again'
+                  ? ' — this file was refused; upload a corrected one'
                   : ' — this upload never completed; upload the file again')}
             </span>
           </>
