@@ -54,7 +54,13 @@ import {
 // server function in this codebase tags telemetry with, so the same human
 // stays one person in GlitchTip and Umami whether they are uploading an image
 // or an audio file. See the `Actor` type in `~/server/functions/audio.ts`.
-async function requireActor(): Promise<{ userId: string; sessionUserId: string }> {
+//
+// Exported (not module-private) so `~/utils/soundboard-server-fns.ts` can
+// import and reuse it rather than defining a second copy — every wrapper in
+// this codebase that resolves the browser session to a Mongo `userId` needs
+// the exact same provider-id-to-`_id` resolution, and two copies is how they
+// drift (see this branch's phase-1 postmortem, above).
+export async function requireActor(): Promise<{ userId: string; sessionUserId: string }> {
   const { getSession } = await import('~/server/session');
   const { connectDB } = await import('~/server/db/connection');
   const { User } = await import('~/server/db/models/User');

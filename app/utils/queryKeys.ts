@@ -258,4 +258,18 @@ export const queryKeys = {
     detail: (campaignId: string, monsterId: string) =>
       ['monsters', 'detail', campaignId, monsterId] as const,
   },
+  packages: {
+    all: ['packages'] as const,
+    // `listPackages` takes no filters (visibility-scoped by the caller's
+    // session alone), so `list` is a fixed key — same shape as
+    // `campaigns.list`, not `audio.list`'s filters-object variant.
+    list: () => ['packages', 'list'] as const,
+    detail: (id: string) => ['packages', 'detail', id] as const,
+  },
+  soundboard: {
+    all: ['soundboard'] as const,
+    // One live board per campaign — same one-key-per-campaign shape as
+    // `calendar.detail`.
+    boardState: (campaignId: string) => ['soundboard', 'boardState', campaignId] as const,
+  },
 };
