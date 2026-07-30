@@ -15,6 +15,7 @@ import type {
   updatePackageSchema,
   deletePackageSchema,
   getPackageSchema,
+  clonePackageSchema,
 } from '~/types/schemas/soundboard';
 
 async function ensureDb() {
@@ -283,6 +284,72 @@ export async function updatePackage({
     return serializePackage(doc as unknown as PackageDoc);
   } catch (e) {
     reportPackageError(e, { userId, sessionUserId }, { action: 'updatePackage' });
+    throw e;
+  }
+}
+
+export async function clonePackage({
+  data,
+  userId,
+  sessionUserId,
+}: {
+  data: z.infer<typeof clonePackageSchema>;
+} & Actor): Promise<AudioPackageData> {
+  try {
+    await ensureDb();
+    // Read through the visibility filter, exactly like `getPackage` — this is
+    // the one legitimate read-side use of `$or` beyond `listPackages`/
+    // `getPackage`, and it is precisely why cloning works at all: a system
+    // package (`ownerId: null`) is otherwise immutable, so cloning is how a
+    // user gets an editable copy of it.
+    const source = await AudioPackage.findOne({
+      _id: data.id,
+      ...packageVisibilityFilter(userId),
+    }).lean();
+    if (!source) throw new PackageClientError('Package not found');
+    const src = source as unknown as {
+      name?: string;
+      description?: string | null;
+      items?: unknown[];
+      moods?: unknown[];
+    };
+    // Deliberate, field-by-field decision about what a clone copies:
+    // - `ownerId`: REPLACED with the caller — this is the whole point of a
+    //   clone. Never the source's (`null` for a system package, or another
+    //   user's private id).
+    // - `_id`, `createdAt`, `updatedAt`, any Mongoose `__v`: DROPPED. This is
+    //   a new document with its own identity; carrying the source `_id`
+    //   through would collide with (or, worse, silently overwrite) the
+    //   original. `create()` assigns a fresh `_id`, and the schema's own
+    //   `createdAt`/`updatedAt` defaults + `pre('save')` hook stamp fresh
+    //   timestamps — never taken from `src`.
+    // - `name`: the caller's `data.name` if given, else the source's — a
+    //   rename-on-clone convenience `clonePackageSchema` already supports.
+    // - `description`: copied as-is.
+    // - `items`/`moods`: copied byte-for-byte, NOT regenerated. Every
+    //   `item.id` and `mood.states[].itemId` must survive verbatim — moods
+    //   reference `item.id`, never `assetId`, so renumbering items here would
+    //   silently break every mood in the clone. The model's own `_id: false`
+    //   on both subdocument schemas exists for exactly this: the
+    //   client-supplied `id` is the only identity these subdocuments need,
+    //   so there is no Mongo-generated `_id` to strip either.
+    const doc = await AudioPackage.create({
+      ownerId: userId,
+      name: data.name ?? src.name ?? '',
+      description: src.description ?? null,
+      items: src.items ?? [],
+      moods: src.moods ?? [],
+    });
+    serverCaptureEvent(telemetryId({ userId, sessionUserId }), 'package_cloned', {
+      packageId: String((doc as { _id: unknown })._id),
+      sourceId: data.id,
+    });
+    // `.toObject()`, not the Document itself — same reasoning as `createPackage`.
+    return serializePackage(
+      (doc as { toObject: () => PackageDoc }).toObject() as unknown as PackageDoc
+    );
+  } catch (e) {
+    reportPackageError(e, { userId, sessionUserId }, { action: 'clonePackage' });
     throw e;
   }
 }
