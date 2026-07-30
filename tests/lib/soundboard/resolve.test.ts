@@ -43,6 +43,19 @@ describe('resolveItemState', () => {
     expect(r.playing).toBe(false);
   });
 
+  it('overrides fadeSeconds with a non-zero value that differs from the item', () => {
+    const r = resolveItemState(item, { itemId: 'i1', playing: true, fadeSeconds: 5 });
+    expect(r.fadeSeconds).toBe(5);
+  });
+
+  it('treats an explicit fadeSeconds: 0 as an instant cut, not as absence', () => {
+    // Load-bearing: `moodState.fadeSeconds || item.fadeSeconds` yields 2
+    // here, because 0 is falsy. item.fadeSeconds (2) is truthy and
+    // different from 0, so this only passes for the right reason.
+    const r = resolveItemState(item, { itemId: 'i1', playing: true, fadeSeconds: 0 });
+    expect(r.fadeSeconds).toBe(0);
+  });
+
   it('lets one item fire at different rates in different moods', () => {
     const overhead = resolveItemState(item, { itemId: 'i1', playing: true });
     const distant = resolveItemState(item, {
