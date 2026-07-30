@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { MAX_PACKAGE_ITEMS } from '~/types/soundboard';
 
 vi.mock('~/server/db/connection', () => ({ connectDB: vi.fn(), isDBConnected: vi.fn(() => true) }));
 vi.mock('~/server/utils/telemetry', () => ({
@@ -115,18 +116,20 @@ describe('listPackageAssets', () => {
   });
 
   it("returns all of a full package's assets, with no pagination boundary", async () => {
-    // MAX_PACKAGE_ITEMS (64) items — a 3-item fixture cannot detect the
+    // MAX_PACKAGE_ITEMS items — a 3-item fixture cannot detect the
     // pagination defect this task exists to fix (listAudioAssets caps at
-    // 50 by default, 200 max).
-    const ids = Array.from({ length: 64 }, (_, i) => `a${i}`);
+    // 50 by default, 200 max). Imported, not hardcoded: if the cap is ever
+    // raised, a literal 64 here would keep asserting the old bound and
+    // silently stop testing the real one.
+    const ids = Array.from({ length: MAX_PACKAGE_ITEMS }, (_, i) => `a${i}`);
     pkgFindOneLean.mockResolvedValue(packageDoc(ids, 'u1'));
     assetFindLean.mockResolvedValue(ids.map((id) => assetDoc(id, 'u1')));
     const { listPackageAssets } = await import('~/server/functions/packages');
     const res = await listPackageAssets({ data: { packageId: 'p1' }, userId: 'u1' });
 
-    expect(res.items).toHaveLength(64);
+    expect(res.items).toHaveLength(MAX_PACKAGE_ITEMS);
     const filter = vi.mocked(assetFind).mock.calls[0][0] as Record<string, unknown>;
-    expect((filter._id as { $in: string[] }).$in).toHaveLength(64);
+    expect((filter._id as { $in: string[] }).$in).toHaveLength(MAX_PACKAGE_ITEMS);
   });
 
   it('does not report a "not found" to GlitchTip — same reasoning as getPackage', async () => {
