@@ -17,38 +17,47 @@ import { extractPeaks } from './peaks.js';
 import { MAX_ATTEMPTS, computeBackoffMs } from './claim.js';
 import { renditionKeyBase } from './keys.js';
 import { PermanentError, PermanentSizeError } from './errors.js';
-import { maxSourceBytes, readS3Timeouts } from './config.js';
+import {
+  maxSourceBytes,
+  readS3Timeouts,
+  MAX_SOURCE_DURATION_MS,
+  MEASURE_LIMIT_SECONDS,
+  RENDER_LIMIT_SECONDS,
+} from './config.js';
 import { beat } from './heartbeat.js';
 import { captureException } from './telemetry.js';
 
 const PEAK_BUCKETS = 400;
 
 /**
- * Hard cap on source length: 30 minutes (the human partner's number).
+ * The cap and the two bounds derived from it live in config.ts, next to every
+ * other tunable the worker reads; re-exported here because this module is where
+ * they are applied and where the existing callers look for them. Read
+ * `MAX_SOURCE_DURATION_MS`'s comment there before touching anything below — it
+ * states the invariant and enumerates the six different "durations" this
+ * feature has managed to confuse.
  *
- * This bounds a decode-amplification DoS. `AUDIO_MAX_BYTES` is 50 MB, and 50 MB
- * of minimum-bitrate audio decodes to ~13.9 hours — each attempt pins the
- * single worker's CPU while every other user's upload queues behind it.
- * Rejecting by *duration* rather than by bytes is what closes it, because bytes
- * say nothing about decode cost.
+ * THERE IS NO HEADER PRE-GATE, and that is a decision rather than an omission.
+ * The tempting shape is "reject when `format=duration` claims something absurd,
+ * several times the cap — over-reports only inflate, so it cannot false-
+ * positive". The asymmetry does not survive measurement. ffmpeg extrapolates an
+ * MP3's duration from the FIRST FRAME's bitrate, so the over-report factor is
+ * `avg_bitrate / first_frame_bitrate` and does not depend on the file's length
+ * at all. Measured here on files built entirely by stock ffmpeg:
  *
- * Decided on the MEASURED decoded length and on nothing else. There is no
- * header pre-gate: `probe()`'s duration is an extrapolation for any MP3 without
- * a Xing header and over-reports by up to 8.2x on files measured here, so a
- * 30-minute gate on it rejects honest uploads (an honest 17-minute file
- * measured a 41.8-minute claim). What made a header gate look necessary was the
- * cost of the decode, and `analyze(src, limitSeconds)` removes that cost
- * instead: the pass is bounded to `MAX_SOURCE_DURATION_MS` + 1 s of audio, so a
- * 13.9-hour source is answered in 0.93 s rather than 24.16 s (measured) and the
- * answer is a fact rather than a claim. See `analyze` in ffmpeg.ts.
+ *   honest 20.8-minute MP3, 32 kbit/s intro frame + 320 kbit/s body (48 MB,
+ *   inside AUDIO_MAX_BYTES, inside the 30-minute cap)   claims 12 464 s = 6.9x cap
+ *   the hostile gap-timeline Matroska this bound exists for     4 000 s = 2.2x cap
+ *
+ * Any threshold low enough to catch the hostile file permanently rejects the
+ * honest one, which is round 5's defect exactly. And the gate buys nothing now:
+ * the reason a header gate ever looked necessary was the COST of decoding an
+ * unbounded source, and `boundedDecodeFilters` caps that at ~1 s (measured 0.99 s
+ * on a 13.9-hour, 50 MB source). A gate that cannot be made safe and is not
+ * needed is not worth having. `probe()`'s duration stays for provenance and for
+ * the disagreement log below, and rejects nothing.
  */
-export const MAX_SOURCE_DURATION_MS = 30 * 60 * 1000;
-
-/**
- * What the bounded decode reads: one second past the cap, so a source exactly
- * at the cap measures exactly at the cap and anything longer measures over it.
- */
-export const DECODE_LIMIT_SECONDS = MAX_SOURCE_DURATION_MS / 1000 + 1;
+export { MAX_SOURCE_DURATION_MS, MEASURE_LIMIT_SECONDS, RENDER_LIMIT_SECONDS };
 
 /**
  * How far a rendition may fall short of the source's DECODED length before we
@@ -108,10 +117,21 @@ export function assertDecodedUsable(decoded: { samples: number; peakDb: number }
 
   const durationSamples = decoded.samples;
   const durationMs = Math.round((durationSamples / RENDITION_SAMPLE_RATE) * 1000);
-  // The duration cap, and the ONLY place it is applied. `decoded.samples` came
-  // from a decode bounded at `DECODE_LIMIT_SECONDS`, so a source of any length
-  // reports at most one second over the cap here — enough to fail it, and
-  // cheap enough that no header pre-gate is needed to afford asking.
+  // The duration cap, and the ONLY place a source is REJECTED for it.
+  // `decoded.samples` came from a decode bounded at `MEASURE_LIMIT_SECONDS`, so
+  // a source of any length reports at most one second over the cap here —
+  // enough to fail it, and cheap enough that no header pre-gate is needed to
+  // afford asking.
+  //
+  // REJECT, NOT TRUNCATE. The rendering stages are bounded too, so silently
+  // publishing the first 30 minutes of a 40-minute mix would be trivial to
+  // implement and is exactly what must not happen: the owner uploaded a file,
+  // saw `ready`, and would find out that the last 10 minutes are gone when the
+  // track cut out mid-session with a table watching. A permanent failure
+  // carrying the measured length ("Audio is 40 minutes long, over the 30 minute
+  // limit") tells them what is wrong and what to do about it while they are
+  // still at the upload screen. The rendering bound exists to make the
+  // invariant hold structurally, not as a product behaviour.
   if (durationMs > MAX_SOURCE_DURATION_MS) {
     throw new PermanentError(
       `Audio is ${formatMinutes(durationMs)} long, over the ${MAX_SOURCE_DURATION_MS / 60_000} minute limit`
@@ -131,7 +151,24 @@ export function assertDecodedUsable(decoded: { samples: number; peakDb: number }
  * would then carry a `durationSamples` phase 2 loops on that the rendition
  * cannot honour.
  *
- * NOTE what this deliberately no longer does: it does not detect a truncated
+ * This is also the one runtime check standing behind the claim that a duration
+ * measured by `analyze` cannot diverge from the renditions a LATER ffmpeg
+ * invocation produced. The argument for why they agree is in `processAsset`;
+ * this is what makes a violation of it a failed asset rather than a wrong row.
+ * It earns its keep: a source that changes audio format mid-stream really does
+ * render short (see below), and this is what stops it publishing.
+ *
+ * `segments` is `analyze`'s count of filter-graph segments, used only to
+ * EXPLAIN a failure. More than one means the source changes sample rate, sample
+ * format or channel layout partway through, which makes ffmpeg rebuild the
+ * filter graph — discarding whatever `loudnorm` was holding in its 3-second
+ * lookahead. Measured on a raw concatenation of a 3 s 44.1 kHz stereo MP3 and a
+ * 4 s 8 kHz mono one: 7.12 s measured, 4.21 s rendered, so the file is refused
+ * here. That is the correct outcome (the alternative is a `ready` row missing
+ * 3 s of its audio), but "the rendition is incomplete" does not tell the owner
+ * that re-encoding to a single format fixes it, and this does.
+ *
+ * NOTE what this deliberately does NOT do: it does not detect a truncated
  * SOURCE. It cannot. Detecting that means trusting the container header, and
  * for the format truncation is most common in — MP3 — the header duration is an
  * extrapolation that over-reports honest files by up to 8.2x (measured). The
@@ -145,11 +182,16 @@ export function assertDecodedUsable(decoded: { samples: number; peakDb: number }
 export function assertRenditionComplete(
   decodedMs: number,
   renditionMs: number,
-  codec: string
+  codec: string,
+  segments = 1
 ): void {
   if (decodedMs - renditionMs > MAX_RENDITION_SHORTFALL_MS) {
+    const cause =
+      segments > 1
+        ? ` — the source changes audio format part way through (${segments} segments); re-encode it to a single sample rate and channel layout`
+        : '';
     throw new PermanentError(
-      `The ${codec} rendition is incomplete: the source decodes to ${decodedMs} ms but the rendition contains only ${renditionMs} ms`
+      `The ${codec} rendition is incomplete: the source decodes to ${decodedMs} ms but the rendition contains only ${renditionMs} ms${cause}`
     );
   }
 }
@@ -542,12 +584,31 @@ export async function processAsset(
     const meta = await probe(src);
     beat();
 
-    // The one decode pass, bounded at `DECODE_LIMIT_SECONDS`. Everything that
+    // The MEASURING pass, bounded at `MEASURE_LIMIT_SECONDS`. Everything that
     // needs to know what the file really contains — as opposed to what its
     // header asserts — comes from here, so this runs once and only once.
-    const { durationMs, durationSamples } = assertDecodedUsable(
-      await analyze(src, DECODE_LIMIT_SECONDS)
-    );
+    //
+    // WHY THIS NUMBER CANNOT DIVERGE FROM THE RENDITIONS, given it comes from a
+    // different ffmpeg invocation than the one that produced them:
+    //
+    // - Same bytes. `src` is a file on local disk written once by
+    //   `downloadSource`; nothing rewrites it and nothing else reads from R2.
+    // - Same decode. Both invocations use `-map 0:a:0` and the same decoder;
+    //   audio decoding of a fixed byte stream is deterministic.
+    // - Same bound, character for character. Both run the string
+    //   `boundedDecodeFilters` returns, so neither can be bounded on a
+    //   different QUANTITY from the other — which is the failure mode that
+    //   produced the last two defects, not arithmetic drift.
+    // - The remaining bound difference is one-way and safe: the rendering
+    //   stages trim at `RENDER_LIMIT_SECONDS` (the cap) while this trims at
+    //   the cap + 1 s, so if they could disagree at all the renditions would be
+    //   SHORTER, never longer than the cap.
+    // - And it is CHECKED per asset rather than argued per commit: every
+    //   rendition is probed below and `assertRenditionComplete` refuses to
+    //   publish one that is short of this number. A divergence is a failed
+    //   asset, never a `ready` row with a wrong duration.
+    const decoded = await analyze(src, MEASURE_LIMIT_SECONDS);
+    const { durationMs, durationSamples } = assertDecodedUsable(decoded);
     beat();
 
     if (meta.durationMs > 0 && Math.abs(meta.durationMs - durationMs) > 1000) {
@@ -556,16 +617,29 @@ export async function processAsset(
       // when someone is looking at an asset whose length surprises them, the
       // two numbers side by side are the whole answer.
       logger.info(
-        { assetId: String(id), headerMs: meta.durationMs, decodedMs: durationMs },
+        {
+          assetId: String(id),
+          headerMs: meta.durationMs,
+          decodedMs: durationMs,
+          // >1 means the source changes format mid-stream, which is both a
+          // common reason for a wild header claim and the thing that will make
+          // the rendition check below refuse the file. Worth having in the same
+          // line as the two durations when someone is working out why.
+          segments: decoded.segments,
+        },
         'container duration disagrees with the decoded length; using the decoded length'
       );
     }
 
     const opusPath = join(dir, 'out.opus');
     const aacPath = join(dir, 'out.m4a');
-    await transcode(src, opusPath, 'opus');
+    // Both legs carry the SAME bound the measuring pass ran under. This is the
+    // half that was missing: `analyze` was bounded and these two were not, so a
+    // source whose decoded length the bound understated was measured short and
+    // encoded long.
+    await transcode(src, opusPath, 'opus', RENDER_LIMIT_SECONDS);
     beat();
-    await transcode(src, aacPath, 'aac');
+    await transcode(src, aacPath, 'aac', RENDER_LIMIT_SECONDS);
     beat();
 
     for (const [codec, path] of [
@@ -576,7 +650,7 @@ export async function processAsset(
       beat();
       // Against `durationMs` — the MEASURED decode — never against
       // `meta.durationMs`. See `assertRenditionComplete`.
-      assertRenditionComplete(durationMs, renditionMs, codec);
+      assertRenditionComplete(durationMs, renditionMs, codec, decoded.segments);
     }
 
     // Peaks describe the OPUS RENDITION, not the source. The user hears the
@@ -590,7 +664,7 @@ export async function processAsset(
     // Opus rather than AAC because it round-trips the length exactly (measured
     // 16 000 samples at the 8 kHz peak-decode rate, against 16 043 for the
     // M4A, whose encoder delay/padding shifts every bucket).
-    const peaks = await extractPeaks(opusPath, PEAK_BUCKETS);
+    const peaks = await extractPeaks(opusPath, PEAK_BUCKETS, RENDER_LIMIT_SECONDS);
     beat();
 
     // This key format is a CONTRACT, not an implementation detail. Both
@@ -613,11 +687,32 @@ export async function processAsset(
       // Renditions stay `readFile`d whole while the SOURCE is streamed, and the
       // asymmetry is deliberate. A source is attacker-controlled and unbounded
       // (that is the whole TOCTOU hole above); a rendition is something this
-      // worker just produced at a fixed bitrate from an input already capped at
-      // MAX_SOURCE_DURATION_MS — 1800 s x 128 kbit/s is ~28.8 MB, measured at
-      // 27.8 MB for a real 30-minute AAC leg — read one at a time. Streaming
-      // them would also make the PUT body non-replayable, turning the SDK's
-      // internal retry of a transient R2 blip into a hard failure.
+      // worker just produced at a fixed bitrate.
+      //
+      // RE-DERIVED. That last clause used to end "…from an input already capped
+      // at MAX_SOURCE_DURATION_MS", and the cap was applied to the MEASURING
+      // pass only — `transcode` ran unbounded, so the premise was false and the
+      // 28.8 MB figure was wishful: a 12.7 MB source produced a 46.5 MB
+      // rendition here, 1.6x the stated worst case. `transcode` now carries the
+      // same bound (see `RENDER_LIMIT_SECONDS` above), so the input to the
+      // encoders is now genuinely 1800 s at most.
+      //
+      // The nominal arithmetic is 1800 s x 128 kbit/s = 28.8 MB for AAC and
+      // 1800 s x 96 kbit/s = 21.6 MB for Opus, and NEITHER is a ceiling —
+      // measured on a real 30-minute source (a pure tone, the shape both
+      // encoders spend the most bits on):
+      //
+      //   aac  -b:a 128k   29 132 201 B   129.5 kbit/s   (nominal + 1%)
+      //   opus -b:a  96k   28 250 409 B   125.6 kbit/s   (nominal + 31%)
+      //
+      // libopus's default VBR treats `-b:a` as a target it may exceed on tonal
+      // content, which is why the honest number to reason about is ~30 MB per
+      // rendition rather than the bitrate multiplied out. One at a time, so the
+      // peak is one rendition plus its PUT body — measured peak RSS for the
+      // whole 30-minute run was 258 MB against the pod's 768Mi.
+      //
+      // Streaming them would also make the PUT body non-replayable, turning the
+      // SDK's internal retry of a transient R2 blip into a hard failure.
       const body = await readFile(path);
       const key = `${base}.${ext}`;
       await client.send(

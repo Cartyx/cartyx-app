@@ -5,6 +5,7 @@ import { mkdtempSync, existsSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { probe, transcode } from '../src/ffmpeg.js';
+import { RENDER_LIMIT_SECONDS } from '../src/config.js';
 import { extractPeaks } from '../src/peaks.js';
 
 const run = promisify(execFile);
@@ -65,7 +66,7 @@ describe('ffmpeg pipeline', () => {
 
   it('produces a real opus rendition, not just a non-empty file', async () => {
     const out = join(dir, 'out.opus');
-    await transcode(src, out, 'opus');
+    await transcode(src, out, 'opus', RENDER_LIMIT_SECONDS);
     expect(existsSync(out)).toBe(true);
     expect(statSync(out).size).toBeGreaterThan(0);
 
@@ -80,7 +81,7 @@ describe('ffmpeg pipeline', () => {
 
   it('produces a real aac rendition, not just a non-empty file', async () => {
     const out = join(dir, 'out.m4a');
-    await transcode(src, out, 'aac');
+    await transcode(src, out, 'aac', RENDER_LIMIT_SECONDS);
     expect(existsSync(out)).toBe(true);
     expect(statSync(out).size).toBeGreaterThan(0);
 
@@ -91,7 +92,7 @@ describe('ffmpeg pipeline', () => {
   });
 
   it('extracts the requested number of peaks in 0..1', async () => {
-    const peaks = await extractPeaks(src, 100);
+    const peaks = await extractPeaks(src, 100, RENDER_LIMIT_SECONDS);
     expect(peaks).toHaveLength(100);
     for (const p of peaks) {
       expect(p).toBeGreaterThanOrEqual(0);
@@ -144,13 +145,15 @@ describe('ffmpeg pipeline', () => {
 
     it('kills a hung ffmpeg in transcode() instead of blocking forever', async () => {
       const started = Date.now();
-      await expect(transcode(fifo, join(dir, 'never.opus'), 'opus')).rejects.toThrow();
+      await expect(
+        transcode(fifo, join(dir, 'never.opus'), 'opus', RENDER_LIMIT_SECONDS)
+      ).rejects.toThrow();
       expect(Date.now() - started).toBeLessThan(8000);
     }, 15_000);
 
     it('kills a hung ffmpeg in extractPeaks() instead of blocking forever', async () => {
       const started = Date.now();
-      await expect(extractPeaks(fifo, 10)).rejects.toThrow();
+      await expect(extractPeaks(fifo, 10, RENDER_LIMIT_SECONDS)).rejects.toThrow();
       expect(Date.now() - started).toBeLessThan(8000);
     }, 15_000);
   });
@@ -162,7 +165,7 @@ describe('ffmpeg pipeline', () => {
       ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', '1', '-y', silent],
       { stdio: ['ignore', 'ignore', 'ignore'] }
     );
-    const peaks = await extractPeaks(silent, 20);
+    const peaks = await extractPeaks(silent, 20, RENDER_LIMIT_SECONDS);
     expect(peaks).toHaveLength(20);
     for (const p of peaks) expect(p).toBe(0);
   });

@@ -237,6 +237,75 @@ export function buildFixtures(dir: string): Fixtures {
   const empty = p('empty.wav');
   writeWav(empty, new Int16Array(0), 48000, 2);
 
+  /*
+   * --- THE GAP-TIMELINE FAMILY: audio parked past a `-t` window ---
+   *
+   * `ffmpeg -f concat` honours a `duration` directive that is LONGER than the
+   * clip it applies to, and the difference becomes a hole in the timeline that
+   * carries no audio. Presentation timestamps run straight through it, so
+   * bounding a decode with `-t` — which cuts at a TIMELINE POSITION — reads only
+   * whatever happens to sit before the hole.
+   *
+   * Every byte here comes from stock ffmpeg. Nothing is hand-crafted, and the
+   * `concat` demuxer is an ordinary tool a user could reach for by accident.
+   *
+   * Measured with ffmpeg 8.1.2 on `gapTimeline` (5 s clip, `duration 3000`,
+   * 20 s clip — 288 kB):
+   *
+   *   -t 1801 (what round 6 bounded the measuring pass with)   241 203 samples (5.02 s)
+   *   boundedDecodeFilters, atrim=end=1801                   1 202 406 samples (25.05 s)
+   *
+   * The file is 25 s long. A pipeline that measures it the first way and then
+   * encodes it publishes a `ready` row claiming 5 s over 25 s of audio.
+   *
+   * Matroska also reports `stream=duration` as N/A, so these double as the
+   * "container with no per-stream duration" case: nothing but a decode can
+   * answer the question at all.
+   */
+  const gapClip = p('gap-clip.mp3');
+  ffmpeg([
+    '-f',
+    'lavfi',
+    '-i',
+    'sine=frequency=440:duration=5:sample_rate=44100',
+    '-ac',
+    '2',
+    '-c:a',
+    'libmp3lame',
+    '-b:a',
+    '64k',
+    gapClip,
+  ]);
+  const gapBody = p('gap-body.mp3');
+  ffmpeg([
+    '-f',
+    'lavfi',
+    '-i',
+    'anoisesrc=d=20:c=white:r=44100:a=0.8',
+    '-ac',
+    '2',
+    '-c:a',
+    'libmp3lame',
+    '-b:a',
+    '96k',
+    gapBody,
+  ]);
+
+  /** Concatenate `clip`, a `gapSeconds` hole, then `body`, into a Matroska. */
+  const gapConcat = (name: string, clip: string, body: string, gapSeconds: number): string => {
+    const list = p(`${name}.txt`);
+    // The concat demuxer resolves `file` entries relative to the LIST, and
+    // `-safe 0` is required for absolute paths.
+    writeFileSync(list, `file '${clip}'\nduration ${gapSeconds}\nfile '${body}'\n`);
+    const out = p(`${name}.mka`);
+    ffmpeg(['-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', out]);
+    return out;
+  };
+
+  // 25 s of audio sitting behind a 3000 s hole: under the cap, so it must be
+  // PUBLISHED, at 25 s and not at 5 s.
+  const gapTimeline = gapConcat('gap-timeline', gapClip, gapBody, 3000);
+
   // 31 minutes, over the 30-minute cap. 8 kbit/s mono keeps it to ~1.8 MB.
   const overCap = p('over-cap.mp3');
   ffmpeg([
@@ -262,6 +331,141 @@ export function buildFixtures(dir: string): Fixtures {
   // decode (see `DECODE_LIMIT_SECONDS`) removes that cost instead.
   const overCapTruncated = p('over-cap-truncated.mp3');
   truncate(overCap, overCapTruncated, 40_000 / readFileSync(overCap).length);
+
+  // 31 minutes of audio parked behind the same 3000 s hole. Under a `-t` bound
+  // this measures 5 s and is PUBLISHED at 5 s with 31-minute renditions; under
+  // the decoded-sample bound it measures over the cap and is refused. This is
+  // the fixture that separates the two bounds on the OUTCOME and not just on
+  // the number.
+  const gapOverCap = gapConcat('gap-over-cap', gapClip, overCap, 3000);
+
+  /*
+   * A source that changes SAMPLE RATE AND CHANNEL LAYOUT part way through: a
+   * raw concatenation of a 3 s 44.1 kHz stereo MP3 and a 4 s 8 kHz mono one.
+   *
+   * ffmpeg rebuilds the entire filter graph at the change, which re-instantiates
+   * every filter in it. Two consequences, and the pipeline has to survive both:
+   *
+   * - `astats` reports PER SEGMENT. Reading the last report called this 7.12 s
+   *   file 4.10 s. `analyze` sums them.
+   * - `asetpts`/`atrim` RESET, so the bound is per segment rather than per file.
+   *   Sound only because the summed measurement is then over the cap and the
+   *   source is refused; see `analyze`'s comment for the argument.
+   *
+   * It also renders SHORT — the teardown discards `loudnorm`'s 3-second
+   * lookahead, so 7.12 s measured comes out 4.21 s rendered — which is what
+   * `assertRenditionComplete` is for. The file must FAIL, not publish.
+   */
+  const rateA = p('rate-a.mp3');
+  ffmpeg([
+    '-f',
+    'lavfi',
+    '-i',
+    'sine=frequency=440:duration=3:sample_rate=44100',
+    '-ac',
+    '2',
+    '-c:a',
+    'libmp3lame',
+    '-b:a',
+    '128k',
+    rateA,
+  ]);
+  const rateB = p('rate-b.mp3');
+  ffmpeg([
+    '-f',
+    'lavfi',
+    '-i',
+    'sine=frequency=300:duration=4:sample_rate=8000',
+    '-ac',
+    '1',
+    '-c:a',
+    'libmp3lame',
+    '-b:a',
+    '32k',
+    rateB,
+  ]);
+  const multiRate = p('multi-rate.mp3');
+  writeFileSync(multiRate, Buffer.concat([readFileSync(rateA), readFileSync(rateB)]));
+
+  /*
+   * THE FIXTURE THAT KILLS THE HEADER PRE-GATE.
+   *
+   * An honest, complete, in-cap MP3, ONE audio format end to end, whose
+   * `format=duration` claims FOUR AND A HALF TIMES the cap.
+   *
+   * 2 s at 8 kbit/s followed by 400 s at 160 kbit/s, both 24 kHz mono — MPEG-2
+   * Layer III, whose bitrate range at that sample rate is 8 to 160 kbit/s.
+   * ffmpeg reads the first frame's 8 kbit/s and extrapolates the whole 8.0 MB
+   * across it, so the claim is 8003 s while the file is 402 s. Measured with
+   * ffmpeg 8.1.2:
+   *
+   *   stream=duration / format=duration    8 003 229 ms   (2h 13m, 4.45x the cap)
+   *   decoded                              19 300 608 samples = 402 096 ms
+   *
+   * THIS IS WHY THERE IS NO HEADER PRE-GATE. The tempting rule is "reject when
+   * the header claims something absurd — several times the cap — since
+   * over-reports only inflate, so it cannot false-positive". The over-report
+   * factor is `avg_bitrate / first_frame_bitrate`, which does not depend on the
+   * file's LENGTH at all, so "absurd" is not a property a threshold can
+   * separate: this honest 6.7-minute file claims 4.45x the cap, while the
+   * hostile gap-timeline Matroska the bound actually exists for claims 4000 s,
+   * i.e. 2.2x. Any threshold low enough to catch the second permanently rejects
+   * the first, and permanently rejecting complete ordinary MP3s on a header
+   * arithmetic is round 5's defect exactly.
+   *
+   * `-write_xing 0` on both halves: a Xing/VBRI frame carries a real frame
+   * count, and its presence is precisely what stops ffmpeg extrapolating.
+   */
+  const claimIntro = p('claim-intro.mp3');
+  ffmpeg([
+    '-f',
+    'lavfi',
+    '-i',
+    'sine=frequency=200:duration=2:sample_rate=24000',
+    '-ac',
+    '1',
+    '-c:a',
+    'libmp3lame',
+    '-b:a',
+    '8k',
+    '-write_xing',
+    '0',
+    claimIntro,
+  ]);
+  const claimBody = p('claim-body.mp3');
+  ffmpeg([
+    '-f',
+    'lavfi',
+    '-i',
+    'anoisesrc=d=400:c=white:r=24000:a=0.8',
+    '-ac',
+    '1',
+    '-c:a',
+    'libmp3lame',
+    '-b:a',
+    '160k',
+    '-write_xing',
+    '0',
+    claimBody,
+  ]);
+  const absurdHeaderClaim = p('absurd-header-claim.mp3');
+  writeFileSync(
+    absurdHeaderClaim,
+    Buffer.concat([readFileSync(claimIntro), readFileSync(claimBody)])
+  );
+
+  // --- container shapes the pipeline had never been driven with ---
+
+  // Raw ADTS AAC: no container at all, just a frame stream. No `stream=duration`
+  // worth the name, and the encoder delay/padding a real AAC decoder applies is
+  // exactly the kind of thing a millisecond-level duration comparison trips on.
+  const adtsAac = p('adts.aac');
+  ffmpeg(['-i', tone, '-c:a', 'aac', '-f', 'adts', adtsAac]);
+
+  // Ogg/Opus: a source already in one of the two output codecs, at Opus's own
+  // 48 kHz, with its own pre-skip.
+  const oggOpus = p('source.opus');
+  ffmpeg(['-i', tone, '-c:a', 'libopus', '-f', 'ogg', oggOpus]);
 
   // --- sources that must NOT be rejected ---
 
@@ -444,6 +648,12 @@ export function buildFixtures(dir: string): Fixtures {
     empty,
     overCap,
     overCapTruncated,
+    gapTimeline,
+    gapOverCap,
+    multiRate,
+    absurdHeaderClaim,
+    adtsAac,
+    oggOpus,
     vbrNoXing,
     quietIntroVbr,
     concatBitrate,

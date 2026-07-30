@@ -28,6 +28,69 @@ export const envMs = envPositive;
 export const DEFAULT_POLL_MS = 5_000;
 
 /**
+ * THE ONE BOUND. 30 minutes (the human partner's number).
+ *
+ * Read the invariant it expresses before changing anything near it:
+ *
+ *   NO STAGE OF THE PIPELINE EVER DECODES MORE THAN THIS MUCH AUDIO, AND THE
+ *   DURATION RECORDED ON THE ASSET IS THE ONE THE RENDITIONS ACTUALLY CONTAIN.
+ *
+ * This bounds a decode-amplification DoS. `AUDIO_MAX_BYTES` is 50 MB and 50 MB
+ * of minimum-bitrate audio decodes to ~13.9 hours, so bytes say nothing about
+ * decode cost and only a DURATION bound closes it. The worker is a single
+ * sequential loop at `replicaCount: 1`, so every second a hostile source spends
+ * in ffmpeg is a second every other user's upload waits.
+ *
+ * SIX QUANTITIES CALL THEMSELVES "how long is this audio", and they are not
+ * interchangeable. Numbering them because the last two defects here were each
+ * a bound placed on a different one from the thing it was meant to protect:
+ *
+ *   1. the client's declared `bytes` at `createAudioUpload` — unverified.
+ *   2. the stored object size (R2 `ContentLength`) — verified, but bytes.
+ *   3. the container's HEADER duration (`stream=`/`format=duration`) — a CLAIM.
+ *   4. TIMELINE position — what `ffmpeg -t` bounds. Presentation timestamps,
+ *      which a container may advance WITHOUT emitting audio.
+ *   5. DECODED SAMPLES — what a decoder actually produces. The real cost, and
+ *      the real length.
+ *   6. the rendition's own duration, read back from the output container.
+ *
+ * (3) is not a measurement: for an MP3 with no Xing header ffmpeg extrapolates
+ * duration from the first frame's bitrate, over-reporting honest files by up to
+ * 8.2x here (see `probe` in ffmpeg.ts), so a cap applied to it permanently
+ * rejects ordinary music. (4) is not the length either: a Matroska built by
+ * `concat` with a `duration` directive advances the timeline across a gap that
+ * contains no audio, so `-t 1801` on a file measured here read 5.02 s of a
+ * source that really decodes to 1005 s — 200x under. Bounding the measuring
+ * pass by (4) while leaving the encoders unbounded is exactly how a row got
+ * written `ready` at 5 s with 1005 s renditions behind it.
+ *
+ * So the bound is on (5), DECODED SAMPLES, expressed as seconds of decoded
+ * audio, and it is applied by `boundedDecodeFilters` — one filter prefix shared
+ * verbatim by `analyze`, both `transcode` legs and `extractPeaks`. See that
+ * function for the mechanism.
+ */
+export const MAX_SOURCE_DURATION_MS = 30 * 60 * 1000;
+
+/**
+ * The bound the RENDERING stages run under, in seconds of decoded audio:
+ * exactly the cap, so a source that passes the cap can never produce a
+ * rendition holding more than the cap.
+ */
+export const RENDER_LIMIT_SECONDS = MAX_SOURCE_DURATION_MS / 1000;
+
+/**
+ * The bound the MEASURING stage runs under: one second past the cap, so a
+ * source exactly at the cap measures exactly at the cap and anything longer
+ * measures over it. Without the extra second "at the cap" and "over the cap"
+ * are the same reading and the cap could only ever be enforced as `>=`.
+ *
+ * The gap between this and `RENDER_LIMIT_SECONDS` never binds in practice:
+ * `assertDecodedUsable` rejects anything above the cap, so every source that
+ * reaches a rendering stage is already known to be at or under it.
+ */
+export const MEASURE_LIMIT_SECONDS = RENDER_LIMIT_SECONDS + 1;
+
+/**
  * How long a row may sit in `processing` before the reaper reclaims it.
  *
  * TIED TO `FFMPEG_TIMEOUT_MS` (ffmpeg.ts) — do not raise one without redoing
@@ -106,15 +169,38 @@ export const DEFAULT_S3_CONNECT_TIMEOUT_MS = 10_000;
  * times slower, and this probe exists precisely because a wedge is otherwise
  * invisible.
  *
- * Every gap in the worker, exhaustively:
+ * Every gap in the worker, exhaustively — BEATEN gaps first, then the ones
+ * that are deliberately left unbeaten and why. (The previous version of this
+ * list claimed exhaustiveness while omitting the whole second group, which is
+ * a claim that cannot be checked and therefore is not worth making.)
+ *
+ * Beaten:
  *
  * - `index.ts`'s loop beats each iteration, and `POLL_INTERVAL_MS` (5 s) is the
  *   idle gap.
- * - `reapStale` beats after every row it writes and after every delete batch.
+ * - `reapAbandonedUploads` beats after every row it writes and after every
+ *   delete batch.
  * - `processAsset` beats after each of: the source download (which also beats
  *   per chunk as bytes arrive, so a slow transfer cannot age it out), the
  *   source `probe`, `analyze`, each `transcode`, each rendition `probe`,
  *   `extractPeaks`, and each rendition `PutObject`.
+ *
+ * Unbeaten, and each is a SINGLE round trip rather than a stage:
+ *
+ * - `claimNext`'s `findOneAndUpdate` (claim.ts) — one Atlas write per loop
+ *   iteration, bounded by the driver's `serverSelectionTimeoutMS`.
+ * - `reapStale`'s two `updateMany` calls (claim.ts) — the requeue and the
+ *   fail-at-cap sweeps. Unbounded in ROWS but one Atlas command each; Mongo
+ *   applies them server-side and the worker waits on a single reply.
+ * - `reapAbandonedUploads`'s `find(...).toArray()` — one Atlas read, capped at
+ *   `REAP_UPLOAD_BATCH` documents projected to `sourceKey` alone.
+ * - `downloadSource`'s `GetObject` send, i.e. the wait for R2's response
+ *   HEADERS. Bounded by `S3_CONNECT_TIMEOUT_MS` + `S3_REQUEST_TIMEOUT_MS`; the
+ *   body that follows is beaten per chunk.
+ *
+ * None is a 300 s stage, so none moves the arithmetic below. They are listed so
+ * that "exhaustively" is true and so the next person adding a beat knows these
+ * were considered rather than missed.
  *
  * So the longest gap is one bounded stage: `FFMPEG_TIMEOUT_MS` (300 s) for a
  * child process, or an R2 call bounded by `S3_REQUEST_TIMEOUT_MS` and the SDK's

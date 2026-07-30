@@ -55,6 +55,58 @@ export const LOUDNORM = 'loudnorm=I=-20:TP=-1.5:LRA=11';
 export const RENDITION_SAMPLE_RATE = 48_000;
 export const RENDITION_CHANNELS = 2;
 
+/**
+ * THE BOUND. Every ffmpeg invocation in this worker that decodes audio begins
+ * with exactly this filter chain, and none of them may be written without it.
+ *
+ * The invariant it enforces — see `MAX_SOURCE_DURATION_MS` in config.ts for the
+ * full statement — is that no stage ever decodes more than the cap, in a unit
+ * that cannot differ between stages. It is three filters and each is
+ * load-bearing:
+ *
+ *   aresample=<rate>   pin the sample clock, so "seconds" below means the same
+ *                      thing whatever the source's own rate was.
+ *   asetpts=N/SR/TB    REBASE the timestamps onto the DECODED-SAMPLE CLOCK. `N`
+ *                      is the count of samples the filter has seen, `SR` the
+ *                      rate, so each frame's pts becomes exactly
+ *                      `samples_so_far / rate`. This is the whole trick.
+ *   atrim=end=<limit>  cut at `limit` on that rebased clock — i.e. after
+ *                      `limit * rate` DECODED SAMPLES, not at a timeline
+ *                      position.
+ *
+ * WHY NOT `-t`. `-t` (input or output) bounds TIMELINE POSITION, and a
+ * container is free to advance the timeline without emitting audio. Measured on
+ * a Matroska built by `ffmpeg -f concat` from a 5 s clip, a `duration 3000`
+ * directive and a 1000 s clip (12.3 MB, every byte produced by stock ffmpeg):
+ *
+ *   -t 1801                        241 203 samples   (5.02 s)    0.01 s
+ *   this chain, atrim=end=1801   48 242 406 samples (1005.05 s)  0.65 s
+ *
+ * The file really is 1005 s long. A pipeline that measures it with `-t` and
+ * then encodes it unbounded writes a `ready` row claiming 5 s with 1005 s
+ * renditions behind it — the duration is wrong by 200x and phase 2's loop
+ * points are meaningless. That is round 6's defect, and no amount of adding
+ * `-t` to the other stages fixes it, because `-t` is measuring the wrong thing.
+ *
+ * The chain still bounds COST, which is what `-t` was there for. `atrim`
+ * propagates EOF upstream, so demuxing stops at the cut rather than running to
+ * the end of the file. Measured on a 50 MB, 8 kbit/s, 13.9-hour MP3 — the
+ * densest decode `AUDIO_MAX_BYTES` can buy:
+ *
+ *   unbounded                  2 400 000 000 samples   26.33 s
+ *   this chain, end=1801          86 448 000 samples    0.99 s
+ *
+ * `end=1801` yields exactly 1801 x 48 000 samples, which is what makes the
+ * cap decidable from the measuring pass: a source at the cap reads at the cap,
+ * anything longer reads over it.
+ *
+ * `asetpts` also normalises a source whose first timestamp is not zero, which
+ * `atrim` would otherwise measure `end` against.
+ */
+export function boundedDecodeFilters(sampleRate: number, limitSeconds: number): string {
+  return `aresample=${sampleRate},asetpts=N/SR/TB,atrim=end=${limitSeconds}`;
+}
+
 export type ProbeResult = { durationMs: number; sampleRate: number; channels: number };
 
 /**
@@ -137,32 +189,68 @@ export async function probe(path: string): Promise<ProbeResult> {
  * encoder dies with `Input contains (near) NaN/+-Inf` (exit 234). Leading and
  * trailing silence are fine — only a wholly-silent file triggers it.
  *
- * Costs one decode pass, BOUNDED BY `limitSeconds`. That bound is what closes
- * the decode-amplification DoS, and it replaces the old header-duration gate
- * outright: `AUDIO_MAX_BYTES` is 50 MB, and 50 MB of minimum-bitrate MP3 is
- * ~13.9 hours of audio, so an unbounded pass over one costs real time on a
- * worker that processes assets one at a time. Measured on exactly that file
- * (50 000 000 bytes, 8 kbit/s mono, 50 000 s long):
+ * Costs one decode pass, BOUNDED BY `limitSeconds` through
+ * `boundedDecodeFilters` — the same prefix `transcode` and `extractPeaks` use,
+ * so the three cannot bound different quantities. `limitSeconds` is REQUIRED
+ * and there is no unbounded mode: an optional bound is a bound someone forgets,
+ * and forgetting it here is what let a source decode for 26 s per attempt on a
+ * worker that processes assets one at a time.
  *
- *     unbounded            2 400 000 000 samples   24.16 s
- *     -t 1801 (cap + 1 s)     86 448 000 samples    0.93 s
+ * The bounded run still answers the question the cap asks — at
+ * `MEASURE_LIMIT_SECONDS` a 30-minute source reads 86 400 000 samples and
+ * anything longer reads 86 448 000 — so the rejection is made on a MEASUREMENT
+ * that cannot be faked, at 4% of the cost of the honest answer and with none of
+ * the header's false positives.
  *
- * The bounded run still answers the question the cap asks — 86 448 000 > the
- * 86 400 000 samples that 30 minutes is — so the rejection is made on a
- * MEASUREMENT that cannot be faked, at 4% of the cost of the honest answer and
- * with none of the header's false positives. `-t` is passed as an INPUT option
- * (before `-i`) so demuxing itself stops there; as an output option the filter
- * graph overshoots slightly (measured 2 930 295 samples against an exact
- * 2 928 000 for `-t 61`).
+ * `samples` is the count AFTER the trim, which is what makes it the right
+ * number to store: it describes precisely the audio the rendering stages, which
+ * run the same prefix over the same bytes, will encode.
  *
  * astats writes its report to stderr at `info` level. A file with zero decoded
  * samples produces no report at all (ffmpeg still exits 0) — that is the
  * `samples: 0` case, and it is a real upload shape: a 44-byte WAV with a valid
  * `fmt ` chunk and an empty `data` chunk.
+ *
+ * ONE REPORT PER FILTER-GRAPH SEGMENT, NOT ONE PER FILE — and the totals are
+ * SUMMED rather than read off the last one. When a source changes sample rate,
+ * sample format or channel layout MID-STREAM (a raw `cat` of two MP3s encoded
+ * at different rates does exactly this, and so does a Matroska assembled by the
+ * `concat` demuxer from mixed inputs), ffmpeg TEARS DOWN AND REBUILDS the whole
+ * filter graph at the change. Every filter in it is re-instantiated: astats
+ * emits its report and starts over, and — the part that matters — `asetpts`'s
+ * sample counter and `atrim`'s cut both RESET.
+ *
+ * Reading only the last report was wrong twice over: it reported one segment's
+ * length as the file's, and it hid the reset. Measured on a 3 s @ 44.1 kHz
+ * stereo MP3 concatenated with a 4 s @ 8 kHz mono one: three reports of 144 230,
+ * 610 and 196 992 samples. The last is 4.10 s; the file is 7.12 s.
+ *
+ * Summing makes the per-segment bound sound again, by this argument:
+ *
+ *   Let S be the sum and B the per-segment bound (`MEASURE_LIMIT_SECONDS`,
+ *   which is strictly greater than the cap). If ANY segment had been trimmed it
+ *   would have measured exactly B, so S >= B > cap and the caller rejects the
+ *   source. Therefore whenever S is at or under the cap — the only case that
+ *   goes on to be encoded — NO segment was trimmed and S is the file's exact
+ *   decoded length.
+ *
+ * So the bound is either invisible (and the measurement exact) or it fires (and
+ * the source is refused). A hostile file that resets the trim a thousand times
+ * cannot buy more decoding than the file's own content, which `AUDIO_MAX_BYTES`
+ * already caps at ~13.9 hours and which sums to far over the cap — so it is
+ * refused after one bounded measuring pass and never reaches an encoder.
+ *
+ * `segments` is returned because the caller needs it to explain a failure: the
+ * same teardown discards whatever `loudnorm` was holding in its 3-second
+ * lookahead, so a multi-segment source RENDERS SHORTER THAN IT MEASURES (the
+ * file above: 7.12 s measured, 4.21 s rendered). `assertRenditionComplete`
+ * catches that and refuses to publish — the row is never `ready` with a
+ * duration its audio does not have — but the reason is worth naming rather than
+ * leaving as a bare "the rendition is incomplete".
  */
-export type AnalyzeResult = { samples: number; peakDb: number };
+export type AnalyzeResult = { samples: number; peakDb: number; segments: number };
 
-export async function analyze(path: string, limitSeconds?: number): Promise<AnalyzeResult> {
+export async function analyze(path: string, limitSeconds: number): Promise<AnalyzeResult> {
   const { stderr } = await run(
     'ffmpeg',
     [
@@ -170,14 +258,13 @@ export async function analyze(path: string, limitSeconds?: number): Promise<Anal
       'info',
       '-hide_banner',
       '-nostats',
-      // Input-side, so it bounds the DEMUX as well as the filter graph.
-      ...(limitSeconds ? ['-t', String(limitSeconds)] : []),
       '-i',
       path,
       '-map',
       '0:a:0',
       '-af',
-      `aresample=${RENDITION_SAMPLE_RATE},astats=measure_perchannel=none:measure_overall=Peak_level+Number_of_samples`,
+      `${boundedDecodeFilters(RENDITION_SAMPLE_RATE, limitSeconds)},` +
+        'astats=measure_perchannel=none:measure_overall=Peak_level+Number_of_samples',
       '-f',
       'null',
       '-',
@@ -188,16 +275,24 @@ export async function analyze(path: string, limitSeconds?: number): Promise<Anal
     { ...childProcOptions(), maxBuffer: 8 * 1024 * 1024 }
   );
 
-  const samplesMatch = [...stderr.matchAll(/Number of samples:\s*(\d+)/g)].pop();
-  const peakMatch = [...stderr.matchAll(/Peak level dB:\s*(\S+)/g)].pop();
-  const peakRaw = peakMatch?.[1];
-  const peak = peakRaw === undefined ? Number.NaN : Number(peakRaw);
+  // SUM, not `.pop()` — see the "one report per filter-graph segment" note
+  // above. On the single-format sources that are the overwhelming majority
+  // there is exactly one report and the two are identical.
+  const sampleReports = [...stderr.matchAll(/Number of samples:\s*(\d+)/g)];
+  const samples = sampleReports.reduce((total, m) => total + Number(m[1]), 0);
+
+  // MAX across segments, for the same reason: a file is "wholly silent" only
+  // if every one of its segments is. `-inf` (exact digital silence) parses to
+  // NaN and is filtered out here, so a file with no finite report at all falls
+  // through to -Infinity — which is what "no audible content" means.
+  const peaks = [...stderr.matchAll(/Peak level dB:\s*(\S+)/g)]
+    .map((m) => Number(m[1]))
+    .filter((n) => Number.isFinite(n));
 
   return {
-    samples: samplesMatch ? Number(samplesMatch[1]) : 0,
-    // `-inf` (exact digital silence) and a missing report both parse to NaN
-    // here; both mean "no audible content", which is what -Infinity says.
-    peakDb: Number.isFinite(peak) ? peak : Number.NEGATIVE_INFINITY,
+    samples,
+    peakDb: peaks.length > 0 ? Math.max(...peaks) : Number.NEGATIVE_INFINITY,
+    segments: sampleReports.length,
   };
 }
 
@@ -209,8 +304,22 @@ export type Codec = 'opus' | 'aac';
  * rendition via `canPlayType`, and players are on browsers we don't control —
  * emitting only one codec is not a size optimization, it's a broken player
  * for half the table. Callers must always produce both.
+ *
+ * BOUNDED, by the same `boundedDecodeFilters` prefix `analyze` measured with —
+ * required, not optional. Leaving the encoders unbounded while the measuring
+ * pass was bounded is the exact shape of the last defect: the row recorded what
+ * the bounded pass saw and the renditions held whatever the unbounded encoder
+ * produced. Here the prefix runs at `RENDER_LIMIT_SECONDS` (the cap itself)
+ * rather than the measuring pass's cap + 1 s, so even a hypothetical
+ * disagreement between the two passes cannot put more than the cap into a
+ * rendition.
  */
-export async function transcode(src: string, out: string, codec: Codec): Promise<void> {
+export async function transcode(
+  src: string,
+  out: string,
+  codec: Codec,
+  limitSeconds: number
+): Promise<void> {
   const args =
     codec === 'opus'
       ? ['-c:a', 'libopus', '-b:a', '96k']
@@ -233,8 +342,12 @@ export async function transcode(src: string, out: string, codec: Codec): Promise
       // It also pins WHICH audio stream is used when a container has several.
       '-map',
       '0:a:0',
+      // The bound comes FIRST in the chain, ahead of loudnorm: loudnorm is the
+      // expensive filter, and trimming before it means a source longer than the
+      // cap never reaches it. loudnorm neither adds nor drops samples relative
+      // to what it is fed, so the trim's position does not change the content.
       '-af',
-      LOUDNORM,
+      `${boundedDecodeFilters(RENDITION_SAMPLE_RATE, limitSeconds)},${LOUDNORM}`,
       // Must come after -af: these constrain the encoder, not the filter
       // chain, and loudnorm's own 192 kHz output is exactly what they undo.
       '-ar',

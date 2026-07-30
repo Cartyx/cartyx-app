@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { probe, analyze, transcode, RENDITION_SAMPLE_RATE } from '../src/ffmpeg.js';
-import { extractPeaks } from '../src/peaks.js';
+import { extractPeaks, pcmBytesForMs, WORST_CASE_PCM_BYTES } from '../src/peaks.js';
 import { buildFixtures, type Fixtures } from './fixtures.js';
 
 const run = promisify(execFile);
@@ -52,7 +52,7 @@ vi.mock('@aws-sdk/client-s3', () => {
   return { S3Client: FakeS3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand };
 });
 
-const { processAsset, DECODE_LIMIT_SECONDS, MAX_SOURCE_DURATION_MS } =
+const { processAsset, MEASURE_LIMIT_SECONDS, RENDER_LIMIT_SECONDS, MAX_SOURCE_DURATION_MS } =
   await import('../src/process.js');
 
 let dir: string;
@@ -146,7 +146,7 @@ describe('transcode produces 48 kHz stereo in both codecs, whatever the source i
     for (const codec of ['opus', 'aac'] as const) {
       it(`${name} -> ${codec}`, async () => {
         const out = join(dir, `out-${name}.${codec === 'opus' ? 'opus' : 'm4a'}`);
-        await transcode(fx[name], out, codec);
+        await transcode(fx[name], out, codec, RENDER_LIMIT_SECONDS);
 
         const info = await streamInfo(out);
         expect(info.codec).toBe(codec);
@@ -189,26 +189,26 @@ describe('probe reads the audio stream, not the container', () => {
 
 describe('analyze reports what the file decodes to', () => {
   it('counts samples exactly, at the rendition rate', async () => {
-    const decoded = await analyze(fx.tone);
+    const decoded = await analyze(fx.tone, MEASURE_LIMIT_SECONDS);
     // 2 s at 48 kHz. Exact — this is the number phase 2 loops on.
     expect(decoded.samples).toBe(96_000);
     expect(Number.isFinite(decoded.peakDb)).toBe(true);
   });
 
   it('reports -Infinity for a file that is digital silence end to end', async () => {
-    const decoded = await analyze(fx.silence);
+    const decoded = await analyze(fx.silence, MEASURE_LIMIT_SECONDS);
     expect(decoded.peakDb).toBe(Number.NEGATIVE_INFINITY);
     expect(decoded.samples).toBeGreaterThan(0);
   });
 
   it('reports zero samples for a header-only WAV', async () => {
-    const decoded = await analyze(fx.empty);
+    const decoded = await analyze(fx.empty, MEASURE_LIMIT_SECONDS);
     expect(decoded.samples).toBe(0);
   });
 
   it('sees a truncated MP3 as its real length, not its header length', async () => {
     const claimed = await probe(fx.truncatedMp3);
-    const decoded = await analyze(fx.truncatedMp3);
+    const decoded = await analyze(fx.truncatedMp3, MEASURE_LIMIT_SECONDS);
     expect(claimed.durationMs).toBeGreaterThan(1900);
     // ~793 ms of actual audio behind a header that claims 2000.
     expect(decoded.samples / 48).toBeLessThan(1000);
@@ -220,7 +220,7 @@ describe('extractPeaks covers the whole file', () => {
     // 16 399 samples at 8 kHz whose last 400 are full scale. A fixed
     // `floor(samples / buckets)` stride covers only 16 000 of them, so the
     // marker is invisible: measured peak 0.3308 instead of 0.9766.
-    const peaks = await extractPeaks(fx.trailingMarker, 400);
+    const peaks = await extractPeaks(fx.trailingMarker, 400, RENDER_LIMIT_SECONDS);
     expect(peaks).toHaveLength(400);
     expect(Math.max(...peaks)).toBeGreaterThan(0.9);
     expect(peaks[peaks.length - 1]).toBeGreaterThan(0.9);
@@ -230,7 +230,7 @@ describe('extractPeaks covers the whole file', () => {
     // 20 ms -> 160 samples at the 8 kHz peak rate. With a clamped stride only
     // the first 159 buckets were ever written and the waveform stopped 40% of
     // the way across, flat for the rest.
-    const peaks = await extractPeaks(fx.veryShort, 400);
+    const peaks = await extractPeaks(fx.veryShort, 400, RENDER_LIMIT_SECONDS);
     expect(peaks).toHaveLength(400);
     expect(peaks.filter((p) => p > 0).length).toBeGreaterThan(390);
     expect(peaks[399]).toBeGreaterThan(0);
@@ -300,14 +300,18 @@ describe('processAsset end to end', () => {
   for (const [label, fixture] of overReporting) {
     it(`publishes a complete VBR MP3 with ${label}`, async () => {
       const claimedMs = (await probe(fx[fixture])).durationMs;
-      const decodedMs = Math.round((await analyze(fx[fixture])).samples / 48);
+      const decodedMs = Math.round(
+        (await analyze(fx[fixture], MEASURE_LIMIT_SECONDS)).samples / 48
+      );
 
       const { written } = await processFixture(fx[fixture]);
       expect(written.status).toBe('ready');
       expect(written.permanentFailure).toBe(false);
       // The published length is the DECODED one, not the claim.
       expect(written.durationMs).toBe(decodedMs);
-      expect(written.durationSamples).toBe((await analyze(fx[fixture])).samples);
+      expect(written.durationSamples).toBe(
+        (await analyze(fx[fixture], MEASURE_LIMIT_SECONDS)).samples
+      );
 
       // And the header really was unusable: for the first two, the old rule
       // (`claimed - rendition > max(500, claimed * 0.25)`) rejected them.
@@ -330,7 +334,7 @@ describe('processAsset end to end', () => {
     // ~40 s of payload. The old pipeline rejected it as over the cap on that
     // claim alone. A claim is not a length: this file is 40 seconds long, and
     // the same header arithmetic that rejected it here is what rejected honest
-    // 17-minute VBR music. The decode is bounded (see DECODE_LIMIT_SECONDS), so
+    // 17-minute VBR music. The decode is bounded (see MEASURE_LIMIT_SECONDS), so
     // asking the file rather than its header costs nothing.
     const { written } = await processFixture(fx.overCapTruncated);
     expect(written.status).toBe('ready');
@@ -341,10 +345,12 @@ describe('processAsset end to end', () => {
   it('bounds the decode so an hours-long source cannot amplify into a stall', async () => {
     // The bound is what lets the cap be decided on a measurement instead of on
     // a header. `overCap` is 31 minutes; a decode limited to 30 min + 1 s reads
-    // strictly less of it than an unlimited one, and still enough to fail it.
-    const bounded = await analyze(fx.overCap, DECODE_LIMIT_SECONDS);
-    const full = await analyze(fx.overCap);
-    expect(bounded.samples).toBeLessThan(full.samples);
+    // strictly less of it than a decode limited to an hour, and still enough to
+    // fail it.
+    const bounded = await analyze(fx.overCap, MEASURE_LIMIT_SECONDS);
+    const wider = await analyze(fx.overCap, MEASURE_LIMIT_SECONDS * 2);
+    expect(bounded.samples).toBeLessThan(wider.samples);
+    expect(bounded.samples).toBe(MEASURE_LIMIT_SECONDS * RENDITION_SAMPLE_RATE);
     expect(bounded.samples).toBeGreaterThan((MAX_SOURCE_DURATION_MS / 1000) * 48_000);
   }, 120_000);
 
@@ -365,6 +371,159 @@ describe('processAsset end to end', () => {
     },
     60_000
   );
+
+  /**
+   * THE INVARIANT, driven end to end on hostile inputs.
+   *
+   *   No stage ever decodes more than MAX_SOURCE_DURATION_MS of audio, and the
+   *   duration recorded on the asset is the one the renditions actually
+   *   contain.
+   *
+   * The second clause is what the last two rounds broke, and it is not
+   * checkable by asserting a number against a constant — the whole failure mode
+   * is that the number and the audio came from passes that disagreed. So these
+   * probe the PUBLISHED RENDITION BYTES and compare them against the row.
+   */
+  describe('stored duration vs the audio the renditions actually contain', () => {
+    /** ffprobe the rendition R2 actually received, not the temp file. */
+    async function publishedMs(body: Buffer, ext: string): Promise<number> {
+      const path = join(dir, `published-${Date.now()}-${Math.random()}.${ext}`);
+      writeFileSync(path, body);
+      return (await probe(path)).durationMs;
+    }
+
+    it.each([
+      // A 5 s clip, a 3000 s hole in the timeline, then 20 s of audio. Bounding
+      // the measuring pass with `-t 1801` reads 5.02 s of this and the encoders
+      // then produce 25 s, so the row said 5 s over 25 s of audio: wrong by 5x,
+      // and phase 2's loop points meaningless. Matroska also reports no
+      // `stream=duration`, so nothing but a decode can answer at all.
+      ['a gap-timeline Matroska', 'gapTimeline' as const, 25_000, 26_000],
+      // Raw ADTS AAC — no container, just frames, plus decoder delay/padding.
+      ['an ADTS AAC frame stream', 'adtsAac' as const, 1900, 2100],
+      // Ogg/Opus: already one of the output codecs, at Opus's own rate, with
+      // its own pre-skip.
+      ['an Ogg/Opus source', 'oggOpus' as const, 1900, 2100],
+      // Matroska with `stream=duration` N/A, the format-fallback case.
+      ['a Matroska with no stream duration', 'noStreamDuration' as const, 1900, 2100],
+      // Complete, honest, one format end to end, 6.7 minutes long — and its
+      // header claims 2h 13m, 4.45x the cap. The fixture that rules out any
+      // "reject an absurd header claim" pre-gate; see its comment.
+      ['an MP3 whose header claims 4.45x the cap', 'absurdHeaderClaim' as const, 401_000, 403_000],
+      // A half-transferred upload: published at its REAL length.
+      ['a truncated MP3', 'truncatedMp3' as const, 1, 1000],
+    ])(
+      'publishes %s at the length its renditions hold',
+      async (_label, fixture, lo, hi) => {
+        const { written, puts } = await processFixture(fx[fixture]);
+        expect(written.status).toBe('ready');
+
+        const durationMs = written.durationMs as number;
+        expect(durationMs).toBeGreaterThanOrEqual(lo);
+        expect(durationMs).toBeLessThanOrEqual(hi);
+
+        // durationSamples is the authoritative one (phase 2 loops on it) and must
+        // agree with durationMs to within the rounding that separates them.
+        const samples = written.durationSamples as number;
+        expect(Math.abs(samples / (RENDITION_SAMPLE_RATE / 1000) - durationMs)).toBeLessThan(1);
+
+        expect(puts).toHaveLength(2);
+        for (const put of puts) {
+          const ext = put.Key.endsWith('.opus') ? 'opus' : 'm4a';
+          const actualMs = await publishedMs(put.Body, ext);
+          // Renditions may run LONG by encoder/container padding and may never
+          // run short by more than MAX_RENDITION_SHORTFALL_MS — the published
+          // audio is the recorded duration, not a different pass's idea of it.
+          expect(actualMs).toBeGreaterThan(durationMs - 500);
+          expect(actualMs).toBeLessThan(durationMs + 500);
+          // And never longer than the cap, which is the load-bearing half.
+          expect(actualMs).toBeLessThanOrEqual(MAX_SOURCE_DURATION_MS);
+        }
+      },
+      120_000
+    );
+
+    it('refuses an over-cap source hidden behind a timeline gap, publishing nothing', async () => {
+      // 31 minutes of audio parked past a 3000 s hole. Under a `-t 1801` bound
+      // this measures 5.02 s and PUBLISHES, with 31-minute renditions behind a
+      // row claiming 5 seconds. Under the decoded-sample bound it measures over
+      // the cap and never reaches an encoder.
+      const { written, puts } = await processFixture(fx.gapOverCap, 0);
+      expect(written.status).toBe('failed');
+      expect(written.permanentFailure).toBe(true);
+      expect(written.lastError).toMatch(/over the 30 minute limit/i);
+      expect(puts).toHaveLength(0);
+    }, 120_000);
+
+    it('refuses a source that changes format mid-stream, and says why', async () => {
+      // ffmpeg rebuilds the filter graph at the change, discarding loudnorm's
+      // 3-second lookahead: 7.12 s measured, 4.21 s rendered. Publishing it
+      // would be a `ready` row missing 3 s of its audio, so it must fail — and
+      // the message has to name the cause, because "the rendition is
+      // incomplete" tells the owner nothing they can act on.
+      const decoded = await analyze(fx.multiRate, MEASURE_LIMIT_SECONDS);
+      expect(decoded.segments).toBeGreaterThan(1);
+      // Summed, not read off the last segment: the last one alone is 4.10 s.
+      expect(decoded.samples / 48).toBeGreaterThan(6000);
+
+      const { written, puts } = await processFixture(fx.multiRate, 0);
+      expect(written.status).toBe('failed');
+      expect(written.permanentFailure).toBe(true);
+      expect(written.lastError).toMatch(/changes audio format part way through/i);
+      expect(puts).toHaveLength(0);
+    }, 120_000);
+
+    it('reads the whole of a gap-timeline file, where a -t bound reads one clip', async () => {
+      // The two bounds, side by side, on the same file. This is the measurement
+      // the last round got wrong, stated as a test rather than as a comment.
+      const bounded = await analyze(fx.gapTimeline, MEASURE_LIMIT_SECONDS);
+      const { stdout: timelineJson } = await run('ffprobe', [
+        '-v',
+        'error',
+        '-show_entries',
+        'format=duration',
+        '-of',
+        'json',
+        fx.gapTimeline,
+      ]);
+      const timelineSeconds = Number(
+        (JSON.parse(timelineJson) as { format?: { duration?: string } }).format?.duration
+      );
+      // The timeline is 3020 s; the audio is 25 s. `-t 1801` cuts inside the
+      // hole, which is why it saw 5 s.
+      expect(timelineSeconds).toBeGreaterThan(3000);
+      expect(bounded.samples / RENDITION_SAMPLE_RATE).toBeGreaterThan(24);
+      expect(bounded.samples / RENDITION_SAMPLE_RATE).toBeLessThan(26);
+    }, 60_000);
+
+    it('rules out a header pre-gate, at any threshold that would catch the gap file', async () => {
+      // The decision recorded in `process.ts`: no header claim rejects anything.
+      // An honest, complete, single-format, 6.7-minute MP3 claims 4.45x the cap;
+      // the hostile gap-timeline Matroska claims 2.2x. There is no threshold
+      // between them, so a gate catching the second permanently rejects the
+      // first — round 5's defect, on real files.
+      const honestClaim = (await probe(fx.absurdHeaderClaim)).durationMs;
+      const honestReal = (await analyze(fx.absurdHeaderClaim, MEASURE_LIMIT_SECONDS)).samples / 48;
+      const hostileClaim = (await probe(fx.gapTimeline)).durationMs;
+
+      expect(honestReal).toBeLessThan(MAX_SOURCE_DURATION_MS);
+      expect(honestClaim / MAX_SOURCE_DURATION_MS).toBeGreaterThan(4);
+      expect(hostileClaim / MAX_SOURCE_DURATION_MS).toBeLessThan(
+        honestClaim / MAX_SOURCE_DURATION_MS
+      );
+    }, 60_000);
+
+    it('keeps the peak decode inside the memory ceiling it claims', async () => {
+      // `MAX_PCM_BYTES` is derived from the duration bound. Before
+      // `extractPeaks` carried that bound, a 12.3 MB gap-timeline source
+      // produced far more PCM than the derivation allowed for.
+      const peaks = await extractPeaks(fx.gapTimeline, 400, RENDER_LIMIT_SECONDS);
+      expect(peaks).toHaveLength(400);
+      expect(Math.max(...peaks)).toBeGreaterThan(0);
+      // 25 s x 16 000 B/s = 400 kB, four orders under the ceiling.
+      expect(pcmBytesForMs(26_000)).toBeLessThan(WORST_CASE_PCM_BYTES);
+    }, 60_000);
+  });
 
   /**
    * The permanent-failure cases. `attempts: 0` throughout: a retryable error at

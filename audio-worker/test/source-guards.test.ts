@@ -2,11 +2,77 @@ import { describe, it, expect } from 'vitest';
 import {
   MAX_SOURCE_DURATION_MS,
   MAX_RENDITION_SHORTFALL_MS,
-  DECODE_LIMIT_SECONDS,
+  MEASURE_LIMIT_SECONDS,
+  RENDER_LIMIT_SECONDS,
   assertDecodedUsable,
   assertRenditionComplete,
 } from '../src/process.js';
 import { PermanentError } from '../src/errors.js';
+import { boundedDecodeFilters, RENDITION_SAMPLE_RATE } from '../src/ffmpeg.js';
+import { PEAK_DECODE_SAMPLE_RATE } from '../src/peaks.js';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+/**
+ * THE INVARIANT, asserted on the worker's own source text.
+ *
+ *   No stage ever decodes more than `MAX_SOURCE_DURATION_MS` of audio, and the
+ *   duration recorded on the asset is the one the renditions actually contain.
+ *
+ * Two rounds of fixes bounded ONE stage and left another unbounded, and both
+ * times the code read as if the bound were universal. Nothing but review caught
+ * that, and review missed it twice. These tests are the mechanical check:
+ * `boundedDecodeFilters` is the only bound, so every `-af`/filter string that
+ * feeds a decode must be built from it, and every function that runs one must
+ * take the limit as a REQUIRED argument (an optional bound is a bound the next
+ * caller omits).
+ */
+describe('the bound is applied at every stage that decodes', () => {
+  const src = (file: string) => readFileSync(join(process.cwd(), 'src', file), 'utf8');
+
+  it('is the same mechanism everywhere: rebase onto the sample clock, then trim', () => {
+    // Not `-t`, which cuts at a TIMELINE POSITION a container can advance
+    // without emitting audio. `asetpts=N/SR/TB` makes each frame's timestamp
+    // its decoded-sample index over the rate, so `atrim` cuts on samples.
+    expect(boundedDecodeFilters(RENDITION_SAMPLE_RATE, 1801)).toBe(
+      'aresample=48000,asetpts=N/SR/TB,atrim=end=1801'
+    );
+    expect(boundedDecodeFilters(PEAK_DECODE_SAMPLE_RATE, 1800)).toBe(
+      'aresample=8000,asetpts=N/SR/TB,atrim=end=1800'
+    );
+  });
+
+  it.each([
+    ['ffmpeg.ts', 2],
+    ['peaks.ts', 1],
+  ])('builds every decoding filter chain in %s from it', (file, uses) => {
+    const text = src(file);
+    // `analyze` and `transcode` in ffmpeg.ts; `extractPeaks` in peaks.ts.
+    const calls = text.match(/boundedDecodeFilters\(/g) ?? [];
+    // One definition site in ffmpeg.ts, plus its uses.
+    expect(calls.length).toBe(file === 'ffmpeg.ts' ? uses + 1 : uses);
+  });
+
+  it('leaves no `-t` bound anywhere: it is the wrong quantity, not a weaker one', () => {
+    for (const file of ['ffmpeg.ts', 'peaks.ts', 'process.ts']) {
+      expect(src(file)).not.toMatch(/'-t',/);
+    }
+  });
+
+  it('makes the limit a required argument of all three, so it cannot be omitted', () => {
+    expect(src('ffmpeg.ts')).toMatch(/analyze\(path: string, limitSeconds: number\)/);
+    expect(src('ffmpeg.ts')).toMatch(/codec: Codec,\s*\n\s*limitSeconds: number/);
+    expect(src('peaks.ts')).toMatch(/buckets: number,\s*\n\s*limitSeconds: number/);
+  });
+
+  it('renders under a bound no looser than the one it measures under', () => {
+    // A source that PASSES the cap must never produce a rendition longer than
+    // the cap, so the rendering bound is the cap itself, while the measuring
+    // pass reads one second further to tell "at the cap" from "over" it.
+    expect(RENDER_LIMIT_SECONDS * 1000).toBe(MAX_SOURCE_DURATION_MS);
+    expect(MEASURE_LIMIT_SECONDS).toBeGreaterThan(RENDER_LIMIT_SECONDS);
+  });
+});
 
 /**
  * The source-rejection rules on their own, fed the numbers that were measured
@@ -35,13 +101,13 @@ describe('the duration cap is decided on the decode, and only there', () => {
   });
 
   it('reads one second past the cap, so anything longer is measurably longer', () => {
-    // `analyze(src, DECODE_LIMIT_SECONDS)` stops the decode here. A limit set AT
-    // the cap would make an hour-long source measure exactly at the cap and pass;
-    // one second past it is the smallest bound that still answers the question,
-    // and it is what keeps a 13.9-hour source (50 MB at 8 kbit/s, the worst
-    // `AUDIO_MAX_BYTES` allows) to a 0.93 s decode instead of 24.16 s.
-    expect(DECODE_LIMIT_SECONDS * 1000).toBeGreaterThan(MAX_SOURCE_DURATION_MS);
-    const atLimit = DECODE_LIMIT_SECONDS * 1000 * SAMPLES_PER_MS;
+    // `analyze(src, MEASURE_LIMIT_SECONDS)` stops the decode here. A limit set
+    // AT the cap would make an hour-long source measure exactly at the cap and
+    // pass; one second past it is the smallest bound that still answers the
+    // question, and it is what keeps a 13.9-hour source (50 MB at 8 kbit/s, the
+    // worst `AUDIO_MAX_BYTES` allows) to a 0.99 s decode instead of 26.33 s.
+    expect(MEASURE_LIMIT_SECONDS * 1000).toBeGreaterThan(MAX_SOURCE_DURATION_MS);
+    const atLimit = MEASURE_LIMIT_SECONDS * 1000 * SAMPLES_PER_MS;
     expect(() => assertDecodedUsable({ samples: atLimit, peakDb: -12 })).toThrow(/minute limit/i);
   });
 
