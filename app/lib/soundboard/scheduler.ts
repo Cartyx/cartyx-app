@@ -17,15 +17,6 @@ export type CreateSchedulerOptions = {
    */
   emit: (command: FireOneShotCommand) => void;
   /**
-   * The clock. Defaults to `Date.now`. Not actually read by the scheduling
-   * logic below (delays are relative, handed straight to `setTimeout`), but
-   * injected anyway per the brief's required signature and so a future
-   * change that needs "how long until the next fire" (e.g. a debug read-out)
-   * has a fake clock ready rather than a second untestable `Date.now()`
-   * call to retrofit.
-   */
-  now?: () => number;
-  /**
    * Injected timer functions — a scheduler that reads the global
    * `setTimeout` directly is untestable. Typed off `typeof globalThis.setTimeout`
    * / `typeof globalThis.clearTimeout` so the default (`globalThis.setTimeout`)
@@ -124,9 +115,7 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     return seconds * 1000;
   }
 
-  function qualifies(
-    item: BoardState['items'][number]
-  ): item is BoardState['items'][number] & {
+  function qualifies(item: BoardState['items'][number]): item is BoardState['items'][number] & {
     randomIntervalMin: number;
     randomIntervalMax: number;
   } {
@@ -149,6 +138,15 @@ export function createScheduler(options: CreateSchedulerOptions): Scheduler {
     if (!pending.has(itemId)) return;
     pending.delete(itemId);
 
+    // INVARIANT: `emit` must not synchronously call back into `sync` on this
+    // same `itemId`. Between the `pending.delete` above and the `armTimer`
+    // re-arm below, this item looks not-pending — a reentrant `sync` would
+    // see it as qualifying-but-untracked and arm a SECOND timer, and the
+    // re-arm below would then overwrite that handle in `pending` via
+    // `Map.set`, orphaning the first one where `dispose` can no longer reach
+    // it. Not a live bug: React's dispatch/effect scheduling never calls a
+    // reducer/subscriber synchronously from inside another dispatch. Holds
+    // only because callers keep it true — see Task 12 notes in the report.
     emit({ type: 'fireOneShot', itemId });
 
     // Reschedule against the CURRENT state, not the state that was live when

@@ -159,6 +159,38 @@ describe('createScheduler', () => {
     expect(emit).not.toHaveBeenCalled();
   });
 
+  it('does not schedule when only one interval bound is resolved, in either direction', () => {
+    // `qualifies()` requires BOTH bounds via `&&`. A future refactor toward
+    // `??`-based merging (mirroring `resolveItemState`'s own `??` rule) could
+    // plausibly treat a lone bound as "good enough" and compute a delay
+    // against `undefined` — `NaN * 1000` — which `setTimeout` fires
+    // immediately, i.e. a thunder crack on every tick. Both directions
+    // (min-only, max-only) are exercised so neither `&&` operand can be
+    // silently dropped without a test noticing.
+    const emit = vi.fn();
+    const scheduler = createScheduler({ emit, random: () => 0 });
+
+    scheduler.sync(
+      makeState([
+        makeItem({
+          itemId: 'min-only',
+          playing: true,
+          randomIntervalMin: 10,
+          randomIntervalMax: undefined,
+        }),
+        makeItem({
+          itemId: 'max-only',
+          playing: true,
+          randomIntervalMin: undefined,
+          randomIntervalMax: 10,
+        }),
+      ])
+    );
+
+    vi.advanceTimersByTime(10 * 60_000);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
   it('does not restart an already-running timer on an unrelated sync (e.g. a volume nudge)', () => {
     const emit = vi.fn();
     const scheduler = createScheduler({ emit, random: () => 0.5 });
