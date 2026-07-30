@@ -147,9 +147,14 @@ async function listUserObjects(
  * would be dangerous rather than merely partial: an unloaded row's keys would
  * look unreferenced, i.e. the scan would offer to delete live audio.
  *
- * `onceRenditions` is reserved for phase 2's ∞/1× music variants and is never
- * written in phase 1, but a cleanup that forgets them once phase 2 starts
- * populating them would offer to delete a user's live music.
+ * `onceRenditions` and `onceSourceKey` are Task 18's ∞/1× music-variant
+ * fields, and a cleanup that forgot any of them would offer to delete a
+ * user's live music or an attach that's still mid-upload. `onceSourceKey`
+ * specifically was missed in Task 18's initial cut — this module's own
+ * doc comment above anticipated exactly this class of bug for
+ * `onceRenditions` and the new sibling field walked past it: the review
+ * that caught it reproduced a live once-attach source getting reported (and
+ * deletable) as an orphan once it crossed `AUDIO_ORPHAN_MIN_AGE_MS`.
  */
 async function referencedKeys(userId: string, keys: string[]): Promise<Set<string>> {
   if (keys.length === 0) return new Set();
@@ -163,15 +168,17 @@ async function referencedKeys(userId: string, keys: string[]): Promise<Set<strin
       ownerId: userId,
       $or: [
         { sourceKey: { $in: keys } },
+        { onceSourceKey: { $in: keys } },
         { 'renditions.opus.key': { $in: keys } },
         { 'renditions.aac.key': { $in: keys } },
         { 'onceRenditions.opus.key': { $in: keys } },
         { 'onceRenditions.aac.key': { $in: keys } },
       ],
     },
-    'sourceKey renditions onceRenditions'
+    'sourceKey onceSourceKey renditions onceRenditions'
   ).lean()) as unknown as Array<{
     sourceKey?: string;
+    onceSourceKey?: string;
     renditions?: { opus?: { key?: string }; aac?: { key?: string } };
     onceRenditions?: { opus?: { key?: string }; aac?: { key?: string } };
   }>;
@@ -180,6 +187,7 @@ async function referencedKeys(userId: string, keys: string[]): Promise<Set<strin
   for (const row of rows) {
     for (const key of [
       row.sourceKey,
+      row.onceSourceKey,
       row.renditions?.opus?.key,
       row.renditions?.aac?.key,
       row.onceRenditions?.opus?.key,

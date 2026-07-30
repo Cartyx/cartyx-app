@@ -578,6 +578,56 @@ async function markFailed(
 }
 
 /**
+ * Terminal outcome for a FAILED once-variant run — and the fix for a Task 18
+ * review Critical: `markFailed` must NEVER be called for a once-variant job.
+ * Reusing the row's single status field for a second job type (the design
+ * doc's own accepted trade-off) means `status: 'failed'` describes the WHOLE
+ * row, not just the once job — a once-variant that is over-cap, silent, or
+ * otherwise permanently unusable would set `permanentFailure: true` on a
+ * fully-transcoded, previously-`ready` music asset, and `retryAudioAsset`
+ * refuses rows carrying that flag. There is no path back to `ready` from
+ * there: a wrong second file bricks a working asset on every board,
+ * permanently, with delete-and-re-upload as the only remedy.
+ *
+ * Instead: the row goes straight back to `ready`/`main` — a fully playable
+ * asset, exactly as it was before the attach — and the reason is recorded in
+ * `onceLastError`, a field dedicated to the once job so it can never be
+ * confused with `lastError` (which describes the MAIN pipeline and must stay
+ * whatever it already was). `onceSourceKey` is cleared: nothing will ever
+ * download it again once `variant` is back to `'main'`, and clearing the
+ * reference is what lets the orphan scanner (`audio-cleanup.ts`) reclaim the
+ * object instead of it being invisibly kept "in use" forever.
+ *
+ * This is reached from BOTH terminal once-variant paths in `processAsset`'s
+ * catch block — a `PermanentError` (over-cap, silent, incomplete rendition,
+ * ...) and a transient failure that exhausted `MAX_ATTEMPTS` — because both
+ * are "this once job cannot succeed right now," and neither may ever read as
+ * "this asset is broken."
+ */
+async function markOnceFailed(
+  model: Model,
+  id: unknown,
+  workerId: string,
+  message: string
+): Promise<void> {
+  await fencedWrite(
+    model,
+    id,
+    workerId,
+    {
+      status: 'ready',
+      variant: 'main',
+      onceSourceKey: null,
+      onceLastError: message,
+      claimedAt: null,
+      claimedBy: null,
+      updatedAt: new Date(),
+    },
+    'once-failed-reverted-to-ready'
+  );
+}
+
+/**
  * Return a claimed row to `pending` so a later `claimNext` picks it back up,
  * after `computeBackoffMs(attempts)` has elapsed. `lastError` is still recorded
  * so the reason for the retry stays visible. Only valid under the attempt cap —
@@ -666,7 +716,11 @@ export async function processAsset(
       { assetId: String(id) },
       'once-variant row has no onceSourceKey, cannot transcode'
     );
-    await markFailed(model, id, workerId, 'Once-variant asset has no onceSourceKey', true);
+    // markOnceFailed, not markFailed: this is a once-variant job, so it must
+    // never turn `status: 'failed'`/`permanentFailure: true` on what may be a
+    // perfectly good, already-`ready` main asset. See markOnceFailed's doc
+    // comment.
+    await markOnceFailed(model, id, workerId, 'Once-variant asset has no onceSourceKey');
     return;
   }
   // What this run actually downloads and transcodes: the once-variant's own
@@ -1006,13 +1060,29 @@ export async function processAsset(
     // pattern-matching an ffmpeg exit code. Retrying it is guaranteed waste,
     // so it skips the budget entirely and is stamped as un-retryable so a
     // human clicking Retry can't buy another pass either. See errors.ts.
+    // Task 18 review Critical 2: a once-variant run must NEVER reach
+    // `markFailed`. Both terminal branches below (permanent, and
+    // budget-exhausted) route a once-variant claim through `markOnceFailed`
+    // instead — see that function's doc comment for why. `requeueForRetry`
+    // is UNCHANGED for once: a transient failure still gets its normal
+    // backoff-and-retry within the attempt budget, re-downloading the SAME
+    // `onceSourceKey` on the next claim, exactly like the main pipeline's
+    // transient retries. Only once the budget (or a PermanentError) makes
+    // this the LAST word on the job does it need to avoid landing on
+    // `failed`.
     if (err instanceof PermanentError) {
-      await markFailed(model, id, workerId, message, true);
+      if (isOnceVariant) {
+        await markOnceFailed(model, id, workerId, message);
+      } else {
+        await markFailed(model, id, workerId, message, true);
+      }
       return;
     }
 
     if (attempts < MAX_ATTEMPTS) {
       await requeueForRetry(model, id, workerId, message, attempts);
+    } else if (isOnceVariant) {
+      await markOnceFailed(model, id, workerId, message);
     } else {
       await markFailed(model, id, workerId, message);
     }

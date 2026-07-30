@@ -28,18 +28,33 @@ const UPLOAD_STALE_MS = 900_000;
 /**
  * A reaper model. `find` returns the abandoned `uploading` rows; `updateOne`
  * reports a match by default, which is what the real driver always does.
+ *
+ * `find` is FILTER-AWARE as of Task 18's review fix round: `reapStale` now
+ * issues TWO `find` calls — `reapAbandonedUploads`'s (`variant: { $ne:
+ * 'once' }`) and the new `reapAbandonedOnceUploads`'s (`variant: 'once'`) —
+ * against the same mocked collection. A filter-blind mock that returned
+ * `abandoned` for either call would silently double-process every fixture
+ * row through both reapers, which is exactly the kind of bug a real Mongo
+ * query (which actually filters) would never reproduce and this suite would
+ * then have zero coverage of. Routing on `variant` keeps every EXISTING test
+ * below exercising only the main-upload reaper (its default `onceAbandoned:
+ * []` makes the once-reaper a no-op) while the new
+ * `reapAbandonedOnceUploads` tests opt in via the third parameter.
  */
 function reaperModel(
   abandoned: { _id: unknown; sourceKey?: string }[] = [],
-  updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 })
+  updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 }),
+  onceAbandoned: { _id: unknown; onceSourceKey?: string }[] = []
 ) {
   const updateMany = vi.fn().mockResolvedValue({ modifiedCount: 1 });
   // `limit` is HONOURED here, as the real driver honours it. A fake that
   // returned every row regardless would make the bound look like it worked
   // while testing a code path that never sees it.
-  const find = vi.fn((_f: unknown, options?: { limit?: number }) => ({
-    toArray: async () => (options?.limit ? abandoned.slice(0, options.limit) : abandoned),
-  }));
+  const find = vi.fn((f: unknown, options?: { limit?: number }) => {
+    const isOnceQuery = (f as { variant?: unknown } | undefined)?.variant === 'once';
+    const source = isOnceQuery ? onceAbandoned : abandoned;
+    return { toArray: async () => (options?.limit ? source.slice(0, options.limit) : source) };
+  });
   return { updateMany, updateOne, find };
 }
 
@@ -367,5 +382,146 @@ describe('reapStale is bounded, beaten and interruptible', () => {
     const model = reaperModel(flood(200));
     await reapStale(model as never, 600_000, UPLOAD_STALE_MS, vi.fn(), () => true);
     expect(model.updateOne.mock.calls.length).toBe(200);
+  });
+});
+
+/**
+ * Task 18 review Critical 1, reproduced and fixed.
+ *
+ * `createOnceVariantUpload` flips an EXISTING, potentially long-lived row to
+ * `status: 'uploading'` to attach a once-variant. Its `createdAt` is
+ * whenever the MAIN asset was first uploaded — routinely hours or days in
+ * the past. Before this fix, `reapAbandonedUploads`'s `createdAt`-gated
+ * query matched such a row on the very next reap pass (default poll
+ * interval: seconds) — while the browser's PUT to the once-variant's
+ * presigned URL was still in flight — failed it, and pushed `row.sourceKey`
+ * — the MAIN asset's source, not the once-variant's — into a real
+ * `DeleteObjects` call. The renditions survive untouched, which is what
+ * makes it silent in production: the asset keeps playing right up until
+ * someone needs to re-transcode it.
+ */
+describe('reapStale handles once-variant attaches separately (Task 18 review Critical 1)', () => {
+  const ONCE_STALE_MS = UPLOAD_STALE_MS; // reapStale reuses uploadTimeoutMs for both.
+
+  it('excludes once-variant attaches from the main abandoned-upload query — the exact clause that closes the bug', async () => {
+    const model = reaperModel();
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
+
+    const mainFindCall = model.find.mock.calls.find(
+      ([f]) => (f as { variant?: unknown })?.variant !== 'once'
+    );
+    expect(mainFindCall).toBeDefined();
+    const [filter] = mainFindCall!;
+    expect((filter as { status: string }).status).toBe('uploading');
+    // `$ne`, not `!== 'once'` in JS: this is a MongoDB query clause, and a
+    // real Mongo evaluates it server-side — that evaluation, not anything in
+    // this process, is what actually stops a once-row reaching this reaper's
+    // row-processing code (which has no per-row variant check of its own; it
+    // trusts the query). This assertion pins the clause the fix depends on.
+    expect((filter as { variant?: unknown }).variant).toEqual({ $ne: 'once' });
+  });
+
+  it("never deletes an UNRELATED main asset's sourceKey while reaping a mid-attach once-variant — the two reapers do not cross-contaminate", async () => {
+    // A genuinely abandoned MAIN upload (a different asset entirely — this
+    // is what `reapAbandonedUploads` exists to catch) alongside a
+    // mid-attach once-variant row (a SECOND, unrelated asset, already
+    // `ready`, now mid-PUT on its once source). Each is placed only where a
+    // real Mongo query honouring the two reapers' respective filters would
+    // actually return it — `abandoned` for the plain main upload,
+    // `onceAbandoned` for the once-variant, never both — because the query
+    // filter, not any row-level check inside either reaper, is the entire
+    // mechanism under test: neither reaper's row-processing code checks
+    // `variant` itself, both simply trust what `find` returned.
+    const model = reaperModel(
+      [{ _id: 'genuinely-abandoned-main', sourceKey: 'uploads/audio/prefix/main-src.wav' }],
+      undefined,
+      [{ _id: 'mid-attach-once', onceSourceKey: 'uploads/audio/prefix/once-src.wav' }]
+    );
+    const deleteSource = vi.fn().mockResolvedValue(undefined);
+
+    await reapStale(model as never, 600_000, ONCE_STALE_MS, deleteSource);
+
+    const deletedKeys = deleteSource.mock.calls.flatMap(([keys]) => keys as string[]);
+    // The genuinely-abandoned main upload is still correctly reclaimed...
+    expect(deletedKeys).toContain('uploads/audio/prefix/main-src.wav');
+    // ...and so is the once-attach's own source, via the once-specific
+    // path...
+    expect(deletedKeys).toContain('uploads/audio/prefix/once-src.wav');
+    // ...but the two rows' outcomes are not swapped or merged: the
+    // mid-attach row's update never references the OTHER asset's key, and
+    // vice versa.
+    const onceUpdateCall = model.updateOne.mock.calls.find(
+      ([f]) => (f as { _id: unknown })._id === 'mid-attach-once'
+    );
+    expect(onceUpdateCall![1]).not.toHaveProperty('sourceKey');
+    const mainUpdateCall = model.updateOne.mock.calls.find(
+      ([f]) => (f as { _id: unknown })._id === 'genuinely-abandoned-main'
+    );
+    expect(mainUpdateCall![1].$set).not.toHaveProperty('onceSourceKey');
+  });
+
+  it('reverts a stale once-attach to ready/main on updatedAt, not createdAt', async () => {
+    const model = reaperModel([], undefined, [
+      { _id: 'once-1', onceSourceKey: 'uploads/audio/prefix/once-src.wav' },
+    ]);
+    const before = Date.now();
+
+    await reapStale(model as never, 600_000, ONCE_STALE_MS, vi.fn());
+
+    const onceFindCall = model.find.mock.calls.find(
+      ([f]) => (f as { variant?: unknown })?.variant === 'once'
+    );
+    expect(onceFindCall).toBeDefined();
+    const [filter] = onceFindCall!;
+    expect((filter as { status: string }).status).toBe('uploading');
+    // updatedAt, NOT createdAt — the entire fix. A cutoff gated on createdAt
+    // would match this row (and every other once-attach) immediately, since
+    // the MAIN asset's createdAt is whatever it always was.
+    expect(filter).not.toHaveProperty('createdAt');
+    const cutoff = (filter as { updatedAt: { $lt: Date } }).updatedAt.$lt;
+    expect(cutoff).toBeInstanceOf(Date);
+    expect(cutoff.getTime()).toBeLessThanOrEqual(before - ONCE_STALE_MS + 1);
+
+    const onceUpdateCall = model.updateOne.mock.calls.find(
+      ([f]) => (f as { _id: unknown })._id === 'once-1'
+    );
+    expect(onceUpdateCall).toBeDefined();
+    const [updateFilter, update] = onceUpdateCall!;
+    expect(updateFilter).toEqual({ _id: 'once-1', status: 'uploading', variant: 'once' });
+    expect(update.$set).toMatchObject({
+      status: 'ready',
+      variant: 'main',
+      onceSourceKey: null,
+    });
+    expect(update.$set.onceLastError).toBeTypeOf('string');
+    expect(update.$set.claimedAt).toBeNull();
+    expect(update.$set.claimedBy).toBeNull();
+    expect(update.$set.updatedAt).toBeInstanceOf(Date);
+  });
+
+  it('leaves a freshly started once-attach alone (nothing in the once-abandoned candidate set)', async () => {
+    // No onceAbandoned rows supplied — mirrors a real Mongo query finding
+    // nothing because the attach is still well within its timeout window.
+    const model = reaperModel();
+    const deleteSource = vi.fn().mockResolvedValue(undefined);
+
+    await reapStale(model as never, 600_000, ONCE_STALE_MS, deleteSource);
+
+    expect(deleteSource).not.toHaveBeenCalled();
+  });
+
+  it('does not touch a once-attach that got confirmed in the meantime — the fenced write correctly no-ops', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 0 });
+    const model = reaperModel([], updateOne, [
+      { _id: 'once-1', onceSourceKey: 'uploads/audio/prefix/once-src.wav' },
+    ]);
+    const deleteSource = vi.fn().mockResolvedValue(undefined);
+
+    await reapStale(model as never, 600_000, ONCE_STALE_MS, deleteSource);
+
+    // matchedCount: 0 means confirmOnceVariantUpload already moved the row
+    // past `uploading` before this write landed — its once source is now a
+    // real part of a `pending`/`processing` asset and must not be deleted.
+    expect(deleteSource).not.toHaveBeenCalled();
   });
 });

@@ -22,11 +22,18 @@ const hooks = vi.hoisted(() => ({
   // as the main key's bytes changing between the two processAsset calls.
   puts: new Map<string, Buffer>(),
   putOrder: [] as string[],
+  // Every key `downloadSource` GetObject'd, in order. Task 18 review
+  // Important finding: the original "downloads the once-variant's own
+  // source object" test didn't track this at all, so it passed even with
+  // `effectiveSourceKey` hardcoded to the main `sourceKey` — the reviewer
+  // confirmed that mutation left all 5 tests green. This is what makes the
+  // assertion real.
+  gets: [] as string[],
 }));
 
 vi.mock('@aws-sdk/client-s3', () => {
   class GetObjectCommand {
-    constructor(public input: unknown) {}
+    constructor(public input: { Key: string }) {}
   }
   class PutObjectCommand {
     constructor(public input: { Key: string; Body: Buffer }) {}
@@ -37,6 +44,7 @@ vi.mock('@aws-sdk/client-s3', () => {
   class FakeS3Client {
     async send(cmd: unknown): Promise<unknown> {
       if (cmd instanceof GetObjectCommand) {
+        hooks.gets.push(cmd.input.Key);
         return { ContentLength: 16, Body: Readable.from([Buffer.alloc(16)]) };
       }
       if (cmd instanceof PutObjectCommand) {
@@ -77,6 +85,8 @@ vi.mock('../src/ffmpeg.js', async () => {
 vi.mock('../src/peaks.js', () => ({ extractPeaks: vi.fn().mockResolvedValue([0.5, 0.5]) }));
 
 import { processAsset } from '../src/process.js';
+import { analyze, probe } from '../src/ffmpeg.js';
+import { MAX_ATTEMPTS } from '../src/claim.js';
 
 const WORKER = 'worker-once-variant';
 const PREFIX_ROOT = 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/';
@@ -96,6 +106,7 @@ beforeEach(() => {
   process.env.HEARTBEAT_FILE = heartbeatPath;
   hooks.puts.clear();
   hooks.putOrder = [];
+  hooks.gets = [];
   transcodeCounter = 0;
 });
 
@@ -170,16 +181,35 @@ describe('the destination field follows the row variant', () => {
       },
       WORKER
     );
-    // GetObjectCommand isn't tracked by key in this fixture's FakeS3Client,
-    // but a wrong-source download would still succeed (same fake response)
-    // — what's provable here is that the run completed successfully at all
-    // using onceSourceKey as the only source reference, i.e. no failure
-    // path was hit for "no sourceKey"/"no onceSourceKey".
+    // Task 18 review Important fix: this now asserts the ACTUAL
+    // GetObjectCommand key, not just that the run happened to succeed
+    // (which it would have even downloading the wrong object, since the
+    // fake client answers every GetObject identically). Exactly one
+    // download, and it is the ONCE source — never the main one.
+    expect(hooks.gets).toEqual([`${PREFIX_ROOT}once-source.wav`]);
+    expect(hooks.gets).not.toContain(`${PREFIX_ROOT}main-source.wav`);
     const [, update] = updateOne.mock.calls[0];
     expect(update.$set.status).toBe('ready');
   });
 
-  it('permanently fails a once-variant claim with no onceSourceKey, without retrying', async () => {
+  it('downloads the main sourceKey (not any onceSourceKey) for a main-pipeline claim', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    await processAsset(
+      { updateOne } as never,
+      { _id: 'asset-main-src', sourceKey: `${PREFIX_ROOT}main-source.wav`, attempts: 1 },
+      WORKER
+    );
+    expect(hooks.gets).toEqual([`${PREFIX_ROOT}main-source.wav`]);
+  });
+
+  /**
+   * Task 18 review Critical 2 fix: this used to assert `status: 'failed'` +
+   * `permanentFailure: true` — which, on a real row, is the MAIN asset
+   * being bricked over a malformed once-attach row. Reverts to ready/main
+   * instead, same as every other once-variant terminal failure; see the
+   * `markOnceFailed` doc comment in process.ts.
+   */
+  it('reverts to ready/main (not failed) for a once-variant claim with no onceSourceKey, and never retries it', async () => {
     const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
     await processAsset(
       { updateOne } as never,
@@ -187,9 +217,11 @@ describe('the destination field follows the row variant', () => {
       WORKER
     );
     const [, update] = updateOne.mock.calls[0];
-    expect(update.$set.status).toBe('failed');
-    expect(update.$set.permanentFailure).toBe(true);
-    expect(update.$set.lastError).toMatch(/onceSourceKey/);
+    expect(update.$set.status).toBe('ready');
+    expect(update.$set.variant).toBe('main');
+    expect(update.$set.onceLastError).toMatch(/onceSourceKey/);
+    expect('permanentFailure' in update.$set).toBe(false);
+    expect('lastError' in update.$set).toBe(false);
     expect(hooks.puts.size).toBe(0);
   });
 });
@@ -259,5 +291,113 @@ describe('a once-variant run does not collide with an existing main rendition', 
     const [, onceUpdate] = onceUpdateOne.mock.calls[0];
     expect(onceUpdate.$set.onceRenditions.opus.key).toBe(onceKeys[0]);
     expect(onceUpdate.$set.onceRenditions.aac.key).toBe(onceKeys[1]);
+  });
+});
+
+/**
+ * Task 18 review Critical 2, fixed: a once-variant run must NEVER leave the
+ * row `status: 'failed'` — reviewer-reported mechanism was feeding a
+ * `PermanentError`-triggering once file (any of: over-cap length, zero
+ * samples, digital silence, an incomplete rendition) and observing
+ * `permanentFailure: true` land on what could be a perfectly good,
+ * already-`ready` music asset, with `retryAudioAsset` then refusing the row
+ * forever. These tests drive the REAL failure paths (a real thrown
+ * `PermanentError` from `assertDecodedUsable`, and a real exhausted retry
+ * budget), not a proxy assertion about `markOnceFailed` in isolation.
+ */
+describe('Critical 2 fix: a failed once-variant run reverts to ready, never failed', () => {
+  it('reverts to ready/main on a PermanentError (digital silence), without permanentFailure or touching any main-describing field', async () => {
+    // A REAL PermanentError, thrown by the real (unmocked) assertDecodedUsable
+    // — only `analyze`'s result is faked, exactly as the rest of this file's
+    // ffmpeg mock already does for the happy path.
+    vi.mocked(analyze).mockResolvedValueOnce({ samples: 48_000, peakDb: Number.NEGATIVE_INFINITY });
+
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    await processAsset(
+      { updateOne } as never,
+      {
+        _id: 'asset-once-permanent',
+        sourceKey: `${PREFIX_ROOT}x.wav`,
+        onceSourceKey: `${PREFIX_ROOT}silent-once.wav`,
+        variant: 'once',
+        attempts: 1,
+      },
+      WORKER
+    );
+
+    expect(updateOne).toHaveBeenCalledTimes(1);
+    const [, update] = updateOne.mock.calls[0];
+    // The load-bearing assertion: NEVER 'failed'.
+    expect(update.$set.status).toBe('ready');
+    expect(update.$set.variant).toBe('main');
+    expect(update.$set.onceLastError).toMatch(/silent/i);
+    expect(update.$set.onceSourceKey).toBeNull();
+    // permanentFailure is not merely false — it is ABSENT from the $set, so
+    // a real MongoDB $set leaves whatever the row already had (always
+    // `false`, since the asset was `ready` before this attach started)
+    // completely untouched, exactly like the "leaves renditions untouched"
+    // assertion elsewhere in this file.
+    expect('permanentFailure' in update.$set).toBe(false);
+    expect('lastError' in update.$set).toBe(false);
+    expect('renditions' in update.$set).toBe(false);
+    expect('onceRenditions' in update.$set).toBe(false);
+    expect('durationMs' in update.$set).toBe(false);
+    // Never reached a PUT at all — the rejection happens before transcode.
+    expect(hooks.puts.size).toBe(0);
+  });
+
+  it('reverts to ready/main once a TRANSIENT once failure exhausts the retry budget, never landing on failed', async () => {
+    vi.mocked(probe).mockRejectedValueOnce(new Error('simulated transient R2/ffmpeg blip'));
+
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    await processAsset(
+      { updateOne } as never,
+      {
+        _id: 'asset-once-exhausted',
+        sourceKey: `${PREFIX_ROOT}x.wav`,
+        onceSourceKey: `${PREFIX_ROOT}flaky-once.wav`,
+        variant: 'once',
+        // At the cap: `attempts < MAX_ATTEMPTS` is false, so this is the
+        // LAST word on the job, exactly the case that used to call
+        // `markFailed` (non-permanent, but still `status: 'failed'`).
+        attempts: MAX_ATTEMPTS,
+      },
+      WORKER
+    );
+
+    const [, update] = updateOne.mock.calls[0];
+    expect(update.$set.status).toBe('ready');
+    expect(update.$set.variant).toBe('main');
+    expect(update.$set.onceLastError).toMatch(/simulated transient/i);
+    expect('permanentFailure' in update.$set).toBe(false);
+    expect('renditions' in update.$set).toBe(false);
+  });
+
+  it('still retries a transient once failure WITHIN budget via the unchanged pending/backoff path', async () => {
+    vi.mocked(probe).mockRejectedValueOnce(new Error('simulated transient blip'));
+
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    await processAsset(
+      { updateOne } as never,
+      {
+        _id: 'asset-once-retry',
+        sourceKey: `${PREFIX_ROOT}x.wav`,
+        onceSourceKey: `${PREFIX_ROOT}flaky-once.wav`,
+        variant: 'once',
+        attempts: 1,
+      },
+      WORKER
+    );
+
+    const [, update] = updateOne.mock.calls[0];
+    // Unchanged behaviour: still the normal backoff-and-retry path, not
+    // `markOnceFailed` — a once job under budget resumes the SAME job on
+    // its next claim, which is why `variant`/`onceSourceKey` must be
+    // ABSENT from this $set (requeueForRetry never touches them).
+    expect(update.$set.status).toBe('pending');
+    expect(update.$set.nextAttemptAt).toBeInstanceOf(Date);
+    expect('variant' in update.$set).toBe(false);
+    expect('onceSourceKey' in update.$set).toBe(false);
+    expect('onceLastError' in update.$set).toBe(false);
   });
 });

@@ -344,6 +344,28 @@ describe('BoardPad', () => {
     expect(screen.queryByRole('button', { name: /switch rain to/i })).not.toBeInTheDocument();
   });
 
+  /**
+   * Task 18 review minor fix: `undefined` above is a real type-level
+   * possibility (the field is optional), but it is no longer what
+   * `serializeAudioAsset` actually sends — every served asset now has
+   * `onceRenditions: {}` when nothing is attached (mirroring `renditions`'s
+   * existing default). Nothing asserted that shape before; this does.
+   */
+  it('does not render the once-variant control when onceRenditions is {} (the real server shape)', () => {
+    render(
+      <BoardPad
+        item={mkItem()}
+        asset={mkAsset({ onceRenditions: {} })}
+        playing={false}
+        volume={0.7}
+        onPlay={noop}
+        onStop={noop}
+        onVolumeChange={noop}
+      />
+    );
+    expect(screen.queryByRole('button', { name: /switch rain to/i })).not.toBeInTheDocument();
+  });
+
   it('renders the once-variant control when the asset has an onceRenditions rendition, and toggling flips it', async () => {
     const user = userEvent.setup();
     render(

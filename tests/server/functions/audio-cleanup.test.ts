@@ -180,6 +180,44 @@ describe('scanOrphanAudio — ownership scoping', () => {
     expect(res.orphans.map((o) => o.key)).toEqual([`${ROOT}renditions/orphan.m4a`]);
   });
 
+  /**
+   * Task 18 review Critical fix #3. `onceSourceKey` — the once-variant's own
+   * uploaded source object, live for as long as an attach is in flight or
+   * has succeeded — was missing from `referencedKeys`'s `$or` and result
+   * set even though `onceRenditions` (a sibling field added in the same
+   * task) was already handled. Without this, once a once-attach source
+   * object crossed `AUDIO_ORPHAN_MIN_AGE_MS` it was reported — and,
+   * critically, DELETABLE — as an orphan by the user's own "delete
+   * orphans" button, even while a once-variant attach was mid-transcode or
+   * successfully attached.
+   */
+  it('never offers a live onceSourceKey object as an orphan', async () => {
+    r2Lists([
+      { Key: `${ROOT}src.wav`, Size: 1, LastModified: OLD },
+      { Key: `${ROOT}once-src.wav`, Size: 2, LastModified: OLD },
+      { Key: `${ROOT}renditions/orphan.m4a`, Size: 3, LastModified: OLD },
+    ]);
+    lean.mockResolvedValue([
+      {
+        sourceKey: `${ROOT}src.wav`,
+        onceSourceKey: `${ROOT}once-src.wav`,
+      },
+    ]);
+
+    const { scanOrphanAudio } = await import('~/server/functions/audio-cleanup');
+    const res = await scanOrphanAudio({ userId: OWNER });
+    // Only the genuinely-unreferenced object is reported — `once-src.wav`
+    // is excluded even though nothing about its NAME distinguishes it from
+    // an orphan; only the row's `onceSourceKey` field does.
+    expect(res.orphans.map((o) => o.key)).toEqual([`${ROOT}renditions/orphan.m4a`]);
+
+    // And the query sent to Mongo actually asks about it — pinning the fix
+    // at the query level, not just the observed result, the same way
+    // `scopes the reference lookup...` below pins `sourceKey`.
+    const filter = (find.mock.calls[0] as unknown as [Record<string, unknown>])[0];
+    expect(JSON.stringify(filter)).toContain(`${ROOT}once-src.wav`);
+  });
+
   /** The reference lookup is scoped to the caller as well as to the listed keys. */
   it('scopes the reference lookup to the caller and to the listed keys', async () => {
     r2Lists([{ Key: `${ROOT}src.wav`, Size: 1, LastModified: OLD }]);

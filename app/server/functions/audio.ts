@@ -241,6 +241,21 @@ export async function confirmAudioUpload({
  * a second, concurrent attach request's identical filter matches nothing,
  * the same technique `confirmAudioUpload`'s `status: 'uploading'` filter
  * uses.
+ *
+ * `attempts: 0` is explicit, not incidental: `attempts` otherwise carries
+ * over from whatever the MAIN pipeline last left it at, so a main asset that
+ * needed 2 of its 3 attempts to transcode would hand its once job only 1
+ * retry before `MAX_ATTEMPTS`. A once job is a fresh unit of work and gets
+ * the full budget.
+ *
+ * Re-attaching (the row already has an `onceSourceKey` from a prior attach,
+ * successful or not) mints a NEW key rather than reusing the old one — and
+ * the old object is deleted, best-effort, once the row points at its
+ * replacement. Without this a user who attaches, then attaches again with a
+ * better file, strands the first once-variant's source object: nothing
+ * references it (the row's `onceSourceKey` has moved on), and unlike the
+ * main `sourceKey` — which is minted exactly once per asset — a once-attach
+ * can happen any number of times, so this is not a one-off gap.
  */
 export async function createOnceVariantUpload({
   data,
@@ -259,6 +274,7 @@ export async function createOnceVariantUpload({
     if (asset.status !== 'ready') {
       throw new Error('This asset must finish processing before a once-variant can be attached');
     }
+    const previousOnceSourceKey = asset.onceSourceKey;
 
     const storagePrefix = await resolveAudioStoragePrefix(userId);
     const { uploadUrl, key } = await getAudioUploadUrl({
@@ -275,6 +291,7 @@ export async function createOnceVariantUpload({
           onceSourceKey: key,
           variant: 'once',
           status: 'uploading',
+          attempts: 0,
           updatedAt: new Date(),
         },
       },
@@ -282,6 +299,27 @@ export async function createOnceVariantUpload({
     );
     if (!updated) {
       throw new Error('This asset is not ready to accept a once-variant right now');
+    }
+
+    // Best-effort, and only after the row is safely pointed at the NEW key —
+    // an R2 outage here must not fail the attach, and deleting before the
+    // write would risk destroying the only object a failed write still
+    // references.
+    if (previousOnceSourceKey) {
+      try {
+        const { client, bucket } = createR2();
+        await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: previousOnceSourceKey }));
+      } catch (e) {
+        void reportAudioError(
+          e,
+          { userId, sessionUserId },
+          {
+            action: 'createOnceVariantUpload.replacedOnceSource',
+            assetId: data.assetId,
+            key: previousOnceSourceKey,
+          }
+        );
+      }
     }
 
     return { assetId: data.assetId, uploadUrl, key };

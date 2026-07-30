@@ -63,22 +63,48 @@ const audioAssetSchema = new mongoose.Schema({
   // (`renditions`/`onceRenditions`) — "same pipeline, different
   // destination field," per the design doc's own framing.
   //
-  // On a SUCCESSFUL once-variant run the worker resets this to 'main',
-  // since the once job is done. On a FAILED run it is left at 'once' on
-  // purpose, so a Retry click retries the SAME job instead of silently
-  // re-running the (already-ready) main transcode.
+  // On BOTH a successful AND a failed once-variant run the worker resets
+  // this to 'main' and flips `status` back to 'ready' — never `'failed'`.
+  // This is a Task 18 review fix, not the original design: `status:
+  // 'failed'` describes the WHOLE row under this shared-state scheme, so a
+  // failed once-variant used to be indistinguishable from a failed MAIN
+  // asset, and a `PermanentError` (over-cap, silent, ...) on the once file
+  // would set `permanentFailure: true` on what could be a perfectly good,
+  // already-`ready` music asset — `retryAudioAsset` refuses those rows, so
+  // there was no path back to `ready` short of delete-and-re-upload. See
+  // `markOnceFailed` in audio-worker/src/process.ts and `onceLastError`
+  // below. A once job is therefore never retried in place; the user just
+  // attaches again, which is why `createOnceVariantUpload` resets
+  // `attempts: 0` on every new attach rather than this field carrying retry
+  // state across attempts.
   //
   // Reusing one status/attempts/claim state for a second job type is the
-  // trade-off this collection's own design doc names explicitly ("if a
-  // second job type is ever added this should become a real queue rather
-  // than growing more status enums") — accepted here rather than building
-  // a second queue. The consequence: while a once-variant attach is
-  // in flight or failed, `status` no longer reads 'ready' for the WHOLE
-  // row, so the main rendition — already finished, and never touched by
-  // this job — is briefly reported as uploading/pending/processing/failed
-  // everywhere `status` is read (the board's play gate, listAudioAssets,
-  // the library row). See Task 18's report.
+  // trade-off this collection's own design doc names explicitly — and
+  // names as a STOP CONDITION, not a sanction: "if a second job type is
+  // ever added this SHOULD BECOME a real queue rather than growing more
+  // status enums." Task 18 is that second job type. The queue was reused
+  // anyway, deliberately, to avoid building the real per-variant queue as
+  // part of this task; the once-specific reap path
+  // (`reapAbandonedOnceUploads` in audio-worker/src/claim.ts) and
+  // `markOnceFailed` exist specifically to contain the two ways that reuse
+  // was found to cause data loss (see Task 18's report, "Fix round 1"). The
+  // remaining, accepted consequence: while a once-variant attach is
+  // uploading/pending/processing, `status` no longer reads 'ready' for the
+  // WHOLE row, so the main rendition — already finished, and never touched
+  // by this job — is briefly reported as
+  // uploading/pending/processing everywhere `status` is read (the board's
+  // play gate, listAudioAssets, the library row). A genuine per-variant
+  // queue (`onceStatus`/`onceAttempts`/...) is the real fix for that,
+  // still out of scope here.
   variant: { type: String, enum: ['main', 'once'], default: 'main' },
+  // The once job's own error, kept separate from `lastError` (which
+  // describes the MAIN pipeline and must never be overwritten by a once
+  // failure). Set by `markOnceFailed`/`reapAbandonedOnceUploads` whenever a
+  // once-variant run fails or is abandoned; cleared implicitly by nothing —
+  // it is display-only context for "what happened last time," overwritten
+  // by the next attach attempt's own failure, if any, and left stale
+  // (harmlessly) after a successful attach.
+  onceLastError: { type: String, default: null },
 
   durationMs: { type: Number, default: null },
   // Exact decoded length in samples per channel at 48 kHz (the rate every
