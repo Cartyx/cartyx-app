@@ -33,7 +33,7 @@ const tagFilter = z.array(z.string().min(1).max(40)).max(30);
  *   invalid id deserves. A *well-formed* id that matches nothing still reaches
  *   the function and still produces its "not found" error, unchanged.
  */
-const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid id');
+export const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid id');
 
 /**
  * `<createdAt epoch ms>_<ObjectId>` — the exact shape `encodeAudioCursor`
