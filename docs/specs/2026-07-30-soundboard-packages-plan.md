@@ -841,7 +841,11 @@ Three things the naive approach gets wrong, all found in review:
 
 **Asset source:** use Task 21's package-scoped resolver, not `listAudioAssetsFn`. See Task 21 for why the paginated owner-scoped list cannot serve a board.
 
-`beforeLoad` guard matching `dashboard.tsx`. Handlers passed to pads must be `useCallback`-stable if pads are memoized — phase 1 found `useDeleteConfirm` returning a fresh closure per render silently defeated a memo.
+**Group pads by `kind` (added 2026-07-30).** The design says pads are grouped by `music` / `ambience` / `one-shot` — "which is what `kind` was made required for" — but the plan's task breakdown dropped it and **no task owned it**. Task 16 correctly built three single-pad-scoped components that cannot group (none owns an assets-by-id map); assembly is the natural owner, so it lands here. Note the edge Task 16 flagged: an item whose asset is a **dangling reference has no `kind` to group by** and must still land somewhere visible, not be silently dropped from every group.
+
+**Route file:** `app/routes/campaigns/$campaignId/soundboard.tsx`. That directory already exists with no `$campaignId.tsx` layout beside it, so it needs none of the trailing-underscore care Tasks 13/14 required — but verify from the generated tree rather than assuming.
+
+`beforeLoad` guard matching `dashboard.tsx`. Handlers passed to pads must be `useCallback`-stable if pads are memoized — phase 1 found `useDeleteConfirm` returning a fresh closure per render silently defeated a memo. **Task 16 memoized `BoardPad`, so this is live, not hypothetical**, and 64 pads is where it bites. Task 16's fix round adds a `.type`-spy test that proves the memo actually bails out; re-run that reasoning against your real handlers.
 
 Commit `app/routeTree.gen.ts` alongside.
 
