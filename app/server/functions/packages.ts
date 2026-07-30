@@ -1,7 +1,10 @@
 import type { z } from 'zod';
 import { connectDB, isDBConnected } from '../db/connection';
+import { AudioAsset } from '../db/models/AudioAsset';
 import { AudioPackage } from '../db/models/AudioPackage';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
+import { serializeAudioAsset } from './audio';
+import type { AudioAssetData } from '~/types/audio';
 import {
   DEFAULT_VOLUME,
   DEFAULT_FADE_SECONDS,
@@ -16,6 +19,7 @@ import type {
   deletePackageSchema,
   getPackageSchema,
   clonePackageSchema,
+  listPackageAssetsSchema,
 } from '~/types/schemas/soundboard';
 
 async function ensureDb() {
@@ -216,6 +220,64 @@ export async function getPackage({
     return serializePackage(doc as unknown as PackageDoc);
   } catch (e) {
     reportPackageError(e, { userId, sessionUserId }, { action: 'getPackage' });
+    throw e;
+  }
+}
+
+/**
+ * The design's Authorization section states two rules; `packageVisibilityFilter`
+ * above is rule one. This is rule two: "An asset is readable if it is owned
+ * by the caller, or is system-owned and referenced by a package the caller
+ * can see." Nothing in the plan implemented this until now — `listAudioAssets`
+ * queries `{ ownerId: userId }` only, so a system package's pads were
+ * structurally unplayable (and a cloned system package, which copies asset
+ * REFERENCES rather than bytes, inherited the same dead end).
+ *
+ * Two gates, strictly in order:
+ *
+ * 1. Resolve the package through `packageVisibilityFilter(userId)`, exactly
+ *    like `getPackage`. If the caller cannot see it, they get nothing — and
+ *    no asset query runs at all. Without this, a caller could enumerate any
+ *    package's referenced asset ids just by supplying them, whether or not
+ *    they can see the package that groups them.
+ * 2. Read exactly the assets that package's items reference:
+ *    `{ _id: { $in: referencedIds }, $or: [{ ownerId: userId }, { ownerId: null }] }`.
+ *    The `$in` is what bounds this query — this is "the assets this one
+ *    package needs", not a library listing, so there is deliberately no
+ *    pagination and no cap beyond the package's own `MAX_PACKAGE_ITEMS` (64).
+ *    The ownership `$or` still applies within that bound: an id in the
+ *    package is only returned if the caller owns it or it is system-owned:
+ *    a package can reference another user's private asset (nothing prevents
+ *    that today) and this must not leak it.
+ *
+ * Deliberately NOT a `listAudioAssets` widening — that function is the
+ * library browser's, it is owner-scoped, and phase 1's review already caught
+ * a campaign-authorized function enumerating per-user data. This is a
+ * second, narrower, package-gated entry point instead.
+ */
+export async function listPackageAssets({
+  data,
+  userId,
+  sessionUserId,
+}: {
+  data: z.infer<typeof listPackageAssetsSchema>;
+} & Actor): Promise<{ items: AudioAssetData[] }> {
+  try {
+    await ensureDb();
+    const pkg = (await AudioPackage.findOne({
+      _id: data.packageId,
+      ...packageVisibilityFilter(userId),
+    }).lean()) as unknown as { items?: { assetId: unknown }[] } | null;
+    if (!pkg) throw new PackageClientError('Package not found');
+
+    const referencedIds = [...new Set((pkg.items ?? []).map((i) => String(i.assetId)))];
+    const rows = (await AudioAsset.find({
+      _id: { $in: referencedIds },
+      $or: [{ ownerId: userId }, { ownerId: null }],
+    }).lean()) as unknown[];
+    return { items: rows.map((r) => serializeAudioAsset(r as Record<string, unknown>)) };
+  } catch (e) {
+    reportPackageError(e, { userId, sessionUserId }, { action: 'listPackageAssets' });
     throw e;
   }
 }

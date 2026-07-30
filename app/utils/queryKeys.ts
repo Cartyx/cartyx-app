@@ -265,6 +265,9 @@ export const queryKeys = {
     // `campaigns.list`, not `audio.list`'s filters-object variant.
     list: () => ['packages', 'list'] as const,
     detail: (id: string) => ['packages', 'detail', id] as const,
+    // Task 21: the assets one package's items reference — one key per
+    // package, distinct from `detail` (the package document itself).
+    assets: (packageId: string) => ['packages', 'assets', packageId] as const,
   },
   soundboard: {
     all: ['soundboard'] as const,

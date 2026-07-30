@@ -36,6 +36,7 @@ vi.mock('~/server/functions/packages', () => ({
   updatePackage: vi.fn(),
   deletePackage: vi.fn(),
   clonePackage: vi.fn(),
+  listPackageAssets: vi.fn(),
 }));
 
 vi.mock('~/server/functions/soundboard', () => ({
@@ -52,6 +53,7 @@ import {
   updatePackage,
   deletePackage,
   clonePackage,
+  listPackageAssets,
 } from '~/server/functions/packages';
 import { loadBoardState, saveBoardState } from '~/server/functions/soundboard';
 import {
@@ -61,6 +63,7 @@ import {
   updatePackageFn,
   deletePackageFn,
   clonePackageFn,
+  listPackageAssetsFn,
   loadBoardStateFn,
   saveBoardStateFn,
 } from '~/utils/soundboard-server-fns';
@@ -258,6 +261,30 @@ describe('clonePackageFn', () => {
       sessionUserId: SESSION_USER.id,
     });
     expect(r).toEqual({ ...FAKE_PACKAGE, id: 'p2', ownerId: DB_USER_ID });
+  });
+});
+
+describe('listPackageAssetsFn', () => {
+  const data = { packageId: 'p1' };
+
+  it('rejects with "Not authenticated" and never calls listPackageAssets when there is no session', async () => {
+    vi.mocked(getSession).mockResolvedValue(null);
+    await expect(listPackageAssetsFn({ data })).rejects.toThrow('Not authenticated');
+    expect(listPackageAssets).not.toHaveBeenCalled();
+  });
+
+  it('calls listPackageAssets with the data and resolved userId once authenticated', async () => {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(DB_USER_ID);
+    vi.mocked(listPackageAssets).mockResolvedValue({ items: [] });
+    const r = await listPackageAssetsFn({ data });
+    expect(listPackageAssets).toHaveBeenCalledTimes(1);
+    expect(listPackageAssets).toHaveBeenCalledWith({
+      data,
+      userId: DB_USER_ID,
+      sessionUserId: SESSION_USER.id,
+    });
+    expect(r).toEqual({ items: [] });
   });
 });
 

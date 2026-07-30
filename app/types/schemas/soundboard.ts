@@ -132,6 +132,14 @@ export const deletePackageSchema = z.object({ id: objectId });
 /** A single package lookup by id, visibility-scoped (owner or system package). */
 export const getPackageSchema = z.object({ id: objectId });
 
+/**
+ * The assets one package's items reference — Task 21's package-gated read.
+ * `packageId` is validated the same way every other package-id field in this
+ * file is; the `$in` bound and ownership check happen server-side in
+ * `listPackageAssets`, not here.
+ */
+export const listPackageAssetsSchema = z.object({ packageId: objectId });
+
 /** Module-private — see the comment on `moodStateSchema` above. */
 const boardItemStateSchema = z.object({
   itemId: stableId,

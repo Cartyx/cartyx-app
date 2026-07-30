@@ -5,6 +5,7 @@ import {
   updatePackageSchema,
   deletePackageSchema,
   clonePackageSchema,
+  listPackageAssetsSchema,
   loadBoardStateSchema,
   saveBoardStateSchema,
 } from '~/types/schemas/soundboard';
@@ -83,6 +84,17 @@ export const clonePackageFn = createServerFn({ method: 'POST' })
   .handler(async ({ data }) => {
     const { clonePackage } = await import('~/server/functions/packages');
     return clonePackage({ data, ...(await requireActor()) });
+  });
+
+// Task 21: the assets one package's items reference — package-gated, not the
+// owner-scoped library browser (`listAudioAssetsFn`). See
+// `~/server/functions/packages`'s `listPackageAssets` doc comment for the
+// two-gate authorization rule this wraps.
+export const listPackageAssetsFn = createServerFn({ method: 'GET' })
+  .inputValidator(listPackageAssetsSchema)
+  .handler(async ({ data }) => {
+    const { listPackageAssets } = await import('~/server/functions/packages');
+    return listPackageAssets({ data, ...(await requireActor()) });
   });
 
 export const loadBoardStateFn = createServerFn({ method: 'GET' })
