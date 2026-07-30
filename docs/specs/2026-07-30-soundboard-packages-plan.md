@@ -25,7 +25,7 @@ Every task's requirements implicitly include this section.
 - **Every new component needs a `.stories.tsx`** — `npm run test:storybook` runs stories in a real browser and blocks CI.
 - **New npm packages must be published ≥10 days ago** and pass `npm run check:deps-age`.
 - **Telemetry:** client `captureException`/`captureEvent` from `~/utils/telemetry-client`; server `serverCaptureException`/`serverCaptureEvent` from `~/server/utils/telemetry`. **The server signature is `(distinctId, event, properties)`** — phase 1's plan got this backwards and it shipped. Never `await` capture calls.
-- **Identity:** `requireUserId()` in `app/utils/audio-server-fns.ts` resolves the OAuth provider id to the Mongo `_id` via `User.findOne({ providerId })`. **Always pass the Mongo `_id` to model queries.** Phase 1 shipped the provider id here and every audio query `CastError`ed; only the e2e caught it.
+- **Identity:** `requireActor()` in `app/utils/audio-server-fns.ts` resolves the OAuth provider id to the Mongo `_id` via `User.findOne({ providerId: session.id })` and returns `{ userId, sessionUserId }`. **`userId` (Mongo `_id`) is the only value that may scope a query; `sessionUserId` (the provider id) is telemetry-only.** Phase 1 shipped the provider id into queries and every audio query `CastError`ed; only the e2e caught it. (This plan originally called the helper `requireUserId()` — no such export exists. Corrected 2026-07-29.)
 - **Ids reaching Mongo must be ObjectId-validated in the Zod schema**, not at the call site. See `objectId` in `app/types/schemas/audio.ts`.
 - **Every array field in a Zod schema needs a `.max()`.** Phase 1 shipped one uncapped `tags` array straight into a `$all` query.
 
@@ -67,14 +67,23 @@ Three separate times in phase 1, a test passed because its **fixture's shape mas
 
 **Modify:**
 
-| Path                                        | Change                                         |
-| ------------------------------------------- | ---------------------------------------------- |
-| `app/utils/queryKeys.ts`                    | `queryKeys.packages`, `queryKeys.soundboard`   |
-| `app/components/audio/AudioAssetDetail.tsx` | Attach a `∞`/`1×` once-variant                 |
-| `app/server/functions/audio.ts`             | Ingest path writing `onceRenditions`           |
-| `audio-worker/src/process.ts`               | Write to `onceRenditions` when the row says so |
+| Path                                        | Change                                                        |
+| ------------------------------------------- | ------------------------------------------------------------- |
+| `app/utils/queryKeys.ts`                    | `queryKeys.packages`, `queryKeys.soundboard`                  |
+| `app/components/audio/AudioAssetDetail.tsx` | Attach a `∞`/`1×` once-variant                                |
+| `app/server/functions/audio.ts`             | Ingest path writing `onceRenditions`; package prune on delete |
+| `audio-worker/src/process.ts`               | Write to `onceRenditions` when the row says so                |
+| `vitest.config.ts`                          | Third `browser` project for the engine tests (Task 10)        |
+| `package.json`                              | `test:browser` script (Task 10)                               |
+| `.github/workflows/ci.yml`                  | Run `test:browser` in the existing storybook job (Task 10)    |
 
 **`app/lib/` does not exist yet.** The engine is framework-agnostic on purpose — it must be testable without React — so it gets a new directory rather than living under `app/utils/`, which is app-glue. Say so in the Task 8 commit.
+
+### Routing shape — verify before Task 13
+
+`app/routes/audio.tsx` is a **flat** 17 KB leaf route. `app/routes/campaigns/$campaignId/` is a **directory** with no `$campaignId.tsx` layout beside it, so Task 17's `app/routes/campaigns/$campaignId/soundboard.tsx` matches the existing convention exactly and needs nothing special.
+
+Tasks 13 and 14 are the risk: adding a directory `app/routes/audio/` beside the flat `audio.tsx` makes `audio.tsx` a **layout** for its children, and `/audio` will render nothing new unless that file gains an `<Outlet />` — or breaks outright. **Verify what the generated `routeTree.gen.ts` actually produces and confirm `/audio` still renders its own page** before committing Task 13. If nesting is disruptive, use the flat dotted form (`app/routes/audio.packages.tsx`, `app/routes/audio.packages.$packageId.tsx`), which yields identical URLs with no change to `audio.tsx`. Report which you chose and why.
 
 ---
 
@@ -363,7 +372,12 @@ git commit -m "feat(soundboard): clone a package, preserving mood references"
 
 - Produces: `loadBoardState({ data, userId })`, `saveBoardState({ data, userId })`.
 
-Both require the caller to be a **member of the campaign**. Read `app/server/functions/cleanup.ts:152` (`requireGmOfCampaign`) and the campaign-membership helpers, and reuse rather than reinventing — phase 1's review found a campaign-authorized function enumerating per-user data, and this is the mirror risk.
+**Use the exported shared helper `requireCampaignMember(campaignId)` from `app/server/utils/requireCampaignMember.ts`** — it returns `{ userId, sessionUserId, isGM }`. Do **not** copy `requireGmOfCampaign` out of `cleanup.ts`: that one is module-private and GM-only, and this plan's original pointer to `cleanup.ts:152` was wrong. Reuse rather than reinventing — phase 1's review found a campaign-authorized function enumerating per-user data, and this is the mirror risk.
+
+**Asymmetric scope, decided 2026-07-29:**
+
+- `loadBoardState` requires **membership** — a player reading state is 2b's resync path and costs nothing to allow now.
+- `saveBoardState` requires **`isGM`** — throw `Forbidden` otherwise. In 2a the GM's browser is the sole authority by construction; the design's two-GMs case is last-write-wins _between GMs_. The plan originally said membership for both, which left the live board writable by every player at the table.
 
 `saveBoardState` is an **upsert** keyed on `campaignId`. Last-write-wins, stamping `updatedBy`.
 
@@ -372,6 +386,13 @@ Both require the caller to be a **member of the campaign**. Read `app/server/fun
 ```ts
 it('refuses a caller who is not in the campaign', async () => {
   /* assert the membership check runs BEFORE any model call */
+});
+
+it('refuses a save from a non-GM member', async () => {
+  // requireCampaignMember resolves with isGM: false; SoundboardState
+  // must not be touched. Assert `findOneAndUpdate` was NOT called —
+  // asserting only that the promise rejects passes with the guard deleted
+  // if some later line happens to throw.
 });
 
 it('upserts on campaignId so a campaign never accumulates two states', async () => {
@@ -403,7 +424,7 @@ git commit -m "feat(soundboard): per-campaign board state load and save"
 
 - Produces: `listPackagesFn`, `getPackageFn`, `createPackageFn`, `updatePackageFn`, `deletePackageFn`, `clonePackageFn`, `loadBoardStateFn`, `saveBoardStateFn`; `queryKeys.packages.*`, `queryKeys.soundboard.*`.
 
-**Copy the structure of `app/utils/audio-server-fns.ts` exactly**, including its `requireUserId()` — that function is the one that resolves the provider id to the Mongo `_id`, and getting it wrong broke every query in phase 1.
+**Copy the structure of `app/utils/audio-server-fns.ts` exactly**, including its `requireActor()` — that function resolves the provider id to the Mongo `_id`, and getting it wrong broke every query in phase 1. Note its dynamic `await import('~/server/session')` inside each handler; the file explains why a module-scope import breaks the client bundle. Do not export a duplicate copy of `requireActor` from this new file if the existing one can be shared — check first and say which you did.
 
 Query keys **nest under the existing `queryKeys` object** (`queryKeys.packages`, not a standalone `packageKeys`). All ~24 domains in that file nest; there is no `<domain>Keys` precedent.
 
@@ -553,11 +574,45 @@ git commit -m "feat(soundboard): command vocabulary and pure board reducer"
 **Files:**
 
 - Create: `app/lib/soundboard/engine.ts`
-- Test: `app/lib/soundboard/engine.stories.tsx` (real browser)
+- Test: `app/lib/soundboard/engine.browser.test.ts` (real browser)
+- Modify: `vitest.config.ts`, `package.json`, `.github/workflows/ci.yml`
 
 **Interfaces:**
 
 - Produces: `createEngine(ctx)` → `{ apply(state), dispose() }`.
+
+### The test vehicle — read this before writing a line of engine code
+
+The plan originally specified `app/lib/soundboard/engine.stories.tsx`. **That file would never have run.** `.storybook/main.ts` globs `stories: ['../app/components/**/*.stories.@(ts|tsx)']`, so a story under `app/lib/` is not collected — `npm run test:storybook` would have reported success having executed zero engine assertions. That is the exact "green suite, broken feature" failure this plan warns about, so the vehicle changed (decided 2026-07-29).
+
+Add a **third vitest project** instead. The engine is not a component and should not be dressed as one to get a browser.
+
+1. In `vitest.config.ts`, add a project alongside `unit` and `storybook`:
+
+```ts
+{
+  extends: true,
+  test: {
+    name: 'browser',
+    include: ['app/**/*.browser.test.ts'],
+    browser: {
+      enabled: true,
+      headless: true,
+      provider: playwright(),
+      instances: [{ browser: 'chromium' }],
+    },
+    setupFiles: [],
+  },
+}
+```
+
+`setupFiles: []` is deliberate — `tests/setup.ts` mocks mongoose and is irrelevant here.
+
+2. `package.json`: `"test:browser": "vitest run --project browser"`.
+3. `.github/workflows/ci.yml`: add a `Run browser tests` step to the **existing `storybook` job**, after `Run story tests`. That job already runs `npx playwright install --with-deps chromium`, so reusing it costs seconds; a new job would pay the chromium install again. Rename the job's `name:` to `Storybook & browser tests` to keep the CI check label honest.
+4. Confirm the `unit` project does not also collect the file — its include is `tests/**/*.test.{ts,tsx}`, so `app/**` is out of scope. Verify rather than assume: run `npm test` and check the engine file is absent from the run.
+
+**Verification that the vehicle works, before trusting any assertion:** make one assertion fail on purpose, run `npm run test:browser`, and confirm you see a _failing_ test. A suite that collects nothing also exits 0.
 
 **Port, do not rewrite.** Read `~/Developer/ttrpg-sfx/docs/soundboard.md` in full first. Its behaviour has measured evidence; reimplementing from scratch throws that away.
 
@@ -580,7 +635,7 @@ source.loopStart = 0;
 source.loopEnd = asset.durationSamples / asset.sampleRate;
 ```
 
-**Tests run in a real browser.** Web Audio does not exist in happy-dom, and mocking it would repeat phase 1's central failure — mocked mongoose passed every test while the feature was broken end to end. Use an `OfflineAudioContext` inside a Storybook play function and **assert on measured gain values**, porting the POC's own verifications:
+**Tests run in a real browser.** Web Audio does not exist in happy-dom, and mocking it would repeat phase 1's central failure — mocked mongoose passed every test while the feature was broken end to end. Use an `OfflineAudioContext` and **assert on measured gain values**, porting the POC's own verifications:
 
 - fade-in is linear and reaches target at exactly `t = fade`
 - two items with different fades started together sit at different gains mid-ramp (the POC measured storm@4s at 0.402 while battle@0.5s was at full)
@@ -801,10 +856,74 @@ git commit -m "feat(soundboard): attach a once-variant, writing onceRenditions"
 
 Cover: create a package → add an asset → define two moods → open the board → enable audio → switch mood → stop all.
 
+- [ ] Steps: seed, write the spec, run it, commit.
+
+```bash
+git commit -m "test(soundboard): e2e for package authoring and the GM board"
+```
+
+---
+
+## Task 20: Prune package references when an asset is deleted
+
+**Added 2026-07-29.** The plan as written left a referenced-asset delete producing a permanently dangling `assetId` in every package that used it. Task 16 renders such a pad unavailable, and that stays — it is still needed for the races this task cannot close (an asset deleted while a board is already loaded, or a system asset removed under a cloned package). But a dangling reference that nothing ever prunes is a slow leak in a document with a hard 64-item cap: a GM who churns their library eventually cannot add items to a package whose pads are mostly tombstones.
+
+**Files:**
+
+- Modify: `app/server/functions/audio.ts` (`deleteAudioAsset`)
+- Test: `tests/server/functions/audio-delete-prunes-packages.test.ts`
+
+**Interfaces:**
+
+- Consumes: `AudioPackage` (Task 2).
+- `deleteAudioAsset` gains, before the row delete: remove every `items[]` entry referencing the asset **and** every `moods[].states[]` entry referencing those items, across the caller's own packages only.
+
+**Scope it to the caller.** `deleteAudioAsset` already resolves `{ _id: data.id, ownerId: userId }`. The prune must filter `{ ownerId: userId }` too — never a bare `{ 'items.assetId': id }`, which would reach into other users' packages. System packages (`ownerId: null`) are **not** pruned: they are read-only, and a user cannot delete a system-owned asset anyway.
+
+**Two-step, not one.** Moods reference `item.id`, not `assetId`, so `$pull`ing the item is not enough — the mood states pointing at it must go too, and you need the item ids before you drop them. Read the affected packages, compute the item ids per package, then update. A single `$pull` on `items` leaves orphaned mood states that resolve to a phantom pad.
+
+**Failure is non-fatal.** Follow the shape of the existing best-effort R2 delete directly above in the same function: a prune that throws must not block the row delete, and must report via `serverCaptureException`. The user asked for the asset to be gone.
+
+- [ ] **Step 1: The tests that matter**
+
+```ts
+it('removes the item AND the mood states that referenced it', async () => {
+  // Fixture shape warning: give the package TWO items and a mood whose
+  // states name both. A single-item fixture passes even if the
+  // implementation clears `states` wholesale instead of filtering it.
+  // Assert the surviving item and its mood state are still present.
+});
+
+it("never touches another owner's packages", async () => {
+  // Assert on the actual filter passed to the model, not on a mocked
+  // return value: expect it to carry `ownerId: <caller>`. A test that
+  // only checks "the other package came back unchanged" passes with the
+  // ownership clause deleted, because the mock returns what it was told.
+});
+
+it('leaves system packages alone', async () => {});
+
+it('still deletes the asset when the prune throws', async () => {
+  // The prune rejects; deleteOne must still have been called and the
+  // function must resolve `{ deleted: true }`.
+});
+```
+
+- [ ] **Steps 2–5:** Run, implement, verify, commit.
+
+```bash
+git commit -m "fix(audio): prune package item and mood references on asset delete"
+```
+
+---
+
+## Final gate
+
 - [ ] **Run the whole gate before opening the PR:**
 
 ```bash
 npm run typecheck && npm run lint && npm test && npm run test:storybook
+npm run test:browser
 bash deploy/charts/cartyx/tests/render-tests.sh
 (cd audio-worker && npm run typecheck && npm test)
 (cd realtime && npm run typecheck && npm test)
@@ -846,6 +965,7 @@ gh pr create --base dev --title "feat(soundboard): phase 2a — packages and the
 | `onceRenditions` attach + `∞`/`1×`                    | 16, 18  |
 | Real-browser engine tests                             | 10      |
 | E2E                                                   | 19      |
+| Reference prune on asset delete                       | 20      |
 
 **Not covered, by design:** realtime broadcast, player playback, autoplay on player devices, mid-session resync — all 2b. Per-user storage quota remains phase 1's open question.
 
