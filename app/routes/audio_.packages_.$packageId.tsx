@@ -144,17 +144,29 @@ export function PackageEditorPage() {
   // SINGLE `updatePackageFn` call rather than two racing writes to the same
   // document.
   const [moods, setMoods] = useState<MoodData[] | null>(null);
+  // Same local-draft-plus-explicit-Save pattern as `items`/`moods` above,
+  // seeded by the same effect — a THIRD draft composed into the SAME single
+  // `saveMutation` below rather than a separate rename call. The task brief
+  // flagged that a second, racing write to this document is precisely the
+  // defect Task 15 was warned about and avoided; adding a name-only mutation
+  // here would reintroduce exactly that.
+  const [name, setName] = useState<string | null>(null);
   useEffect(() => {
     if (pkg) {
       setItems(pkg.items);
       setMoods(pkg.moods);
+      setName(pkg.name);
     }
   }, [pkg]);
 
   const isSystemPackage = pkg?.ownerId === null;
+  // `updatePackageSchema.name` is `min(1)` — an empty/whitespace-only draft
+  // must not reach the server as a doomed round trip.
+  const nameValid = name !== null && name.trim().length > 0;
   const dirty =
     (items !== null && pkg !== undefined && items !== pkg.items) ||
-    (moods !== null && pkg !== undefined && moods !== pkg.moods);
+    (moods !== null && pkg !== undefined && moods !== pkg.moods) ||
+    (name !== null && pkg !== undefined && name !== pkg.name);
 
   const assetsQuery = useInfiniteQuery<
     AssetPage,
@@ -212,13 +224,16 @@ export function PackageEditorPage() {
     mutationFn: ({
       items: nextItems,
       moods: nextMoods,
+      name: nextName,
     }: {
       items: PackageItemData[];
       moods: MoodData[];
+      name: string;
     }) =>
       updatePackageFn({
         data: {
           id: packageId,
+          name: nextName,
           items: nextItems,
           // Always sent alongside `items`, not only when an item was
           // actually removed: pruning is a no-op filter when nothing
@@ -234,6 +249,7 @@ export function PackageEditorPage() {
       qc.setQueryData(queryKeys.packages.detail(packageId), updated);
       setItems(updated.items);
       setMoods(updated.moods);
+      setName(updated.name);
       void qc.invalidateQueries({ queryKey: queryKeys.packages.all });
     },
     onError: (e) => captureException(e, { action: 'PackageEditorPage.save' }),
@@ -248,7 +264,7 @@ export function PackageEditorPage() {
   }, []);
 
   const handleSave = () => {
-    if (items && moods) saveMutation.mutate({ items, moods });
+    if (items && moods && name !== null && nameValid) saveMutation.mutate({ items, moods, name });
   };
 
   return (
@@ -266,14 +282,38 @@ export function PackageEditorPage() {
         {pkg && items && moods && (
           <>
             <div className="mb-8 flex items-start justify-between gap-4">
-              <div>
-                <h1 className="font-sans font-semibold text-[15px] text-white tracking-widest">
-                  {pkg.name.toUpperCase()}
-                </h1>
+              <div className="min-w-0 flex-1">
+                {/*
+                  Was a plain, non-editable `<h1>{pkg.name.toUpperCase()}</h1>`
+                  — the gap this task closes (see the task brief: a clone
+                  copies its source's name verbatim and there was no rename
+                  affordance anywhere). `uppercase` (CSS) reproduces the old
+                  h1's visual treatment without forcing the STORED name to
+                  uppercase the way `.toUpperCase()` did. Disabled, not just
+                  `readOnly`, for a system package — `readOnly` alone would
+                  still let the value participate in a form submit / focus
+                  ring as if it were live, which is misleading for a value
+                  that can never be saved (system packages are immutable
+                  server-side; see `packageVisibilityFilter`'s doc comment).
+                */}
+                <input
+                  type="text"
+                  value={name ?? ''}
+                  onChange={(e) => setName(e.target.value)}
+                  disabled={isSystemPackage}
+                  aria-label="Package name"
+                  placeholder="Package name"
+                  className="w-full max-w-md truncate bg-transparent font-sans font-semibold text-[15px] uppercase tracking-widest text-white outline-none border-b border-transparent focus:border-blue-500 disabled:cursor-not-allowed disabled:opacity-80"
+                />
                 {isSystemPackage && (
                   <p className="mt-1 text-xs text-amber-400">
                     This is a system package and cannot be edited directly — clone it from the
                     package list first.
+                  </p>
+                )}
+                {!isSystemPackage && name !== null && !nameValid && (
+                  <p role="alert" className="mt-1 text-xs text-red-400">
+                    Package name cannot be empty.
                   </p>
                 )}
               </div>
@@ -282,7 +322,7 @@ export function PackageEditorPage() {
                 <button
                   type="button"
                   onClick={handleSave}
-                  disabled={!dirty || saveMutation.isPending}
+                  disabled={!dirty || !nameValid || saveMutation.isPending}
                   className="shrink-0 rounded bg-blue-600 px-4 py-1.5 font-sans text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-blue-600"
                 >
                   {saveMutation.isPending ? 'Saving…' : dirty ? 'Save changes' : 'Saved'}

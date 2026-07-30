@@ -150,3 +150,33 @@ export const AssetDeleted: Story = {
     volume: 0.7,
   },
 };
+
+/**
+ * Task 22 / E2E finding: `playing: true` can coexist with an unavailable
+ * reason — the board still thinks this pad is sounding even though its
+ * asset reference is now dangling (e.g. deleted mid-session) or its
+ * rendition failed to decode. The transport button must stay usable as
+ * Stop here (label reads "Stop …", not disabled) even though Play would be
+ * disabled for the same pad if it weren't already playing — see
+ * `UnavailableNotPlaying` below for that other half.
+ */
+export const UnavailablePlaying: Story = {
+  render: (args) => <Controlled {...args} />,
+  args: {
+    item: mkItem({ label: 'Thunder (deleted asset)' }),
+    asset: undefined,
+    playing: true,
+    volume: 0.7,
+  },
+};
+
+/** The other half of the same fix: an unavailable pad that ISN'T playing keeps Play disabled — this story alone would not catch a fix that also re-enabled Play for every unavailable pad. */
+export const UnavailableNotPlaying: Story = {
+  render: (args) => <Controlled {...args} />,
+  args: {
+    item: mkItem({ label: 'Thunder (deleted asset)' }),
+    asset: undefined,
+    playing: false,
+    volume: 0.7,
+  },
+};

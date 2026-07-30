@@ -326,6 +326,58 @@ describe('BoardPad', () => {
   });
 
   // ---------------------------------------------------------------------
+  // Task 22 / E2E finding: the single transport button serves as BOTH Play
+  // and Stop. Gating it on `disabled={unavailable}` alone means a pad that
+  // the board reports as `playing: true` (a dangling reference or a decode
+  // failure discovered mid-playback) can never be stopped from the pad
+  // itself — only Master Bar's Stop All can clear it, which is the wrong
+  // failure mode mid-session. Both halves are asserted here, in the same
+  // describe block, so a fix that also re-enables Play for an unavailable,
+  // NOT-playing pad cannot pass silently (see the task report's teeth-proof:
+  // reverting to `disabled={unavailable}` makes exactly the first test below
+  // fail, not the second).
+  // ---------------------------------------------------------------------
+
+  it('an unavailable pad that is currently playing still exposes a working Stop control', async () => {
+    const user = userEvent.setup();
+    const onStop = vi.fn();
+    render(
+      <BoardPad
+        item={mkItem({ label: 'Rain' })}
+        asset={undefined}
+        playing={true}
+        volume={0.7}
+        onPlay={noop}
+        onStop={onStop}
+        onVolumeChange={noop}
+      />
+    );
+
+    const button = screen.getByRole('button', { name: /stop rain/i });
+    expect(button).not.toBeDisabled();
+    await user.click(button);
+    expect(onStop).toHaveBeenCalledWith('i1');
+    // Still shows the unavailable reason — Stop being reachable doesn't mean
+    // the pad is pretending to be fine.
+    expect(screen.getByTestId('pad-unavailable-reason')).toBeInTheDocument();
+  });
+
+  it('an unavailable pad that is NOT playing keeps Play disabled', () => {
+    render(
+      <BoardPad
+        item={mkItem({ label: 'Rain' })}
+        asset={undefined}
+        playing={false}
+        volume={0.7}
+        onPlay={noop}
+        onStop={noop}
+        onVolumeChange={noop}
+      />
+    );
+    expect(screen.getByRole('button', { name: /play rain/i })).toBeDisabled();
+  });
+
+  // ---------------------------------------------------------------------
   // The ∞/1× once-variant control.
   // ---------------------------------------------------------------------
 

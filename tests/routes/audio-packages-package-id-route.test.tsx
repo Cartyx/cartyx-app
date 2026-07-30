@@ -219,4 +219,65 @@ describe('PackageEditorPage save path', () => {
     expect(call.data.items[0].volume).toBe(0.9);
     expect(call.data.moods[0].states).toEqual([{ itemId: 'i1', playing: true }]);
   });
+
+  // Task 22: the editor previously rendered `pkg.name` as a plain,
+  // non-editable `<h1>`. This proves the rename reaches the SAME single
+  // `updatePackageFn` call Task 15 built for `items`/`moods` — not a second,
+  // racing write to the same document, which is exactly the defect Task 15's
+  // own report was warned about and avoided. Asserting call COUNT (one) is
+  // load-bearing: a naive "save the name separately" implementation would
+  // still get the name to the server, just via a second call, and a test
+  // that only checked the name arrived somewhere would not catch that.
+  it('sends a renamed name in the SAME single updatePackageFn call that carries items and moods', async () => {
+    const user = userEvent.setup();
+    const item1 = mkItem({ id: 'i1', label: 'Rain', sortIndex: 0 });
+    const pkg = mkPackage({
+      name: 'Storm Set',
+      items: [item1],
+      moods: [{ id: 'm1', name: 'Overhead', states: [] }],
+    });
+
+    getPackageFn.mockResolvedValue(pkg);
+    listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+    updatePackageFn.mockResolvedValue({ ...pkg, name: 'Thunderstorm Set' });
+
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <PackageEditorPage />
+      </QueryClientProvider>
+    );
+
+    const nameInput = await screen.findByRole('textbox', { name: /package name/i });
+    expect(nameInput).toHaveValue('Storm Set');
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Thunderstorm Set');
+
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(updatePackageFn).toHaveBeenCalledTimes(1));
+    const call = updatePackageFn.mock.calls[0][0] as {
+      data: { id: string; name: string; items: PackageItemData[]; moods: MoodData[] };
+    };
+    expect(call.data.name).toBe('Thunderstorm Set');
+    expect(call.data.items).toHaveLength(1);
+    expect(call.data.moods).toHaveLength(1);
+  });
+
+  it('does not render an editable name field for a system package', async () => {
+    const pkg = mkPackage({ ownerId: null, name: 'Storm Basics' });
+    getPackageFn.mockResolvedValue(pkg);
+    listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <PackageEditorPage />
+      </QueryClientProvider>
+    );
+
+    const nameInput = await screen.findByRole('textbox', { name: /package name/i });
+    expect(nameInput).toHaveValue('Storm Basics');
+    expect(nameInput).toBeDisabled();
+  });
 });

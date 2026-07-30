@@ -1,15 +1,36 @@
 import { useCallback } from 'react';
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { z } from 'zod';
 import { getMe } from '~/server/functions/rpc';
 import { Topbar } from '~/components/Topbar';
 import { PackageList } from '~/components/soundboard/PackageList';
 import { ConfirmDialog } from '~/components/shared/ConfirmDialog';
 import { useDeleteConfirm } from '~/hooks/useDeleteConfirm';
-import { listPackagesFn, clonePackageFn, deletePackageFn } from '~/utils/soundboard-server-fns';
+import {
+  listPackagesFn,
+  createPackageFn,
+  clonePackageFn,
+  deletePackageFn,
+} from '~/utils/soundboard-server-fns';
+import type { createPackageSchema } from '~/types/schemas/soundboard';
 import { queryKeys } from '~/utils/queryKeys';
 import { captureException } from '~/utils/telemetry-client';
 import type { AudioPackageData } from '~/types/soundboard';
+
+/**
+ * `createPackageSchema`'s shape, not a structural literal (per the brief) —
+ * typed against `z.input` (the schema's PRE-`.parse()` shape, where
+ * `items`/`moods`' `.default([])` makes them optional) rather than
+ * `z.infer`/`z.output`, so this stays a compile error if the schema ever
+ * drops `name`'s requiredness or gains a new required field, instead of
+ * silently structurally matching forever. A freshly created package is
+ * unnamed by the user yet — the rename field this task adds to the editor
+ * route is where the GM actually names it; this default only needs to exist
+ * long enough to satisfy `createPackageSchema`'s `name` `min(1)` and get the
+ * user into the editor.
+ */
+const NEW_PACKAGE_INPUT: z.input<typeof createPackageSchema> = { name: 'New Package' };
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
@@ -85,8 +106,31 @@ export function PackagesListPage() {
     void qc.invalidateQueries({ queryKey: queryKeys.packages.all });
   }, [qc]);
 
+  const createMutation = useMutation({
+    mutationFn: () => createPackageFn({ data: NEW_PACKAGE_INPUT }),
+    onSuccess: (created) => {
+      invalidatePackages();
+      navigate({ to: '/audio/packages/$packageId', params: { packageId: created.id } });
+    },
+    onError: (e) => captureException(e, { action: 'PackagesListPage.createPackage' }),
+  });
+
   const cloneMutation = useMutation({
-    mutationFn: (pkg: AudioPackageData) => clonePackageFn({ data: { id: pkg.id } }),
+    // `clonePackage` (Task 5) has always accepted an optional `data.name` —
+    // the gap this task closes is that nothing here ever supplied one, so
+    // a clone was indistinguishable from its source in both this list and
+    // the board's package picker. A client-computed "(copy)" suffix (the
+    // brief's own suggested wording) rather than a prompt dialog or relying
+    // solely on the new rename field: cloning stays the single click it
+    // already was — no modal interrupts the flow — and the clone is
+    // immediately distinguishable in the list without a required follow-up
+    // trip to the editor. The rename field (added to the editor route in
+    // this same task) is still there for a GM who wants something other
+    // than the default suffix. This needs NO server change: `clonePackage`'s
+    // `data.name ?? src.name` already does exactly the right thing with a
+    // supplied name.
+    mutationFn: (pkg: AudioPackageData) =>
+      clonePackageFn({ data: { id: pkg.id, name: `${pkg.name} (copy)` } }),
     onSuccess: invalidatePackages,
     onError: (e) => captureException(e, { action: 'PackagesListPage.clonePackage' }),
   });
@@ -107,9 +151,19 @@ export function PackagesListPage() {
     <div className="min-h-screen flex flex-col bg-[#080A12]">
       <Topbar />
       <main className="flex-1 w-full max-w-3xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-        <h1 className="font-sans font-semibold text-[15px] text-white tracking-widest mb-8">
-          SOUND PACKAGES
-        </h1>
+        <div className="mb-8 flex items-center justify-between gap-4">
+          <h1 className="font-sans font-semibold text-[15px] text-white tracking-widest">
+            SOUND PACKAGES
+          </h1>
+          <button
+            type="button"
+            onClick={() => createMutation.mutate()}
+            disabled={createMutation.isPending}
+            className="shrink-0 rounded bg-blue-600 px-4 py-1.5 font-sans text-xs font-semibold text-white transition-colors hover:bg-blue-500 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-blue-600"
+          >
+            {createMutation.isPending ? 'Creating…' : 'New package'}
+          </button>
+        </div>
 
         {isLoading && <p className="text-sm text-slate-500">Loading packages…</p>}
 
@@ -129,6 +183,12 @@ export function PackagesListPage() {
             onDelete={requestDelete}
             cloningId={cloneMutation.isPending ? (cloneMutation.variables?.id ?? null) : null}
           />
+        )}
+
+        {createMutation.error && (
+          <p role="alert" className="mt-4 text-sm text-red-400">
+            {errorMessage(createMutation.error, 'Failed to create package. Please try again.')}
+          </p>
         )}
 
         {cloneMutation.error && (

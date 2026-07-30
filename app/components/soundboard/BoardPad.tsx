@@ -211,7 +211,17 @@ export const BoardPad = memo(function BoardPad({
 
       <button
         type="button"
-        disabled={unavailable}
+        // Play must stay blocked while unavailable — pressing it would try
+        // to start a sound that cannot load/decode. Stop must NOT be
+        // blocked: `playing` can be `true` for an unavailable pad (a
+        // dangling reference or a decode failure discovered mid-playback,
+        // per the design doc's failure-modes table), and this is the ONE
+        // button that serves as both Play and Stop. `disabled={unavailable}`
+        // alone made a playing-but-unavailable pad permanently stuck —
+        // unstoppable from the pad itself, recoverable only via Master
+        // Bar's Stop All. See `BoardPad.test.tsx`'s "unavailable pad" pair
+        // for the two-halves proof this doesn't just re-enable Play too.
+        disabled={unavailable && !playing}
         onClick={() => (playing ? onStop(item.id) : onPlay(item.id))}
         aria-pressed={playing}
         aria-label={playing ? `Stop ${label}` : `Play ${label}`}
