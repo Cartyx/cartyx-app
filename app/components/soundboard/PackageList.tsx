@@ -10,7 +10,7 @@ export interface PackageListProps {
    * packages, `ownerId === null` is sufficient on its own to tell a system
    * row from an owned one: no separate "current user id" is needed (and
    * comparing against one would risk the identity-resolution class of bug
-   * `~/utils/audio-server-fns.ts`'s `requireActor` exists to prevent — the
+   * `~/utils/require-actor.ts`'s `requireActor` exists to prevent — the
    * client-side `getMe()` user id is the OAuth provider id, not the Mongo
    * `_id` that `ownerId` stores).
    */
