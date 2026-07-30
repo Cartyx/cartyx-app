@@ -1,6 +1,6 @@
 import React from 'react';
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { AudioPackageData, MoodData, PackageItemData } from '~/types/soundboard';
@@ -44,6 +44,18 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 import { PackageEditorPage, pruneOrphanedMoodStates } from '~/routes/audio_.packages_.$packageId';
+
+// Mocks above are module-scoped `vi.fn()`s, not per-test — without a reset,
+// `updatePackageFn`'s call count (and any other mock's) carries over between
+// `it` blocks in this file, which is invisible in isolation (`vitest -t
+// "..."`) and only shows up running the whole suite. Matches
+// `audio-route.test.tsx`'s own `beforeEach` convention.
+beforeEach(() => {
+  getPackageFn.mockReset();
+  updatePackageFn.mockReset();
+  listAudioAssetsFn.mockReset();
+  captureException.mockReset();
+});
 
 function mkItem(overrides: Partial<PackageItemData> = {}): PackageItemData {
   return {
@@ -144,7 +156,12 @@ describe('PackageEditorPage save path', () => {
       </QueryClientProvider>
     );
 
-    await screen.findByText('Thunder');
+    // `findByText('Thunder')` is ambiguous now that `MoodEditor` (this
+    // task) also renders one row per item, including "Thunder", for the
+    // package's mood — so this waits on the one thing that's still unique:
+    // the item row's own remove button (`MoodEditor` has no per-item remove
+    // affordance, only "Remove mood <name>").
+    await screen.findByRole('button', { name: /remove thunder/i });
     await user.click(screen.getByRole('button', { name: /remove thunder/i }));
     await user.click(screen.getByRole('button', { name: /save changes/i }));
 
@@ -155,5 +172,51 @@ describe('PackageEditorPage save path', () => {
     expect(call.data.id).toBe('p1');
     expect(call.data.items.map((i) => i.id)).toEqual(['i1']);
     expect(call.data.moods).toEqual([{ id: 'm1', name: 'Overhead', states: [survivorState] }]);
+  });
+
+  // Composition test: an item edit (PackageEditor/Task 14) and a mood edit
+  // (MoodEditor/Task 15) made in the SAME sitting must land in the SAME
+  // `updatePackageFn` call, not two separate racing writes. This is what
+  // proves the "one save button" design actually holds together, not just
+  // that each editor's own emitted array looks right in isolation.
+  it('sends an item edit and a mood override edit from the same sitting in a single save call', async () => {
+    const user = userEvent.setup();
+    const item1 = mkItem({ id: 'i1', label: 'Rain', volume: 0.5, sortIndex: 0 });
+    const pkg = mkPackage({
+      items: [item1],
+      moods: [{ id: 'm1', name: 'Overhead', states: [] }],
+    });
+
+    getPackageFn.mockResolvedValue(pkg);
+    listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+    updatePackageFn.mockResolvedValue(pkg);
+
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <PackageEditorPage />
+      </QueryClientProvider>
+    );
+
+    // Item edit: bump Rain's volume via PackageEditor's row.
+    const itemSlider = await screen.findByRole('slider', { name: /volume for rain$/i });
+    fireEvent.change(itemSlider, { target: { value: '0.9' } });
+
+    // Mood edit: toggle Rain "playing" in the Overhead mood via MoodEditor —
+    // this is the one place the two editors' fields could plausibly clash on
+    // a naive `aria-label`, since both call their volume control "Volume for
+    // Rain"; the mood one is disambiguated with "in this mood".
+    const playingCheckbox = screen.getByRole('checkbox', { name: /playing rain in this mood/i });
+    await user.click(playingCheckbox);
+
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(updatePackageFn).toHaveBeenCalledTimes(1));
+    const call = updatePackageFn.mock.calls[0][0] as {
+      data: { id: string; items: PackageItemData[]; moods: MoodData[] };
+    };
+    // Both edits present in the ONE call.
+    expect(call.data.items[0].volume).toBe(0.9);
+    expect(call.data.moods[0].states).toEqual([{ itemId: 'i1', playing: true }]);
   });
 });

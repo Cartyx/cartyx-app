@@ -5,6 +5,7 @@ import type { InfiniteData, QueryKey } from '@tanstack/react-query';
 import { getMe } from '~/server/functions/rpc';
 import { Topbar } from '~/components/Topbar';
 import { PackageEditor } from '~/components/soundboard/PackageEditor';
+import { MoodEditor } from '~/components/soundboard/MoodEditor';
 import { getPackageFn, updatePackageFn } from '~/utils/soundboard-server-fns';
 import { listAudioAssetsFn } from '~/utils/audio-server-fns';
 import { queryKeys } from '~/utils/queryKeys';
@@ -150,12 +151,26 @@ export function PackageEditorPage() {
   // (see `updatePackageFn` being a full-array replace of `items`, not a
   // per-item patch — the whole current draft is what's sent).
   const [items, setItems] = useState<PackageItemData[] | null>(null);
+  // Same local-draft-plus-explicit-Save pattern as `items` above, and seeded
+  // by the same effect: `MoodEditor` fires `onMoodsChange` on every mood
+  // add/remove/rename and every per-item state edit, and batching those into
+  // one draft (rather than a server round trip per keystroke) is exactly why
+  // `items` already works this way. Composing with `items`' save is the
+  // whole point — see `saveMutation` below for how the two combine into a
+  // SINGLE `updatePackageFn` call rather than two racing writes to the same
+  // document.
+  const [moods, setMoods] = useState<MoodData[] | null>(null);
   useEffect(() => {
-    if (pkg) setItems(pkg.items);
+    if (pkg) {
+      setItems(pkg.items);
+      setMoods(pkg.moods);
+    }
   }, [pkg]);
 
   const isSystemPackage = pkg?.ownerId === null;
-  const dirty = items !== null && pkg !== undefined && items !== pkg.items;
+  const dirty =
+    (items !== null && pkg !== undefined && items !== pkg.items) ||
+    (moods !== null && pkg !== undefined && moods !== pkg.moods);
 
   const assetsQuery = useInfiniteQuery<
     AssetPage,
@@ -189,8 +204,34 @@ export function PackageEditorPage() {
   });
   const assets = useMemo(() => flattenAssetPages(assetsQuery.data), [assetsQuery.data]);
 
+  /**
+   * ONE save path for both `items` and `moods` — not two. `PackageEditor`
+   * (Task 14) and `MoodEditor` (this task) are both fully controlled and
+   * never call a server fn themselves; they only stage local drafts here via
+   * `handleItemsChange`/`handleMoodsChange`. This mutation is the single
+   * place either draft reaches the server, in a single `updatePackageFn`
+   * call keyed by whatever is in `items`/`moods` state at the moment "Save
+   * changes" is clicked. That's what rules out the two-racing-writes
+   * failure mode the brief warns about: there is no second mutation, no
+   * second `updatePackageFn` call, and no interleaving to race, because
+   * both drafts are read out of the SAME `handleSave` closure into the SAME
+   * mutate() call. A user editing an item's volume and a mood's override in
+   * the same sitting sends both in the one request that "Save changes"
+   * fires; there is no per-editor save button to click out of order.
+   *
+   * Pruning uses `nextMoods` (the live draft, which may include mood edits
+   * made in this same sitting) against `nextItems` (ditto for items) — not
+   * `pkg?.moods`, which would ignore any in-progress mood edit and silently
+   * discard it by re-deriving from stale server data.
+   */
   const saveMutation = useMutation({
-    mutationFn: (nextItems: PackageItemData[]) =>
+    mutationFn: ({
+      items: nextItems,
+      moods: nextMoods,
+    }: {
+      items: PackageItemData[];
+      moods: MoodData[];
+    }) =>
       updatePackageFn({
         data: {
           id: packageId,
@@ -202,23 +243,28 @@ export function PackageEditorPage() {
           // "only prune on removal" would require this route to track
           // which edit just happened rather than just what's true of the
           // current items/moods pair.
-          moods: pruneOrphanedMoodStates(pkg?.moods ?? [], nextItems),
+          moods: pruneOrphanedMoodStates(nextMoods, nextItems),
         },
       }),
     onSuccess: (updated) => {
       qc.setQueryData(queryKeys.packages.detail(packageId), updated);
       setItems(updated.items);
+      setMoods(updated.moods);
       void qc.invalidateQueries({ queryKey: queryKeys.packages.all });
     },
-    onError: (e) => captureException(e, { action: 'PackageEditorPage.saveItems' }),
+    onError: (e) => captureException(e, { action: 'PackageEditorPage.save' }),
   });
 
   const handleItemsChange = useCallback((next: PackageItemData[]) => {
     setItems(next);
   }, []);
 
+  const handleMoodsChange = useCallback((next: MoodData[]) => {
+    setMoods(next);
+  }, []);
+
   const handleSave = () => {
-    if (items) saveMutation.mutate(items);
+    if (items && moods) saveMutation.mutate({ items, moods });
   };
 
   return (
@@ -233,7 +279,7 @@ export function PackageEditorPage() {
           </p>
         )}
 
-        {pkg && items && (
+        {pkg && items && moods && (
           <>
             <div className="mb-8 flex items-start justify-between gap-4">
               <div>
@@ -272,6 +318,15 @@ export function PackageEditorPage() {
               loadingMore={assetsQuery.isFetchingNextPage}
               readOnly={isSystemPackage}
             />
+
+            <div className="mt-8">
+              <MoodEditor
+                items={items}
+                moods={moods}
+                onMoodsChange={handleMoodsChange}
+                readOnly={isSystemPackage}
+              />
+            </div>
 
             {saveMutation.error && (
               <p role="alert" className="mt-4 text-sm text-red-400">
