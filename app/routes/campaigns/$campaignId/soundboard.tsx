@@ -17,6 +17,7 @@ import {
 } from '~/utils/soundboard-server-fns';
 import { queryKeys } from '~/utils/queryKeys';
 import type { AudioAssetData } from '~/types/audio';
+import type { AudioPackageData, BoardStateData } from '~/types/soundboard';
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
@@ -72,38 +73,37 @@ export const Route = createFileRoute('/campaigns/$campaignId/soundboard')({
 /**
  * The in-campaign GM board — the surface everything else in this phase feeds.
  *
- * It owns four pieces of query state and threads three of them into
- * `useSoundboard`, which is where every non-obvious decision in this file
- * comes from:
+ * This outer component owns every query and NOTHING else. `useSoundboard` and
+ * the board controls live in `BoardSurface` below, which is `key`ed so that
+ * clearing the board genuinely unmounts it — see `boardGeneration`.
  *
- * 1. **`initialState`** — `loadBoardStateFn`'s result, the hydrate seam. The
- *    hook applies it directly instead of replaying commands: a replay of
- *    `setMood` + per-item `play` cannot express an item the mood names but the
- *    GM had STOPPED (`setMood` resolves it back to playing), and a replay would
- *    also re-save what it just read, making "opened the board" the last write
- *    to `updatedBy`. Forgetting this key is the SILENT failure — the hook
- *    cannot tell "forgot" from "this board does not hydrate", so the board
- *    would simply never restore and the `[pkg]` effect's `loadPackage` would
- *    overwrite the persisted board with a blank one, logging nothing anywhere.
- * 2. **`packagePending`** — whether the package query is in flight. It
- *    defaults to `false`, and passing `false` while the query is still running
- *    concludes hydration against `pkg === null`; the `[pkg]` effect then arms a
- *    prompt-urgency write of a blank board and DURABLY destroys the persisted
- *    `moodId` and every item's `playing`/`volume`.
- * 3. **`assets`** — from Task 21's package-scoped `listPackageAssetsFn`, never
- *    `listAudioAssetsFn`. The library list is owner-scoped and cursor-paginated
- *    at 50 while a package holds up to 64 items; the engine caches a failed
- *    load as unplayable for its whole lifetime, so a package straddling that
- *    boundary gets permanently dead pads. `undefined` means "not settled" and
- *    the hook refuses to build an engine against it, which is why the
- *    enable-audio control is gated on the same signal.
+ * The four query results and where each goes:
  *
- * The fourth, `persist`, is the non-GM suppression described on
- * `soundboardBeforeLoad` above.
+ * 1. **`loadBoardStateFn` → `initialState`** — the hydrate seam. The hook
+ *    applies it directly instead of replaying commands: a replay of `setMood`
+ *    + per-item `play` cannot express an item the mood names but the GM had
+ *    STOPPED (`setMood` resolves it back to playing), and a replay would also
+ *    re-save what it just read, making "opened the board" the last write to
+ *    `updatedBy`. Forgetting this key is the SILENT failure — the hook cannot
+ *    tell "forgot" from "this board does not hydrate", so the board would
+ *    never restore and the `[pkg]` effect's `loadPackage` would overwrite the
+ *    persisted board with a blank one, logging nothing anywhere.
+ * 2. **`getPackageFn` → `pkg` + `packagePending`** — passing `packagePending:
+ *    false` while the query is still running concludes hydration against
+ *    `pkg === null`; the `[pkg]` effect then arms a prompt-urgency write of a
+ *    blank board and DURABLY destroys the persisted `moodId` and every item's
+ *    `playing`/`volume`.
+ * 3. **`listPackageAssetsFn` → `assets`** — Task 21's package-scoped read,
+ *    never `listAudioAssetsFn`. The library list is owner-scoped and
+ *    cursor-paginated at 50 while a package holds up to 64 items; the engine
+ *    caches a failed load as unplayable for its whole lifetime, so a package
+ *    straddling that boundary gets permanently dead pads.
+ * 4. **`getCampaignFn` → `persist`** — see `BoardSurface`, which refuses to
+ *    render any dispatching control until this one has settled.
  */
 export function SoundboardPage() {
   const { campaignId } = Route.useParams();
-  const { campaign } = useCampaign(campaignId);
+  const { campaign, isLoading: campaignLoading, error: campaignError } = useCampaign(campaignId);
 
   // --- the persisted board -------------------------------------------------
   const boardQuery = useQuery({
@@ -118,11 +118,48 @@ export function SoundboardPage() {
   });
   const packages = useMemo(() => packagesQuery.data?.items ?? [], [packagesQuery.data]);
 
-  // The GM's in-session choice wins over what was persisted; before they make
-  // one, the persisted package is what the board loads. `null` on both means
-  // nothing is loaded, which is a legal board state everywhere below.
-  const [pickedPackageId, setPickedPackageId] = useState<string | null>(null);
-  const packageId = pickedPackageId ?? boardQuery.data?.packageId ?? null;
+  /**
+   * THREE states, not two, and the distinction is load-bearing:
+   *
+   * - `undefined` — the GM has not picked anything this session; the persisted
+   *   package is what loads.
+   * - `null` — the GM explicitly chose "— none —". The board is cleared.
+   * - a string — the GM picked that package.
+   *
+   * Collapsing the first two into `null` (which is what this was) makes
+   * "— none —" a no-op: it falls straight back through `??` to the persisted
+   * package and the board never clears.
+   */
+  const [pickedPackageId, setPickedPackageId] = useState<string | null | undefined>(undefined);
+  const packageId =
+    pickedPackageId !== undefined ? pickedPackageId : (boardQuery.data?.packageId ?? null);
+  const clearedByGM = pickedPackageId === null;
+
+  /**
+   * Bumped ONLY when the GM clears the board, and used as `BoardSurface`'s
+   * `key`, so clearing remounts the whole soundboard.
+   *
+   * A remount is the documented requirement, not a stylistic choice:
+   * `useSoundboard`'s `[pkg]` effect does `if (pkg) dispatch(loadPackage)`, so
+   * `pkg` going null dispatches NOTHING — the previous package stays in
+   * `BoardState`, its items keep playing with no pads on screen to stop them,
+   * and `toBoardStatePayload` keeps persisting the old `packageId` so the
+   * clear does not even survive a reload. The hook's own comment says as much:
+   * "There is no command for unloading … Task 17 should unmount the board
+   * instead."
+   *
+   * Keyed on an explicit counter rather than on `packageId` so that switching
+   * BETWEEN packages does not remount: that path is handled correctly by the
+   * `[pkg]` effect, and a remount there would tear down the `AudioContext` and
+   * force the GM to re-do the enable-audio gesture mid-session.
+   */
+  const [boardGeneration, setBoardGeneration] = useState(0);
+
+  const handlePickPackage = useCallback((value: string) => {
+    const next = value === '' ? null : value;
+    setPickedPackageId(next);
+    if (next === null) setBoardGeneration((generation) => generation + 1);
+  }, []);
 
   // --- the loaded package --------------------------------------------------
   const packageQuery = useQuery({
@@ -131,8 +168,12 @@ export function SoundboardPage() {
     enabled: packageId !== null,
   });
   const pkg = packageQuery.data ?? null;
-  // A DISABLED query reports `isPending` too, which would mean "in flight"
-  // forever for a board with no package — hence the explicit `packageId` half.
+  // The `packageId !== null` half guards a real v5 behaviour — a DISABLED
+  // query still reports `isPending: true`. It is currently belt-and-braces
+  // (the hook only consults `packagePending` when the persisted state names a
+  // package, which implies the query is enabled), but it stops being so the
+  // moment `packageId` can diverge from `boardQuery.data.packageId` — which it
+  // now can, via the picker's explicit-null.
   const packagePending = packageId !== null && packageQuery.isPending;
 
   // --- the package's assets ------------------------------------------------
@@ -145,16 +186,151 @@ export function SoundboardPage() {
   // array when there is genuinely no package to have assets for.
   const assets = packageId === null ? NO_ASSETS : assetsQuery.data?.items;
 
-  const { state, dispatch, audioReady, audioError, enableAudio, saveError } = useSoundboard(
-    campaignId,
-    pkg,
-    {
-      assets,
-      initialState: boardQuery.isPending ? 'pending' : (boardQuery.data ?? null),
-      packagePending,
-      persist: campaign?.isOwner === true,
-    }
+  /**
+   * What the hook hydrates from.
+   *
+   * `null` — not the persisted board — once the GM has explicitly cleared,
+   * because after a clear there is nothing to restore. Handing the remounted
+   * surface the old board instead would make the hydration effect take its
+   * "persisted board names a package that did not resolve" branch and file a
+   * `captureException` on every single "— none —" click: an error-reporting
+   * loop for an ordinary, deliberate GM action.
+   */
+  const initialState: BoardStateData | null | 'pending' = clearedByGM
+    ? null
+    : boardQuery.isPending
+      ? 'pending'
+      : (boardQuery.data ?? null);
+
+  return (
+    <div className="flex min-h-screen flex-col bg-[#080A12]">
+      <Topbar />
+      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10 sm:px-6 lg:px-8">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <h1 className="font-sans text-[15px] font-semibold tracking-widest text-white">
+            SOUNDBOARD
+          </h1>
+          <Link
+            to="/audio/packages"
+            className="text-xs text-slate-400 underline-offset-2 hover:text-slate-200 hover:underline"
+          >
+            Manage packages
+          </Link>
+        </div>
+
+        {boardQuery.error && (
+          <p role="alert" className="mb-4 text-sm text-red-400">
+            {errorMessage(boardQuery.error, 'Failed to load the saved board.')}
+          </p>
+        )}
+
+        <div className="mb-6 flex flex-wrap items-center gap-2">
+          <label
+            className="text-xs uppercase tracking-widest text-slate-500"
+            htmlFor="package-pick"
+          >
+            Package
+          </label>
+          <select
+            id="package-pick"
+            value={packageId ?? ''}
+            onChange={(e) => handlePickPackage(e.target.value)}
+            className="rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-sm text-slate-200"
+          >
+            <option value="">— none —</option>
+            {packages.map((candidate) => (
+              <option key={candidate.id} value={candidate.id}>
+                {candidate.name}
+              </option>
+            ))}
+          </select>
+          {packagesQuery.error && (
+            <span role="alert" className="text-sm text-red-400">
+              {errorMessage(packagesQuery.error, 'Failed to load packages.')}
+            </span>
+          )}
+        </div>
+
+        {packageQuery.error && (
+          <p role="alert" className="mb-4 text-sm text-red-400">
+            {errorMessage(packageQuery.error, 'Failed to load this package.')}
+          </p>
+        )}
+        {assetsQuery.error && (
+          <p role="alert" className="mb-4 text-sm text-red-400">
+            {errorMessage(assetsQuery.error, 'Failed to load this package’s sounds.')}
+          </p>
+        )}
+
+        {/* Nothing that can DISPATCH renders until we know whether this caller
+            is the GM. `persist` is the only consumer of that answer, and it
+            defaults to "not the GM", so a command issued while the campaign
+            query is in flight is silently never persisted — and if that query
+            fails outright, the board would never save for the entire session
+            with `saveError` left `null`. Failing visibly here is the whole
+            point; that class of silence is what this surface exists to remove. */}
+        {campaignError ? (
+          <p role="alert" data-testid="campaign-error" className="text-sm text-red-400">
+            {campaignError} — the board cannot be used until this campaign loads.
+          </p>
+        ) : campaignLoading ? (
+          <p data-testid="campaign-loading" className="text-sm text-slate-500">
+            Loading campaign…
+          </p>
+        ) : (
+          <BoardSurface
+            key={boardGeneration}
+            campaignId={campaignId}
+            packageId={packageId}
+            pkg={pkg}
+            assets={assets}
+            initialState={initialState}
+            packagePending={packagePending}
+            persist={campaign?.isOwner === true}
+            boardUnavailable={Boolean(packageQuery.error ?? assetsQuery.error)}
+            boardStatePending={boardQuery.isPending}
+          />
+        )}
+      </main>
+    </div>
   );
+}
+
+interface BoardSurfaceProps {
+  campaignId: string;
+  /** The package the board should be showing, or `null` for a cleared board. */
+  packageId: string | null;
+  pkg: AudioPackageData | null;
+  /** `undefined` = the asset query has not resolved. NEVER coerced to `[]`. */
+  assets: readonly AudioAssetData[] | undefined;
+  initialState: BoardStateData | null | 'pending';
+  packagePending: boolean;
+  persist: boolean;
+  /** The package or its assets failed to load; the errors are already shown. */
+  boardUnavailable: boolean;
+  boardStatePending: boolean;
+}
+
+/**
+ * Everything stateful: the hook, the handlers, and the three controls.
+ *
+ * Split from `SoundboardPage` so that clearing the board can `key`-remount it
+ * (see `boardGeneration`), and so that the queries and the audio state are not
+ * tangled in one 300-line component.
+ */
+function BoardSurface({
+  campaignId,
+  packageId,
+  pkg,
+  assets,
+  initialState,
+  packagePending,
+  persist,
+  boardUnavailable,
+  boardStatePending,
+}: BoardSurfaceProps) {
+  const { state, dispatch, audioReady, audioError, enableAudio, saveError, loadErrors } =
+    useSoundboard(campaignId, pkg, { assets, initialState, packagePending, persist });
 
   // Every handler below is `useCallback`-stable, and that is load-bearing
   // rather than cosmetic: `BoardPad` is memoized with the default shallow
@@ -185,159 +361,127 @@ export function SoundboardPage() {
   const handleStopAll = useCallback(() => dispatch({ type: 'stopAll' }), [dispatch]);
 
   const playingCount = state.items.filter((item) => item.playing).length;
+
   /**
    * Whether the enable-audio control may be clicked yet.
    *
    * BOTH halves are needed. `assets !== undefined` is the hook's own contract.
-   * `!boardQuery.isPending` is the subtler one: until the saved board says
-   * which package is loaded, `packageId` is `null`, so `assets` is the
+   * `!boardStatePending` is the subtler one: until the saved board says which
+   * package is loaded, `packageId` is `null`, so `assets` is the
    * legitimately-empty `NO_ASSETS` and the first half is already satisfied.
-   * Enabling on that would let the GM build an engine against an empty list
-   * moments before the real package arrives — and the engine caches every
-   * failed load as unplayable for its whole lifetime, so the board would come
-   * up with every pad permanently dead and nothing to show for it.
+   * The damage from enabling there is not merely "an engine over an empty
+   * list": hydration is about to restore `playing: true` items, the hook's
+   * `[state]` effect calls `engine.apply` on them, and `loadAsset` throws
+   * against the unsettled list — so `unplayable` permanently swallows exactly
+   * the pads the GM had running when they reloaded.
    */
-  const assetsSettled = !boardQuery.isPending && assets !== undefined;
+  const audioEnableReady = !boardStatePending && assets !== undefined;
+
+  /**
+   * Whether the MOOD BAR and the PADS may be shown — i.e. whether an action
+   * taken here can reach a settled asset list.
+   *
+   * This is the same failure as above, on the mid-session path, and it is the
+   * one nothing else catches. `getPackageFn` and `listPackageAssetsFn` are
+   * independent queries fired on the same render; when the package wins, a
+   * mood is one click away while `assets` is still `undefined`. That click
+   * resolves every item the mood names to `playing: true`, `engine.apply`
+   * calls `loadAsset`, `loadAsset` throws "ran before the asset list settled",
+   * and the engine adds each asset to an `unplayable` set it NEVER clears.
+   * Those pads are silent for the rest of the session and the only trace is a
+   * GlitchTip event.
+   */
+  const boardDataReady = pkg !== null && assets !== undefined;
 
   return (
-    <div className="flex min-h-screen flex-col bg-[#080A12]">
-      <Topbar />
-      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-10 sm:px-6 lg:px-8">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-          <h1 className="font-sans text-[15px] font-semibold tracking-widest text-white">
-            SOUNDBOARD
-          </h1>
-          <Link
-            to="/audio/packages"
-            className="text-xs text-slate-400 underline-offset-2 hover:text-slate-200 hover:underline"
+    <>
+      {/* The audio gesture. An `AudioContext` created outside a user gesture
+          starts suspended, so without this the GM's first pad press silently
+          does nothing — the worst failure a live tool can have. It stays
+          clickable after a failure on purpose: every failure path in
+          `enableAudio` is retryable, and a dead button after one bad gesture
+          is exactly what the hook's Critical fix removed. */}
+      {!audioReady && (
+        <div
+          data-testid="enable-audio"
+          className="mb-6 flex flex-wrap items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2"
+        >
+          <span className="text-sm text-amber-200">
+            Audio is off. Enable it before the session starts — browsers only allow sound after a
+            click.
+          </span>
+          <button
+            type="button"
+            onClick={() => void enableAudio()}
+            disabled={!audioEnableReady}
+            // Stable accessible name across both states — the visible label
+            // changes, the control does not.
+            aria-label="Enable audio"
+            className="ml-auto rounded bg-amber-500/90 px-3 py-1.5 text-sm font-medium text-black transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
           >
-            Manage packages
-          </Link>
+            {audioEnableReady ? 'Enable audio' : 'Loading sounds…'}
+          </button>
         </div>
+      )}
 
-        {/* The audio gesture. An `AudioContext` created outside a user gesture
-            starts suspended, so without this the GM's first pad press silently
-            does nothing — the worst failure a live tool can have. It stays
-            clickable after a failure on purpose: every failure path in
-            `enableAudio` is retryable, and a dead button after one bad gesture
-            is exactly what the hook's Critical fix removed. It is DISABLED only
-            while the asset query is unsettled, because the hook refuses to
-            build an engine then and a refused build looks identical to a
-            working one until the first silent pad. */}
-        {!audioReady && (
-          <div
-            data-testid="enable-audio"
-            className="mb-6 flex flex-wrap items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/[0.06] px-3 py-2"
-          >
-            <span className="text-sm text-amber-200">
-              Audio is off. Enable it before the session starts — browsers only allow sound after a
-              click.
-            </span>
-            <button
-              type="button"
-              onClick={() => void enableAudio()}
-              disabled={!assetsSettled}
-              // Stable accessible name across both states — the visible label
-              // changes, the control does not.
-              aria-label="Enable audio"
-              className="ml-auto rounded bg-amber-500/90 px-3 py-1.5 text-sm font-medium text-black transition-colors hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {assetsSettled ? 'Enable audio' : 'Loading sounds…'}
-            </button>
-          </div>
+      {audioError && (
+        <p role="alert" data-testid="audio-error" className="mb-4 text-sm text-red-400">
+          {audioError}
+        </p>
+      )}
+
+      {/* A failed save is a banner, never a modal or an error boundary: the
+          engine owns sound and the server is only a mirror, so audio keeps
+          playing and the GM is told without being interrupted. */}
+      {saveError && (
+        <p role="alert" data-testid="save-error" className="mb-4 text-sm text-amber-400">
+          Could not save the board: {saveError}
+        </p>
+      )}
+
+      <div className="flex flex-col gap-4">
+        {boardDataReady && (
+          <MoodBar moods={pkg.moods} activeMoodId={state.moodId} onSelectMood={handleSelectMood} />
         )}
 
-        {audioError && (
-          <p role="alert" data-testid="audio-error" className="mb-4 text-sm text-red-400">
-            {audioError}
+        {/* Master volume and Stop All stay available even mid-load: neither can
+            start a sound, and Stop All is a panic button that must never be
+            the thing a loading spinner is covering. */}
+        <MasterBar
+          masterVolume={state.masterVolume}
+          onMasterVolumeChange={handleMasterVolumeChange}
+          onStopAll={handleStopAll}
+          playingCount={playingCount}
+        />
+
+        {packageId === null ? (
+          <p data-testid="board-empty" className="text-sm text-slate-500">
+            Pick a package to load its pads onto the board.
           </p>
-        )}
-
-        {/* A failed save is a banner, never a modal or an error boundary: the
-            engine owns sound and the server is only a mirror, so audio keeps
-            playing and the GM is told without being interrupted. */}
-        {saveError && (
-          <p role="alert" data-testid="save-error" className="mb-4 text-sm text-amber-400">
-            Could not save the board: {saveError}
+        ) : boardUnavailable ? (
+          <p data-testid="board-unavailable" className="text-sm text-slate-500">
+            This package could not be loaded, so its pads are unavailable.
           </p>
-        )}
-
-        {boardQuery.error && (
-          <p role="alert" className="mb-4 text-sm text-red-400">
-            {errorMessage(boardQuery.error, 'Failed to load the saved board.')}
+        ) : !boardDataReady ? (
+          /* NOT the grid with an empty asset list. `BoardGrid` reads "no asset
+             for this item" as "the asset was deleted" and says so on every
+             pad, which would turn a perfectly normal load into an on-screen
+             claim that the GM's library had been wiped. */
+          <p data-testid="board-loading" className="text-sm text-slate-500">
+            Loading package…
           </p>
-        )}
-
-        <div className="mb-6 flex flex-wrap items-center gap-2">
-          <label
-            className="text-xs uppercase tracking-widest text-slate-500"
-            htmlFor="package-pick"
-          >
-            Package
-          </label>
-          <select
-            id="package-pick"
-            value={packageId ?? ''}
-            onChange={(e) => setPickedPackageId(e.target.value === '' ? null : e.target.value)}
-            className="rounded border border-white/10 bg-white/[0.04] px-2 py-1.5 text-sm text-slate-200"
-          >
-            <option value="">— none —</option>
-            {packages.map((candidate) => (
-              <option key={candidate.id} value={candidate.id}>
-                {candidate.name}
-              </option>
-            ))}
-          </select>
-          {packagesQuery.error && (
-            <span role="alert" className="text-sm text-red-400">
-              {errorMessage(packagesQuery.error, 'Failed to load packages.')}
-            </span>
-          )}
-        </div>
-
-        {packageQuery.error && (
-          <p role="alert" className="mb-4 text-sm text-red-400">
-            {errorMessage(packageQuery.error, 'Failed to load this package.')}
-          </p>
-        )}
-        {assetsQuery.error && (
-          <p role="alert" className="mb-4 text-sm text-red-400">
-            {errorMessage(assetsQuery.error, 'Failed to load this package’s sounds.')}
-          </p>
-        )}
-
-        <div className="flex flex-col gap-4">
-          <MoodBar
-            moods={pkg?.moods ?? []}
-            activeMoodId={state.moodId}
-            onSelectMood={handleSelectMood}
+        ) : (
+          <BoardGrid
+            items={pkg.items}
+            assets={assets}
+            itemStates={state.items}
+            loadErrors={loadErrors}
+            onPlay={handlePlay}
+            onStop={handleStop}
+            onVolumeChange={handleVolumeChange}
           />
-
-          <MasterBar
-            masterVolume={state.masterVolume}
-            onMasterVolumeChange={handleMasterVolumeChange}
-            onStopAll={handleStopAll}
-            playingCount={playingCount}
-          />
-
-          {packageId === null ? (
-            <p className="text-sm text-slate-500">
-              Pick a package to load its pads onto the board.
-            </p>
-          ) : packagePending ? (
-            <p className="text-sm text-slate-500">Loading package…</p>
-          ) : (
-            <BoardGrid
-              items={pkg?.items ?? []}
-              assets={assets ?? NO_ASSETS}
-              itemStates={state.items}
-              onPlay={handlePlay}
-              onStop={handleStop}
-              onVolumeChange={handleVolumeChange}
-            />
-          )}
-        </div>
-      </main>
-    </div>
+        )}
+      </div>
+    </>
   );
 }

@@ -105,6 +105,24 @@ export const WithADanglingReference: Story = {
   },
 };
 
+/**
+ * The engine could not decode `a1`'s rendition — a 404'd object, or bytes this
+ * browser cannot decode. The engine's `unplayable` set is never cleared, so
+ * this pad is silent for the rest of the session; without this state it would
+ * keep looking perfectly ready.
+ */
+export const ARenditionFailedToDecode: Story = {
+  args: {
+    items: [item('i1', 'a1', 'Battle Theme', 0), item('i2', 'a2', 'Rain', 1)],
+    assets: [asset('a1', 'music'), asset('a2', 'ambience')],
+    itemStates: [state('i1'), state('i2')],
+    loadErrors: new Set(['a1']),
+    onPlay: noop,
+    onStop: noop,
+    onVolumeChange: noop,
+  },
+};
+
 export const StillTranscoding: Story = {
   args: {
     items: [item('i1', 'a1', 'Battle Theme', 0)],

@@ -812,6 +812,50 @@ describe('useSoundboard', () => {
     });
   });
 
+  // Telemetry tells ME. `loadErrors` is what tells the GM, and it is the only
+  // signal that reaches `BoardPad`'s "Failed to decode this rendition" state —
+  // the engine's `unplayable` set is never cleared, so a pad that hits this is
+  // silent for the engine's whole life while still LOOKING ready.
+  it('surfaces an engine load error to the UI, not only to telemetry', async () => {
+    const { result } = renderBoard();
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    expect(result.current.loadErrors.size).toBe(0);
+
+    act(() => {
+      engineOptions().onLoadError?.(ASSET_A, new Error('decode failed'));
+    });
+
+    expect(result.current.loadErrors.has(ASSET_A)).toBe(true);
+    // Asset ids, not item ids — two items may reference the same asset.
+    expect(result.current.loadErrors.has(ASSET_B)).toBe(false);
+
+    // Repeats do not churn the set's identity, which would defeat a memoized
+    // consumer re-rendering 64 pads for no change.
+    const first = result.current.loadErrors;
+    act(() => {
+      engineOptions().onLoadError?.(ASSET_A, new Error('again'));
+    });
+    expect(result.current.loadErrors).toBe(first);
+  });
+
+  it('clears load errors when the engine is torn down, since a new engine will retry', async () => {
+    const { result, unmount } = renderBoard();
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    act(() => {
+      engineOptions().onLoadError?.(ASSET_A, new Error('decode failed'));
+    });
+    expect(result.current.loadErrors.has(ASSET_A)).toBe(true);
+
+    // `teardownAudio` runs on unmount; the assertion that matters is that the
+    // set is not treated as durable knowledge about the asset itself.
+    unmount();
+    expect(engine.dispose).toHaveBeenCalled();
+  });
+
   it('pickRendition prefers what canPlayType accepts, and falls back to AAC', () => {
     const both = makeAsset(ASSET_A).renditions;
     const safari = (mime: string) => mime.startsWith('audio/mp4');

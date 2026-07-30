@@ -25,6 +25,9 @@ export const BOARD_GROUPS = [
 
 export type BoardGroupKey = (typeof BOARD_GROUPS)[number]['key'];
 
+/** Shared, so the default `loadErrors` has a stable identity across renders. */
+const NO_LOAD_ERRORS: ReadonlySet<string> = new Set<string>();
+
 /**
  * Sort by `sortIndex`, then bucket by the referenced asset's `kind`.
  *
@@ -63,8 +66,24 @@ export interface BoardGridProps {
    * and cursor-paginated at 50 while a package holds up to 64 items, so a
    * package straddling the boundary would silently lose the `kind` of its
    * tail and dump those pads into `unresolved`.
+   *
+   * **Required, and never `undefined`.** This component reads "no asset for
+   * this item" as "the asset was deleted" and says so on the pad, so handing
+   * it an in-flight (or errored) asset query renders a LOADING state as a
+   * DATA-LOSS state: every pad would read "This sound was removed from your
+   * library" for the duration of a normal load. The caller must withhold this
+   * component until the asset query has actually resolved — the route does
+   * that, and `tests/routes/soundboard-route.test.tsx` pins it.
    */
   assets: readonly AudioAssetData[];
+  /**
+   * Asset ids the audio engine failed to load or decode — `useSoundboard`'s
+   * `loadErrors`. Reverse-looked-up per item, since the failure belongs to the
+   * asset and two items may share one. Optional so a caller with no engine
+   * (stories, editor previews) need not invent one; the default is a shared
+   * empty set, so its identity is stable and cannot defeat `BoardPad`'s memo.
+   */
+  loadErrors?: ReadonlySet<string>;
   /** `BoardState.items` — each item's resolved `playing`/`volume`. */
   itemStates: readonly BoardItemState[];
   /** Must be referentially stable (`useCallback`): `BoardPad` is memoized. */
@@ -92,6 +111,7 @@ export function BoardGrid({
   items,
   assets,
   itemStates,
+  loadErrors = NO_LOAD_ERRORS,
   onPlay,
   onStop,
   onVolumeChange,
@@ -136,6 +156,9 @@ export function BoardGrid({
                     asset={assetsById.get(item.assetId)}
                     playing={state?.playing ?? false}
                     volume={state?.volume ?? item.volume}
+                    // A boolean, so a pad whose asset did not fail still sees
+                    // an unchanged prop and keeps bailing out of its memo.
+                    decodeFailed={loadErrors.has(item.assetId)}
                     onPlay={onPlay}
                     onStop={onStop}
                     onVolumeChange={onVolumeChange}

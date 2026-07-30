@@ -26,7 +26,13 @@ const engine = vi.hoisted(() => ({
   dispose: vi.fn(),
 }));
 const scheduler = vi.hoisted(() => ({ sync: vi.fn(), dispose: vi.fn() }));
-const createEngine = vi.hoisted(() => vi.fn(() => engine));
+// Parameter types spelled out so `createEngine.mock.calls[0][1]` is the real
+// `SoundboardEngineOptions` the hook built, not an untyped empty tuple.
+const createEngine = vi.hoisted(() =>
+  vi.fn(
+    (_ctx: unknown, _options: import('~/lib/soundboard/engine').SoundboardEngineOptions) => engine
+  )
+);
 const createScheduler = vi.hoisted(() => vi.fn(() => scheduler));
 vi.mock('~/lib/soundboard/engine', () => ({ createEngine }));
 vi.mock('~/lib/soundboard/scheduler', () => ({ createScheduler }));
@@ -52,6 +58,9 @@ vi.mock('~/utils/telemetry-client', () => ({
 
 const useCampaign = vi.hoisted(() => vi.fn());
 vi.mock('~/hooks/useCampaigns', () => ({ useCampaign }));
+
+const getMe = vi.hoisted(() => vi.fn());
+vi.mock('~/server/functions/rpc', () => ({ getMe }));
 
 vi.mock('~/components/Topbar', () => ({ Topbar: () => <div data-testid="topbar" /> }));
 
@@ -226,6 +235,20 @@ async function enabledEnableAudioButton(): Promise<HTMLElement> {
   return button;
 }
 
+/** Enable audio for real, once every query it depends on has settled. */
+async function enableAudioForReal(): Promise<void> {
+  const button = await enabledEnableAudioButton();
+  await act(async () => {
+    fireEvent.click(button);
+  });
+  await waitFor(() => expect(createEngine).toHaveBeenCalledTimes(1));
+}
+
+/** Drive the package picker the way a GM does. */
+function pickPackage(value: string): void {
+  fireEvent.change(screen.getByLabelText('Package'), { target: { value } });
+}
+
 /** The `BoardState` from the most recent `engine.apply` call. */
 function lastApplied(): BoardState {
   const calls = engine.apply.mock.calls;
@@ -264,10 +287,22 @@ afterEach(() => {
 // ---------------------------------------------------------------------------
 
 describe('soundboardBeforeLoad', () => {
-  it('is the dashboard guard — a signed-out visitor is redirected', async () => {
-    const { getMe } = await import('~/server/functions/rpc');
-    expect(typeof soundboardBeforeLoad).toBe('function');
-    expect(typeof getMe).toBe('function');
+  it('redirects a signed-out visitor, without returning a context', async () => {
+    getMe.mockResolvedValue(null);
+    // The router mock makes `redirect()` return its argument rather than throw,
+    // so the guard's own `throw` is what surfaces here — which is exactly the
+    // behaviour under test (a guard that RETURNED the redirect would let the
+    // route render).
+    await expect(soundboardBeforeLoad()).rejects.toEqual({
+      to: '/',
+      search: { reason: 'session_expired' },
+    });
+  });
+
+  it('passes the signed-in user through as route context', async () => {
+    const user = { id: 'u1', name: 'GM' };
+    getMe.mockResolvedValue(user);
+    await expect(soundboardBeforeLoad()).resolves.toEqual({ user });
   });
 });
 
@@ -528,5 +563,227 @@ describe('SoundboardPage — pad handler stability', () => {
     } finally {
       memoComponent.type = originalType;
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Critical: a package switch races its own asset query.
+// ---------------------------------------------------------------------------
+
+describe('SoundboardPage — a package switch', () => {
+  /**
+   * `getPackageFn` and `listPackageAssetsFn` are independent queries fired on
+   * the same render, so either can win. When the package wins, a mood is one
+   * click away while `assets` is still `undefined` — and that click resolves
+   * every item the mood names to `playing: true`, `engine.apply` calls
+   * `loadAsset`, `loadAsset` throws "ran before the asset list settled", and
+   * the engine adds each asset to an `unplayable` set it NEVER clears. Those
+   * pads are then silent for the rest of the session.
+   */
+  it('shows no mood bar and no pads while the new package’s assets are still loading', async () => {
+    const otherPkg: AudioPackageData = { ...pkg, id: OTHER_PKG_ID, name: 'Tavern' };
+    getPackageFn.mockImplementation(({ data }: { data: { id: string } }) =>
+      Promise.resolve(data.id === OTHER_PKG_ID ? otherPkg : pkg)
+    );
+    renderBoard();
+    await waitFor(() => expect(screen.getByText('Rain')).toBeInTheDocument());
+    await enableAudioForReal();
+
+    // The package resolves immediately; its assets do not.
+    const slowAssets = deferred<{ items: AudioAssetData[] }>();
+    listPackageAssetsFn.mockReturnValue(slowAssets.promise);
+    // Everything before this point ran against a SETTLED asset list (the
+    // hydrated board legitimately has `itemB` playing), so only the applies
+    // from here on are the ones that could hit an unsettled one.
+    const appliesBeforeSwitch = engine.apply.mock.calls.length;
+
+    await act(async () => {
+      pickPackage(OTHER_PKG_ID);
+    });
+    await waitFor(() =>
+      expect(listPackageAssetsFn).toHaveBeenCalledWith({ data: { packageId: OTHER_PKG_ID } })
+    );
+    // Wait until the NEW PACKAGE has actually landed while its assets have
+    // not — `loadPackage` resets every item to not-playing, so this is the
+    // observable proof we are inside the dangerous window rather than before
+    // it. Without this the assertions below could pass vacuously.
+    await waitFor(() =>
+      expect(screen.getByTestId('playing-count')).toHaveTextContent('Nothing playing')
+    );
+
+    // Nothing that could resolve an item to `playing` is reachable.
+    expect(screen.queryByRole('button', { name: 'Set mood to Storm' })).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId('board-pad')).toHaveLength(0);
+    expect(screen.getByTestId('board-loading')).toBeInTheDocument();
+
+    // ...and the engine was never handed a state with a playing item while the
+    // asset list was unsettled. `loadAsset` would have thrown on every one of
+    // them and the engine's `unplayable` set would have swallowed those assets
+    // permanently.
+    const appliesDuringSwitch = engine.apply.mock.calls.slice(appliesBeforeSwitch);
+    expect(appliesDuringSwitch.length).toBeGreaterThan(0);
+    for (const call of appliesDuringSwitch) {
+      const applied = call[0] as unknown as BoardState;
+      expect(applied.items.some((i) => i.playing)).toBe(false);
+    }
+
+    // Once the assets land the gate opens and a mood click reaches the engine.
+    await act(async () => {
+      slowAssets.resolve({ items: assets });
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Set mood to Storm' })).toBeInTheDocument()
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Set mood to Storm' }));
+    await waitFor(() => expect(lastApplied().items.some((i) => i.playing)).toBe(true));
+  });
+
+  // Important: a loading state must not render as a data-loss state.
+  it('does not claim the GM’s sounds were deleted while the asset query is in flight', async () => {
+    const slowAssets = deferred<{ items: AudioAssetData[] }>();
+    listPackageAssetsFn.mockReturnValue(slowAssets.promise);
+    renderBoard();
+
+    await waitFor(() => expect(screen.getByTestId('board-loading')).toBeInTheDocument());
+    expect(screen.queryByText(/removed from your library/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('board-group-unresolved')).not.toBeInTheDocument();
+
+    await act(async () => {
+      slowAssets.resolve({ items: assets });
+    });
+    await waitFor(() => expect(screen.getByText('Rain')).toBeInTheDocument());
+    expect(screen.queryByText(/removed from your library/i)).not.toBeInTheDocument();
+  });
+
+  // The same reasoning for a query that never resolves at all: an error must
+  // not read as "your library was wiped" either.
+  it('says the package could not be loaded when its asset query fails', async () => {
+    listPackageAssetsFn.mockRejectedValue(new Error('network down'));
+    renderBoard();
+
+    await waitFor(() => expect(screen.getByTestId('board-unavailable')).toBeInTheDocument());
+    expect(screen.queryByText(/removed from your library/i)).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId('board-pad')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Important: "— none —" must actually clear the board.
+// ---------------------------------------------------------------------------
+
+describe('SoundboardPage — clearing the board', () => {
+  it('unloads the package, tears the audio down and persists an empty board', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    renderBoard();
+    await waitFor(() => expect(screen.getByText('Rain')).toBeInTheDocument());
+    await enableAudioForReal();
+    // The persisted fixture has `itemB` playing, so there IS something to stop.
+    expect(screen.getByTestId('playing-count')).toHaveTextContent('1 playing');
+
+    await act(async () => {
+      pickPackage('');
+    });
+
+    // The board is genuinely unloaded, not just hidden: no pads, nothing
+    // playing, and the audio graph disposed rather than left sounding.
+    await waitFor(() => expect(screen.getByTestId('board-empty')).toBeInTheDocument());
+    expect(screen.queryAllByTestId('board-pad')).toHaveLength(0);
+    expect(screen.getByTestId('playing-count')).toHaveTextContent('Nothing playing');
+    expect(engine.dispose).toHaveBeenCalled();
+
+    // ...and the clear survives a reload, because what gets written is an
+    // empty board rather than the package the GM just dismissed.
+    saveBoardStateFn.mockClear();
+    fireEvent.change(screen.getByLabelText('Master volume'), { target: { value: '0.3' } });
+    await act(async () => {
+      vi.advanceTimersByTime(2000);
+    });
+    await waitFor(() => expect(saveBoardStateFn).toHaveBeenCalled());
+    const payload = saveBoardStateFn.mock.calls.at(-1)?.[0].data;
+    expect(payload.packageId).toBeNull();
+    expect(payload.moodId).toBeNull();
+    expect(payload.items).toEqual([]);
+  });
+
+  it('files no telemetry for a deliberate clear', async () => {
+    renderBoard();
+    await waitFor(() => expect(screen.getByText('Rain')).toBeInTheDocument());
+    captureException.mockClear();
+
+    await act(async () => {
+      pickPackage('');
+    });
+    await waitFor(() => expect(screen.getByTestId('board-empty')).toBeInTheDocument());
+
+    // Re-hydrating the cleared board against the OLD persisted state would take
+    // the hook's "persisted board names a package that did not resolve" branch
+    // and report an error for an ordinary GM action, once per click.
+    expect(captureException).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Important: `persist` reads a fourth query, and it has a pending state too.
+// ---------------------------------------------------------------------------
+
+describe('SoundboardPage — the campaign query', () => {
+  it('renders nothing that can dispatch until it is known whether this caller is the GM', async () => {
+    useCampaign.mockReturnValue({ campaign: null, isLoading: true, error: null });
+    renderBoard();
+
+    await waitFor(() => expect(screen.getByTestId('campaign-loading')).toBeInTheDocument());
+    // `persist` defaults to "not the GM", so a command issued in this window is
+    // silently never persisted. No control that could issue one is on screen.
+    expect(screen.queryByTestId('master-bar')).not.toBeInTheDocument();
+    expect(screen.queryAllByTestId('board-pad')).toHaveLength(0);
+    expect(screen.queryByRole('button', { name: 'Stop all' })).not.toBeInTheDocument();
+    expect(saveBoardStateFn).not.toHaveBeenCalled();
+  });
+
+  it('says so out loud when it fails, rather than silently never saving', async () => {
+    useCampaign.mockReturnValue({
+      campaign: null,
+      isLoading: false,
+      error: 'Failed to load campaign',
+    });
+    renderBoard();
+
+    await waitFor(() =>
+      expect(screen.getByTestId('campaign-error')).toHaveTextContent(/Failed to load campaign/)
+    );
+    expect(screen.queryByTestId('master-bar')).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The decodeFailed wire: producer -> useSoundboard -> BoardGrid -> BoardPad.
+// ---------------------------------------------------------------------------
+
+describe('SoundboardPage — a rendition that fails to load', () => {
+  it('tells the GM on the pad itself, not only GlitchTip', async () => {
+    renderBoard();
+    await waitFor(() => expect(screen.getByText('Rain')).toBeInTheDocument());
+    await enableAudioForReal();
+
+    // Nothing has failed yet — the pad is ordinary and usable.
+    expect(screen.queryByTestId('pad-unavailable-reason')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Play Rain' })).toBeEnabled();
+
+    // The engine reports a decode failure for `Rain`'s asset. Without this
+    // wire the pad keeps looking ready forever while being permanently silent
+    // (the engine's `unplayable` set is never cleared).
+    const onLoadError = createEngine.mock.calls[0][1].onLoadError;
+    await act(async () => {
+      onLoadError?.(ASSET_A, new Error('Unable to decode audio data'));
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId('pad-unavailable-reason')).toHaveTextContent(
+        'Failed to decode this rendition'
+      )
+    );
+    expect(screen.getByRole('button', { name: 'Play Rain' })).toBeDisabled();
+    // Only the failed asset's pad — `Thunder` references a different asset.
+    expect(screen.getByRole('button', { name: 'Stop Thunder' })).toBeEnabled();
   });
 });

@@ -229,6 +229,49 @@ describe('BoardGrid', () => {
     expect(screen.getByTestId('board-grid-empty')).toBeInTheDocument();
   });
 
+  it('marks only the pads whose asset the engine failed to load', () => {
+    render(
+      <BoardGrid
+        items={[
+          mkItem({ id: 'i1', assetId: 'a1', label: 'Theme' }),
+          mkItem({ id: 'i2', assetId: 'a2', label: 'Rain' }),
+        ]}
+        assets={[mkAsset('a1', 'music'), mkAsset('a2', 'ambience')]}
+        itemStates={[mkState('i1'), mkState('i2')]}
+        loadErrors={new Set(['a1'])}
+        onPlay={noop}
+        onStop={noop}
+        onVolumeChange={noop}
+      />
+    );
+
+    // Keyed by ASSET id, reverse-looked-up per item.
+    expect(screen.getByTestId('board-group-music')).toHaveTextContent(
+      'Failed to decode this rendition'
+    );
+    expect(screen.getByRole('button', { name: 'Play Theme' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Play Rain' })).toBeEnabled();
+  });
+
+  it('marks every item that shares a failed asset', () => {
+    render(
+      <BoardGrid
+        items={[
+          mkItem({ id: 'i1', assetId: 'a1', label: 'Loud' }),
+          mkItem({ id: 'i2', assetId: 'a1', label: 'Quiet' }),
+        ]}
+        assets={[mkAsset('a1', 'music')]}
+        itemStates={[mkState('i1'), mkState('i2')]}
+        loadErrors={new Set(['a1'])}
+        onPlay={noop}
+        onStop={noop}
+        onVolumeChange={noop}
+      />
+    );
+
+    expect(screen.getAllByTestId('pad-unavailable-reason')).toHaveLength(2);
+  });
+
   it('forwards a pad press to the handler with the item id', async () => {
     const onPlay = vi.fn();
     render(

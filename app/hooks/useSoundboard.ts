@@ -282,7 +282,32 @@ export type UseSoundboardResult = {
    * from mount.
    */
   hydrated: boolean;
+  /**
+   * The ids of assets whose load or decode FAILED for the current engine —
+   * a 404'd rendition URL, bytes the browser could not decode, or an asset
+   * missing from the list this board was handed.
+   *
+   * This is the missing half of a wire whose two ends already existed:
+   * `createEngine`'s `onLoadError` produces the event, and `BoardPad`'s
+   * `decodeFailed` prop renders "Failed to decode this rendition" ahead of
+   * every asset-status case. Without it the engine's `unplayable` set — which
+   * is NEVER cleared for the life of the engine — silently swallows the most
+   * severe failure the board has: a pad that looks ready, is enabled, and
+   * makes no sound, with a GlitchTip event as its only trace.
+   *
+   * Asset ids, not item ids: the failure belongs to the asset, and two items
+   * in a package may reference the same one. Callers reverse-look-up per item
+   * (`loadErrors.has(item.assetId)`).
+   *
+   * Cleared by `teardownAudio`, because the engine's own `unplayable` set dies
+   * with the engine — a rebuilt engine genuinely will retry, so continuing to
+   * report the old failure would be a lie the GM cannot clear.
+   */
+  loadErrors: ReadonlySet<string>;
 };
+
+/** Stable identity for the common "nothing has failed" case. */
+const NO_LOAD_ERRORS: ReadonlySet<string> = new Set<string>();
 
 /**
  * The GM board's one stateful seam: reducer + Web Audio engine + random
@@ -313,6 +338,7 @@ export function useSoundboard(
   const [audioError, setAudioError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [hydrated, setHydrated] = useState(() => options.initialState === undefined);
+  const [loadErrors, setLoadErrors] = useState<ReadonlySet<string>>(NO_LOAD_ERRORS);
 
   const stateRef = useRef(state);
   const optionsRef = useRef(options);
@@ -515,6 +541,9 @@ export function useSoundboard(
     schedulerRef.current = null;
     engineRef.current = null;
     ctxRef.current = null;
+    // The engine's `unplayable` set dies with the engine, so the failures we
+    // were reporting are no longer true of the engine that replaces it.
+    if (mountedRef.current) setLoadErrors(NO_LOAD_ERRORS);
   }, []);
 
   const runEnableAudio = useCallback(async (): Promise<void> => {
@@ -598,8 +627,19 @@ export function useSoundboard(
       // the end of its buffer, or a loop flipped to 1x finishing its pass.
       // Without this the pad stays lit forever.
       onItemEnded: (itemId) => dispatch({ type: 'stop', itemId }),
-      onLoadError: (assetId, error) =>
-        captureException(error, { area: 'soundboard', campaignId: campaignIdRef.current, assetId }),
+      onLoadError: (assetId, error) => {
+        captureException(error, { area: 'soundboard', campaignId: campaignIdRef.current, assetId });
+        // Surface it too. A GlitchTip event tells ME; `loadErrors` tells the
+        // GM mid-session, which is the only audience that can react to a pad
+        // that will now be silent for the rest of the engine's life.
+        if (!mountedRef.current) return;
+        setLoadErrors((previous) => {
+          if (previous.has(assetId)) return previous;
+          const next = new Set(previous);
+          next.add(assetId);
+          return next;
+        });
+      },
     });
     engineRef.current = engine;
 
@@ -729,5 +769,5 @@ export function useSoundboard(
     };
   }, [flushSaveNow, teardownAudio]);
 
-  return { state, dispatch, audioReady, audioError, enableAudio, saveError, hydrated };
+  return { state, dispatch, audioReady, audioError, enableAudio, saveError, hydrated, loadErrors };
 }
