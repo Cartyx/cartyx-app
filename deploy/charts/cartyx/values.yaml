@@ -79,21 +79,51 @@ audioWorker:
   # revoked mid-job writes nothing instead of overwriting the row a second
   # worker now owns. Atomic claiming alone was never exclusive ownership,
   # because reapStale can hand a live claim away.
-  # Kept at 1 because the single-node cluster has no spare CPU headroom.
+  # Kept at 1 because one worker now clears the worst-case asset well inside
+  # its timeouts (see the resources block), not because the node is full — z440
+  # has 36 cores / 62 GiB and sits at ~7%. A second replica buys throughput on a
+  # bulk import and nothing else; add it when import latency is the complaint.
   replicaCount: 1
-  # CPU limits matter here: ffmpeg is CPU-bound and a bulk import must not
-  # starve SSR in the web pod.
+  # ffmpeg is CPU-bound, so this is the one pod in the chart with a CPU LIMIT
+  # (web and realtime deliberately have none — throttling an event loop is
+  # worse than letting it burst). Both numbers are sized from measurements
+  # taken in-pod on the deployed image, against the worst realistic source:
+  # 30 minutes, 5 additive tones, 128 kbit/s MP3, 28.8 MB.
+  #
+  #   limits.cpu   The ceiling exists to stop a bulk import starving SSR in the
+  #                web pod, NOT because the node lacks headroom. 4 is ~11% of a
+  #                36-core box idling at 7%, and it takes the binding leg (aac)
+  #                to 49s — a 6x margin under FFMPEG_TIMEOUT_MS (300s) instead
+  #                of the 1.46x that `cpu: 1` gave (205s measured, in-pod).
+  #                That margin is the whole point: a timeout is a SIGKILL, which
+  #                is a transient failure, which is three attempts of ~205s each
+  #                before the asset lands `failed` — ten minutes of burnt CPU to
+  #                permanently reject a legitimate upload.
+  #                4 rather than 1 also stops the cgroup being the binding
+  #                constraint at all: with `-threads 1` (see `SINGLE_THREAD` in
+  #                audio-worker/src/ffmpeg.ts) ffmpeg still runs ~6 pipeline
+  #                threads, and 49s at cpu=6 vs 49s at cpu=4-with-1-thread is
+  #                the same number — the encode is effectively single-threaded,
+  #                so anything past a small multiple of one core buys nothing.
+  #   requests.cpu The scheduler reservation AND the cgroup's share weight under
+  #                contention. At the old 100m the worker was weighted at a
+  #                tenth of a core against the web pod's 100m + burst, i.e. it
+  #                lost the CPU it needs continuously while transcoding. 1 is
+  #                what a transcode actually uses steadily, it is 2.8% of the
+  #                node, and keeping it below the limit leaves the pod
+  #                Burstable rather than Guaranteed.
   resources:
     requests:
-      cpu: 100m
+      cpu: '1'
       memory: 256Mi
     limits:
-      cpu: '1'
+      cpu: '4'
       memory: 768Mi
   # Recreate, not RollingUpdate: the default strategy starts the new pod before
   # the old one terminates, so every deploy briefly runs TWO workers even at
-  # replicas: 1 — both claiming, both transcoding, on a node with one spare
-  # core. realtime sets this for the same class of reason.
+  # replicas: 1 — both claiming, both transcoding, and (with limits.cpu: 4)
+  # between them entitled to 8 cores plus whatever the terminating pod is still
+  # holding. realtime sets this for the same class of reason.
   strategy: Recreate
   # Long enough for an in-flight transcode to finish after SIGTERM (the worker
   # stops claiming and drains the current asset). The default 30s is shorter
@@ -114,10 +144,14 @@ audioWorker:
     CLAIM_TIMEOUT_MS: '3600000'
     # Wall-clock cap on any single ffmpeg/ffprobe invocation. The worker is one
     # sequential loop and the stale-row reaper runs inside it, so a hung child
-    # process wedges the whole queue until the pod is restarted. Measured: a
-    # 30-minute source (the hard cap) costs ~45s CPU for the Opus leg and ~51s
-    # for the AAC leg on a fast core, so this is a small multiple of real work
-    # on this node, not slack — lowering it risks killing healthy transcodes.
+    # process wedges the whole queue until the pod is restarted. Sized against
+    # work MEASURED IN-POD on the deployed image, not on a laptop: the worst
+    # realistic 30-minute source (the hard cap) costs 26s for the Opus leg and
+    # 49s for the binding AAC leg at the resources set above, so this is ~6x
+    # real work. It was 1.46x at `cpu: 1` with ffmpeg's default thread count
+    # (205s for the same leg) — close enough that an ordinary long upload could
+    # be SIGKILLed as if it had hung. Lowering either this or limits.cpu walks
+    # back toward that, and both legs must keep clearing it with room.
     FFMPEG_TIMEOUT_MS: '300000'
     # A row stuck in `uploading` past this age is failed: presigned PUT URLs
     # expire after 300s, so nothing can confirm it any more.
