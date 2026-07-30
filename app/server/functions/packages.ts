@@ -2,20 +2,43 @@ import type { z } from 'zod';
 import { connectDB, isDBConnected } from '../db/connection';
 import { AudioPackage } from '../db/models/AudioPackage';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
-import type {
-  AudioPackageData,
-  PackageItemData,
-  MoodData,
-  MoodStateData,
+import {
+  DEFAULT_VOLUME,
+  DEFAULT_FADE_SECONDS,
+  type AudioPackageData,
+  type PackageItemData,
+  type MoodData,
+  type MoodStateData,
 } from '~/types/soundboard';
 import type {
   createPackageSchema,
   updatePackageSchema,
   deletePackageSchema,
+  getPackageSchema,
 } from '~/types/schemas/soundboard';
 
 async function ensureDb() {
   if (!isDBConnected()) await connectDB();
+}
+
+/**
+ * A "not found" from this file, in every case, means one of two things: the
+ * id genuinely does not exist, or it belongs to another user's private
+ * package. Neither is a server fault — it's a caller asking about a document
+ * it cannot see, which for `getPackage` in particular is a shape any
+ * authenticated user can trigger just by guessing ids. Same class, same
+ * purpose, as `AudioClientError` in `app/server/functions/audio.ts`: it
+ * marks the error as "the caller's own doing" so `reportPackageError` below
+ * does not file a GlitchTip event for it. Packages has a STRONGER case for
+ * this than audio does — `getPackage` reads through the visibility filter,
+ * so a probe against ids the caller cannot see is an attacker-controlled
+ * GlitchTip volume path if left unguarded.
+ */
+export class PackageClientError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PackageClientError';
+  }
 }
 
 /**
@@ -35,7 +58,9 @@ function telemetryId(actor: Actor): string {
   return actor.sessionUserId ?? actor.userId;
 }
 
+/** Report to GlitchTip unless the failure was the caller's own doing. */
 function reportPackageError(e: unknown, actor: Actor, context: Record<string, unknown>) {
+  if (e instanceof PackageClientError) return;
   serverCaptureException(e, telemetryId(actor), context);
 }
 
@@ -89,8 +114,8 @@ function serializePackageItem(item: unknown): PackageItemData {
     id: i.id,
     assetId: String(i.assetId),
     label: i.label ?? undefined,
-    volume: i.volume ?? 1,
-    fadeSeconds: i.fadeSeconds ?? 2,
+    volume: i.volume ?? DEFAULT_VOLUME,
+    fadeSeconds: i.fadeSeconds ?? DEFAULT_FADE_SECONDS,
     loop: i.loop ?? false,
     randomIntervalMin: i.randomIntervalMin ?? undefined,
     randomIntervalMax: i.randomIntervalMax ?? undefined,
@@ -175,7 +200,7 @@ export async function getPackage({
   userId,
   sessionUserId,
 }: {
-  data: { id: string };
+  data: z.infer<typeof getPackageSchema>;
 } & Actor): Promise<AudioPackageData> {
   try {
     await ensureDb();
@@ -186,7 +211,7 @@ export async function getPackage({
       _id: data.id,
       ...packageVisibilityFilter(userId),
     }).lean();
-    if (!doc) throw new Error('Package not found');
+    if (!doc) throw new PackageClientError('Package not found');
     return serializePackage(doc as unknown as PackageDoc);
   } catch (e) {
     reportPackageError(e, { userId, sessionUserId }, { action: 'getPackage' });
@@ -251,7 +276,7 @@ export async function updatePackage({
       { $set: set },
       { new: true }
     ).lean();
-    if (!doc) throw new Error('Package not found');
+    if (!doc) throw new PackageClientError('Package not found');
     serverCaptureEvent(telemetryId({ userId, sessionUserId }), 'package_updated', {
       packageId: data.id,
     });
@@ -274,7 +299,7 @@ export async function deletePackage({
     // Owner-scoped, NEVER the visibility filter — same reasoning as
     // `updatePackage`. A system package must not be deletable by anyone.
     const res = await AudioPackage.deleteOne({ _id: data.id, ownerId: userId });
-    if (!res.deletedCount) throw new Error('Package not found');
+    if (!res.deletedCount) throw new PackageClientError('Package not found');
     serverCaptureEvent(telemetryId({ userId, sessionUserId }), 'package_deleted', {
       packageId: data.id,
     });

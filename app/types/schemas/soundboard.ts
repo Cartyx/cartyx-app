@@ -129,6 +129,9 @@ export const clonePackageSchema = z.object({
 
 export const deletePackageSchema = z.object({ id: objectId });
 
+/** A single package lookup by id, visibility-scoped (owner or system package). */
+export const getPackageSchema = z.object({ id: objectId });
+
 /** Module-private — see the comment on `moodStateSchema` above. */
 const boardItemStateSchema = z.object({
   itemId: stableId,

@@ -98,17 +98,25 @@ describe('getPackage', () => {
     });
   });
 
-  it('returns a system package to a caller who does not own it', async () => {
+  it('serializes a system package (ownerId: null) in the response without rejecting it', async () => {
     findOneLean.mockResolvedValue({ ...baseDoc(), ownerId: null });
     const { getPackage } = await import('~/server/functions/packages');
     const res = await getPackage({ data: { id: 'p1' }, userId: 'u2' });
     expect(res.ownerId).toBeNull();
   });
 
-  it("throws when the package does not exist or is another user's private package", async () => {
+  it('throws "not found" when the model returns no document', async () => {
     findOneLean.mockResolvedValue(null);
     const { getPackage } = await import('~/server/functions/packages');
     await expect(getPackage({ data: { id: 'p1' }, userId: 'u2' })).rejects.toThrow(/not found/i);
+  });
+
+  it('does not report a "not found" to GlitchTip — it is the caller asking about a document it cannot see, not a server fault', async () => {
+    const { serverCaptureException } = await import('~/server/utils/telemetry');
+    findOneLean.mockResolvedValue(null);
+    const { getPackage } = await import('~/server/functions/packages');
+    await expect(getPackage({ data: { id: 'p1' }, userId: 'u2' })).rejects.toThrow(/not found/i);
+    expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
   });
 });
 
@@ -168,7 +176,31 @@ describe('updatePackage', () => {
     expect('moods' in update.$set).toBe(false);
   });
 
-  it('throws when the package does not exist or belongs to another owner', async () => {
+  /**
+   * `serverCaptureEvent(distinctId, event, properties)` — distinctId FIRST.
+   * Phase 1's own plan had the first two arguments swapped and shipped that
+   * way; nothing about the call site's own shape would catch a transposition
+   * (both are strings), so this pins the exact tuple rather than checking
+   * each argument in isolation, and uses the session identity (not the Mongo
+   * id) so a swap fails on BOTH the position and the value.
+   */
+  it('emits package_updated with distinctId first, tagged with the session identity', async () => {
+    const { serverCaptureEvent } = await import('~/server/utils/telemetry');
+    findOneAndUpdateLean.mockResolvedValue(baseDoc());
+    const { updatePackage } = await import('~/server/functions/packages');
+    await updatePackage({
+      data: { id: 'p1', name: 'New Name' },
+      userId: 'mongo-id-1',
+      sessionUserId: 'provider-id-1',
+    });
+    expect(vi.mocked(serverCaptureEvent).mock.calls[0]).toEqual([
+      'provider-id-1',
+      'package_updated',
+      { packageId: 'p1' },
+    ]);
+  });
+
+  it('throws "not found" when the model returns no document (does not distinguish absent vs. another owner)', async () => {
     findOneAndUpdateLean.mockResolvedValue(null);
     const { updatePackage } = await import('~/server/functions/packages');
     await expect(updatePackage({ data: { id: 'p1', name: 'x' }, userId: 'u2' })).rejects.toThrow(
@@ -192,9 +224,11 @@ describe('deletePackage', () => {
   });
 
   it("throws and does not report to GlitchTip as a server fault when nothing matched (another owner's package)", async () => {
+    const { serverCaptureException } = await import('~/server/utils/telemetry');
     deleteOne.mockResolvedValue({ deletedCount: 0 });
     const { deletePackage } = await import('~/server/functions/packages');
     await expect(deletePackage({ data: { id: 'p1' }, userId: 'u2' })).rejects.toThrow(/not found/i);
+    expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
   });
 });
 
@@ -239,12 +273,9 @@ describe('serializePackage normalises Mongoose null defaults to undefined', () =
     expect(item.randomIntervalMax).toBeUndefined();
     expect(item.volumeJitter).toBeUndefined();
     expect(item.panJitter).toBeUndefined();
-    // Explicitly checking `in` too: a naive cast leaves the key present with
-    // value `null`, which `toBeUndefined()` alone cannot distinguish from a
-    // key that was normalised away — JSON/structuredClone both preserve
-    // explicit `null` keys, and `'label' in item` is true either way, so this
-    // assertion is about the VALUE, and the two asserts above already cover
-    // that. This one guards the mood-state fields the same way.
+    // A meaningful, non-null value must survive untouched — the assertions
+    // above prove `null` is normalised away, this one proves normalisation
+    // isn't blanket-clobbering every field.
     expect(item.volume).toBe(1);
   });
 
