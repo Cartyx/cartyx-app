@@ -73,6 +73,16 @@ export function normalizeTag(raw: string): string | null {
 }
 
 /**
+ * Escape a string for safe interpolation into a RegExp / Mongo $regex.
+ * Without this, caller-controlled search text could contain a
+ * catastrophic-backtracking pattern (e.g. "(a+)+$") that gets evaluated
+ * against every matching document.
+ */
+export function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
  * Normalize an array of tags, removing duplicates and invalid entries.
  */
 export function normalizeTags(tags: string[]): string[] {

@@ -1,0 +1,172 @@
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { execFile, execFileSync } from 'node:child_process';
+import { promisify } from 'node:util';
+import { mkdtempSync, existsSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { probe, transcode } from '../src/ffmpeg.js';
+import { RENDER_LIMIT_SECONDS } from '../src/config.js';
+import { extractPeaks } from '../src/peaks.js';
+
+const run = promisify(execFile);
+
+let dir: string;
+let src: string;
+
+/** Probe an arbitrary file's codec name — used only to verify test OUTPUTS. */
+async function probeCodec(path: string): Promise<string> {
+  const { stdout } = await run('ffprobe', [
+    '-v',
+    'error',
+    '-select_streams',
+    'a:0',
+    '-show_entries',
+    'stream=codec_name',
+    '-of',
+    'json',
+    path,
+  ]);
+  const parsed = JSON.parse(stdout) as { streams?: { codec_name?: string }[] };
+  return parsed.streams?.[0]?.codec_name ?? '';
+}
+
+beforeAll(() => {
+  dir = mkdtempSync(join(tmpdir(), 'audio-worker-'));
+  src = join(dir, 'tone.wav');
+  // 2s 440Hz stereo tone — deterministic fixture, no binary in the repo.
+  execFileSync(
+    'ffmpeg',
+    [
+      '-f',
+      'lavfi',
+      '-i',
+      'sine=frequency=440:duration=2:sample_rate=48000',
+      '-ac',
+      '2',
+      '-y',
+      src,
+      // ffmpeg's version/config banner and per-frame progress line go to
+      // stderr unconditionally at this verbosity; execFileSync inherits the
+      // parent's stderr by default, so without this it leaks into the test
+      // run's console output on every invocation. Silence it — the tests
+      // assert on ffprobe/PCM output, not on console noise.
+    ],
+    { stdio: ['ignore', 'ignore', 'ignore'] }
+  );
+});
+
+describe('ffmpeg pipeline', () => {
+  it('probes accurate duration, sample rate and channels', async () => {
+    const meta = await probe(src);
+    expect(meta.durationMs).toBeGreaterThan(1950);
+    expect(meta.durationMs).toBeLessThan(2050);
+    expect(meta.sampleRate).toBe(48000);
+    expect(meta.channels).toBe(2);
+  });
+
+  it('produces a real opus rendition, not just a non-empty file', async () => {
+    const out = join(dir, 'out.opus');
+    await transcode(src, out, 'opus', RENDER_LIMIT_SECONDS);
+    expect(existsSync(out)).toBe(true);
+    expect(statSync(out).size).toBeGreaterThan(0);
+
+    // A truncated file or a wrong-codec file would pass a bare
+    // exists+non-empty check. Probing the output catches both: assert the
+    // codec is really opus and the duration round-trips close to the source.
+    expect(await probeCodec(out)).toBe('opus');
+    const meta = await probe(out);
+    expect(meta.durationMs).toBeGreaterThan(1800);
+    expect(meta.durationMs).toBeLessThan(2200);
+  });
+
+  it('produces a real aac rendition, not just a non-empty file', async () => {
+    const out = join(dir, 'out.m4a');
+    await transcode(src, out, 'aac', RENDER_LIMIT_SECONDS);
+    expect(existsSync(out)).toBe(true);
+    expect(statSync(out).size).toBeGreaterThan(0);
+
+    expect(await probeCodec(out)).toBe('aac');
+    const meta = await probe(out);
+    expect(meta.durationMs).toBeGreaterThan(1800);
+    expect(meta.durationMs).toBeLessThan(2200);
+  });
+
+  it('extracts the requested number of peaks in 0..1', async () => {
+    const peaks = await extractPeaks(src, 100, RENDER_LIMIT_SECONDS);
+    expect(peaks).toHaveLength(100);
+    for (const p of peaks) {
+      expect(p).toBeGreaterThanOrEqual(0);
+      expect(p).toBeLessThanOrEqual(1);
+    }
+    // This ffmpeg build's `sine` lavfi source (no `amplitude` option exists
+    // on it — verified via `ffmpeg -h filter=sine`) emits a fixed peak of
+    // ~0.088 for this fixture, not full scale. Confirmed empirically against
+    // the raw s16le PCM before wiring this assertion, so 0.05 is a real
+    // signal-detection threshold, not a guess — well above the silence
+    // floor (0) and comfortably below the measured ~0.088 peak.
+    expect(Math.max(...peaks)).toBeGreaterThan(0.05);
+  });
+
+  /**
+   * A FIFO with no writer makes `open(2)` block indefinitely, so ffmpeg/ffprobe
+   * hang rather than exit — the exact failure mode that would otherwise wedge
+   * the worker forever. The worker is one sequential loop at replicaCount 1 and
+   * `reapStale` runs inside it, so a hung child blocks processAsset, which
+   * blocks the loop, which means nothing can ever rescue the row from
+   * `processing` and every later upload queues behind it.
+   *
+   * Each case below hangs until the vitest timeout (i.e. fails) if
+   * `childProcOptions()` stops being passed to that call site.
+   */
+  describe('child process timeout', () => {
+    let fifo: string;
+    let previous: string | undefined;
+
+    beforeAll(() => {
+      fifo = join(dir, 'blocking.fifo');
+      execFileSync('mkfifo', [fifo]);
+    });
+
+    beforeEach(() => {
+      previous = process.env.FFMPEG_TIMEOUT_MS;
+      process.env.FFMPEG_TIMEOUT_MS = '800';
+    });
+
+    afterEach(() => {
+      if (previous === undefined) delete process.env.FFMPEG_TIMEOUT_MS;
+      else process.env.FFMPEG_TIMEOUT_MS = previous;
+    });
+
+    it('kills a hung ffprobe in probe() instead of blocking forever', async () => {
+      const started = Date.now();
+      await expect(probe(fifo)).rejects.toThrow();
+      expect(Date.now() - started).toBeLessThan(8000);
+    }, 15_000);
+
+    it('kills a hung ffmpeg in transcode() instead of blocking forever', async () => {
+      const started = Date.now();
+      await expect(
+        transcode(fifo, join(dir, 'never.opus'), 'opus', RENDER_LIMIT_SECONDS)
+      ).rejects.toThrow();
+      expect(Date.now() - started).toBeLessThan(8000);
+    }, 15_000);
+
+    it('kills a hung ffmpeg in extractPeaks() instead of blocking forever', async () => {
+      const started = Date.now();
+      await expect(extractPeaks(fifo, 10, RENDER_LIMIT_SECONDS)).rejects.toThrow();
+      expect(Date.now() - started).toBeLessThan(8000);
+    }, 15_000);
+  });
+
+  it('extracts a silent buffer as all-zero peaks, not garbage', async () => {
+    const silent = join(dir, 'silence.wav');
+    execFileSync(
+      'ffmpeg',
+      ['-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-t', '1', '-y', silent],
+      { stdio: ['ignore', 'ignore', 'ignore'] }
+    );
+    const peaks = await extractPeaks(silent, 20, RENDER_LIMIT_SECONDS);
+    expect(peaks).toHaveLength(20);
+    for (const p of peaks) expect(p).toBe(0);
+  });
+});

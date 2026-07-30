@@ -21,9 +21,19 @@ import {
   type ScanOrphanImagesResult,
 } from '~/types/schemas/cleanup';
 
-// Prefixes the app uses for R2 uploads. Anything outside these is ignored so
-// the scan never proposes deleting keys we don't know how to attribute.
-const TRACKED_PREFIXES = [
+// Prefixes the app uses for CAMPAIGN IMAGE uploads. Anything outside these is
+// ignored so the scan never proposes deleting keys we don't know how to
+// attribute.
+//
+// `uploads/audio/` is deliberately absent. Authorization for this scanner is
+// `requireGmOfCampaign` — it proves you are GM of ONE campaign you name. Audio
+// is a per-user library with no campaign scoping whatsoever, so including the
+// audio prefix meant that proving GM of your own campaign handed you a
+// bucket-wide listing of every other user's audio objects (keys, sizes, upload
+// times) and let you delete them. Owner-scoped audio cleanup lives in
+// `~/server/functions/audio-cleanup.ts`, which never lists a key it cannot
+// trace back to one of the caller's own AudioAsset rows.
+export const TRACKED_PREFIXES = [
   'uploads/locations/',
   'uploads/characters/',
   'uploads/players/',
@@ -94,6 +104,11 @@ async function collectInUseKeys(cdnUrl: string | null): Promise<Set<string>> {
       if (key) inUse.add(key);
     }
   }
+
+  // No AudioAsset walk here on purpose. Audio keys are outside TRACKED_PREFIXES
+  // now (see the comment there), so this scanner never lists one and therefore
+  // never needs to know which are in use. Audio's own in-use set is computed
+  // per-owner in `~/server/functions/audio-cleanup.ts`.
 
   return inUse;
 }

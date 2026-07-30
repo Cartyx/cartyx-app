@@ -1,8 +1,9 @@
 # Cartyx — D&D Campaign Management
 
-TanStack Start (React 19) web app + custom Node `ws` realtime service, self-hosted
-on a single-node k3s cluster (`z440`) behind a Cloudflare Tunnel. MongoDB Atlas for
-data, Cloudflare R2 + CDN for images, self-hosted observability
+TanStack Start (React 19) web app + custom Node `ws` realtime service + a Node
+`audio-worker` (ffmpeg transcode queue), self-hosted on a single-node k3s cluster
+(`z440`) behind a Cloudflare Tunnel. MongoDB Atlas for data, Cloudflare R2 + CDN
+for images and audio, self-hosted observability
 (GlitchTip/Umami/Grafana — see `docs/observability.md`).
 
 ## Commands
@@ -19,7 +20,26 @@ data, Cloudflare R2 + CDN for images, self-hosted observability
   REQUIRED whenever anything under `deploy/charts/` changes (also a CI job).
 - `npm run e2e` — Playwright; all inspector tabs (Chat/Dice/Wiki/Notes/Settings)
   render unconditionally — the old `VITE_PUBLIC_FF_*` gating was removed.
+- `realtime/` and `audio-worker/` are separate npm packages with their own
+  lockfiles and test suites — run `(cd audio-worker && npm run typecheck && npm
+test)` for worker changes; the root suite does not cover them. CI's `services`
+  job runs both, and also `docker build`s the worker image (its Dockerfile
+  asserts the ffmpeg capabilities the pipeline needs).
 - `deploy/charts/` is prettierignored — don't format it.
+
+## Testing conventions
+
+- Unit tests mock mongoose (per-method model mocks, no in-memory Mongo). That
+  makes them fast, but it also means **they cannot catch identity-resolution or
+  query-shape bugs**: a mock returns whatever it was told to regardless of what
+  the query actually asked for, so handing a query the wrong id (e.g. the OAuth
+  provider id where a `User` Mongo `_id` is required) or dropping a filter
+  clause passes every unit assertion. E2E against seeded data is what covers
+  those — the audio library's `ownerId` bug (2026-07-28) was green across the
+  whole unit suite and caught only by an E2E hitting a real seeded row.
+- E2E runs against deliberately fake R2 credentials (`ci.yml`'s e2e job), so
+  any server-side outbound R2 call in a user-facing path fails there. Exercise
+  new ones locally with those env vars before assuming CI will pass.
 
 ## Branching and deploys
 

@@ -1,3 +1,5 @@
+import type { AudioFilters } from '~/components/audio/AudioFilterBar';
+
 export const queryKeys = {
   auth: {
     me: ['auth', 'me'] as const,
@@ -223,6 +225,15 @@ export const queryKeys = {
     linked: (campaignId: string, kind: string, id: string) =>
       ['events', 'linked', campaignId, kind, id] as const,
     epic: (campaignId: string) => ['events', 'epic', campaignId] as const,
+  },
+  audio: {
+    all: ['audio'] as const,
+    // `AudioFilters` (not a local re-declaration) is the actual shape every
+    // caller builds — Task 19's `/audio` route state, mirrored from
+    // `listAudioAssetsSchema` — so importing it here is the single source
+    // of truth instead of a second, driftable definition.
+    list: (filters: AudioFilters) => ['audio', 'list', filters] as const,
+    detail: (id: string) => ['audio', 'detail', id] as const,
   },
   monsters: {
     all: ['monsters'] as const,

@@ -34,6 +34,25 @@ const userSchema = new mongoose.Schema({
     select: false,
     _id: false,
   },
+  // The user's private namespace in R2 for audio objects: 32 lowercase hex
+  // characters (128 bits), minted lazily on the FIRST audio upload and never
+  // rewritten. Every audio key this user owns lives under
+  // `uploads/audio/<audioStoragePrefix>/`, which is what makes
+  // `~/server/functions/audio-cleanup.ts` owner-scoped by construction rather
+  // than by filtering: `ListObjectsV2` with that prefix cannot return another
+  // user's object, because the S3 API itself will not.
+  //
+  // RANDOM, not the `_id`, and that is the whole point. An audio key becomes
+  // the object's public CDN URL (`publicUrl = ${cdnUrl}/${key}`), so a path
+  // segment carrying the user's ObjectId would let anyone holding one shared
+  // link enumerate-by-correlation every other track that user owns. This
+  // segment carries no identity and is not derivable from one.
+  //
+  // Minted lazily rather than backfilled: a user who never uploads audio has
+  // no namespace and needs none. It must never be regenerated — the prefix is
+  // the only path to that user's existing objects, so a new one strands all of
+  // them. `resolveAudioStoragePrefix` enforces that with a conditional write.
+  audioStoragePrefix: { type: String, unique: true, sparse: true },
   lastLoginAt: { type: Date, default: Date.now },
   createdAt: { type: Date, default: Date.now },
 });

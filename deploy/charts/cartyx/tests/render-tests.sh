@@ -11,6 +11,7 @@ PASS=0 FAIL=0
 BASE_ARGS=(
   --set=web.image.tag=prod-test123
   --set=realtime.image.tag=test123
+  --set=audioWorker.image.tag=test123
   --set=ingress.webHost=web.test
   --set=ingress.wsHost=ws.test
   --set=tls.certificate.clusterIssuer=test-issuer
@@ -187,6 +188,97 @@ echo "$prod_out" | grep -q "value: \"http://umami.platform.svc:3000\"" \
   && ok || bad "values-prod UMAMI_HOST resolves"
 echo "$dev_out" | grep -q "value: \"http://umami.platform.svc:3000\"" \
   && ok || bad "values-dev UMAMI_HOST resolves"
+
+# --- Task 12 (audio plan): audio-worker deployment ---
+assert_contains "audio-worker deployment exists" "name: cartyx-audio-worker"
+assert_contains "audio-worker poll interval env renders" "name: POLL_INTERVAL_MS"
+# Both timeouts are resilience knobs the worker degrades badly without: no
+# FFMPEG_TIMEOUT_MS and a hung ffmpeg wedges the single sequential loop (and
+# therefore the stale-row reaper) until a manual restart; no UPLOAD_TIMEOUT_MS
+# and rows abandoned in `uploading` never resolve. Assert the values too — a
+# bare name would still render if values.yaml dropped the entry, since Helm
+# emits an empty string for a missing key.
+assert_contains "audio-worker ffmpeg timeout env renders" "name: FFMPEG_TIMEOUT_MS"
+assert_contains "audio-worker ffmpeg timeout has a value" '"300000"'
+assert_contains "audio-worker upload-stale timeout env renders" "name: UPLOAD_TIMEOUT_MS"
+assert_contains "audio-worker upload-stale timeout has a value" '"900000"'
+# CPU limit is the whole point of this deployment (ffmpeg is CPU-bound and
+# must not starve SSR) — "cpu:" alone would pass even with no limits block
+# at all, since web/realtime both set cpu under requests. "1" is the one cpu
+# value in the entire chart that only the audio-worker limits block sets.
+assert_contains "audio-worker gets a cpu limit (bulk imports must not starve SSR)" \
+  'cpu: "1"'
+filtered_args=$(args_without audioWorker.image.tag)
+# shellcheck disable=SC2086
+assert_fails "missing audioWorker.image.tag is a render error" "audioWorker.image.tag" $filtered_args
+
+# --- Adversarial review, group B: worker resilience ---
+# Scoped to the audio-worker manifest: a whole-chart grep for "Recreate" or
+# "livenessProbe" passes on realtime's, which proves nothing about this pod.
+worker_out=$(render -s templates/audio-worker-deployment.yaml)
+env_value() { echo "$worker_out" | grep -A1 "name: $1$" | grep 'value:' | tr -dc '0-9'; }
+
+# B4: the default RollingUpdate starts the new pod before the old one exits, so
+# every deploy runs two claiming workers at replicas: 1.
+echo "$worker_out" | grep -q "type: Recreate" && ok || bad "audio-worker uses Recreate"
+# B11: default grace is 30s, shorter than a legitimate transcode — every
+# rollout SIGKILLed a live job and burned one of its three attempts.
+echo "$worker_out" | grep -q "terminationGracePeriodSeconds: 900" && ok ||
+  bad "audio-worker sets a termination grace period longer than a transcode"
+# B7: no port, so the only liveness signal is the heartbeat file's age.
+echo "$worker_out" | grep -q "dist/healthcheck.js" && ok ||
+  bad "audio-worker has an exec liveness probe on the heartbeat"
+echo "$worker_out" | grep -q "name: HEARTBEAT_MAX_AGE_MS" && ok ||
+  bad "audio-worker heartbeat threshold is configured"
+# B2: without these the AWS SDK has no request timeout at all.
+echo "$worker_out" | grep -q "name: S3_REQUEST_TIMEOUT_MS" && ok ||
+  bad "audio-worker R2 request timeout renders"
+echo "$worker_out" | grep -q "name: S3_CONNECT_TIMEOUT_MS" && ok ||
+  bad "audio-worker R2 connect timeout renders"
+# B8: worker errors must reach GlitchTip like every other service's.
+echo "$worker_out" | grep -q "name: GLITCHTIP_DSN" && bad "empty GLITCHTIP_DSN reaches the worker" || ok
+render -s templates/audio-worker-deployment.yaml --set web.env.GLITCHTIP_DSN=https://k@gt.test/1 |
+  grep -q "name: GLITCHTIP_DSN" && ok || bad "audio-worker receives GLITCHTIP_DSN when set"
+
+# B5: the relationship, not the literals. One asset spawns SEVEN capped ffmpeg
+# children, so a claim timeout below 7x FFMPEG_TIMEOUT_MS tells the reaper to
+# revoke the claims of healthy workers mid-transcode.
+claim_ms=$(env_value CLAIM_TIMEOUT_MS)
+ffmpeg_ms=$(env_value FFMPEG_TIMEOUT_MS)
+heartbeat_ms=$(env_value HEARTBEAT_MAX_AGE_MS)
+if [ "$claim_ms" -ge $((ffmpeg_ms * 7)) ]; then ok; else
+  bad "CLAIM_TIMEOUT_MS ($claim_ms) must clear 7 x FFMPEG_TIMEOUT_MS ($ffmpeg_ms)"
+fi
+# The heartbeat threshold has to sit above one bounded stage (or the probe kills
+# healthy transcodes) and below the claim budget (or it never fires first).
+if [ "$heartbeat_ms" -gt "$ffmpeg_ms" ] && [ "$heartbeat_ms" -lt "$claim_ms" ]; then ok; else
+  bad "HEARTBEAT_MAX_AGE_MS ($heartbeat_ms) must sit between one ffmpeg stage and the claim budget"
+fi
+
+# --- Adversarial review, group D: config that was read but not wired ---
+# All three were read from the environment by the worker and settable NOWHERE,
+# so changing any of them meant a code change, a CI run, an image push and a
+# Flux reconcile. LOG_LEVEL in particular is the 2am lever: without it you
+# cannot raise the worker to debug at all.
+# Assert the VALUES too, not just the names — Helm renders an empty string for
+# a missing values.yaml key, and the deployment's `range` drops empty values,
+# so a name-only assertion would still pass with the entry deleted.
+echo "$worker_out" | grep -q "name: LOG_LEVEL" && ok ||
+  bad "audio-worker log level is settable without an image rebuild"
+echo "$worker_out" | grep -A1 "name: LOG_LEVEL$" | grep -q 'value: "info"' && ok ||
+  bad "audio-worker LOG_LEVEL has a value"
+echo "$worker_out" | grep -q "name: RETRY_BACKOFF_MS" && ok ||
+  bad "audio-worker retry backoff base renders"
+echo "$worker_out" | grep -q "name: RETRY_BACKOFF_MAX_MS" && ok ||
+  bad "audio-worker retry backoff cap renders"
+backoff_ms=$(env_value RETRY_BACKOFF_MS)
+backoff_max_ms=$(env_value RETRY_BACKOFF_MAX_MS)
+# The cap must clear the base or every retry waits the cap, i.e. the backoff
+# stops being a backoff. It must also stay under the claim budget, or a row's
+# retry delay outlives the reaper window that is supposed to rescue it.
+if [ "$backoff_max_ms" -ge "$backoff_ms" ] && [ "$backoff_max_ms" -le "$claim_ms" ]; then ok; else
+  bad "RETRY_BACKOFF_MAX_MS ($backoff_max_ms) must sit between the base ($backoff_ms) and the claim budget ($claim_ms)"
+fi
 
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"

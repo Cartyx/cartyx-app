@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Local kind deploy for the Cartyx app chart (web + realtime).
+# Local kind deploy for the Cartyx app chart (web + realtime + audio-worker).
 #   deploy-kind.sh up     (default) build image, load into kind, helm upgrade, verify
 #   deploy-kind.sh down   delete the kind cluster
 
@@ -10,6 +10,7 @@ NAMESPACE=cartyx-local
 RELEASE=cartyx
 WEB_IMAGE=cartyx-web:local
 REALTIME_IMAGE=cartyx-realtime:local
+AUDIO_WORKER_IMAGE=cartyx-audio-worker:local
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO_ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
@@ -104,9 +105,13 @@ up() {
     --build-arg VITE_PUBLIC_PARTYKIT_HOST=localhost:1999 \
     -t "$WEB_IMAGE" "$REPO_ROOT"
 
+  log "Building audio-worker image $AUDIO_WORKER_IMAGE..."
+  docker build -t "$AUDIO_WORKER_IMAGE" "$REPO_ROOT/audio-worker"
+
   log "Loading images into kind..."
   kind load docker-image "$REALTIME_IMAGE" --name "$CLUSTER"
   kind load docker-image "$WEB_IMAGE" --name "$CLUSTER"
+  kind load docker-image "$AUDIO_WORKER_IMAGE" --name "$CLUSTER"
 
   # Optional web config/secrets passed through from .env when present.
   # (bash 3.2: expand with ${arr[@]+...} so an empty array survives set -u.)
@@ -144,10 +149,11 @@ up() {
   # ReplicaSets on its own. Force restarts so pods pick up the freshly-loaded
   # images and current secret values.
   log "Restarting pods to pick up latest images/secrets..."
-  kubectl -n "$NAMESPACE" rollout restart "deploy/$RELEASE-web" "deploy/$RELEASE-realtime"
+  kubectl -n "$NAMESPACE" rollout restart "deploy/$RELEASE-web" "deploy/$RELEASE-realtime" "deploy/$RELEASE-audio-worker"
 
   log "Waiting for rollouts..."
   kubectl -n "$NAMESPACE" rollout status "deploy/$RELEASE-realtime" --timeout=90s
+  kubectl -n "$NAMESPACE" rollout status "deploy/$RELEASE-audio-worker" --timeout=90s
   kubectl -n "$NAMESPACE" rollout status "deploy/$RELEASE-web" --timeout=180s
 
   verify_endpoint "http://localhost:1999/healthz" "realtime"

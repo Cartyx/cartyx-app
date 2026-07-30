@@ -84,6 +84,15 @@ function DashboardPage() {
             >
               ⚔️ My Campaigns
             </a>
+            {/* The audio library is a top-level, campaign-independent route, so
+                nothing in the campaign navigation ever reaches it — without an
+                entry point here it is discoverable only by typing the URL. */}
+            <a
+              href="/audio"
+              className="px-6 py-2.5 rounded-xl bg-[#2a3a4a] text-[#7ea8e8] border border-[#3a5a7a] text-sm font-medium hover:bg-[#3a4a5a] transition-colors"
+            >
+              🎵 Audio Library
+            </a>
             <button
               type="button"
               onClick={() => logout()}

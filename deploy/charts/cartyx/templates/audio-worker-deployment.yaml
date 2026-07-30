@@ -1,0 +1,110 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cartyx.fullname" . }}-audio-worker
+  labels:
+    {{- include "cartyx.labels" . | nindent 4 }}
+    app.kubernetes.io/component: audio-worker
+spec:
+  replicas: {{ .Values.audioWorker.replicaCount }}
+  # Recreate: the default RollingUpdate starts the new pod before terminating
+  # the old one, so every deploy runs TWO workers for a while even at
+  # replicas: 1 — both claiming rows and both running ffmpeg on a node with one
+  # spare core. Same hazard realtime-deployment.yaml names.
+  strategy:
+    type: {{ .Values.audioWorker.strategy }}
+  selector:
+    matchLabels:
+      {{- include "cartyx.audioWorker.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      labels:
+        {{- include "cartyx.audioWorker.selectorLabels" . | nindent 8 }}
+    spec:
+      # SIGTERM makes the worker stop claiming and drain the asset it is
+      # holding; the default 30s grace period is shorter than a legitimate
+      # transcode, so every rollout used to SIGKILL a live job and burn one of
+      # its three retry attempts.
+      terminationGracePeriodSeconds: {{ .Values.audioWorker.terminationGracePeriodSeconds }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: audio-worker
+          image: "{{ .Values.audioWorker.image.repository }}:{{ required "audioWorker.image.tag is required — set an immutable git-sha tag at install time" .Values.audioWorker.image.tag }}"
+          imagePullPolicy: {{ .Values.audioWorker.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            # Ranged like web.env rather than listed one by one: every key is a
+            # tuning knob the worker reads through `envMs`, which falls back to
+            # its own default for an absent OR empty value, so an omitted key is
+            # safe. Empty values are dropped, matching the web deployment.
+            {{- range $key, $value := .Values.audioWorker.env }}
+            {{- if $value }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+            {{- end }}
+            # Shared with the web pod (deploy/charts/cartyx/values.yaml
+            # web.env) — same bucket/CDN/telemetry project, not worker-specific
+            # config. Empty values are omitted, matching the web deployment's
+            # convention.
+            {{- if .Values.web.env.GLITCHTIP_DSN }}
+            - name: GLITCHTIP_DSN
+              value: {{ .Values.web.env.GLITCHTIP_DSN | quote }}
+            {{- end }}
+            {{- if .Values.web.env.APP_ENV }}
+            - name: APP_ENV
+              value: {{ .Values.web.env.APP_ENV | quote }}
+            {{- end }}
+            {{- if .Values.web.env.CDN_URL }}
+            - name: CDN_URL
+              value: {{ .Values.web.env.CDN_URL | quote }}
+            {{- end }}
+            {{- if .Values.web.env.R2_ACCOUNT_ID }}
+            - name: R2_ACCOUNT_ID
+              value: {{ .Values.web.env.R2_ACCOUNT_ID | quote }}
+            {{- end }}
+            {{- if .Values.web.env.R2_BUCKET }}
+            - name: R2_BUCKET
+              value: {{ .Values.web.env.R2_BUCKET | quote }}
+            {{- end }}
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cartyx.secretName" . }}
+                  key: mongodbUri
+            - name: R2_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cartyx.secretName" . }}
+                  key: r2AccessKeyId
+            - name: R2_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "cartyx.secretName" . }}
+                  key: r2SecretAccessKey
+          # The worker has no HTTP port, so a wedge was undetectable from
+          # outside: restart count 0, memory flat, logs silent, HelmRelease
+          # green, and every user's uploads queued behind one stuck row. The
+          # heartbeat file records LOOP PROGRESS (written after each pipeline
+          # stage, never on a timer — a timer keeps ticking while the loop sits
+          # on a hung socket), and this probe fails once it goes stale.
+          # No readiness probe: nothing routes traffic here.
+          livenessProbe:
+            exec:
+              command: ['node', 'dist/healthcheck.js']
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.audioWorker.resources | nindent 12 }}

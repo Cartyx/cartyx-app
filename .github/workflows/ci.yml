@@ -59,6 +59,62 @@ jobs:
           path: coverage/
           retention-days: 7
 
+  services:
+    name: Services (realtime + audio-worker)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      matrix:
+        service: [realtime, audio-worker]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '25'
+          cache: 'npm'
+          cache-dependency-path: ${{ matrix.service }}/package-lock.json
+
+      # ffprobe/ffmpeg are required by audio-worker's integration test, which
+      # deliberately runs the real binaries — mocking them would test nothing.
+      - name: Install ffmpeg
+        if: matrix.service == 'audio-worker'
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: ${{ matrix.service }}
+
+      - name: Security audit
+        run: npm audit --audit-level=high --omit=dev
+        working-directory: ${{ matrix.service }}
+
+      - name: Type check
+        run: npm run typecheck
+        working-directory: ${{ matrix.service }}
+
+      - name: Tests
+        run: npm test
+        working-directory: ${{ matrix.service }}
+
+      # audio-worker/Dockerfile had never been built anywhere: this job runs
+      # npm ci/typecheck/test but no image build, so the FIRST execution of it
+      # would have been a deploy to dev — and deploy.yml builds the worker
+      # image BEFORE the web image, so a broken worker Dockerfile would block
+      # the web deploy with it. Building it here makes that a PR failure.
+      #
+      # It is also the pipeline's capability check: the final stage asserts
+      # ffprobe's presence, a libopus-enabled ffmpeg, and a real end-to-end run
+      # of the exact filter chain in src/ffmpeg.ts. Those were unverified
+      # assumptions that would otherwise have failed per-asset at runtime.
+      # No push and no registry credentials — this proves the build, nothing more.
+      - name: Build container image
+        if: matrix.service == 'audio-worker'
+        run: docker build -t cartyx-audio-worker:ci audio-worker
+
   build:
     name: Build
     runs-on: ubuntu-latest

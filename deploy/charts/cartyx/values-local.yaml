@@ -21,6 +21,12 @@ realtime:
     type: NodePort
     nodePort: 30199 # paired with kind-config.yaml: host 1999 -> 30199
 
+audioWorker:
+  image:
+    repository: cartyx-audio-worker
+    tag: local
+    pullPolicy: Never
+
 # No Traefik / cert-manager in kind — NodePort access only.
 ingress:
   enabled: false
