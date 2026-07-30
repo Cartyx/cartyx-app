@@ -21,6 +21,10 @@ Every task's requirements implicitly include this section.
 - **Branch:** work on `soundboard-phase2`. Every PR targets `dev`. NEVER open a PR against `main`.
 - **`npm run lint` runs with `--max-warnings 0`** — any new warning fails CI.
 - **`npm run typecheck` must be clean** (0 errors).
+- **`npm run build` must pass, and it is NOT implied by the four checks above.** Added 2026-07-30, the hard way: Task 7 broke the client bundle and it went undetected through **ten** subsequent tasks because typecheck, lint, unit tests and Storybook all stayed green the whole time. CI runs `build` as its own job, so the PR would have failed at the end. **Any task touching `app/utils/*-server-fns.ts`, `app/routes/**`, or anything reachable from the client graph must run `npm run build`.**
+
+  The specific trap, because it will recur: server-fn wrapper modules **are** bundled for the client (the browser calls them), and TanStack Start strips only the `.handler()` bodies. A helper referenced solely inside those bodies is dead code afterwards and gets tree-shaken — but **exporting that helper makes it non-tree-shakeable**, so its `await import('~/server/...')` chain stays reachable and drags mongoose and `@sentry/node` into the client bundle. `requireActor` therefore lives in `app/utils/require-actor.ts` and is reached **only** via `await import(...)` inside each handler, never a static import. Nothing mechanically enforces that yet — see `require-actor.ts`'s comment before adding a third consumer.
+
 - **Unit tests mock mongoose** — per-method model mocks, no in-memory Mongo. Follow `tests/server/functions/audio-mutations.test.ts`.
 - **Every new component needs a `.stories.tsx`** — `npm run test:storybook` runs stories in a real browser and blocks CI.
 - **New npm packages must be published ≥10 days ago** and pass `npm run check:deps-age`.
@@ -1016,6 +1020,7 @@ git commit -m "feat(soundboard): package-scoped asset readability for the board"
 - [ ] **Run the whole gate before opening the PR:**
 
 ```bash
+npm run build
 npm run typecheck && npm run lint && npm test && npm run test:storybook
 npm run test:browser
 bash deploy/charts/cartyx/tests/render-tests.sh
