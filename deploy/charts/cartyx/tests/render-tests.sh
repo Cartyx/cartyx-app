@@ -204,10 +204,14 @@ assert_contains "audio-worker upload-stale timeout env renders" "name: UPLOAD_TI
 assert_contains "audio-worker upload-stale timeout has a value" '"900000"'
 # CPU limit is the whole point of this deployment (ffmpeg is CPU-bound and
 # must not starve SSR) — "cpu:" alone would pass even with no limits block
-# at all, since web/realtime both set cpu under requests. "1" is the one cpu
-# value in the entire chart that only the audio-worker limits block sets.
+# at all, since web/realtime both set cpu under requests. "4" is the one cpu
+# value in the entire chart that only the audio-worker limits block sets, and
+# it stays discriminating now that audioWorker requests.cpu is "1": a chart
+# that dropped the limits block entirely would still render `cpu: "1"` from
+# the requests side, so asserting on that value would prove nothing. The
+# scoped limits-block check in group B below pins the pairing.
 assert_contains "audio-worker gets a cpu limit (bulk imports must not starve SSR)" \
-  'cpu: "1"'
+  'cpu: "4"'
 filtered_args=$(args_without audioWorker.image.tag)
 # shellcheck disable=SC2086
 assert_fails "missing audioWorker.image.tag is a render error" "audioWorker.image.tag" $filtered_args
@@ -225,6 +229,17 @@ echo "$worker_out" | grep -q "type: Recreate" && ok || bad "audio-worker uses Re
 # rollout SIGKILLed a live job and burned one of its three attempts.
 echo "$worker_out" | grep -q "terminationGracePeriodSeconds: 900" && ok ||
   bad "audio-worker sets a termination grace period longer than a transcode"
+# The CPU numbers, scoped to this manifest and to the block each one belongs
+# in. `limits.cpu` is what keeps a bulk import off the web pod's cores; it is
+# ALSO what decides whether a legitimate 30-minute transcode finishes inside
+# FFMPEG_TIMEOUT_MS (measured in-pod: 205s for the aac leg at cpu 1 against a
+# 300s timeout — a 1.46x margin, where a SIGKILL costs three attempts).
+# `requests.cpu` is the share weight under contention: at 100m the worker was
+# outweighed by the web pod and lost the core it needs continuously.
+echo "$worker_out" | grep -A2 "limits:" | grep -q 'cpu: "4"' && ok ||
+  bad "audio-worker limits.cpu is 4 (measured worst-case transcode + margin)"
+echo "$worker_out" | grep -A2 "requests:" | grep -q 'cpu: "1"' && ok ||
+  bad "audio-worker requests.cpu reserves the core a transcode uses"
 # B7: no port, so the only liveness signal is the heartbeat file's age.
 echo "$worker_out" | grep -q "dist/healthcheck.js" && ok ||
   bad "audio-worker has an exec liveness probe on the heartbeat"

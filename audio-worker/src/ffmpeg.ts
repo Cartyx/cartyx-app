@@ -175,6 +175,49 @@ export const COMPACT_OUTPUT_TIMELINE = 'asetpts=N/SR/TB';
 export const FFMPEG_STDERR_MAX_BYTES = 8 * 1024 * 1024;
 
 /**
+ * `-threads 1`, spliced into EVERY decoding invocation TWICE — once before the
+ * input and once before the output. DO NOT "optimise" this back to the default.
+ *
+ * ffmpeg sizes its thread pools from `nproc`, and a container sees the NODE's
+ * core count, not its cgroup quota. Measured in-pod on the deployed image:
+ * `nproc` = 36 while `cpu.max` = `100000 100000`, i.e. exactly one CPU. So
+ * ffmpeg opened 36-way pools against a 1-core quota and spent the difference
+ * on context switches. Timed in-pod against the worst realistic source
+ * (30 min, 5 additive tones at 440/3k/9k/15k/21k Hz, 128 kbit/s MP3, 28.8 MB —
+ * the shape that produces the highest opus bitrate):
+ *
+ *   cpu=1, default threads    opus 142s   aac 205s
+ *   cpu=1, -threads 1         opus  43s   aac  69s
+ *   cpu=6, default threads               aac  49s
+ *   cpu=6, -threads 1         opus  26s   aac  49s
+ *
+ * Read the last two rows together: once the quota is not the binding
+ * constraint, one thread and thirty-six are THE SAME SPEED (49s vs 49s). This
+ * encode is effectively single-threaded, so the pool size only ever decides how
+ * badly a throttled cgroup thrashes. That makes the flag free when CPU is
+ * plentiful and a 3x win whenever it is not — correct defensively, and it stays
+ * correct if the limit in values.yaml is ever lowered again.
+ *
+ * TWICE, because the two positions are DIFFERENT KNOBS and each leaves the
+ * other's pool at `nproc`. Before `-i` it is a decoder option; after the input
+ * it sizes the encoder and filter side. Thread counts of a live ffmpeg
+ * (`ps -M`, 18-core host, ffmpeg 8.1.2), transcoding to aac:
+ *
+ *   input      default   output-side only   both
+ *   mp3            21            6            6
+ *   flac           22           22            6
+ *
+ * mp3float decodes on one thread whatever you ask, so the output-side flag
+ * alone looks sufficient — and a fixture that is only ever an MP3 would say so.
+ * flac frame-threads its decode, and there the input-side flag is the only one
+ * that does anything. Both stages behave the same way: `analyze` on a flac
+ * source runs 37 threads by default and 6 with both flags.
+ *
+ * `probe()` is not on this list: ffprobe reads headers and decodes nothing.
+ */
+export const SINGLE_THREAD = ['-threads', '1'];
+
+/**
  * Runs ffmpeg with the worker's standard timeout and stderr ceiling, and turns
  * a stderr overrun into a readable permanent failure rather than an opaque
  * retryable one. Every ffmpeg invocation in this worker goes through it.
@@ -353,6 +396,8 @@ export async function analyze(path: string, limitSeconds: number): Promise<Analy
       'info',
       '-hide_banner',
       '-nostats',
+      // Decoder-side pool. See `SINGLE_THREAD`.
+      ...SINGLE_THREAD,
       '-i',
       path,
       '-map',
@@ -360,6 +405,9 @@ export async function analyze(path: string, limitSeconds: number): Promise<Analy
       '-af',
       `${boundedDecodeFilters(RENDITION_SAMPLE_RATE, limitSeconds)},` +
         'astats=measure_perchannel=none:measure_overall=Peak_level+Number_of_samples',
+      // Filter/encoder-side pool — a separate pool from the one above, and the
+      // one the input-side flag does NOT reach.
+      ...SINGLE_THREAD,
       '-f',
       'null',
       '-',
@@ -421,6 +469,8 @@ export async function transcode(
     [
       '-v',
       'error',
+      // Decoder-side pool. See `SINGLE_THREAD`.
+      ...SINGLE_THREAD,
       '-i',
       src,
       // `-map 0:a:0` — take the first audio stream and NOTHING else. Without
@@ -451,6 +501,9 @@ export async function transcode(
       '-ac',
       String(RENDITION_CHANNELS),
       ...args,
+      // Filter/encoder-side pool — a separate pool from the one before `-i`,
+      // and the leg these measurements were taken on. See `SINGLE_THREAD`.
+      ...SINGLE_THREAD,
       '-y',
       out,
     ],
