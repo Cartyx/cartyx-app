@@ -525,3 +525,165 @@ describe('reapStale handles once-variant attaches separately (Task 18 review Cri
     expect(deleteSource).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Task 18 re-review, Important B.
+ *
+ * The tests above prove the fixed code sends the RIGHT QUERY to Mongo, but
+ * the mocked `find` routes by inspecting which query was sent rather than
+ * actually evaluating it against document content — so none of them can
+ * fail against code that sent the WRONG query in a way that still happens
+ * to route through the same mock branch, and none of them feed a row that
+ * carries BOTH `sourceKey` and `onceSourceKey` (the realistic shape: the
+ * once-attach row IS the main asset's own document) through the reaper at
+ * all.
+ *
+ * This suite closes that gap with a small in-memory collection that
+ * actually EVALUATES filters (`$ne`, `$lt`, plain equality, including
+ * Mongo's equality-to-missing-field semantics for `$ne`/`null`) against
+ * real documents, and drives the genuine `reapStale` against it. It is
+ * still not a real MongoDB — no indexes, no `$or`, no type coercion beyond
+ * what these two reapers' queries actually use — but it is evaluated
+ * rather than routed, which is the property the review asked for.
+ */
+function matchesFilter(doc: Record<string, unknown>, filter: Record<string, unknown>): boolean {
+  return Object.entries(filter).every(([key, cond]) => {
+    const val = doc[key];
+    if (cond !== null && typeof cond === 'object' && !(cond instanceof Date)) {
+      return Object.entries(cond as Record<string, unknown>).every(([op, opVal]) => {
+        switch (op) {
+          case '$ne':
+            // Mongo's equality-to-missing-field semantics: `$ne: 'x'` on a
+            // document where the field is absent (undefined) counts as
+            // "not equal to x", same as a present-but-different value.
+            return val !== opVal;
+          case '$lt':
+            return val instanceof Date && (opVal as Date).getTime() > val.getTime();
+          case '$gte':
+            return typeof val === 'number' && val >= (opVal as number);
+          default:
+            throw new Error(`unsupported operator in test fake: ${op}`);
+        }
+      });
+    }
+    if (cond === null) return val === null || val === undefined;
+    return val === cond;
+  });
+}
+
+/** A minimal collection that stores documents and actually evaluates filters. */
+function makeRealFilterCollection(initialDocs: Record<string, unknown>[]) {
+  const docs = new Map(initialDocs.map((d) => [d._id as unknown, { ...d }]));
+
+  const find = vi.fn((filter: Record<string, unknown>, options?: { limit?: number }) => ({
+    toArray: async () => {
+      // SNAPSHOT, not the live references — a real driver's `find().toArray()`
+      // returns independent plain objects, so a caller reading a field off a
+      // previously-fetched row (as `reapAbandonedOnceUploads` reads
+      // `row.onceSourceKey` AFTER its own `updateOne` has already cleared
+      // that field on the real document) must see the value as it was AT
+      // FETCH TIME, not a live view that changes underneath it. Returning
+      // the same object references here reproduced exactly that bug in this
+      // fake and made "reclaims a genuinely STALE once-attach" fail for a
+      // reason that had nothing to do with the production code under test.
+      const matched = [...docs.values()]
+        .filter((d) => matchesFilter(d, filter))
+        .map((d) => ({ ...d }));
+      return options?.limit ? matched.slice(0, options.limit) : matched;
+    },
+  }));
+
+  const updateOne = vi.fn(
+    async (filter: Record<string, unknown>, update: { $set: Record<string, unknown> }) => {
+      const doc = [...docs.values()].find((d) => matchesFilter(d, filter));
+      if (!doc) return { matchedCount: 0 };
+      Object.assign(doc, update.$set);
+      return { matchedCount: 1 };
+    }
+  );
+
+  const updateMany = vi.fn(
+    async (filter: Record<string, unknown>, update: { $set: Record<string, unknown> }) => {
+      const matched = [...docs.values()].filter((d) => matchesFilter(d, filter));
+      for (const doc of matched) Object.assign(doc, update.$set);
+      return { modifiedCount: matched.length };
+    }
+  );
+
+  return { find, updateOne, updateMany, docs };
+}
+
+describe('reapStale against a real filter-evaluating collection (Task 18 re-review Important B)', () => {
+  it('does not delete the main sourceKey of a mid-attach once-variant row, while still reclaiming a genuinely-abandoned main upload', async () => {
+    const now = Date.now();
+    const yesterday = new Date(now - 24 * 60 * 60 * 1000);
+    const justNow = new Date(now - 1_000);
+
+    // Shaped exactly like the reported bug: ONE document carrying both keys
+    // — the once-attach row IS the main asset's own row, `createdAt` from
+    // whenever the main asset was first uploaded (a day ago), `updatedAt`
+    // from the attach that started a second ago.
+    const collection = makeRealFilterCollection([
+      {
+        _id: 'mid-attach',
+        status: 'uploading',
+        variant: 'once',
+        createdAt: yesterday,
+        updatedAt: justNow,
+        sourceKey: 'uploads/audio/p/main.wav',
+        onceSourceKey: 'uploads/audio/p/once.wav',
+      },
+      // An UNRELATED, genuinely-abandoned plain upload — old on both
+      // timestamps, no once-attach in progress — proving the fix doesn't
+      // just make the reaper inert.
+      {
+        _id: 'genuinely-abandoned',
+        status: 'uploading',
+        createdAt: yesterday,
+        updatedAt: yesterday,
+        sourceKey: 'uploads/audio/p/abandoned.wav',
+      },
+    ]);
+    const deleteSource = vi.fn().mockResolvedValue(undefined);
+
+    await reapStale(collection as never, 600_000, UPLOAD_STALE_MS, deleteSource);
+
+    const deletedKeys = deleteSource.mock.calls.flatMap(([keys]) => keys as string[]);
+    expect(deletedKeys).not.toContain('uploads/audio/p/main.wav');
+    expect(deletedKeys).toContain('uploads/audio/p/abandoned.wav');
+    // The mid-attach row itself must be untouched — still `uploading`,
+    // still `once` — not failed, not reverted (it isn't stale yet).
+    expect(collection.docs.get('mid-attach')).toMatchObject({
+      status: 'uploading',
+      variant: 'once',
+    });
+  });
+
+  it('reclaims a genuinely STALE once-attach — only its own key, never the main one', async () => {
+    const now = Date.now();
+    const yesterday = new Date(now - 24 * 60 * 60 * 1000);
+
+    const collection = makeRealFilterCollection([
+      {
+        _id: 'stale-attach',
+        status: 'uploading',
+        variant: 'once',
+        createdAt: yesterday,
+        updatedAt: yesterday, // the attach itself is now stale too
+        sourceKey: 'uploads/audio/p/main.wav',
+        onceSourceKey: 'uploads/audio/p/once.wav',
+      },
+    ]);
+    const deleteSource = vi.fn().mockResolvedValue(undefined);
+
+    await reapStale(collection as never, 600_000, UPLOAD_STALE_MS, deleteSource);
+
+    const deletedKeys = deleteSource.mock.calls.flatMap(([keys]) => keys as string[]);
+    expect(deletedKeys).toEqual(['uploads/audio/p/once.wav']);
+    expect(collection.docs.get('stale-attach')).toMatchObject({
+      status: 'ready',
+      variant: 'main',
+      onceSourceKey: null,
+    });
+  });
+});

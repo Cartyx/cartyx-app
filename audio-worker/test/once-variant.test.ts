@@ -227,6 +227,89 @@ describe('the destination field follows the row variant', () => {
 });
 
 /**
+ * Task 18 re-review, Important A. Critical 2's fix ("a variant failure
+ * cannot brick a working asset, by construction") was only wired into
+ * `processAsset`'s catch block — the two EARLY guards
+ * (`!asset.sourceKey` and the legacy-layout `renditionBase === null`
+ * check) still called `markFailed(..., true)` unconditionally. The
+ * legacy-layout guard is the more dangerous of the two: it derives from
+ * the MAIN `sourceKey`, so any row whose source predates the per-owner
+ * storage layout is necessarily `ready` already (it had to pass its own
+ * main transcode once) and therefore attachable — `createOnceVariantUpload`
+ * has no check against storage-layout age. Attaching a once-variant to
+ * such an asset used to brick it exactly as Critical 2 described.
+ */
+describe('Important A fix: the early guards also avoid markFailed for a once-variant claim', () => {
+  it('reverts to ready/main (not failed) for a once-variant claim on a legacy-layout sourceKey', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    await processAsset(
+      { updateOne } as never,
+      {
+        _id: 'asset-once-legacy',
+        // No 32-hex-char per-owner prefix segment — the exact shape
+        // `renditionKeyBase` returns null for.
+        sourceKey: 'uploads/audio/1700000000000-deadbeef.wav',
+        onceSourceKey: 'uploads/audio/1700000000000-once-deadbeef.wav',
+        variant: 'once',
+        attempts: 0,
+      },
+      WORKER
+    );
+    const [, update] = updateOne.mock.calls[0];
+    expect(update.$set.status).toBe('ready');
+    expect(update.$set.variant).toBe('main');
+    expect(update.$set.onceLastError).toMatch(/per-owner storage layout/);
+    expect('permanentFailure' in update.$set).toBe(false);
+    expect('lastError' in update.$set).toBe(false);
+    expect(hooks.puts.size).toBe(0);
+  });
+
+  it('reverts to ready/main (not failed) for a once-variant claim with no sourceKey at all', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    await processAsset(
+      { updateOne } as never,
+      { _id: 'asset-once-no-source', variant: 'once', attempts: 0 },
+      WORKER
+    );
+    const [, update] = updateOne.mock.calls[0];
+    expect(update.$set.status).toBe('ready');
+    expect(update.$set.variant).toBe('main');
+    expect(update.$set.onceLastError).toMatch(/no sourceKey/);
+    expect('permanentFailure' in update.$set).toBe(false);
+  });
+
+  // Regression guard: the MAIN pipeline must still be bricked (correctly)
+  // by both guards — this fix must not have loosened them for main claims.
+  it('still permanently fails a MAIN claim on a legacy-layout sourceKey', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    await processAsset(
+      { updateOne } as never,
+      {
+        _id: 'asset-main-legacy',
+        sourceKey: 'uploads/audio/1700000000000-deadbeef.wav',
+        attempts: 0,
+      },
+      WORKER
+    );
+    const [, update] = updateOne.mock.calls[0];
+    expect(update.$set.status).toBe('failed');
+    expect(update.$set.permanentFailure).toBe(true);
+  });
+
+  it('still permanently fails a MAIN claim with no sourceKey', async () => {
+    const updateOne = vi.fn().mockResolvedValue({ matchedCount: 1 });
+    await processAsset(
+      { updateOne } as never,
+      { _id: 'asset-main-no-source', attempts: 0 },
+      WORKER
+    );
+    const [, update] = updateOne.mock.calls[0];
+    expect(update.$set.status).toBe('failed');
+    expect(update.$set.permanentFailure).toBe(true);
+  });
+});
+
+/**
  * THE LOAD-BEARING CASE. A fixture where the asset has no existing main
  * rendition cannot detect a collision — every key is "new" either way. This
  * suite runs the MAIN pipeline first (real PUTs, real captured bytes), then

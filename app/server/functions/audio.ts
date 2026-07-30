@@ -246,7 +246,12 @@ export async function confirmAudioUpload({
  * over from whatever the MAIN pipeline last left it at, so a main asset that
  * needed 2 of its 3 attempts to transcode would hand its once job only 1
  * retry before `MAX_ATTEMPTS`. A once job is a fresh unit of work and gets
- * the full budget.
+ * the full budget. `nextAttemptAt: null` for the same reason, from the other
+ * side: a once job that previously failed and requeued (still within
+ * budget, still `variant: 'once'`) can leave a FUTURE backoff timestamp
+ * behind, and a fresh attach must not inherit an old job's delay —
+ * `claimNext`'s filter would otherwise silently hold this brand-new attach
+ * back for up to the backoff cap (5 minutes by default).
  *
  * Re-attaching (the row already has an `onceSourceKey` from a prior attach,
  * successful or not) mints a NEW key rather than reusing the old one — and
@@ -292,6 +297,13 @@ export async function createOnceVariantUpload({
           variant: 'once',
           status: 'uploading',
           attempts: 0,
+          // A previously-failed once run can leave a FUTURE nextAttemptAt
+          // behind (requeueForRetry's backoff gate) even though this is a
+          // brand-new attach, not a retry of that old job — without
+          // clearing it, claimNext's `{ nextAttemptAt: null } | { $lte:
+          // now }` filter would silently delay this attach's first claim
+          // by up to the backoff cap (5 minutes by default).
+          nextAttemptAt: null,
           updatedAt: new Date(),
         },
       },

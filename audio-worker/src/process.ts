@@ -697,9 +697,20 @@ export async function processAsset(
   // no sourceKey — so it goes straight to `failed` rather than through the
   // retry path below, and it does so before any temp dir or R2 client is
   // created.
+  //
+  // Task 18 review Important A: routed through `markOnceFailed` when this
+  // claim is a once-variant job, same as every other terminal once-variant
+  // failure. A row with no `sourceKey` at all is a deeply malformed row
+  // regardless of variant, but Critical 2's guarantee — "a variant failure
+  // cannot brick a working asset, by construction" — only holds if it holds
+  // on EVERY path that can terminate a once claim, this one included.
   if (!asset.sourceKey) {
     logger.error({ assetId: String(id) }, 'asset has no sourceKey, cannot transcode');
-    await markFailed(model, id, workerId, 'Asset has no sourceKey', true);
+    if (isOnceVariant) {
+      await markOnceFailed(model, id, workerId, 'Asset has no sourceKey');
+    } else {
+      await markFailed(model, id, workerId, 'Asset has no sourceKey', true);
+    }
     return;
   }
   const sourceKey = asset.sourceKey;
@@ -747,13 +758,31 @@ export async function processAsset(
   const renditionBase = renditionKeyBase(sourceKey, String(id));
   if (!renditionBase) {
     logger.error({ assetId: String(id), sourceKey }, 'source key is not in the per-owner layout');
-    await markFailed(
-      model,
-      id,
-      workerId,
-      'Source key predates the per-owner storage layout; re-upload this file',
-      true
-    );
+    // Task 18 review Important A: this guard derives from the MAIN
+    // sourceKey, so it fires for a legacy-layout row regardless of which
+    // pipeline claimed it. A legacy row is necessarily `ready` (it had to
+    // pass its own main transcode once, before this layout existed) and
+    // therefore ATTACHABLE — `createOnceVariantUpload` has no check against
+    // storage-layout age. Without the branch below, attaching a once-variant
+    // to such an asset bricked it exactly as Critical 2 described:
+    // `permanentFailure: true` on a fully-transcoded, previously-`ready`
+    // asset, with no path back.
+    if (isOnceVariant) {
+      await markOnceFailed(
+        model,
+        id,
+        workerId,
+        'Source key predates the per-owner storage layout; re-upload the main asset first'
+      );
+    } else {
+      await markFailed(
+        model,
+        id,
+        workerId,
+        'Source key predates the per-owner storage layout; re-upload this file',
+        true
+      );
+    }
     return;
   }
 

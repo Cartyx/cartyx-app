@@ -60,6 +60,13 @@ describe('createOnceVariantUpload', () => {
       onceSourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/once-1-a.wav',
       variant: 'once',
       status: 'uploading',
+      // Task 18 re-review minor: a fresh attach gets a fresh retry budget
+      // and no inherited backoff delay. Neither was previously asserted —
+      // `toMatchObject` only fails on a listed key whose value is wrong,
+      // and these two keys simply weren't listed, so removing them from
+      // the implementation would have passed silently.
+      attempts: 0,
+      nextAttemptAt: null,
     });
     // This write must never touch either rendition field — it only presigns
     // and stamps queue state; nothing has been transcoded yet.
@@ -131,6 +138,77 @@ describe('createOnceVariantUpload', () => {
         userId: 'u1',
       })
     ).rejects.toThrow(/not ready to accept/i);
+  });
+
+  /**
+   * Task 18 re-review minor: re-attaching mints a new `onceSourceKey` and,
+   * before this test existed, nothing asserted that the SUPERSEDED object
+   * actually gets deleted — only that the row points at the new key. Since
+   * `createOnceVariantUpload` requires `status: 'ready'` to attach at all,
+   * the only way a row reaches this function with an existing
+   * `onceSourceKey` already set is after a PRIOR successful once-variant
+   * (the fixture below), which is exactly the re-attach case the fix is
+   * for.
+   */
+  it('deletes the previous onceSourceKey object when re-attaching, only after the row points at the new key', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      ...READY_MUSIC_ASSET,
+      onceSourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/old-once.wav',
+    } as never);
+    vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+      _id: 'a1',
+      status: 'uploading',
+    } as never);
+
+    const { createOnceVariantUpload } = await import('~/server/functions/audio');
+    await createOnceVariantUpload({
+      data: { assetId: 'a1', filename: 'ending2.wav', contentType: 'audio/wav', bytes: 1024 },
+      userId: 'u1',
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const deleteCall = send.mock.calls[0][0] as DeleteObjectCommand;
+    expect(deleteCall).toBeInstanceOf(DeleteObjectCommand);
+    expect(deleteCall.input).toEqual({
+      Bucket: 'b',
+      Key: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/old-once.wav',
+    });
+  });
+
+  it('does not attempt any delete on a first attach (no previous onceSourceKey)', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue(READY_MUSIC_ASSET as never);
+    vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+      _id: 'a1',
+      status: 'uploading',
+    } as never);
+
+    const { createOnceVariantUpload } = await import('~/server/functions/audio');
+    await createOnceVariantUpload({
+      data: { assetId: 'a1', filename: 'ending.wav', contentType: 'audio/wav', bytes: 1024 },
+      userId: 'u1',
+    });
+
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('still succeeds the attach when deleting the superseded object fails — best effort, not fatal', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      ...READY_MUSIC_ASSET,
+      onceSourceKey: 'uploads/audio/a1b2c3d4e5f60718293a4b5c6d7e8f90/old-once.wav',
+    } as never);
+    vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+      _id: 'a1',
+      status: 'uploading',
+    } as never);
+    send.mockRejectedValueOnce(new Error('R2 unavailable'));
+
+    const { createOnceVariantUpload } = await import('~/server/functions/audio');
+    const r = await createOnceVariantUpload({
+      data: { assetId: 'a1', filename: 'ending2.wav', contentType: 'audio/wav', bytes: 1024 },
+      userId: 'u1',
+    });
+
+    expect(r.assetId).toBe('a1');
   });
 });
 
