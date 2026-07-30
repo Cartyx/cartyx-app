@@ -153,11 +153,17 @@ references rather than bytes.
 Every GM action is a command:
 
 ```
-loadPackage(packageId)      setMood(moodId)
+loadPackage(pkg)            setMood(moodId)
 play(itemId) / stop(itemId) fireOneShot(itemId)
 setItemVolume(itemId, v)    setMasterVolume(v)
 stopAll()
 ```
+
+`loadPackage` takes the resolved package, not a bare `packageId` (this read
+`loadPackage(packageId)` when first written; corrected in Task 9). Reason:
+package visibility is owner-or-system-scoped, so an id-only broadcast could
+not be resolved by a player receiving the GM's own package — the caller must
+already hold the (already-authorized) package to dispatch this command.
 
 A pure reducer applies a command to `BoardState`. The engine subscribes to state
 and reconciles the audio graph. The engine never reads the UI; the UI never

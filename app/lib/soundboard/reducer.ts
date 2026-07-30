@@ -79,21 +79,32 @@ export function initialBoardState(pkg: AudioPackageData | null): BoardState {
  * below returns a fresh object (or, for no-op branches, the same
  * reference — never a mutated one).
  *
- * The `switch` has no `default` case. `_never` makes an unhandled
- * `SoundboardCommand` variant a compile-time error (`command` would fail to
- * narrow to `never`) rather than a silent no-op at runtime — the union is
- * closed, so there is no such thing as a genuinely "unknown" command here;
- * a new variant added to `SoundboardCommand` without a matching case simply
- * fails `npm run typecheck`.
+ * Every known command has its own `case`; the trailing `default` exists
+ * only for exhaustiveness (see its comment below) and returns `state`
+ * unchanged for anything it reaches at runtime.
  */
 export function boardReducer(state: BoardState, command: SoundboardCommand): BoardState {
   switch (command.type) {
     case 'loadPackage':
-      return initialBoardState(command.pkg);
+      // `masterVolume` is a board/output property, not a package property —
+      // it must survive a package switch. Without this, a GM who dialed
+      // master down to 0.4 gets full volume on the very next pad after
+      // switching packages: the same "surprise loud audio" failure
+      // `initialBoardState`'s "no auto-selected mood" choice exists to
+      // prevent, reintroduced through the one field `initialBoardState`
+      // can't know isn't meant to reset.
+      return { ...initialBoardState(command.pkg), masterVolume: state.masterVolume };
 
     case 'setMood': {
       if (!state.pkg) return state;
       const mood = state.pkg.moods.find((m) => m.id === command.moodId);
+      // An unrecognized moodId (e.g. a 2b client on a stale package) must
+      // leave the board exactly as it was, not silence every item. Without
+      // this guard, `mood` resolves to `undefined` and every item resolves
+      // via `resolveItemState(item, undefined)` — indistinguishable from
+      // "explicitly switch to no mood" — which is not what an unknown id
+      // means.
+      if (!mood) return state;
       return {
         ...state,
         moodId: command.moodId,
@@ -150,8 +161,17 @@ export function boardReducer(state: BoardState, command: SoundboardCommand): Boa
       };
 
     default: {
+      // Compile-time exhaustiveness only: `command` failing to narrow to
+      // `never` here is what makes an unhandled `SoundboardCommand` variant
+      // a `npm run typecheck` failure. At runtime, 2b feeds this reducer
+      // values that arrived off a wire — exactly where a value with an
+      // unrecognized `type` can turn up despite the union being closed at
+      // compile time. Returning `_never` itself would hand that object to
+      // `useReducer` *as* `BoardState`, which Task 10's engine and Task 12's
+      // debounced Atlas save would then both act on. Return `state`
+      // unchanged instead — ignore what wasn't understood.
       const _never: never = command;
-      return _never;
+      return state;
     }
   }
 }

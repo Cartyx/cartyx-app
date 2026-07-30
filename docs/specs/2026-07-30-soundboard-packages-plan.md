@@ -528,7 +528,7 @@ git commit -m "feat(soundboard): mood-over-item resolution"
 
 ```ts
 export type SoundboardCommand =
-  | { type: 'loadPackage'; packageId: string }
+  | { type: 'loadPackage'; pkg: AudioPackageData }
   | { type: 'setMood'; moodId: string }
   | { type: 'play'; itemId: string }
   | { type: 'stop'; itemId: string }
@@ -537,6 +537,14 @@ export type SoundboardCommand =
   | { type: 'setMasterVolume'; volume: number }
   | { type: 'stopAll' };
 ```
+
+`loadPackage` carries the resolved `pkg`, not a bare `packageId` — this was
+`packageId: string` when this plan was written, corrected during Task 9's
+implementation. Reason: `packageVisibilityFilter` scopes every package read
+to the owner or a system package, so a player receiving an id-only
+`loadPackage` broadcast could not fetch a GM-owned package by that id at
+all. Carrying `pkg` means whoever dispatches the command already proved
+they could see it.
 
 The reducer is **pure** — no audio, no network, no `Date.now()`. That is what makes it exhaustively testable and what lets 2b replay commands.
 

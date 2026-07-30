@@ -7,15 +7,26 @@ import type { AudioPackageData } from '~/types/soundboard';
  * replayed by `boardReducer` and later re-broadcast verbatim.
  *
  * `loadPackage` carries the resolved package (`pkg`), not a bare
- * `packageId`. A pure reducer with no network access cannot turn an id into
- * a package's items and moods by itself — and `setMood` (below) MUST see
- * every item and mood definition to resolve "every item in the package, not
- * just the ones the mood names" (see `reducer.ts`). The caller already has
- * the full package in hand before it can meaningfully dispatch this command
- * — `useSoundboard(campaignId, pkg)` (Task 12) receives `pkg` as an argument
- * for exactly this reason, mirroring `initialBoardState(pkg)`'s own
- * signature. This is the one place this file's command shapes diverge from
- * the plan doc's snippet; see the Task 9 report for the full reasoning.
+ * `packageId`, and this is an AUTHORIZATION choice, not a purity one.
+ * `packageVisibilityFilter` (`~/server/functions/packages.ts`) scopes every
+ * package read to `{ $or: [{ ownerId: userId }, { ownerId: null }] }` — a
+ * player in the GM's campaign cannot fetch the GM's own (non-system)
+ * package by id at all. An id-only `loadPackage` broadcast would resolve
+ * for system packages and silently fail (or 403) for every GM-owned one,
+ * which is the common case. Carrying the already-authorized `pkg` payload
+ * sidesteps that: whoever dispatches `loadPackage` proves they could see
+ * the package by already holding its contents, and every recipient — GM or
+ * player, in phase 2b — gets the same data without a second fetch that
+ * would fail for exactly the packages this board is built to run.
+ * `useSoundboard(campaignId, pkg)` (Task 12) receiving `pkg` directly, and
+ * `initialBoardState(pkg)`'s identical signature, both follow from this.
+ * This is the one place this file's command shapes diverge from the plan
+ * doc's snippet — `docs/specs/2026-07-30-soundboard-packages-plan.md` and
+ * `…-design.md` were amended alongside this comment; see the Task 9 report
+ * for the full history (an earlier version of this comment argued purity
+ * alone, which is incomplete: a curried `makeBoardReducer(lookup)` would
+ * have kept `packageId` and stayed pure — authorization is the real reason
+ * an id can't work here).
  */
 export type SoundboardCommand =
   | { type: 'loadPackage'; pkg: AudioPackageData }
