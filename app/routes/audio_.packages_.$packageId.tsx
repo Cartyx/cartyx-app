@@ -11,7 +11,7 @@ import { queryKeys } from '~/utils/queryKeys';
 import { captureException } from '~/utils/telemetry-client';
 import type { AudioFilters } from '~/components/audio/AudioFilterBar';
 import type { AudioAssetData, AudioEnvironment, AudioMood } from '~/types/audio';
-import type { PackageItemData } from '~/types/soundboard';
+import type { MoodData, PackageItemData } from '~/types/soundboard';
 
 /** Server-side page size for the asset picker — same value `/audio` uses. */
 const PAGE_SIZE = 50;
@@ -24,6 +24,36 @@ function flattenAssetPages(data: { pages: AssetPage[] } | undefined): AudioAsset
 
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
+}
+
+/**
+ * `updatePackage`'s `$set` only touches fields the caller actually sends
+ * (confirmed by reading `~/server/functions/packages.ts`) — so a save that
+ * sends `items` alone leaves a package's existing `moods` in the DB
+ * untouched, and any `moods[].states[]` entry whose `itemId` named an item
+ * this route's editor just removed becomes a dangling reference forever
+ * (the board layer tolerates it safely today — `resolveAllItems` iterates
+ * `pkg.items`, never `mood.states` — but it's still dead, silently
+ * accumulating data with no future consumer defending against it).
+ *
+ * This route is what creates that orphan (removing an item is this task's
+ * UI, not Task 15's mood editor), so it's what prunes it: every `states[]`
+ * entry is kept ONLY if its `itemId` still names a surviving item — nothing
+ * here rebuilds `states` from `items`, which would silently drop every
+ * per-state override (`volume`, `fadeSeconds`, `randomIntervalMin/Max`,
+ * even a bare `playing: true`/`false` toggle) for every item that
+ * survived, not just the one that was removed. Filtering by id membership
+ * is the only operation that changes exactly what needs to change.
+ *
+ * Exported for direct unit testing, same reasoning as `flattenAssetPages`
+ * above and `flattenAudioPages`/`shouldPoll` in `~/routes/audio.tsx`.
+ */
+export function pruneOrphanedMoodStates(moods: MoodData[], items: PackageItemData[]): MoodData[] {
+  const survivingIds = new Set(items.map((item) => item.id));
+  return moods.map((mood) => ({
+    ...mood,
+    states: mood.states.filter((state) => survivingIds.has(state.itemId)),
+  }));
 }
 
 /**
@@ -161,7 +191,20 @@ export function PackageEditorPage() {
 
   const saveMutation = useMutation({
     mutationFn: (nextItems: PackageItemData[]) =>
-      updatePackageFn({ data: { id: packageId, items: nextItems } }),
+      updatePackageFn({
+        data: {
+          id: packageId,
+          items: nextItems,
+          // Always sent alongside `items`, not only when an item was
+          // actually removed: pruning is a no-op filter when nothing
+          // shrank (every state already names a surviving item), so there
+          // is no cheaper-but-correct way to send it conditionally, and
+          // "only prune on removal" would require this route to track
+          // which edit just happened rather than just what's true of the
+          // current items/moods pair.
+          moods: pruneOrphanedMoodStates(pkg?.moods ?? [], nextItems),
+        },
+      }),
     onSuccess: (updated) => {
       qc.setQueryData(queryKeys.packages.detail(packageId), updated);
       setItems(updated.items);
