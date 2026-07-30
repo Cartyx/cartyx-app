@@ -13,6 +13,7 @@ import { captureException } from '~/utils/telemetry-client';
 import type { AudioFilters } from '~/components/audio/AudioFilterBar';
 import type { AudioAssetData, AudioEnvironment, AudioMood } from '~/types/audio';
 import type { MoodData, PackageItemData } from '~/types/soundboard';
+import { pruneOrphanedMoodStates } from '~/lib/soundboard/prune';
 
 /** Server-side page size for the asset picker — same value `/audio` uses. */
 const PAGE_SIZE = 50;
@@ -28,34 +29,17 @@ function errorMessage(error: unknown, fallback: string): string {
 }
 
 /**
- * `updatePackage`'s `$set` only touches fields the caller actually sends
- * (confirmed by reading `~/server/functions/packages.ts`) — so a save that
- * sends `items` alone leaves a package's existing `moods` in the DB
- * untouched, and any `moods[].states[]` entry whose `itemId` named an item
- * this route's editor just removed becomes a dangling reference forever
- * (the board layer tolerates it safely today — `resolveAllItems` iterates
- * `pkg.items`, never `mood.states` — but it's still dead, silently
- * accumulating data with no future consumer defending against it).
- *
- * This route is what creates that orphan (removing an item is this task's
- * UI, not Task 15's mood editor), so it's what prunes it: every `states[]`
- * entry is kept ONLY if its `itemId` still names a surviving item — nothing
- * here rebuilds `states` from `items`, which would silently drop every
- * per-state override (`volume`, `fadeSeconds`, `randomIntervalMin/Max`,
- * even a bare `playing: true`/`false` toggle) for every item that
- * survived, not just the one that was removed. Filtering by id membership
- * is the only operation that changes exactly what needs to change.
- *
- * Exported for direct unit testing, same reasoning as `flattenAssetPages`
- * above and `flattenAudioPages`/`shouldPoll` in `~/routes/audio.tsx`.
+ * Re-exported so this route's own import path
+ * (`~/routes/audio_.packages_.$packageId`) — and the existing test file that
+ * imports it from there — keep working unchanged. The implementation now
+ * lives in `~/lib/soundboard/prune` (Task 20): a framework-free module,
+ * because `deleteAudioAsset` (`app/server/functions/audio.ts`) needed the
+ * exact same logic for its own prune-on-delete path and a server function
+ * must not import a route module (React, `@tanstack/react-router`, and this
+ * file's own client-only telemetry import all come along with it). See that
+ * module for the "why filter, not rebuild" reasoning.
  */
-export function pruneOrphanedMoodStates(moods: MoodData[], items: PackageItemData[]): MoodData[] {
-  const survivingIds = new Set(items.map((item) => item.id));
-  return moods.map((mood) => ({
-    ...mood,
-    states: mood.states.filter((state) => survivingIds.has(state.itemId)),
-  }));
-}
+export { pruneOrphanedMoodStates } from '~/lib/soundboard/prune';
 
 /**
  * Exported for direct unit-testing, matching `audioBeforeLoad`

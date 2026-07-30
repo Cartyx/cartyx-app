@@ -2,12 +2,15 @@ import { HeadObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import type { z } from 'zod';
 import { connectDB, isDBConnected } from '../db/connection';
 import { AudioAsset } from '../db/models/AudioAsset';
+import { AudioPackage } from '../db/models/AudioPackage';
 import { escapeRegExp, normalizeTags } from '../utils/helpers';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { resolveAudioStoragePrefix } from './audio-storage';
 import { createR2, getAudioUploadUrl } from './uploads';
+import { pruneOrphanedMoodStates } from '~/lib/soundboard/prune';
 import { AUDIO_MAX_BYTES, AUDIO_SOURCE_TYPES } from '~/types/audio';
 import type { AudioAssetData } from '~/types/audio';
+import type { MoodData, PackageItemData } from '~/types/soundboard';
 import type {
   createAudioUploadSchema,
   confirmAudioUploadSchema,
@@ -913,6 +916,59 @@ export async function deleteAudioAsset({
           }
         );
       }
+    }
+
+    // Best-effort prune of package references to this asset. Same reasoning
+    // as the R2 delete loop just above: a failure here must not block the
+    // row delete — the user asked for this asset to be gone — so it is
+    // caught and reported rather than allowed to propagate. Without this,
+    // every package that placed this asset would keep a permanently
+    // dangling `items[].assetId`, and in a document capped at 64 items that
+    // is a slow leak: a GM who churns their library eventually can't add
+    // items to a package whose pads are mostly tombstones.
+    //
+    // Scoped to `{ ownerId: userId, ... }` — the caller's OWN packages
+    // only, never a bare `{ 'items.assetId': id }`, which would reach into
+    // other users' packages. This is a plain scalar equality, not
+    // `packageVisibilityFilter`'s read-side `$or` (which also matches
+    // `ownerId: null`): a system package is read-only and a user cannot
+    // delete a system-owned asset anyway (the `findOne` above already
+    // scoped `asset` to `ownerId: userId`), so system packages must never
+    // be reachable here.
+    try {
+      const affected = (await AudioPackage.find({
+        ownerId: userId,
+        'items.assetId': data.id,
+      }).lean()) as unknown as {
+        _id: unknown;
+        items: PackageItemData[];
+        moods: MoodData[];
+      }[];
+
+      for (const pkg of affected) {
+        // Two steps, not one `$pull`: moods reference `item.id`, never
+        // `assetId` (see `~/lib/soundboard/prune`'s doc comment), so the
+        // surviving item ids must be computed FIRST and used to prune
+        // `moods[].states[]` too. A single `$pull` on `items` alone would
+        // leave every mood state that named the removed item pointing at
+        // an id that no longer exists — exactly the orphan Task 14 had to
+        // go back and fix for the editor's own item-removal path.
+        const survivingItems = pkg.items.filter((item) => String(item.assetId) !== data.id);
+        const survivingMoods = pruneOrphanedMoodStates(pkg.moods, survivingItems);
+        await AudioPackage.updateOne(
+          { _id: pkg._id, ownerId: userId },
+          { $set: { items: survivingItems, moods: survivingMoods, updatedAt: new Date() } }
+        );
+      }
+    } catch (e) {
+      void reportAudioError(
+        e,
+        { userId, sessionUserId },
+        {
+          action: 'deleteAudioAsset.prunePackages',
+          assetId: data.id,
+        }
+      );
     }
 
     await AudioAsset.deleteOne({ _id: data.id, ownerId: userId });
