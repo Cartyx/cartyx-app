@@ -103,6 +103,20 @@ export type AudioAssetData = {
   loudnessTargetLufs: number | null;
   peaks: number[];
   renditions: { opus?: AudioRendition; aac?: AudioRendition };
+  /**
+   * The phase 2 ∞/1× music variant — a second, composed-ending encode of the
+   * same source, attached via Task 18's flow and written by the same worker
+   * pipeline into this field instead of `renditions`. Optional and, as of
+   * this task, ALWAYS absent: `AudioAsset.ts`'s model has reserved this field
+   * since phase 1, but `serializeAudioAsset` deliberately never puts it on
+   * the wire yet (see its own comment) — Task 18 is what starts writing it.
+   * Declared here now, ahead of that, purely so the board's pad component
+   * (Task 16) can type-check `asset.onceRenditions` instead of taking a
+   * caller-computed boolean; every reader must treat it as possibly absent,
+   * on every asset, indefinitely, same as `renditions.opus`/`.aac` already
+   * are treated.
+   */
+  onceRenditions?: { opus?: AudioRendition; aac?: AudioRendition };
   lastError: string | null;
   /**
    * True when the worker rejected the SOURCE ITSELF, so no rerun of the same
