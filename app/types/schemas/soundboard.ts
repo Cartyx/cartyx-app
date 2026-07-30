@@ -143,15 +143,30 @@ const boardItemStateSchema = z.object({
  * The GM board's live state for one campaign. Capped at `MAX_PACKAGE_ITEMS`
  * entries for the same reason the package's own `items[]` is — one entry per
  * item that exists, at most.
+ *
+ * `packageId`/`moodId`: nullable AND optional. A campaign can legitimately
+ * have a board with nothing loaded yet — Task 3's `SoundboardState` model
+ * makes both fields nullable for exactly this reason (`packageId: { default:
+ * null }`, `moodId: { default: null }`). This schema originally typed
+ * `packageId` as a required `objectId`, which a fresh-campaign save (no
+ * package chosen yet) fails to parse against — caught by a review running
+ * this file's own Task 6 fixture (`{ campaignId, masterVolume }`, no
+ * `packageId`/`moodId` at all) through it. The model was correct; this
+ * schema was not.
  */
 export const saveBoardStateSchema = z.object({
   campaignId: objectId,
-  packageId: objectId,
-  moodId: stableId.nullable(),
+  packageId: objectId.nullable().optional(),
+  moodId: stableId.nullable().optional(),
   items: z.array(boardItemStateSchema).max(MAX_PACKAGE_ITEMS).default([]),
   masterVolume: volume,
 });
 
+// Checked for the same packageId/moodId nullability defect as
+// `saveBoardStateSchema` above: it has none, because it carries no
+// `packageId`/`moodId` field at all — a load is identified purely by
+// `campaignId`, so there is nothing here that could reject a "nothing
+// loaded" board.
 export const loadBoardStateSchema = z.object({
   campaignId: objectId,
 });

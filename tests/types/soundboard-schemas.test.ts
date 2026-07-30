@@ -54,4 +54,39 @@ describe('soundboard schemas', () => {
     });
     expect(bad.success).toBe(false);
   });
+
+  /**
+   * A campaign can legitimately have a board with nothing loaded — Task 3's
+   * `SoundboardState` model makes `packageId`/`moodId` nullable for exactly
+   * this reason. `saveBoardStateSchema` originally typed `packageId` as a
+   * required `objectId` (and `moodId` as nullable but still required), which
+   * rejected this exact payload — the plan's own Task 6 fixture. Pinning it
+   * so the schema can never regress back to requiring a package before one
+   * has ever been chosen.
+   */
+  it('parses a save of a board with nothing loaded (no packageId, no moodId)', async () => {
+    const { saveBoardStateSchema } = await import('~/types/schemas/soundboard');
+    const r = saveBoardStateSchema.safeParse({
+      campaignId: '507f1f77bcf86cd799439011',
+      masterVolume: 0.8,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('also parses when packageId/moodId are explicitly null (as opposed to merely omitted)', async () => {
+    const { saveBoardStateSchema } = await import('~/types/schemas/soundboard');
+    const r = saveBoardStateSchema.safeParse({
+      campaignId: '507f1f77bcf86cd799439011',
+      packageId: null,
+      moodId: null,
+      masterVolume: 0.8,
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('loadBoardStateSchema parses campaignId alone, with no packageId/moodId defect to trigger', async () => {
+    const { loadBoardStateSchema } = await import('~/types/schemas/soundboard');
+    const r = loadBoardStateSchema.safeParse({ campaignId: '507f1f77bcf86cd799439011' });
+    expect(r.success).toBe(true);
+  });
 });

@@ -92,11 +92,17 @@ export type BoardItemStateData = {
 
 /**
  * The GM board's live state, persisted per campaign so a reload does not
- * silence the table. `moodId` is `null` when no mood has been selected yet.
+ * silence the table. `packageId` and `moodId` are both `null` when nothing
+ * has been loaded yet — matching Task 3's `SoundboardState` model, which
+ * makes both fields nullable for exactly this reason. (This type originally
+ * had `packageId: string`, non-nullable — the same defect Task 6's review
+ * found in `saveBoardStateSchema`, just in the plain-TS sibling instead of
+ * the Zod one. Fixed alongside it: a fresh campaign's board, with nothing
+ * loaded, needs to be representable here too.)
  */
 export type BoardStateData = {
   campaignId: string;
-  packageId: string;
+  packageId: string | null;
   moodId: string | null;
   items: BoardItemStateData[];
   masterVolume: number;
