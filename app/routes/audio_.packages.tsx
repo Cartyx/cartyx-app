@@ -32,6 +32,36 @@ import type { AudioPackageData } from '~/types/soundboard';
  */
 const NEW_PACKAGE_INPUT: z.input<typeof createPackageSchema> = { name: 'New Package' };
 
+/**
+ * `clonePackageSchema`'s `name` bound (`z.string().min(1).max(200)`) — kept
+ * as a local literal rather than importing a shared constant so this file
+ * doesn't need a schema-file change to fix a UI-only overflow risk (see
+ * `cloneDisplayName` below). If the schema's bound ever moves, this needs to
+ * move with it; there is no single source of truth to import here without
+ * exporting a new constant from `~/types/schemas/soundboard`, which is more
+ * surface than a length clamp needs.
+ */
+const CLONE_NAME_MAX_LENGTH = 200;
+const CLONE_SUFFIX = ' (copy)';
+
+/**
+ * The client-computed name a clone gets, distinguishing it from its source
+ * both in this list and in the board's package picker (a plain `<select>`
+ * listing `candidate.name` with no badge or other distinguishing UI at all —
+ * see `campaigns/$campaignId/soundboard.tsx`'s `#package-pick`) without
+ * requiring the user to open the editor and rename it first.
+ *
+ * Exported for direct unit testing of the clamp: a source name near the
+ * schema's 200-char cap plus the 7-char suffix would otherwise overflow it,
+ * and the UI must not offer a clone action that the server is guaranteed to
+ * reject.
+ */
+export function cloneDisplayName(sourceName: string): string {
+  const maxBaseLength = CLONE_NAME_MAX_LENGTH - CLONE_SUFFIX.length;
+  const base = sourceName.length > maxBaseLength ? sourceName.slice(0, maxBaseLength) : sourceName;
+  return `${base}${CLONE_SUFFIX}`;
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
@@ -130,7 +160,7 @@ export function PackagesListPage() {
     // `data.name ?? src.name` already does exactly the right thing with a
     // supplied name.
     mutationFn: (pkg: AudioPackageData) =>
-      clonePackageFn({ data: { id: pkg.id, name: `${pkg.name} (copy)` } }),
+      clonePackageFn({ data: { id: pkg.id, name: cloneDisplayName(pkg.name) } }),
     onSuccess: invalidatePackages,
     onError: (e) => captureException(e, { action: 'PackagesListPage.clonePackage' }),
   });

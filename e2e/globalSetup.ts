@@ -31,6 +31,16 @@ import {
   SOUNDBOARD_FIXTURES,
 } from './fixtures/soundboard-fixtures';
 
+/**
+ * Local, not imported from `~/server/utils/helpers`'s own `escapeRegExp` —
+ * this file runs as a standalone Node script under Playwright's
+ * `globalSetup`, outside the app's bundling/alias setup, and the one caller
+ * below needs nothing beyond the standard escape.
+ */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 // Image titled to be stable across runs — the lightbox spec asserts on this alt text.
 const E2E_IMAGE_TITLE = 'E2E Lightbox Fixture';
 const E2E_SCREEN_NAME = 'E2E Test Screen';
@@ -184,10 +194,19 @@ async function seedAudioFixtures(
  *
  * Resets:
  *
- * - **Every previous run's clone.** `clonePackage` copies the source name
- *   verbatim and `PackagesListPage` offers no rename, so each run would
- *   otherwise leave another identically-named row behind and the spec's
- *   "exactly one clone" assertion would drift into meaninglessness.
+ * - **Every previous run's clone.** Task 22 gave `PackagesListPage` a
+ *   client-computed `"${name} (copy)"` suffix on clone (previously
+ *   `clonePackage` copied the source name verbatim with no rename
+ *   affordance at all), so a previous run's clone is no longer an EXACT name
+ *   match for `SOUNDBOARD_FIXTURES.systemPackageName` — it's that name plus
+ *   the suffix. The reset below matches by PREFIX (`$regex: '^' + escaped
+ *   name`), which catches both the pre-Task-22 verbatim shape and the
+ *   current suffixed one, so a stale exact-match filter can't silently stop
+ *   cleaning these up the moment the naming convention changes again.
+ *   Without this, each run leaves another row behind and the spec's "exactly
+ *   one clone" assertion drifts into meaninglessness — this is not
+ *   hypothetical: it is exactly what broke when Task 22 shipped the suffix
+ *   and this reset still matched on the old exact name.
  * - **This campaign's `SoundboardState`.** The reload assertion is only worth
  *   anything if the board starts from nothing: a row left over from a
  *   previous run names a package id that was just deleted, which puts the
@@ -289,9 +308,13 @@ async function seedSoundboardFixtures(
   );
 
   // --- resets ----------------------------------------------------------------
-  await db
-    .collection('audiopackages')
-    .deleteMany({ ownerId, name: SOUNDBOARD_FIXTURES.systemPackageName });
+  // PREFIX match, not exact — see the doc comment above for why: Task 22's
+  // clone-naming suffix means a previous run's clone is
+  // `${systemPackageName} (copy)`, not `systemPackageName` verbatim.
+  await db.collection('audiopackages').deleteMany({
+    ownerId,
+    name: { $regex: `^${escapeRegExp(SOUNDBOARD_FIXTURES.systemPackageName)}` },
+  });
   await db.collection('soundboardstates').deleteMany({ campaignId });
 
   return {

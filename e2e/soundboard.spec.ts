@@ -200,11 +200,23 @@ test.describe('Sound packages and the GM board', () => {
     await expect(page.getByRole('heading', { name: 'SOUND PACKAGES' })).toBeVisible();
     await page.waitForLoadState('networkidle');
 
+    // Task 22: cloning now gives the copy a client-computed "(copy)"-suffixed
+    // name (`audio_.packages.tsx`'s `cloneDisplayName`), so the two rows are
+    // distinguishable by name, not only by the system badge — closing the gap
+    // this spec used to have to work around. This literal tracks that
+    // function's own suffix; if it drifts, the assertions below should fail
+    // loudly rather than silently pass on a stale assumption.
+    const cloneName = `${SOUNDBOARD_FIXTURES.systemPackageName} (copy)`;
+
     const rows = page.getByTestId('package-row');
     const named = rows.filter({ hasText: SOUNDBOARD_FIXTURES.systemPackageName });
     const systemRow = named.filter({ has: page.getByTestId('system-badge') });
-    // The clone inherits the source's name verbatim, so the ONLY thing telling
-    // the two rows apart is the badge.
+    // The badge remains the authoritative discriminator this spec uses to
+    // locate each row unambiguously (a real package could legitimately be
+    // named "... (copy)" for unrelated reasons, so name alone isn't a safe
+    // locator) — but the rows are no longer identical strings, which is
+    // exactly the defect this task closed. The `cloneName` assertion below
+    // checks that directly, not just the badge's absence.
     const cloneRow = named.filter({ hasNot: page.getByTestId('system-badge') });
 
     await expect(systemRow).toHaveCount(1);
@@ -216,20 +228,24 @@ test.describe('Sound packages and the GM board', () => {
     await systemRow.getByTestId('overflow-item-clone').click();
 
     await expect(cloneRow).toHaveCount(1);
+    // The clone is now distinguishable by name alone — the whole point of
+    // this task's fix, not merely a side effect of it.
+    await expect(cloneRow).toContainText(cloneName);
     const packageId = await cloneRow.getAttribute('data-package-id');
     expect(packageId).toBeTruthy();
     // The clone copied the system package's single item byte-for-byte.
     await expect(cloneRow).toContainText('1 item');
 
     // ------------------------------------------------------------ add an asset
-    await cloneRow
-      .getByRole('button', { name: `${SOUNDBOARD_FIXTURES.systemPackageName} actions` })
-      .click();
+    await cloneRow.getByRole('button', { name: `${cloneName} actions` }).click();
     await cloneRow.getByTestId('overflow-item-edit').click();
     await expect(page).toHaveURL(new RegExp(`/audio/packages/${packageId}$`));
-    await expect(
-      page.getByRole('heading', { name: SOUNDBOARD_FIXTURES.systemPackageName.toUpperCase() })
-    ).toBeVisible();
+    // The name field replaced a static, non-editable `<h1>` (Task 22) —
+    // asserted as a textbox, not a heading, and checked against the CLONE's
+    // OWN name (which now differs from the source's) rather than
+    // `.toUpperCase()`'s old visual-only transform: the input stores the
+    // real casing and is only uppercased by CSS.
+    await expect(page.getByRole('textbox', { name: 'Package name' })).toHaveValue(cloneName);
     await page.waitForLoadState('networkidle');
 
     // The inherited item is here, and it is editable — the clone is the

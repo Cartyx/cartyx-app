@@ -36,7 +36,7 @@ vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => navigateSpy,
 }));
 
-import { PackagesListPage } from '~/routes/audio_.packages';
+import { PackagesListPage, cloneDisplayName } from '~/routes/audio_.packages';
 
 beforeEach(() => {
   listPackagesFn.mockReset();
@@ -134,5 +134,31 @@ describe('PackagesListPage — name a clone', () => {
     expect(clonePackageFn).toHaveBeenCalledWith({
       data: { id: 'sys1', name: 'Storm Basics (copy)' },
     });
+  });
+});
+
+describe('cloneDisplayName', () => {
+  it('appends the "(copy)" suffix to a normal-length name', () => {
+    expect(cloneDisplayName('Storm Basics')).toBe('Storm Basics (copy)');
+  });
+
+  // Review finding: `clonePackageSchema.name` is `max(200)`. A source name
+  // near that cap plus the 7-char suffix would overflow it, and the UI must
+  // not offer a clone action the server is guaranteed to reject. Built at
+  // the actual boundary — a source name whose suffixed form would be exactly
+  // one character over the cap — not "a long name", so the clamp's off-by-one
+  // is exercised, not just its general existence.
+  it('clamps the base name so the suffixed result never exceeds the schema max (200)', () => {
+    const longName = 'x'.repeat(200); // 200 + ' (copy)' (7) = 207, 7 over the cap
+    const result = cloneDisplayName(longName);
+    expect(result).toHaveLength(200);
+    expect(result.endsWith(' (copy)')).toBe(true);
+    expect(result).toBe(`${'x'.repeat(193)} (copy)`);
+  });
+
+  it('does not clamp a name exactly at the boundary where the suffixed result equals the cap', () => {
+    const boundaryName = 'x'.repeat(193); // 193 + 7 = 200, exactly the cap
+    expect(cloneDisplayName(boundaryName)).toBe(`${boundaryName} (copy)`);
+    expect(cloneDisplayName(boundaryName)).toHaveLength(200);
   });
 });
