@@ -142,7 +142,7 @@ jobs:
           BASE_URL: https://cartyx.io
 
   storybook:
-    name: Storybook
+    name: Storybook & browser tests
     runs-on: ubuntu-latest
     needs: quality
     # `test:ci` runs `--project unit` only, so before this job nothing verified
@@ -173,6 +173,15 @@ jobs:
 
       - name: Run story tests
         run: npm run test:storybook
+
+      # The `browser` vitest project — non-component code that needs real
+      # browser APIs, currently the soundboard's Web Audio engine (Web Audio
+      # does not exist in happy-dom, and mocking it would make the suite green
+      # while measuring nothing). It lives in this job rather than its own
+      # because the chromium install above is the expensive part and is
+      # already paid for here.
+      - name: Run browser tests
+        run: npm run test:browser
 
       # Catches build-only breakage the test run can miss (chunking, static
       # assets, the manifest plugins that broke it originally).

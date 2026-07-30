@@ -19,6 +19,7 @@
     "test": "vitest run --project unit",
     "test:unit": "vitest run --project unit",
     "test:storybook": "vitest run --project storybook",
+    "test:browser": "vitest run --project browser",
     "test:watch": "vitest --project unit",
     "test:coverage": "vitest run --project unit --coverage",
     "test:ci": "vitest run --project unit --coverage --reporter=verbose",
