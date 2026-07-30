@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 
-import type { AudioPackageData } from '~/types/soundboard';
+import type { AudioPackageData, BoardStateData } from '~/types/soundboard';
 import type { AudioAssetData } from '~/types/audio';
 import type { SoundboardEngineOptions, EngineAsset } from '~/lib/soundboard/engine';
 import type { CreateSchedulerOptions } from '~/lib/soundboard/scheduler';
@@ -42,15 +42,17 @@ vi.mock('~/lib/soundboard/scheduler', () => ({ createScheduler }));
 vi.mock('~/utils/soundboard-server-fns', () => ({ saveBoardStateFn }));
 vi.mock('~/utils/telemetry-client', () => ({ captureException }));
 
-const { useSoundboard, SAVE_FLUSH_MS, SAVE_SETTLE_MS, pickRendition } =
+const { useSoundboard, SAVE_FLUSH_MS, SAVE_SETTLE_MS, pickRendition, hydrateBoardState } =
   await import('~/hooks/useSoundboard');
+type UseSoundboardOptions = NonNullable<Parameters<typeof useSoundboard>[2]>;
 
 const CAMPAIGN = '507f1f77bcf86cd799439011';
 const ASSET_A = '507f1f77bcf86cd799439021';
 const ASSET_B = '507f1f77bcf86cd799439022';
+const PKG_ID = '507f1f77bcf86cd799439031';
 
 const pkg: AudioPackageData = {
-  id: '507f1f77bcf86cd799439031',
+  id: PKG_ID,
   ownerId: 'gm1',
   name: 'Storm',
   description: null,
@@ -71,6 +73,9 @@ const pkg: AudioPackageData = {
     {
       id: 'storm',
       name: 'Storm',
+      // Names BOTH items as playing — which is what makes the hydration test
+      // meaningful: a persisted `playing: false` for one of them cannot be
+      // reproduced by replaying `play` commands over this mood.
       states: [
         { itemId: 'itemA', playing: true, volume: 0.3 },
         { itemId: 'itemB', playing: true, volume: 0.4 },
@@ -109,6 +114,15 @@ function makeAsset(id: string, over: Partial<AudioAssetData> = {}): AudioAssetDa
   };
 }
 
+const defaultAssets: readonly AudioAssetData[] = [makeAsset(ASSET_A), makeAsset(ASSET_B)];
+
+type CtxBehaviour = {
+  /** `resume()` rejects — the autoplay-policy failure the affordance exists for. */
+  resumeRejects?: string;
+  /** `resume()` RESOLVES but the context never reaches `running` (iOS Safari). */
+  staysSuspended?: boolean;
+};
+
 type FakeCtx = {
   state: AudioContextState;
   currentTime: number;
@@ -117,11 +131,13 @@ type FakeCtx = {
   decodeAudioData: ReturnType<typeof vi.fn>;
 };
 
-function makeCtx(): FakeCtx {
+function makeCtx(behaviour: CtxBehaviour = {}): FakeCtx {
   const ctx: FakeCtx = {
     state: 'suspended',
     currentTime: 0,
     resume: vi.fn(async () => {
+      if (behaviour.resumeRejects) throw new Error(behaviour.resumeRejects);
+      if (behaviour.staysSuspended) return;
       ctx.state = 'running';
     }),
     close: vi.fn(async () => {
@@ -130,6 +146,14 @@ function makeCtx(): FakeCtx {
     decodeAudioData: vi.fn(async () => ({ duration: 1 }) as unknown as AudioBuffer),
   };
   return ctx;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
 }
 
 /** The options `useSoundboard` handed `createEngine` on its single call. */
@@ -165,22 +189,47 @@ function lastSaved(): SavePayload {
 }
 
 let ctx: FakeCtx;
+/** When non-empty, `ctxFactory` shifts from here instead of returning `ctx`. */
+let ctxQueue: FakeCtx[] = [];
 
-function render(over: { pkg?: AudioPackageData | null; persist?: boolean } = {}) {
-  const result = renderHook(() =>
-    useSoundboard(CAMPAIGN, over.pkg === undefined ? pkg : over.pkg, {
-      assets: [makeAsset(ASSET_A), makeAsset(ASSET_B)],
-      persist: over.persist,
-      createAudioContext: () => ctx as unknown as AudioContext,
-    })
+function ctxFactory(): AudioContext {
+  const next = ctxQueue.length > 0 ? ctxQueue.shift()! : ctx;
+  return next as unknown as AudioContext;
+}
+
+type Props = {
+  pkg?: AudioPackageData | null;
+  persist?: boolean;
+  assets?: readonly AudioAssetData[];
+  /**
+   * Only when true is the `initialState` KEY passed at all — an absent key
+   * means "this board does not hydrate", which is a different thing from
+   * `'pending'`.
+   */
+  withInitialState?: boolean;
+  initialState?: BoardStateData | null | 'pending';
+};
+
+function renderBoard(initialProps: Props = {}) {
+  return renderHook(
+    (props: Props) => {
+      const opts: UseSoundboardOptions = {
+        assets: 'assets' in props ? props.assets : defaultAssets,
+        persist: props.persist,
+        createAudioContext: ctxFactory,
+        ...(props.withInitialState ? { initialState: props.initialState } : {}),
+      };
+      return useSoundboard(CAMPAIGN, props.pkg === undefined ? pkg : props.pkg, opts);
+    },
+    { initialProps }
   );
-  return result;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   ctx = makeCtx();
+  ctxQueue = [];
   // `vi.clearAllMocks()` clears recorded calls but NOT implementations, so the
   // rejecting `saveBoardStateFn` one test installs would leak into every test
   // after it without this line.
@@ -188,12 +237,15 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // In `afterEach`, not inline in the test body: a mid-test failure would
+  // otherwise leak the stubbed `fetch` into every subsequent test in the file.
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
 describe('useSoundboard', () => {
   it('does not dispatch audio commands before the context is resumed', () => {
-    const { result } = render();
+    const { result } = renderBoard();
 
     act(() => {
       result.current.dispatch({ type: 'setMood', moodId: 'storm' });
@@ -211,7 +263,7 @@ describe('useSoundboard', () => {
   });
 
   it('enableAudio resumes the suspended context and applies the current board state', async () => {
-    const { result } = render();
+    const { result } = renderBoard();
 
     act(() => {
       result.current.dispatch({ type: 'setMood', moodId: 'storm' });
@@ -222,13 +274,14 @@ describe('useSoundboard', () => {
 
     expect(ctx.resume).toHaveBeenCalledTimes(1);
     expect(result.current.audioReady).toBe(true);
+    expect(result.current.audioError).toBeNull();
     expect(createEngine).toHaveBeenCalledTimes(1);
     expect(lastApplied().moodId).toBe('storm');
     expect(scheduler.sync).toHaveBeenCalled();
   });
 
   it('sends a dispatched fireOneShot to the engine, and leaves board state untouched', async () => {
-    const { result } = render();
+    const { result } = renderBoard();
     await act(async () => {
       await result.current.enableAudio();
     });
@@ -254,7 +307,7 @@ describe('useSoundboard', () => {
   });
 
   it('does not save a random fire, so ambient thunder never reaches Atlas', async () => {
-    const { result } = render();
+    const { result } = renderBoard();
     await act(async () => {
       await result.current.enableAudio();
     });
@@ -273,7 +326,7 @@ describe('useSoundboard', () => {
   });
 
   it('does not write on every volume tick — one save carrying the FINAL value', async () => {
-    const { result } = render();
+    const { result } = renderBoard();
     await act(async () => {
       await result.current.enableAudio();
     });
@@ -301,7 +354,7 @@ describe('useSoundboard', () => {
   });
 
   it('flushes play promptly but lets a volume tick settle first', async () => {
-    const { result } = render();
+    const { result } = renderBoard();
     await act(async () => {
       await result.current.enableAudio();
     });
@@ -330,13 +383,50 @@ describe('useSoundboard', () => {
     expect(saveBoardStateFn).toHaveBeenCalledTimes(1);
   });
 
+  it('serializes writes — a flush during an in-flight save waits and carries the newest state', async () => {
+    const first = deferred<unknown>();
+    const { result } = renderBoard();
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    saveBoardStateFn.mockClear();
+    saveBoardStateFn.mockReturnValueOnce(first.promise);
+
+    act(() => {
+      result.current.dispatch({ type: 'play', itemId: 'itemA' });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_FLUSH_MS + 1);
+    });
+    expect(saveBoardStateFn).toHaveBeenCalledTimes(1);
+
+    // A second flush lands while the first write is still in flight. Two
+    // concurrent full-state REPLACEs can reach Atlas out of order.
+    act(() => {
+      result.current.dispatch({ type: 'setMasterVolume', volume: 0.42 });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_SETTLE_MS + 1);
+    });
+    expect(saveBoardStateFn).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      first.resolve({});
+      await first.promise;
+    });
+
+    expect(saveBoardStateFn).toHaveBeenCalledTimes(2);
+    expect(lastSaved().masterVolume).toBe(0.42);
+  });
+
   it('keeps playing when the save rejects', async () => {
     saveBoardStateFn.mockRejectedValue(new Error('not the GM'));
-    const { result } = render();
+    const { result } = renderBoard();
     await act(async () => {
       await result.current.enableAudio();
     });
     engine.apply.mockClear();
+    captureException.mockClear();
 
     act(() => {
       result.current.dispatch({ type: 'play', itemId: 'itemA' });
@@ -360,7 +450,7 @@ describe('useSoundboard', () => {
   });
 
   it('persists a board with nothing loaded — null packageId and moodId', async () => {
-    const { result } = render({ pkg: null });
+    const { result } = renderBoard({ pkg: null });
     await act(async () => {
       await result.current.enableAudio();
     });
@@ -384,7 +474,7 @@ describe('useSoundboard', () => {
   });
 
   it('never calls save when persist is false — the non-GM board', async () => {
-    const { result } = render({ persist: false });
+    const { result } = renderBoard({ persist: false });
     await act(async () => {
       await result.current.enableAudio();
     });
@@ -403,8 +493,27 @@ describe('useSoundboard', () => {
     expect(lastApplied().items.find((item) => item.itemId === 'itemA')?.playing).toBe(true);
   });
 
+  it('does not fire a save armed before persist flipped to false', async () => {
+    const { result, rerender } = renderBoard({ persist: true });
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    saveBoardStateFn.mockClear();
+
+    act(() => {
+      result.current.dispatch({ type: 'play', itemId: 'itemA' });
+    });
+    rerender({ persist: false });
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_SETTLE_MS * 4);
+    });
+
+    expect(saveBoardStateFn).not.toHaveBeenCalled();
+    expect(captureException).not.toHaveBeenCalled();
+  });
+
   it('turns the pad off when the engine reports an item ended', async () => {
-    const { result } = render();
+    const { result } = renderBoard();
     await act(async () => {
       await result.current.enableAudio();
     });
@@ -421,7 +530,7 @@ describe('useSoundboard', () => {
   });
 
   it("the scheduler's emit does not synchronously re-enter sync", async () => {
-    const { result } = render();
+    const { result } = renderBoard();
     await act(async () => {
       await result.current.enableAudio();
     });
@@ -441,13 +550,87 @@ describe('useSoundboard', () => {
     expect(engine.fireOneShot).toHaveBeenCalledWith('itemA');
   });
 
+  // -------------------------------------------------------------------
+  // enableAudio failure modes
+  // -------------------------------------------------------------------
+
+  it('does not report ready, and stays retryable, when resume() rejects', async () => {
+    const bad = makeCtx({ resumeRejects: 'play() failed because the user did not interact' });
+    const good = makeCtx();
+    ctxQueue = [bad, good];
+    const { result } = renderBoard();
+
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+
+    expect(result.current.audioReady).toBe(false);
+    expect(result.current.audioError).toContain('did not interact');
+    expect(createEngine).not.toHaveBeenCalled();
+    expect(captureException).toHaveBeenCalledTimes(1);
+    // The failed context must not be left in the ref — that is what made the
+    // failure unrecoverable: every later click took the retry path, resumed a
+    // context with no engine beside it, and reported green.
+    expect(bad.close).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+
+    expect(good.resume).toHaveBeenCalledTimes(1);
+    expect(createEngine).toHaveBeenCalledTimes(1);
+    expect(result.current.audioReady).toBe(true);
+    expect(result.current.audioError).toBeNull();
+  });
+
+  it('does not report ready when resume() resolves but the context never runs', async () => {
+    const stuck = makeCtx({ staysSuspended: true });
+    ctxQueue = [stuck];
+    const { result } = renderBoard();
+
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+
+    expect(stuck.resume).toHaveBeenCalledTimes(1);
+    expect(result.current.audioReady).toBe(false);
+    expect(result.current.audioError).toContain('suspended');
+    expect(createEngine).not.toHaveBeenCalled();
+    expect(stuck.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to build the engine while the asset list has not settled', async () => {
+    const { result, rerender } = renderBoard({ assets: undefined });
+
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+
+    // A single build against an unsettled list poisons the engine's
+    // `unplayable` set permanently, so it must not happen at all.
+    expect(createEngine).not.toHaveBeenCalled();
+    expect(result.current.audioReady).toBe(false);
+    expect(result.current.audioError).toContain('still loading');
+
+    rerender({ assets: defaultAssets });
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    expect(createEngine).toHaveBeenCalledTimes(1);
+    expect(result.current.audioReady).toBe(true);
+  });
+
+  // -------------------------------------------------------------------
+  // loadAsset
+  // -------------------------------------------------------------------
+
   it('loads the rendition the browser can play and passes durationSamples through unmodified', async () => {
     const fetchMock = vi.fn(async () => ({
       ok: true,
       arrayBuffer: async () => new ArrayBuffer(8),
     }));
     vi.stubGlobal('fetch', fetchMock);
-    const { result } = render();
+    const { result } = renderBoard();
     await act(async () => {
       await result.current.enableAudio();
     });
@@ -462,38 +645,313 @@ describe('useSoundboard', () => {
     // Verbatim — the engine divides it by AUDIO_RENDITION_SAMPLE_RATE itself,
     // and rounding it here makes Safari loops tick.
     expect(asset!.durationSamples).toBe(48_312);
-    vi.unstubAllGlobals();
   });
 
-  it('returns null for an asset with no usable rendition rather than guessing', async () => {
-    const { result } = renderHook(() =>
-      useSoundboard(CAMPAIGN, pkg, {
-        assets: [makeAsset(ASSET_A, { renditions: {} }), makeAsset(ASSET_B)],
-        createAudioContext: () => ctx as unknown as AudioContext,
-      })
-    );
+  it('returns null only for an asset that can genuinely never play', async () => {
+    const { result } = renderBoard({
+      assets: [makeAsset(ASSET_A, { renditions: {} }), makeAsset(ASSET_B, { status: 'failed' })],
+    });
     await act(async () => {
       await result.current.enableAudio();
     });
 
     await expect(engineOptions().loadAsset(ASSET_A)).resolves.toBeNull();
-    await expect(engineOptions().loadAsset('nope')).resolves.toBeNull();
+    await expect(engineOptions().loadAsset(ASSET_B)).resolves.toBeNull();
   });
 
-  it('pickRendition prefers what canPlayType accepts, and never returns null when something exists', () => {
+  it('throws — rather than vanishing — for an asset missing from a settled list', async () => {
+    const { result } = renderBoard();
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+
+    // Both `null` and a throw put the asset in the engine's permanent
+    // `unplayable` set, but only a throw reaches `onLoadError`. A list that is
+    // simply wrong (paginated past 50, or `{ ownerId }`-filtered so no system
+    // package's assets are ever in it) must not kill a pad in silence.
+    await expect(engineOptions().loadAsset('507f1f77bcf86cd799439099')).rejects.toThrow(
+      'not in the board'
+    );
+  });
+
+  it('throws for an asset still being transcoded', async () => {
+    const { result } = renderBoard({ assets: [makeAsset(ASSET_A, { status: 'processing' })] });
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+
+    await expect(engineOptions().loadAsset(ASSET_A)).rejects.toThrow('status: processing');
+  });
+
+  it('throws when the rendition URL 404s', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 404 }))
+    );
+    const { result } = renderBoard();
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+
+    await expect(engineOptions().loadAsset(ASSET_A)).rejects.toThrow(
+      'Audio rendition fetch failed (404)'
+    );
+  });
+
+  it('reports an engine load error to telemetry', async () => {
+    const { result } = renderBoard();
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    captureException.mockClear();
+
+    const boom = new Error('decode failed');
+    act(() => {
+      engineOptions().onLoadError?.(ASSET_A, boom);
+    });
+
+    expect(captureException).toHaveBeenCalledTimes(1);
+    expect(captureException).toHaveBeenCalledWith(boom, {
+      area: 'soundboard',
+      campaignId: CAMPAIGN,
+      assetId: ASSET_A,
+    });
+  });
+
+  it('pickRendition prefers what canPlayType accepts, and falls back to AAC', () => {
     const both = makeAsset(ASSET_A).renditions;
     const safari = (mime: string) => mime.startsWith('audio/mp4');
     const chrome = (mime: string) => mime.startsWith('audio/ogg');
 
     expect(pickRendition(both, safari)?.key).toBe('a/main.m4a');
     expect(pickRendition(both, chrome)?.key).toBe('a/main.opus');
-    // happy-dom, and any engine that under-reports: still pick something.
-    expect(pickRendition(both, () => false)?.key).toBe('a/main.opus');
+    // Nothing reported support. Under-reporting is a Safari/iOS behaviour and
+    // MP4/AAC-LC is the more universally decodable of the two, so the fallback
+    // must not be Opus.
+    expect(pickRendition(both, () => false)?.key).toBe('a/main.m4a');
+    expect(pickRendition({ opus: both.opus }, () => false)?.key).toBe('a/main.opus');
     expect(pickRendition({}, chrome)).toBeNull();
   });
 
+  // -------------------------------------------------------------------
+  // Hydration
+  // -------------------------------------------------------------------
+
+  it('hydrateBoardState restores a stopped item the mood names', () => {
+    const persisted: BoardStateData = {
+      campaignId: CAMPAIGN,
+      packageId: PKG_ID,
+      moodId: 'storm',
+      // `storm` names BOTH items as playing. `itemA` was stopped by the GM
+      // before the reload — unreachable by replaying `play` commands.
+      items: [
+        { itemId: 'itemA', playing: false, volume: 0.9 },
+        { itemId: 'itemB', playing: true, volume: 0.2 },
+      ],
+      masterVolume: 0.55,
+    };
+
+    const hydrated = hydrateBoardState(pkg, persisted);
+
+    expect(hydrated.moodId).toBe('storm');
+    expect(hydrated.masterVolume).toBe(0.55);
+    const a = hydrated.items.find((item) => item.itemId === 'itemA')!;
+    const b = hydrated.items.find((item) => item.itemId === 'itemB')!;
+    expect(a.playing).toBe(false);
+    expect(a.volume).toBe(0.9);
+    expect(b.playing).toBe(true);
+    expect(b.volume).toBe(0.2);
+    // The mood's non-persisted resolutions still apply.
+    expect(a.fadeSeconds).toBe(2);
+    expect(a.randomIntervalMin).toBe(30);
+  });
+
+  it('hydrateBoardState keeps only masterVolume when the package does not match', () => {
+    const hydrated = hydrateBoardState(pkg, {
+      campaignId: CAMPAIGN,
+      packageId: '507f1f77bcf86cd799439077',
+      moodId: 'storm',
+      items: [{ itemId: 'itemA', playing: true, volume: 0.9 }],
+      masterVolume: 0.35,
+    });
+
+    // `itemId` is stable only within its own package — overlaying another
+    // package's saved states would apply the wrong volume to whatever shares
+    // an id.
+    expect(hydrated.moodId).toBeNull();
+    expect(hydrated.masterVolume).toBe(0.35);
+    expect(hydrated.items.every((item) => !item.playing)).toBe(true);
+    expect(hydrated.items.find((item) => item.itemId === 'itemA')?.volume).toBe(0.8);
+  });
+
+  it('applies initialState without scheduling a save', async () => {
+    const persisted: BoardStateData = {
+      campaignId: CAMPAIGN,
+      packageId: PKG_ID,
+      moodId: 'storm',
+      items: [
+        { itemId: 'itemA', playing: false, volume: 0.9 },
+        { itemId: 'itemB', playing: true, volume: 0.2 },
+      ],
+      masterVolume: 0.55,
+    };
+    const { result } = renderBoard({ withInitialState: true, initialState: persisted });
+
+    expect(result.current.hydrated).toBe(true);
+    expect(result.current.state.moodId).toBe('storm');
+    expect(result.current.state.masterVolume).toBe(0.55);
+
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_SETTLE_MS * 4);
+    });
+    // Merely opening the board must not make the reader the last writer —
+    // `updatedBy`/`updatedAt` are the signal two-GM handling depends on.
+    expect(saveBoardStateFn).not.toHaveBeenCalled();
+  });
+
+  it('holds every save until initialState settles, so a blank board cannot clobber the saved one', async () => {
+    const { result, rerender } = renderBoard({
+      pkg: null,
+      withInitialState: true,
+      initialState: 'pending',
+    });
+    expect(result.current.hydrated).toBe(false);
+
+    // The package query lands first. The [pkg] effect dispatches `loadPackage`,
+    // which is prompt-urgency — this is the write that would race the
+    // board-state query and overwrite Atlas with a blank board.
+    rerender({ pkg, withInitialState: true, initialState: 'pending' });
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_SETTLE_MS * 4);
+    });
+    expect(saveBoardStateFn).not.toHaveBeenCalled();
+
+    const persisted: BoardStateData = {
+      campaignId: CAMPAIGN,
+      packageId: PKG_ID,
+      moodId: 'storm',
+      items: [
+        { itemId: 'itemA', playing: false, volume: 0.9 },
+        { itemId: 'itemB', playing: true, volume: 0.2 },
+      ],
+      masterVolume: 0.55,
+    };
+    rerender({ pkg, withInitialState: true, initialState: persisted });
+
+    expect(result.current.hydrated).toBe(true);
+    expect(result.current.state.moodId).toBe('storm');
+    expect(result.current.state.items.find((i) => i.itemId === 'itemA')?.volume).toBe(0.9);
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_SETTLE_MS * 4);
+    });
+    expect(saveBoardStateFn).not.toHaveBeenCalled();
+
+    // Saving goes live from the GM's first real action.
+    act(() => {
+      result.current.dispatch({ type: 'play', itemId: 'itemA' });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_FLUSH_MS + 1);
+    });
+    expect(saveBoardStateFn).toHaveBeenCalledTimes(1);
+    expect(lastSaved().moodId).toBe('storm');
+  });
+
+  it('waits for the package the persisted state names before hydrating', async () => {
+    const persisted: BoardStateData = {
+      campaignId: CAMPAIGN,
+      packageId: PKG_ID,
+      moodId: 'storm',
+      items: [{ itemId: 'itemA', playing: false, volume: 0.9 }],
+      masterVolume: 0.55,
+    };
+    // Board state settles first, package still resolving.
+    const { result, rerender } = renderBoard({
+      pkg: null,
+      withInitialState: true,
+      initialState: persisted,
+    });
+
+    // Hydrating against a null package would drop every item state and then be
+    // clobbered by the [pkg] effect's own `loadPackage` moments later.
+    expect(result.current.hydrated).toBe(false);
+    expect(result.current.state.items).toEqual([]);
+
+    rerender({ pkg, withInitialState: true, initialState: persisted });
+
+    expect(result.current.hydrated).toBe(true);
+    expect(result.current.state.moodId).toBe('storm');
+    expect(result.current.state.items.find((i) => i.itemId === 'itemA')?.volume).toBe(0.9);
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_SETTLE_MS * 4);
+    });
+    expect(saveBoardStateFn).not.toHaveBeenCalled();
+  });
+
+  it('hydrates immediately when nothing was persisted', async () => {
+    const { result } = renderBoard({ withInitialState: true, initialState: null });
+
+    expect(result.current.hydrated).toBe(true);
+    act(() => {
+      result.current.dispatch({ type: 'play', itemId: 'itemA' });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_FLUSH_MS + 1);
+    });
+    expect(saveBoardStateFn).toHaveBeenCalledTimes(1);
+  });
+
+  // -------------------------------------------------------------------
+  // Package identity
+  // -------------------------------------------------------------------
+
+  it('does not reset the board when a refetch returns the same package as a new object', async () => {
+    const { result, rerender } = renderBoard();
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    act(() => {
+      result.current.dispatch({ type: 'setMood', moodId: 'storm' });
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_SETTLE_MS * 4);
+    });
+    saveBoardStateFn.mockClear();
+
+    // Same package, new object — exactly what a react-query refetch produces
+    // when `updatedAt` moves. Identity-keying would reset the whole board
+    // mid-session AND persist the reset.
+    rerender({ pkg: { ...pkg, updatedAt: '2026-07-30T00:00:00.000Z' } });
+
+    expect(result.current.state.moodId).toBe('storm');
+    await act(async () => {
+      vi.advanceTimersByTime(SAVE_SETTLE_MS * 4);
+    });
+    expect(saveBoardStateFn).not.toHaveBeenCalled();
+  });
+
+  it('loads a genuinely different package', async () => {
+    const { result, rerender } = renderBoard();
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    act(() => {
+      result.current.dispatch({ type: 'setMood', moodId: 'storm' });
+    });
+
+    const other: AudioPackageData = { ...pkg, id: '507f1f77bcf86cd799439088', moods: [] };
+    rerender({ pkg: other });
+
+    expect(result.current.state.pkg?.id).toBe(other.id);
+    expect(result.current.state.moodId).toBeNull();
+  });
+
+  // -------------------------------------------------------------------
+  // Lifecycle
+  // -------------------------------------------------------------------
+
   it('disposes the scheduler, the engine and the context on unmount', async () => {
-    const { result, unmount } = render();
+    const { result, unmount } = renderBoard();
     await act(async () => {
       await result.current.enableAudio();
     });
@@ -506,7 +964,7 @@ describe('useSoundboard', () => {
   });
 
   it('flushes a pending save on unmount rather than dropping the last change', async () => {
-    const { result, unmount } = render();
+    const { result, unmount } = renderBoard();
     await act(async () => {
       await result.current.enableAudio();
     });

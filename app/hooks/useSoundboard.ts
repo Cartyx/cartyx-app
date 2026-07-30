@@ -6,7 +6,7 @@ import { boardReducer, initialBoardState, type BoardState } from '~/lib/soundboa
 import type { SoundboardCommand } from '~/lib/soundboard/commands';
 import { saveBoardStateFn } from '~/utils/soundboard-server-fns';
 import { captureException } from '~/utils/telemetry-client';
-import type { AudioPackageData } from '~/types/soundboard';
+import type { AudioPackageData, BoardStateData } from '~/types/soundboard';
 import type { AudioAssetData, AudioRendition } from '~/types/audio';
 
 /**
@@ -49,6 +49,11 @@ function browserCanPlay(mime: string): boolean {
  * lifetime of the engine, so a browser that merely under-reports (or an
  * environment with no `canPlayType` at all) would go permanently silent on
  * that pad. `null` is reserved for "there is genuinely nothing to play".
+ *
+ * The fallback prefers **AAC/M4A**, not Opus. Under-reporting is
+ * overwhelmingly a Safari/iOS behaviour, and MP4/AAC-LC is the more
+ * universally decodable of the two — falling back to Opus would fail hardest
+ * on exactly the browser the AAC rendition exists to serve.
  */
 export function pickRendition(
   renditions: { opus?: AudioRendition; aac?: AudioRendition },
@@ -57,7 +62,7 @@ export function pickRendition(
   const { opus, aac } = renditions;
   if (opus && canPlay(OPUS_MIME)) return opus;
   if (aac && canPlay(AAC_MIME)) return aac;
-  return opus ?? aac ?? null;
+  return aac ?? opus ?? null;
 }
 
 /** How soon a command's state needs to reach Atlas. */
@@ -103,19 +108,122 @@ function toBoardStatePayload(campaignId: string, state: BoardState) {
   };
 }
 
+/**
+ * Rebuild a live `BoardState` from what was persisted — the inverse of
+ * `toBoardStatePayload`, and the reason this hook needs a hydration seam at
+ * all rather than a replay of commands through `dispatch`.
+ *
+ * Why a replay does not work. `setMood` runs `resolveAllItems`, which sets
+ * `playing: true` for **every item the mood names**. An item the mood names
+ * but that the GM had explicitly STOPPED before the reload is therefore
+ * unreachable by any sequence of `play` commands — you would need a `stop`
+ * for it, and knowing which items need one means doing this overlay anyway.
+ * A replay also runs through `dispatch`, so it would re-save what it just
+ * read, silently making "opened the board" the last write to `updatedBy`.
+ *
+ * The overlay, in order:
+ *
+ * 1. `initialBoardState(pkg)` — every item resolved to not-playing.
+ * 2. `setMood(persisted.moodId)` through `boardReducer`, so the mood's own
+ *    `fadeSeconds`/`randomInterval` overrides are resolved exactly as a live
+ *    `setMood` would resolve them. A `moodId` naming a mood that has since
+ *    been deleted leaves `moodId` null — that is `boardReducer`'s own guard,
+ *    reused rather than reimplemented.
+ * 3. Persisted `{ playing, volume }` overlaid per item. This is the step that
+ *    restores a stopped item the mood names, and it is why the persisted row
+ *    wins over the mood's resolution for those two fields only.
+ *
+ * **Package mismatch is not merged.** `PackageItemData.id` is stable only
+ * WITHIN its package, so overlaying package A's saved item states onto package
+ * B's items would apply the wrong `playing`/`volume` to whatever happened to
+ * share an id. When `persisted.packageId` does not match the package being
+ * hydrated, only `masterVolume` survives — it is a board/output property, not
+ * a package one, exactly as `boardReducer`'s `loadPackage` case already treats
+ * it.
+ */
+export function hydrateBoardState(
+  pkg: AudioPackageData | null,
+  persisted: BoardStateData
+): BoardState {
+  const base = initialBoardState(pkg);
+  if (persisted.packageId !== (pkg?.id ?? null)) {
+    return { ...base, masterVolume: persisted.masterVolume };
+  }
+
+  const withMood =
+    pkg && persisted.moodId
+      ? boardReducer(base, { type: 'setMood', moodId: persisted.moodId })
+      : base;
+
+  const saved = new Map(persisted.items.map((item) => [item.itemId, item]));
+  return {
+    ...withMood,
+    masterVolume: persisted.masterVolume,
+    items: withMood.items.map((item) => {
+      const row = saved.get(item.itemId);
+      // No saved row means the item was added to the package after the last
+      // save — its mood-resolved value is the only correct answer.
+      if (!row) return item;
+      return { ...item, playing: row.playing, volume: row.volume };
+    }),
+  };
+}
+
+/**
+ * Hook-private. Deliberately NOT a member of `SoundboardCommand`: that union
+ * is phase 2b's wire vocabulary, and a whole-state replacement is not
+ * something one client may hand another. It also carries a `BoardState`, which
+ * embeds the full `AudioPackageData` — not a payload anything should
+ * broadcast. Keeping it out of the union is what makes it impossible to
+ * dispatch through the public `dispatch`, and therefore impossible to
+ * accidentally persist or broadcast.
+ */
+type HydrateAction = { type: '@@hydrate'; state: BoardState };
+
+function soundboardReducer(
+  state: BoardState,
+  action: SoundboardCommand | HydrateAction
+): BoardState {
+  if (action.type === '@@hydrate') return action.state;
+  return boardReducer(state, action);
+}
+
 export type UseSoundboardOptions = {
   /**
    * The library rows for the assets this package references — where the
    * rendition URLs and `durationSamples` come from. Read live through a ref,
    * so a list that arrives after mount is picked up without remounting.
+   *
+   * `undefined` means "not settled yet" and `enableAudio()` REFUSES to build
+   * the engine while it is. That is not defensive noise: `loadAsset` returning
+   * `null` (or throwing) puts the asset in the engine's `unplayable` set for
+   * the engine's whole lifetime (`engine.ts`), so a single early build against
+   * an empty list produces permanently dead pads with nothing logged. Pass an
+   * explicit `[]` for a board that genuinely has no assets — the empty array
+   * is the statement "I know there are none".
    */
   assets?: readonly AudioAssetData[];
+  /**
+   * What `loadBoardStateFn` returned for this campaign.
+   *
+   * - key ABSENT — this board does not hydrate; saving is live from mount.
+   * - `'pending'` — the query is in flight. **No save may be armed yet.**
+   *   Without this gate the `[pkg]` effect's `loadPackage` arms a write at
+   *   +200 ms and a slower board-state query loses the race, overwriting the
+   *   GM's saved board with a blank one.
+   * - `BoardStateData` / `null` — settled. Applied ONCE, without scheduling a
+   *   save, then saving goes live.
+   *
+   * Task 17: `initialState: boardQuery.isPending ? 'pending' : (boardQuery.data ?? null)`.
+   */
+  initialState?: BoardStateData | null | 'pending';
   /**
    * `false` disables persistence entirely. `saveBoardState` requires the
    * caller to be **GM** (`loadBoardState` only requires membership), so a
    * non-GM board would otherwise emit a guaranteed-rejected write — and a
    * `captureException` — on every command. Audio is unaffected either way.
-   * Defaults to `true`.
+   * Defaults to `true`. Honoured at both ends: a pending timer armed while it
+   * was `true` does not fire a write after it flips to `false`.
    */
   persist?: boolean;
   /**
@@ -131,8 +239,20 @@ export type UseSoundboardOptions = {
 export type UseSoundboardResult = {
   state: BoardState;
   dispatch: (command: SoundboardCommand) => void;
-  /** True once the `AudioContext` is running. Until then nothing makes sound. */
+  /**
+   * True only while the `AudioContext` has actually REACHED `running`. Never
+   * set optimistically from a resolved `resume()` — on iOS Safari a `resume()`
+   * can resolve with the context still suspended or interrupted, and a board
+   * that says audio is on while making no sound is the worst failure this hook
+   * has.
+   */
   audioReady: boolean;
+  /**
+   * Why the last `enableAudio()` did not produce a running context, or `null`.
+   * A failed gesture is fully retryable — nothing is cached, the context is
+   * closed and the ref left empty, so the next call is a fresh attempt.
+   */
+  audioError: string | null;
   /** Must be called from a user gesture — see `createAudioContext` above. */
   enableAudio: () => Promise<void>;
   /**
@@ -141,13 +261,19 @@ export type UseSoundboardResult = {
    * so this is a banner for the GM, not an error boundary.
    */
   saveError: string | null;
+  /**
+   * False until `initialState` has settled and been applied. While false, no
+   * save can be armed. A board that does not use `initialState` is `hydrated`
+   * from mount.
+   */
+  hydrated: boolean;
 };
 
 /**
  * The GM board's one stateful seam: reducer + Web Audio engine + random
  * one-shot scheduler + debounced persistence.
  *
- * Three things live here and nowhere else:
+ * Four things live here and nowhere else:
  *
  * 1. **The audio gesture.** An `AudioContext` starts suspended. Without
  *    `enableAudio()` on a real click, the GM's first pad press silently does
@@ -155,23 +281,31 @@ export type UseSoundboardResult = {
  *    scheduler are therefore constructed INSIDE `enableAudio`, so "nothing
  *    reaches the audio layer before the context is resumed" is structural
  *    rather than a flag anyone has to remember to check.
- * 2. **The debounce.** See `SAVE_FLUSH_MS` / `SAVE_SETTLE_MS`.
- * 3. **Save failures are non-events for audio.** Reported, surfaced, dropped.
+ * 2. **Hydration.** `initialState` is applied without a save, and gates every
+ *    save until it settles.
+ * 3. **The debounce.** See `SAVE_FLUSH_MS` / `SAVE_SETTLE_MS`. Writes are also
+ *    SERIALIZED — never two in flight — so a slow prompt write and a later
+ *    settle write cannot land at Atlas out of order.
+ * 4. **Save failures are non-events for audio.** Reported, surfaced, dropped.
  */
 export function useSoundboard(
   campaignId: string,
   pkg: AudioPackageData | null,
   options: UseSoundboardOptions = {}
 ): UseSoundboardResult {
-  const [state, rawDispatch] = useReducer(boardReducer, pkg, initialBoardState);
+  const [state, rawDispatch] = useReducer(soundboardReducer, pkg, initialBoardState);
   const [audioReady, setAudioReady] = useState(false);
+  const [audioError, setAudioError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(() => options.initialState === undefined);
 
   const stateRef = useRef(state);
   const optionsRef = useRef(options);
   const campaignIdRef = useRef(campaignId);
-  const pkgRef = useRef(pkg);
+  /** Package IDENTITY is not the key — see the `[pkg]` effect. */
+  const pkgIdRef = useRef(pkg?.id ?? null);
   const mountedRef = useRef(true);
+  const hydratedRef = useRef(options.initialState === undefined);
 
   const ctxRef = useRef<AudioContext | null>(null);
   const engineRef = useRef<SoundboardEngine | null>(null);
@@ -181,6 +315,10 @@ export function useSoundboard(
   const deadlineRef = useRef<number | null>(null);
   /** True while a `prompt`-urgency flush is already queued. */
   const promptPendingRef = useRef(false);
+  /** True while a write is in flight — writes are serialized, never raced. */
+  const inFlightRef = useRef(false);
+  /** A flush that arrived while a write was in flight, to run after it lands. */
+  const resaveRef = useRef(false);
 
   useEffect(() => {
     optionsRef.current = options;
@@ -191,10 +329,27 @@ export function useSoundboard(
   // Persistence
   // ---------------------------------------------------------------------
 
-  const runSave = useCallback((): void => {
+  const runSave = useCallback(function save(): void {
     timerRef.current = null;
     deadlineRef.current = null;
     promptPendingRef.current = false;
+
+    // `persist` may have flipped to `false` while this timer was pending — the
+    // guard in `scheduleSave` cannot see that. Firing anyway is a guaranteed
+    // server rejection plus a GlitchTip event, which is the loop `persist`
+    // exists to prevent.
+    if (optionsRef.current.persist === false) return;
+
+    // Writes are serialized. `saveBoardState` is a full-state REPLACE, so two
+    // concurrent writes are not merely wasteful: a slow 200 ms prompt write and
+    // a faster later settle write can land at Atlas in the wrong order and
+    // persist stale state. Queue instead, and re-read `stateRef` when the queued
+    // write actually runs so it carries the newest state rather than a snapshot.
+    if (inFlightRef.current) {
+      resaveRef.current = true;
+      return;
+    }
+    inFlightRef.current = true;
 
     const id = campaignIdRef.current;
     void saveBoardStateFn({ data: toBoardStatePayload(id, stateRef.current) })
@@ -208,11 +363,21 @@ export function useSoundboard(
         if (mountedRef.current) {
           setSaveError(error instanceof Error ? error.message : String(error));
         }
+      })
+      .finally(() => {
+        inFlightRef.current = false;
+        if (!resaveRef.current) return;
+        resaveRef.current = false;
+        save();
       });
   }, []);
 
   const scheduleSave = useCallback(
     (urgency: Exclude<SaveUrgency, 'none'>): void => {
+      // Nothing may be written before we know what is already persisted. This
+      // is the clobber gate: the `[pkg]` effect's `loadPackage` would otherwise
+      // arm a write of a blank board that a slower board-state query loses to.
+      if (!hydratedRef.current) return;
       if (optionsRef.current.persist === false) return;
 
       const now = Date.now();
@@ -276,9 +441,36 @@ export function useSoundboard(
 
   const loadAsset = useCallback(async (assetId: string): Promise<EngineAsset | null> => {
     const ctx = ctxRef.current;
-    if (!ctx) return null;
-    const asset = optionsRef.current.assets?.find((candidate) => candidate.id === assetId);
-    if (!asset || asset.status !== 'ready') return null;
+    if (!ctx) throw new Error('Soundboard: loadAsset ran with no AudioContext');
+
+    const assets = optionsRef.current.assets;
+    // `enableAudio` refuses to build an engine while this is undefined, so
+    // reaching here means the invariant broke. THROW rather than return null:
+    // both end up in the engine's permanent `unplayable` set, but only a throw
+    // reaches `onLoadError` -> `captureException` instead of vanishing.
+    if (!assets) throw new Error('Soundboard: loadAsset ran before the asset list settled');
+
+    const asset = assets.find((candidate) => candidate.id === assetId);
+    // Absent from a SETTLED list is not "nothing to play" — it is the list
+    // being wrong. Today that happens two ways: `listAudioAssetsFn` is
+    // cursor-paginated (default 50) while a package holds up to 64 items, and
+    // it filters `{ ownerId: userId }` so no system package's assets are ever
+    // in it (Task 21 adds `listPackageAssetsFn` to fix the source). Either way
+    // the pad dies permanently, so it must not die quietly.
+    if (!asset) throw new Error(`Soundboard: asset ${assetId} is not in the board's asset list`);
+    // Still transcoding: temporary in the world, permanent for this engine.
+    // Loud, for the same reason.
+    if (
+      asset.status === 'pending' ||
+      asset.status === 'processing' ||
+      asset.status === 'uploading'
+    ) {
+      throw new Error(`Soundboard: asset ${assetId} is not ready (status: ${asset.status})`);
+    }
+
+    // `failed`/no rendition are the only genuine "there is nothing to play,
+    // ever" answers, and the only ones that may return null silently.
+    if (asset.status !== 'ready') return null;
     const rendition = pickRendition(asset.renditions);
     if (!rendition) return null;
 
@@ -292,24 +484,91 @@ export function useSoundboard(
     return { buffer, durationSamples: asset.durationSamples };
   }, []);
 
+  const teardownAudio = useCallback((): void => {
+    schedulerRef.current?.dispose();
+    engineRef.current?.dispose();
+    void ctxRef.current?.close().catch(() => {});
+    schedulerRef.current = null;
+    engineRef.current = null;
+    ctxRef.current = null;
+  }, []);
+
   const enableAudio = useCallback(async (): Promise<void> => {
+    const fail = (message: string, error?: unknown) => {
+      captureException(error ?? new Error(message), {
+        area: 'soundboard',
+        campaignId: campaignIdRef.current,
+        stage: 'enableAudio',
+      });
+      if (mountedRef.current) {
+        setAudioReady(false);
+        setAudioError(message);
+      }
+    };
+
+    // Retry path. `ctxRef.current` is only ever a context that reached
+    // `running` WITH a live engine beside it, so a desync here means something
+    // tore one down; rebuild rather than trust it.
     const existing = ctxRef.current;
-    if (existing) {
-      if (existing.state === 'suspended') await existing.resume();
-      if (mountedRef.current) setAudioReady(existing.state === 'running');
+    if (existing && engineRef.current && existing.state !== 'closed') {
+      try {
+        if (existing.state !== 'running') await existing.resume();
+      } catch (error) {
+        fail(error instanceof Error ? error.message : String(error), error);
+        return;
+      }
+      if (existing.state !== 'running') {
+        fail(`Audio could not start (context is ${existing.state}).`);
+        return;
+      }
+      if (mountedRef.current) {
+        setAudioReady(true);
+        setAudioError(null);
+      }
+      return;
+    }
+    // Closed or desynced: nothing here is reusable.
+    if (existing) teardownAudio();
+
+    // Building the engine against an unsettled asset list produces permanently
+    // dead pads with nothing logged (see `assets` in the options type).
+    if (!optionsRef.current.assets) {
+      fail('Audio assets are still loading — try again in a moment.');
       return;
     }
 
     const create = optionsRef.current.createAudioContext ?? (() => new AudioContext());
-    const ctx = create();
-    ctxRef.current = ctx;
-    if (ctx.state === 'suspended') await ctx.resume();
-    if (!mountedRef.current) {
-      void ctx.close().catch(() => {});
+    let created: AudioContext | null = null;
+    try {
+      created = create();
+      if (created.state !== 'running') await created.resume();
+    } catch (error) {
+      // `ctxRef.current` is deliberately still NULL here. Assigning it before
+      // the resume settles is what made a rejected autoplay gesture
+      // unrecoverable: every later click took the retry path, resumed a
+      // context with no engine beside it, and returned green and silent.
+      if (created) void created.close().catch(() => {});
+      fail(error instanceof Error ? error.message : String(error), error);
       return;
     }
 
-    const engine = createEngine(ctx, {
+    // `resume()` can RESOLVE without the context reaching `running` — iOS
+    // Safari does exactly this on a stale gesture or during an audio-session
+    // interruption. Never infer readiness from the promise settling.
+    if (created.state !== 'running') {
+      const observed = created.state;
+      void created.close().catch(() => {});
+      fail(`Audio could not start (context is ${observed}).`);
+      return;
+    }
+
+    if (!mountedRef.current) {
+      void created.close().catch(() => {});
+      return;
+    }
+
+    ctxRef.current = created;
+    const engine = createEngine(created, {
       loadAsset,
       // The only signal that playback ended on its own — a one-shot reaching
       // the end of its buffer, or a loop flipped to 1x finishing its pass.
@@ -332,11 +591,37 @@ export function useSoundboard(
     engine.apply(stateRef.current);
     scheduler.sync(stateRef.current);
     setAudioReady(true);
-  }, [dispatch, loadAsset]);
+    setAudioError(null);
+  }, [dispatch, loadAsset, teardownAudio]);
 
   // ---------------------------------------------------------------------
-  // Reconciliation and lifecycle
+  // Hydration, reconciliation and lifecycle
   // ---------------------------------------------------------------------
+
+  const initialState = options.initialState;
+
+  // Declared BEFORE the `[pkg]` effect on purpose: in the commit where `pkg`
+  // first arrives, this runs first and claims the package id, so the `[pkg]`
+  // effect sees no change and cannot dispatch a `loadPackage` that would wipe
+  // what was just hydrated.
+  useEffect(() => {
+    if (hydratedRef.current) return;
+    if (initialState === 'pending') return;
+    // The persisted board names a package that has not arrived yet. Consuming
+    // hydration now would drop every item state (there are no items to overlay
+    // onto), so wait for the route to resolve it.
+    if (initialState && initialState.packageId !== null && pkg === null) return;
+
+    hydratedRef.current = true;
+    pkgIdRef.current = pkg?.id ?? null;
+    if (initialState) {
+      // Straight into the reducer, NOT through `dispatch`: hydration must not
+      // schedule a save. Re-writing what was just read would make merely
+      // opening the board the last write to `updatedBy`/`updatedAt`.
+      rawDispatch({ type: '@@hydrate', state: hydrateBoardState(pkg, initialState) });
+    }
+    setHydrated(true);
+  }, [initialState, pkg]);
 
   useEffect(() => {
     stateRef.current = state;
@@ -347,13 +632,19 @@ export function useSoundboard(
     schedulerRef.current?.sync(state);
   }, [state]);
 
-  // A package swap while the board is mounted. Keyed on `pkg` IDENTITY, not on
-  // `pkg.id`, matching `loadPackage`'s payload. There is no command for
-  // unloading, so `pkg` going null leaves the previous package on the board —
-  // Task 17 should unmount the board instead.
+  // A package swap while the board is mounted. Keyed on `pkg.id`, NOT object
+  // identity: a refetch that returns the same package with a moving
+  // `updatedAt` produces a new object every time, and identity-keying would
+  // reset the whole board mid-session and then persist the reset. The
+  // trade-off is deliberate — an in-place edit to the same package id is not
+  // picked up until the board remounts.
+  //
+  // There is no command for unloading, so `pkg` going null leaves the previous
+  // package on the board; Task 17 should unmount the board instead.
   useEffect(() => {
-    if (pkgRef.current === pkg) return;
-    pkgRef.current = pkg;
+    const id = pkg?.id ?? null;
+    if (pkgIdRef.current === id) return;
+    pkgIdRef.current = id;
     if (pkg) dispatch({ type: 'loadPackage', pkg });
   }, [pkg, dispatch]);
 
@@ -363,14 +654,9 @@ export function useSoundboard(
       mountedRef.current = false;
       // A pending debounce must not eat the GM's last change.
       flushSaveNow();
-      schedulerRef.current?.dispose();
-      engineRef.current?.dispose();
-      void ctxRef.current?.close().catch(() => {});
-      schedulerRef.current = null;
-      engineRef.current = null;
-      ctxRef.current = null;
+      teardownAudio();
     };
-  }, [flushSaveNow]);
+  }, [flushSaveNow, teardownAudio]);
 
-  return { state, dispatch, audioReady, enableAudio, saveError };
+  return { state, dispatch, audioReady, audioError, enableAudio, saveError, hydrated };
 }
