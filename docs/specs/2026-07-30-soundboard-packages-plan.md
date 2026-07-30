@@ -820,6 +820,16 @@ git commit -m "feat(soundboard): board pad, mood bar and master bar"
 
 Assembles everything: package picker, `useSoundboard`, mood bar, pads, master bar, and the **enable-audio** affordance.
 
+**Hydration is part of this task (added 2026-07-30).** `loadBoardStateFn` shipped in Task 7 and, as originally planned, was consumed by no task at all — the design's goal _"survive a mid-session page reload without silencing the table"_ had zero coverage anywhere in the plan. Fetch it here and hand the result to `useSoundboard`'s hydrate seam (Task 12's fix round adds one).
+
+Three things the naive approach gets wrong, all found in review:
+
+- **Do not hydrate by replaying commands.** A replay of `setMood` + per-item `play` cannot express an item the mood names but the GM had _stopped_ before the reload — `setMood` resolves it back to playing. Hydration sets state directly.
+- **Hydration must not schedule a save.** Every ordinary command is prompt- or settle-urgency, so a replay re-saves what it just read, silently making whoever _opened_ the board the last writer and destroying the `updatedBy` signal the design's two-GM handling depends on.
+- **Mind the clobber race.** The `[pkg]` effect dispatches `loadPackage`, which resets to `initialBoardState` and arms a prompt-urgency save. If board state or hydration lands after that, Atlas is overwritten with a blank board first. Order the two so hydration wins, and test it.
+
+**Asset source:** use Task 21's package-scoped resolver, not `listAudioAssetsFn`. See Task 21 for why the paginated owner-scoped list cannot serve a board.
+
 `beforeLoad` guard matching `dashboard.tsx`. Handlers passed to pads must be `useCallback`-stable if pads are memoized — phase 1 found `useDeleteConfirm` returning a fresh closure per render silently defeated a memo.
 
 Commit `app/routeTree.gen.ts` alongside.
@@ -863,6 +873,8 @@ git commit -m "feat(soundboard): attach a once-variant, writing onceRenditions"
 **Seed real fixtures**, as `e2e/globalSetup.ts` already does for audio. Do **not** guard assertions behind `if (await x.count())` — with no seed data that condition is always false and the spec reports coverage it does not have. Phase 1's plan made exactly that mistake.
 
 Cover: create a package → add an asset → define two moods → open the board → enable audio → switch mood → stop all.
+
+**Add a reload step (2026-07-30).** After switching mood, reload the page and assert the board comes back in the same state. This is the only coverage the design's headline persistence goal gets — Task 17 implements hydration, and nothing else exercises it end to end. Without this step the whole `SoundboardState` collection is write-only and untested.
 
 - [ ] Steps: seed, write the spec, run it, commit.
 
@@ -921,6 +933,65 @@ it('still deletes the asset when the prune throws', async () => {
 
 ```bash
 git commit -m "fix(audio): prune package item and mood references on asset delete"
+```
+
+---
+
+## Task 21: Asset readability for a package's items
+
+**Added 2026-07-30.** The design's Authorization section states **two** rules:
+
+> A package is visible if it is owned by the caller or is a system package.
+> An asset is readable if it is owned by the caller, **or is system-owned and referenced by a package the caller can see.**
+
+Task 4 implemented the first. **Nothing in the plan ever implemented the second** — `listAudioAssets` queries `{ ownerId: userId }` and nothing else, so a system package's pads are structurally unplayable. Cloning does not help: a clone copies asset _references_, not bytes, so a cloned system package still points at assets the cloner cannot read. The system-package mechanism 2a is supposed to ship has therefore never worked once, end to end.
+
+There is a second, independent defect the same resolver fixes. Task 12 was going to source board assets from `listAudioAssetsFn`, which is **cursor-paginated at 50 by default, 200 max**, while a package holds up to `MAX_PACKAGE_ITEMS` (64) items. A package whose assets straddle a page boundary gets permanently dead pads regardless of ownership — and the engine caches a failed load as permanently unplayable, so the pad stays dead for the rest of the session.
+
+**Files:**
+
+- Modify: `app/server/functions/packages.ts` (or a sibling — decide and say which)
+- Modify: `app/utils/soundboard-server-fns.ts`, `app/utils/queryKeys.ts`
+- Test: `tests/server/functions/package-assets.test.ts`, plus wrapper coverage
+
+**Interfaces:**
+
+- Produces: `listPackageAssets({ data: { packageId }, userId, sessionUserId })` → the `AudioAssetData[]` a board needs, and a `listPackageAssetsFn` wrapper.
+
+**The rule, expressed once.** Resolve the package through `packageVisibilityFilter` first — if the caller cannot see the package, they get nothing, and no asset query runs. Then read exactly the assets that package's items reference, scoped to `{ _id: { $in: referencedIds }, $or: [{ ownerId: userId }, { ownerId: null }] }`. **The `$in` is what bounds it** — this is not a library listing, it is "the assets this one package needs", so there is no pagination and no cap beyond the package's own 64.
+
+**Do not widen `listAudioAssets`.** That function is the library browser's, it is owner-scoped, and phase 1's review already caught a campaign-authorized function enumerating per-user data. A second, narrower, package-gated entry point is the safer shape.
+
+- [ ] **Step 1: The tests that matter**
+
+```ts
+it('refuses a package the caller cannot see, without querying assets at all', async () => {
+  // Assert AudioAsset.find was NOT called. Asserting only that it rejects
+  // passes with the gate deleted, because a later line throws anyway.
+});
+
+it('returns system-owned assets referenced by a system package', async () => {
+  // The case that is broken today. Assert the asset filter carries BOTH the
+  // $in of referenced ids AND the ownerId $or — either alone passes against
+  // half a fix.
+});
+
+it('does not return an asset the package does not reference', async () => {
+  // Fixture: caller owns two assets, the package references one.
+  // A resolver that ignores $in and just returns the owner's library
+  // passes every other test in this file.
+});
+
+it('returns all of a full package's assets, with no pagination boundary', async () => {
+  // MAX_PACKAGE_ITEMS items. This is the pagination defect; a fixture with
+  // three items cannot detect it.
+});
+```
+
+- [ ] **Steps 2–5:** Run, implement, verify, commit.
+
+```bash
+git commit -m "feat(soundboard): package-scoped asset readability for the board"
 ```
 
 ---
