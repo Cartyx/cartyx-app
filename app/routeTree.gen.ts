@@ -21,6 +21,7 @@ import { Route as CampaignsNewRouteImport } from './routes/campaigns/new'
 import { Route as CampaignJoinRouteImport } from './routes/campaign/join'
 import { Route as AuthLogoutRouteImport } from './routes/auth/logout'
 import { Route as AuthProviderRouteImport } from './routes/auth/$provider'
+import { Route as AudioPackagesRouteImport } from './routes/audio_.packages'
 import { Route as CampaignsCampaignIdSessionsRouteImport } from './routes/campaigns/$campaignId/sessions'
 import { Route as CampaignsCampaignIdPlayRouteImport } from './routes/campaigns/$campaignId/play'
 import { Route as CampaignsCampaignIdEditRouteImport } from './routes/campaigns/$campaignId/edit'
@@ -88,6 +89,11 @@ const AuthProviderRoute = AuthProviderRouteImport.update({
   path: '/auth/$provider',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AudioPackagesRoute = AudioPackagesRouteImport.update({
+  id: '/audio_/packages',
+  path: '/audio/packages',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CampaignsCampaignIdSessionsRoute =
   CampaignsCampaignIdSessionsRouteImport.update({
     id: '/campaigns/$campaignId/sessions',
@@ -129,6 +135,7 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/readyz': typeof ReadyzRoute
   '/terms': typeof TermsRoute
+  '/audio/packages': typeof AudioPackagesRoute
   '/auth/$provider': typeof AuthProviderRoute
   '/auth/logout': typeof AuthLogoutRoute
   '/campaign/join': typeof CampaignJoinRoute
@@ -149,6 +156,7 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/readyz': typeof ReadyzRoute
   '/terms': typeof TermsRoute
+  '/audio/packages': typeof AudioPackagesRoute
   '/auth/$provider': typeof AuthProviderRoute
   '/auth/logout': typeof AuthLogoutRoute
   '/campaign/join': typeof CampaignJoinRoute
@@ -170,6 +178,7 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/readyz': typeof ReadyzRoute
   '/terms': typeof TermsRoute
+  '/audio_/packages': typeof AudioPackagesRoute
   '/auth/$provider': typeof AuthProviderRoute
   '/auth/logout': typeof AuthLogoutRoute
   '/campaign/join': typeof CampaignJoinRoute
@@ -192,6 +201,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/readyz'
     | '/terms'
+    | '/audio/packages'
     | '/auth/$provider'
     | '/auth/logout'
     | '/campaign/join'
@@ -212,6 +222,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/readyz'
     | '/terms'
+    | '/audio/packages'
     | '/auth/$provider'
     | '/auth/logout'
     | '/campaign/join'
@@ -232,6 +243,7 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/readyz'
     | '/terms'
+    | '/audio_/packages'
     | '/auth/$provider'
     | '/auth/logout'
     | '/campaign/join'
@@ -253,6 +265,7 @@ export interface RootRouteChildren {
   PrivacyRoute: typeof PrivacyRoute
   ReadyzRoute: typeof ReadyzRoute
   TermsRoute: typeof TermsRoute
+  AudioPackagesRoute: typeof AudioPackagesRoute
   AuthProviderRoute: typeof AuthProviderRoute
   AuthLogoutRoute: typeof AuthLogoutRoute
   CampaignJoinRoute: typeof CampaignJoinRoute
@@ -351,6 +364,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthProviderRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/audio_/packages': {
+      id: '/audio_/packages'
+      path: '/audio/packages'
+      fullPath: '/audio/packages'
+      preLoaderRoute: typeof AudioPackagesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/campaigns/$campaignId/sessions': {
       id: '/campaigns/$campaignId/sessions'
       path: '/campaigns/$campaignId/sessions'
@@ -416,6 +436,7 @@ const rootRouteChildren: RootRouteChildren = {
   PrivacyRoute: PrivacyRoute,
   ReadyzRoute: ReadyzRoute,
   TermsRoute: TermsRoute,
+  AudioPackagesRoute: AudioPackagesRoute,
   AuthProviderRoute: AuthProviderRoute,
   AuthLogoutRoute: AuthLogoutRoute,
   CampaignJoinRoute: CampaignJoinRoute,
