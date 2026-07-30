@@ -31,6 +31,7 @@ function mkAsset(id: string, title: string): AudioAssetData {
     renditions: {},
     lastError: null,
     permanentFailure: false,
+    retryable: false,
     createdAt: '',
     updatedAt: '',
   };
@@ -101,7 +102,7 @@ describe('AudioLibraryBrowser', () => {
 
     it('forwards onRetry with the clicked asset', async () => {
       const onRetry = vi.fn();
-      const failed = { ...mkAsset('3', 'Broken'), status: 'failed' as const };
+      const failed = { ...mkAsset('3', 'Broken'), status: 'failed' as const, retryable: true };
       render(
         <AudioLibraryBrowser
           assets={[...rows, failed]}

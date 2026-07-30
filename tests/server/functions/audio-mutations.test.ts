@@ -358,6 +358,73 @@ describe('retryAudioAsset', () => {
       });
     }
 
+    /**
+     * F5 — the clause the UI could not see.
+     *
+     * The serializer's `retryable` is meant to be `retryAudioAsset`'s WHOLE
+     * filter, not a fragment of it. The previous arrangement exported
+     * `permanentFailure` alone and a comment claiming the two "can never
+     * disagree"; they disagreed for every row with a null `confirmedAt`, which
+     * is what `reapAbandonedUploads` and `confirmAudioUpload`'s reject path
+     * both produce.
+     *
+     * So this drives BOTH sides with the same documents and asserts they agree
+     * — the property, not either implementation.
+     */
+    it('serializes `retryable` as exactly what the retry filter accepts', async () => {
+      const { retryAudioAsset, serializeAudioAsset } = await import('~/server/functions/audio');
+      vi.mocked(AudioAsset.findOneAndUpdate).mockReset();
+      mockUpdateResult(null);
+      await expect(retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' })).rejects.toThrow(
+        /cannot be retried/i
+      );
+      const retryFilter = vi.mocked(AudioAsset.findOneAndUpdate).mock
+        .calls[0][0] as unknown as Record<string, unknown>;
+      // The ownership/id clauses are not the UI's business; it only ever asks
+      // about rows it was already served.
+      const { _id: _ignoredId, ownerId: _ignoredOwner, ...stateFilter } = retryFilter;
+
+      const confirmed = new Date();
+      const docs: Record<string, unknown>[] = [
+        // The two shapes the old UI got wrong: `failed`, not permanent, but
+        // never confirmed. Written by the upload reaper and by confirm's
+        // reject path respectively — the commonest failures there are.
+        { status: 'failed', confirmedAt: null, permanentFailure: false },
+        { status: 'failed', confirmedAt: null },
+        // The shape it got right.
+        { status: 'failed', confirmedAt: confirmed, permanentFailure: true },
+        // Genuinely retryable, including the legacy row with no field at all.
+        { status: 'failed', confirmedAt: confirmed, permanentFailure: false },
+        { status: 'failed', confirmedAt: confirmed },
+        // Every non-failed status, confirmed and clean.
+        { status: 'ready', confirmedAt: confirmed, permanentFailure: false },
+        { status: 'pending', confirmedAt: confirmed, permanentFailure: false },
+        { status: 'processing', confirmedAt: confirmed, permanentFailure: false },
+        { status: 'uploading', confirmedAt: null, permanentFailure: false },
+      ];
+
+      for (const doc of docs) {
+        const row = {
+          _id: 'a1',
+          ownerId: 'u1',
+          createdAt: new Date(0),
+          updatedAt: new Date(0),
+          ...doc,
+        };
+        expect(
+          serializeAudioAsset(row).retryable,
+          `serializer and filter disagree for ${JSON.stringify(doc)}`
+        ).toBe(matchesFilter(row, stateFilter));
+      }
+
+      // And it really discriminates — a test where both sides say `false` for
+      // everything would pass vacuously.
+      const outcomes = docs.map((doc) =>
+        matchesFilter({ _id: 'a1', ownerId: 'u1', ...doc }, stateFilter)
+      );
+      expect(outcomes.filter(Boolean).length).toBe(2);
+    });
+
     it('excludes a row that never passed confirm, and admits one that did', async () => {
       const { createAudioUpload, confirmAudioUpload, retryAudioAsset } =
         await import('~/server/functions/audio');

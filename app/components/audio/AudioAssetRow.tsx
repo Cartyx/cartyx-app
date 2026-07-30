@@ -35,7 +35,7 @@ export interface AudioAssetRowProps {
   onEdit?: (asset: AudioAssetData) => void;
   /** Called with the full asset when the delete button is clicked. Available regardless of status — a stuck `failed`/`pending` asset is exactly the kind of thing a GM most needs to be able to remove. */
   onDelete?: (asset: AudioAssetData) => void;
-  /** Called with the full asset when the retry button is clicked. Rendered for `failed` assets that are NOT `permanentFailure` — the source object is still in R2, so a transient transcode failure is recoverable without re-uploading. */
+  /** Called with the full asset when the retry button is clicked. Rendered only for assets the server's `retryAudioAsset` would actually accept — `asset.retryable`, which is that function's whole filter evaluated server-side. The source object is still in R2, so a transient transcode failure is recoverable without re-uploading. */
   onRetry?: (asset: AudioAssetData) => void;
 }
 
@@ -147,15 +147,20 @@ function AudioAssetRowComponent({
                 only recovery is delete-and-re-upload, for a 50-file bulk import
                 the whole folder.
 
-                `permanentFailure` means the worker rejected the source itself,
-                and `retryAudioAsset` refuses those rows. Rendering the button
-                anyway is what made it a lie: the server function's rejection is
-                a single message naming all four of its preconditions at once
-                ("not found, not failed, its upload never completed, or the file
-                itself was rejected"), so the click's only possible outcome was
-                an error that could not say which. Say it here instead, where the
+                `retryable` is `retryAudioAsset`'s WHOLE filter, evaluated
+                server-side (see `serializeAudioAsset`). This used to test
+                `permanentFailure` alone, which is only one of the server's three
+                clauses — the other two are `status: 'failed'` (checked above)
+                and `confirmedAt != null` (which the client had no field for).
+                That last gap covered the most common failed rows there are: the
+                upload reaper and confirm's reject path both write `failed` with
+                a null `confirmedAt`. Retry rendered on them, and the server's
+                rejection is a single message naming all four possible causes at
+                once ("not found, not failed, its upload never completed, or the
+                file itself was rejected"), so the click's only outcome was an
+                error that could not say which. Say it here instead, where the
                 reason is known. */}
-            {asset.permanentFailure ? (
+            {!asset.retryable ? (
               <span className="text-xs text-slate-500">Cannot be retried</span>
             ) : (
               <button
@@ -170,7 +175,16 @@ function AudioAssetRowComponent({
             <span className="flex items-center gap-1.5 text-xs text-red-400">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
               {asset.lastError ?? 'Processing failed'}
-              {asset.permanentFailure && ' — re-upload a corrected file to try again'}
+              {/* Two different non-retryable rows, and the advice differs.
+                  `permanentFailure` means the worker read the file and refused
+                  it, so a different file is needed. Otherwise a non-retryable
+                  row is one that never passed confirm — the object was never
+                  measured and confirm's reject path has usually already deleted
+                  it — so the fix is to upload again, not to fix the file. */}
+              {!asset.retryable &&
+                (asset.permanentFailure
+                  ? ' — re-upload a corrected file to try again'
+                  : ' — this upload never completed; upload the file again')}
             </span>
           </>
         ) : asset.status === 'pending' ? (

@@ -22,6 +22,7 @@ const asset: AudioAssetData = {
   renditions: {},
   lastError: null,
   permanentFailure: false,
+  retryable: false,
   createdAt: '',
   updatedAt: '',
 };
@@ -92,7 +93,12 @@ describe('AudioAssetRow', () => {
   describe('retry', () => {
     it('offers Retry on a failed asset and calls back with that asset', async () => {
       const onRetry = vi.fn();
-      const failed = { ...asset, status: 'failed' as const, lastError: 'bad codec' };
+      const failed = {
+        ...asset,
+        status: 'failed' as const,
+        retryable: true,
+        lastError: 'bad codec',
+      };
       renderRow(<AudioAssetRow asset={failed} onRetry={onRetry} />);
 
       // Without this the only recovery from one transient transcode failure is
@@ -112,46 +118,79 @@ describe('AudioAssetRow', () => {
     );
 
     /**
-     * D-2 — the button that lied.
+     * D-2 — the button that lied, and F5 — the half of it that stayed lying.
      *
-     * `retryAudioAsset` filters on `permanentFailure: { $ne: true }`, so a row
-     * the worker rejected for its own content can never be retried. The row
-     * offered the button anyway, and the server function's rejection is one
-     * message naming all four of its preconditions at once ("not found, not
-     * failed, its upload never completed, or the file itself was rejected") —
-     * so the click's only outcome was an error that could not say which.
+     * `retryAudioAsset` has THREE preconditions. The row used to gate on
+     * `permanentFailure` alone, i.e. on one of them, so it kept offering Retry
+     * for every row whose `confirmedAt` is null — and those are not an edge
+     * case: `reapAbandonedUploads` and `confirmAudioUpload`'s reject path each
+     * write `failed` with a null `confirmedAt`, which is most of the failed rows
+     * the system produces. The click's only outcome was the server's four-way
+     * error, naming every precondition at once and identifying none.
+     *
+     * `retryable` is now that whole filter, evaluated server-side, so these
+     * cases are the UI mirroring ONE value rather than re-deriving three.
      */
-    it('does not offer Retry on a permanently failed asset', () => {
+    it.each([
+      [
+        'a source the worker itself rejected',
+        { permanentFailure: true, retryable: false, lastError: 'Audio file is completely silent' },
+      ],
+      [
+        'an upload the reaper aged out before it was ever confirmed',
+        { permanentFailure: false, retryable: false, lastError: 'Upload never completed' },
+      ],
+      [
+        'a file confirm refused for its type',
+        {
+          permanentFailure: false,
+          retryable: false,
+          lastError: 'Unsupported audio type: text/csv',
+        },
+      ],
+    ])('does not offer Retry for %s', (_label, overrides) => {
       const onRetry = vi.fn();
       renderRow(
-        <AudioAssetRow
-          asset={{
-            ...asset,
-            status: 'failed',
-            permanentFailure: true,
-            lastError: 'Audio file is completely silent',
-          }}
-          onRetry={onRetry}
-        />
+        <AudioAssetRow asset={{ ...asset, status: 'failed', ...overrides }} onRetry={onRetry} />
       );
       expect(screen.queryByRole('button', { name: /^Retry/ })).not.toBeInTheDocument();
+      expect(screen.getByText(/cannot be retried/i)).toBeInTheDocument();
     });
 
-    it('says why a permanently failed asset cannot be retried', () => {
+    it('says a permanently failed asset needs a different file', () => {
       renderRow(
         <AudioAssetRow
           asset={{
             ...asset,
             status: 'failed',
             permanentFailure: true,
+            retryable: false,
             lastError: 'Audio is 47 minutes long, over the 30 minute limit',
           }}
         />
       );
       // The reason is known here, so state it here — the server function cannot.
-      expect(screen.getByText(/cannot be retried/i)).toBeInTheDocument();
-      expect(screen.getByText(/re-upload/i)).toBeInTheDocument();
+      expect(screen.getByText(/re-upload a corrected file/i)).toBeInTheDocument();
       expect(screen.getByText(/47 minutes long/i)).toBeInTheDocument();
+    });
+
+    it('says an unconfirmed upload needs uploading again, not correcting', () => {
+      // Different advice, because it is a different problem: nothing is wrong
+      // with the file, the transfer never finished and confirm has usually
+      // already deleted whatever partial object there was.
+      renderRow(
+        <AudioAssetRow
+          asset={{
+            ...asset,
+            status: 'failed',
+            permanentFailure: false,
+            retryable: false,
+            lastError: 'Upload never completed',
+          }}
+        />
+      );
+      expect(screen.getByText(/upload the file again/i)).toBeInTheDocument();
+      expect(screen.queryByText(/re-upload a corrected file/i)).not.toBeInTheDocument();
     });
 
     it('still offers Retry on a transient failure', () => {
@@ -159,7 +198,13 @@ describe('AudioAssetRow', () => {
       // what the button exists for, and must not be swept up with the above.
       renderRow(
         <AudioAssetRow
-          asset={{ ...asset, status: 'failed', permanentFailure: false, lastError: 'R2 timeout' }}
+          asset={{
+            ...asset,
+            status: 'failed',
+            permanentFailure: false,
+            retryable: true,
+            lastError: 'R2 timeout',
+          }}
           onRetry={vi.fn()}
         />
       );

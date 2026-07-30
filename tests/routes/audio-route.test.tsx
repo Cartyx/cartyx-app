@@ -79,6 +79,7 @@ function mkAsset(overrides: Partial<AudioAssetData> = {}): AudioAssetData {
     renditions: { opus: { key: 'k1', url: 'https://cdn.example/a1.ogg', bytes: 100 } },
     lastError: null,
     permanentFailure: false,
+    retryable: false,
     createdAt: '',
     updatedAt: '',
     ...overrides,
@@ -463,7 +464,13 @@ describe('AudioLibraryPage', () => {
       listAudioAssetsFn
         .mockResolvedValueOnce({
           items: [
-            mkAsset({ id: 'a1', title: 'Storm', status: 'failed', lastError: 'ffmpeg exploded' }),
+            mkAsset({
+              id: 'a1',
+              title: 'Storm',
+              status: 'failed',
+              retryable: true,
+              lastError: 'ffmpeg exploded',
+            }),
           ],
           nextCursor: null,
         })
@@ -483,7 +490,15 @@ describe('AudioLibraryPage', () => {
 
     it('surfaces an error when the retry fails, leaving the row failed', async () => {
       listAudioAssetsFn.mockResolvedValue({
-        items: [mkAsset({ id: 'a1', title: 'Storm', status: 'failed', lastError: 'boom' })],
+        items: [
+          mkAsset({
+            id: 'a1',
+            title: 'Storm',
+            status: 'failed',
+            retryable: true,
+            lastError: 'boom',
+          }),
+        ],
         nextCursor: null,
       });
       retryAudioAssetFn.mockRejectedValue(new Error('retry boom'));

@@ -20,6 +20,7 @@ const base: AudioAssetData = {
   renditions: {},
   lastError: null,
   permanentFailure: false,
+  retryable: false,
   createdAt: '',
   updatedAt: '',
 };
@@ -91,6 +92,10 @@ export const Failed: Story = {
     asset: {
       ...base,
       status: 'failed',
+      // `retryable` is `retryAudioAsset`'s whole filter, evaluated server-side
+      // — see `serializeAudioAsset`. It is what decides whether the button
+      // renders; `permanentFailure` only decides what the row says instead.
+      retryable: true,
       lastError: 'Unsupported codec',
       peaks: [],
       durationMs: null,
@@ -116,6 +121,32 @@ export const FailedPermanently: Story = {
       status: 'failed',
       permanentFailure: true,
       lastError: 'Audio is 47 minutes long, over the 30 minute limit',
+      peaks: [],
+      durationMs: null,
+    },
+    onEdit: () => {},
+    onDelete: () => {},
+    onRetry: () => {},
+  },
+};
+
+/**
+ * The OTHER non-retryable failure, and the one the UI used to get wrong: a row
+ * that never passed confirm. `reapAbandonedUploads` writes exactly this for
+ * every upload that was abandoned mid-transfer, and `confirmAudioUpload`'s
+ * reject path writes it for every file that was too large or the wrong type —
+ * so it is far commoner than `permanentFailure`. Retry rendered on it and threw.
+ * Nothing is wrong with the FILE here, so the advice is to upload it again
+ * rather than to correct it.
+ */
+export const FailedUnconfirmed: Story = {
+  args: {
+    asset: {
+      ...base,
+      status: 'failed',
+      permanentFailure: false,
+      retryable: false,
+      lastError: 'Upload never completed',
       peaks: [],
       durationMs: null,
     },

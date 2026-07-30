@@ -99,6 +99,28 @@ export type AudioAssetData = {
    * whose only outcome is an error that cannot say why is worse than no button.
    */
   permanentFailure: boolean;
+  /**
+   * Whether `retryAudioAsset` will actually accept this row — the server's
+   * WHOLE filter, evaluated once on the server, not a fragment of it the client
+   * re-derives.
+   *
+   * `retryAudioAsset` has THREE preconditions (`status: 'failed'`,
+   * `confirmedAt != null`, `permanentFailure !== true`) and the UI used to
+   * mirror two of them, because `confirmedAt` was never serialized. The rows
+   * that fell through the gap are the most common ones the system produces:
+   * `reapAbandonedUploads` and `confirmAudioUpload`'s reject path both write
+   * `failed` with `confirmedAt` still null. Retry rendered on those, and the
+   * click's only possible outcome was the four-way error naming every
+   * precondition at once — the exact failure `permanentFailure` was serialized
+   * to fix, reintroduced through the clause nobody exported.
+   *
+   * ONE derived flag rather than a third raw field, because "the UI mirrors the
+   * server's filter" is only checkable if there is one thing to mirror.
+   * `permanentFailure` stays alongside it: `retryable === false` says the button
+   * must not render, and `permanentFailure` says WHY, which is the difference
+   * between "re-upload a corrected file" and "your upload never finished".
+   */
+  retryable: boolean;
   createdAt: string;
   updatedAt: string;
 };

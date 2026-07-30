@@ -22,6 +22,7 @@ const asset: AudioAssetData = {
   renditions: {},
   lastError: null,
   permanentFailure: false,
+  retryable: false,
   createdAt: '',
   updatedAt: '',
 };

@@ -222,6 +222,7 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     renditions?: AudioAssetData['renditions'];
     lastError?: string | null;
     permanentFailure?: boolean | null;
+    confirmedAt?: Date | null;
     createdAt?: Date;
     updatedAt?: Date;
   };
@@ -241,10 +242,32 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     peaks: d.peaks ?? [],
     renditions: d.renditions ?? {},
     lastError: d.lastError ?? null,
-    // Mirrors `retryAudioAsset`'s `{ $ne: true }` exactly, so the UI's decision
-    // to offer Retry and the server's decision to accept it can never disagree.
-    // Absent (a row written before the field existed) means retryable.
+    // Serialized so the UI can EXPLAIN a non-retryable row, not so it can
+    // decide about one — `retryable` below is what decides. Absent (a row
+    // written before the field existed) means not-permanent.
     permanentFailure: d.permanentFailure === true,
+    // `retryAudioAsset`'s filter, all three clauses, evaluated here.
+    //
+    // The comment this replaces claimed that serializing `permanentFailure`
+    // meant the UI and the server "can never disagree". It was false the day it
+    // was written: the filter also requires `status: 'failed'` (which the UI did
+    // check) and `confirmedAt != null` (which it could not, because
+    // `confirmedAt` was not serialized). Both of the rows that condition exists
+    // to exclude are ROUTINE — `reapAbandonedUploads` writes `failed` with a
+    // null `confirmedAt` for every upload that was abandoned, and
+    // `confirmAudioUpload`'s reject path does the same for every file that was
+    // too large or the wrong type — so the Retry button rendered on them and
+    // threw. Mirroring a filter clause-by-clause across a network boundary is
+    // the kind of thing that is right when written and wrong a commit later;
+    // one derived boolean is the thing the UI can mirror EXACTLY.
+    //
+    // Kept literally parallel to the query below so the correspondence is
+    // checkable by eye, and `tests/server/functions/audio-mutations.test.ts`
+    // drives both against the same documents.
+    retryable:
+      (d.status ?? '') === 'failed' &&
+      (d.confirmedAt ?? null) !== null &&
+      d.permanentFailure !== true,
     createdAt: d.createdAt instanceof Date ? d.createdAt.toISOString() : '',
     updatedAt: d.updatedAt instanceof Date ? d.updatedAt.toISOString() : '',
   };
@@ -474,7 +497,11 @@ export async function bulkTagAudioAssets({
  * it on the next pass, and the claim fields are cleared so it can't look
  * in-flight.
  *
- * The filter carries THREE preconditions, and all are load-bearing:
+ * The filter carries THREE preconditions, and all are load-bearing. All three
+ * are also mirrored to the client, as the single derived `retryable` flag
+ * `serializeAudioAsset` computes — see there for why one flag rather than three
+ * fields, and for what went wrong when only two of the three were reachable
+ * from the UI.
  *
  * - `status: 'failed'` — this can never be used to yank a `ready` asset back
  *   through the worker; that is the same abuse `confirmAudioUpload`'s own
