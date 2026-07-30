@@ -4,7 +4,13 @@ import { promisify } from 'node:util';
 import { mkdtempSync, rmSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { probe, analyze, transcode, RENDITION_SAMPLE_RATE } from '../src/ffmpeg.js';
+import {
+  probe,
+  analyze,
+  transcode,
+  boundedDecodeFilters,
+  RENDITION_SAMPLE_RATE,
+} from '../src/ffmpeg.js';
 import { extractPeaks, pcmBytesForMs, WORST_CASE_PCM_BYTES } from '../src/peaks.js';
 import { buildFixtures, type Fixtures } from './fixtures.js';
 
@@ -52,8 +58,14 @@ vi.mock('@aws-sdk/client-s3', () => {
   return { S3Client: FakeS3Client, GetObjectCommand, PutObjectCommand, DeleteObjectCommand };
 });
 
-const { processAsset, MEASURE_LIMIT_SECONDS, RENDER_LIMIT_SECONDS, MAX_SOURCE_DURATION_MS } =
-  await import('../src/process.js');
+const {
+  processAsset,
+  MEASURE_LIMIT_SECONDS,
+  RENDER_LIMIT_SECONDS,
+  MAX_SOURCE_DURATION_MS,
+  MAX_RENDITION_SHORTFALL_MS,
+  MAX_RENDITION_OVERRUN_MS,
+} = await import('../src/process.js');
 
 let dir: string;
 let fx: Fixtures;
@@ -431,13 +443,21 @@ describe('processAsset end to end', () => {
         for (const put of puts) {
           const ext = put.Key.endsWith('.opus') ? 'opus' : 'm4a';
           const actualMs = await publishedMs(put.Body, ext);
-          // Renditions may run LONG by encoder/container padding and may never
-          // run short by more than MAX_RENDITION_SHORTFALL_MS — the published
-          // audio is the recorded duration, not a different pass's idea of it.
-          expect(actualMs).toBeGreaterThan(durationMs - 500);
-          expect(actualMs).toBeLessThan(durationMs + 500);
+          // The published audio is the recorded duration, not a different
+          // pass's idea of it — in BOTH directions, and to the same allowances
+          // `assertRenditionComplete` enforces.
+          expect(durationMs - actualMs).toBeLessThanOrEqual(MAX_RENDITION_SHORTFALL_MS);
+          expect(actualMs - durationMs).toBeLessThanOrEqual(MAX_RENDITION_OVERRUN_MS);
           // And never longer than the cap, which is the load-bearing half.
-          expect(actualMs).toBeLessThanOrEqual(MAX_SOURCE_DURATION_MS);
+          //
+          // The allowance is NOT optional slack here: a source AT the cap
+          // renders to 1 800 000 ms of audio in a container that declares
+          // 1 800 007 ms (Ogg/Opus pre-skip), so a bare
+          // `toBeLessThanOrEqual(MAX_SOURCE_DURATION_MS)` — which is what this
+          // was — fails the moment the at-cap boundary fixtures are promoted
+          // into CI, on a rendition that is entirely correct. The cap binds the
+          // AUDIO; the container may declare its padding.
+          expect(actualMs).toBeLessThanOrEqual(MAX_SOURCE_DURATION_MS + MAX_RENDITION_OVERRUN_MS);
         }
       },
       120_000
@@ -448,10 +468,19 @@ describe('processAsset end to end', () => {
       // this measures 5.02 s and PUBLISHES, with 31-minute renditions behind a
       // row claiming 5 seconds. Under the decoded-sample bound it measures over
       // the cap and never reaches an encoder.
+      //
+      // SINGLE-FORMAT throughout (see the fixture): it must be refused for its
+      // LENGTH. The fixture used to join two different formats, so once
+      // multi-format sources became a rejection of their own this passed on the
+      // wrong one and the over-cap path went unasserted.
+      expect((await analyze(fx.gapOverCap, MEASURE_LIMIT_SECONDS)).segments).toBe(1);
       const { written, puts } = await processFixture(fx.gapOverCap, 0);
       expect(written.status).toBe('failed');
       expect(written.permanentFailure).toBe(true);
-      expect(written.lastError).toMatch(/over the 30 minute limit/i);
+      // Not "is 30 minutes long, over the 30 minute limit": the measuring pass
+      // stopped at the bound, so the file's length is not known and must not be
+      // quoted. See `assertDecodedUsable`.
+      expect(written.lastError).toBe('Audio is longer than the 30 minute limit');
       expect(puts).toHaveLength(0);
     }, 120_000);
 
@@ -472,6 +501,51 @@ describe('processAsset end to end', () => {
       expect(written.lastError).toMatch(/changes audio format part way through/i);
       expect(puts).toHaveLength(0);
     }, 120_000);
+
+    /**
+     * THE FILTER PREFIX'S OWN FAILURE MODE, driven through the real code.
+     *
+     * Thirty rebuilds in one file. Under the previous prefix this did not fail
+     * on its contents at all — it failed on `execFile`'s stderr buffer, with
+     * `lastError: "stderr maxBuffer length exceeded"`, retryably, three times,
+     * on a row the UI then offered a Retry button for. Both halves are asserted:
+     * the stderr stays small, AND the rejection is permanent and readable.
+     */
+    it('refuses a thirty-segment source once, permanently, without flooding stderr', async () => {
+      const decoded = await analyze(fx.manySegments, MEASURE_LIMIT_SECONDS);
+      expect(decoded.segments).toBe(30);
+
+      // The flood, measured rather than asserted about: run the exact command
+      // `analyze` runs and weigh its stderr. The old prefix produced 7 140 647 B
+      // on the 60 s version of this file; the bound is 8 MiB.
+      const { stderr } = await run('ffmpeg', [
+        '-v',
+        'info',
+        '-hide_banner',
+        '-nostats',
+        '-i',
+        fx.manySegments,
+        '-map',
+        '0:a:0',
+        '-af',
+        `${boundedDecodeFilters(RENDITION_SAMPLE_RATE, MEASURE_LIMIT_SECONDS)},astats=measure_perchannel=none:measure_overall=Peak_level+Number_of_samples`,
+        '-f',
+        'null',
+        '-',
+      ]);
+      expect(stderr).not.toMatch(/non monotonic/i);
+      // Thirty astats reports are ~13 KB. Anything approaching the 8 MiB
+      // ceiling means the prefix is rewriting timestamps again.
+      expect(stderr.length).toBeLessThan(64 * 1024);
+
+      const { written, puts } = await processFixture(fx.manySegments, 0);
+      expect(written.status).toBe('failed');
+      expect(written.permanentFailure).toBe(true);
+      expect(written.lastError).toMatch(/changes audio format part way through \(30 segments\)/i);
+      // Never the leaked command line or the buffer error.
+      expect(written.lastError).not.toMatch(/Command failed|ffmpeg -v error|maxBuffer/);
+      expect(puts).toHaveLength(0);
+    }, 180_000);
 
     it('reads the whole of a gap-timeline file, where a -t bound reads one clip', async () => {
       // The two bounds, side by side, on the same file. This is the measurement

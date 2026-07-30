@@ -328,7 +328,7 @@ export function buildFixtures(dir: string): Fixtures {
   // alone, and that is the same arithmetic that rejected honest 17-minute VBR
   // music: a header is not a length. What made judging it on the header look
   // necessary was the cost of decoding an hours-long source, and the bounded
-  // decode (see `DECODE_LIMIT_SECONDS`) removes that cost instead.
+  // decode (see `MEASURE_LIMIT_SECONDS`) removes that cost instead.
   const overCapTruncated = p('over-cap-truncated.mp3');
   truncate(overCap, overCapTruncated, 40_000 / readFileSync(overCap).length);
 
@@ -337,7 +337,29 @@ export function buildFixtures(dir: string): Fixtures {
   // the decoded-sample bound it measures over the cap and is refused. This is
   // the fixture that separates the two bounds on the OUTCOME and not just on
   // the number.
-  const gapOverCap = gapConcat('gap-over-cap', gapClip, overCap, 3000);
+  //
+  // Its body is built at gapClip's OWN rate and layout (44.1 kHz stereo) rather
+  // than reusing `overCap`, which is 8 kHz mono. That is not tidiness: joining
+  // two different formats makes ffmpeg rebuild the filter graph, so the old
+  // fixture was over the cap AND multi-format at once, and once
+  // `assertDecodedUsable` learned to refuse multi-format sources it was refused
+  // for that instead — leaving the over-cap-behind-a-gap path, the thing this
+  // fixture exists for, asserted by nothing. One property per fixture.
+  const gapOverCapBody = p('gap-over-cap-body.mp3');
+  ffmpeg([
+    '-f',
+    'lavfi',
+    '-i',
+    'sine=frequency=220:duration=1860:sample_rate=44100',
+    '-ac',
+    '2',
+    '-c:a',
+    'libmp3lame',
+    '-b:a',
+    '32k',
+    gapOverCapBody,
+  ]);
+  const gapOverCap = gapConcat('gap-over-cap', gapClip, gapOverCapBody, 3000);
 
   /*
    * A source that changes SAMPLE RATE AND CHANNEL LAYOUT part way through: a
@@ -386,6 +408,59 @@ export function buildFixtures(dir: string): Fixtures {
   ]);
   const multiRate = p('multi-rate.mp3');
   writeFileSync(multiRate, Buffer.concat([readFileSync(rateA), readFileSync(rateB)]));
+
+  /*
+   * THE SAME SHAPE, THIRTY TIMES OVER — the fixture that made the filter
+   * prefix's own failure mode visible.
+   *
+   * Thirty 2 s segments alternating 44.1 kHz and 32 kHz, raw-concatenated, so
+   * ffmpeg rebuilds the filter graph twenty-nine times in one file. `multiRate`
+   * above rebuilds it twice and hides what that costs; the cost is per output
+   * FRAME, so only a file with many rebuilds and real length shows it.
+   *
+   * With the previous prefix (`asetpts=N/SR/TB,atrim=end=<limit>`) each rebuild
+   * restarted `asetpts`'s sample counter, so the timestamps handed to the
+   * `-f null -` muxer jumped backwards and ffmpeg emitted one
+   * "non monotonically increasing dts" warning per frame until they caught up.
+   * `analyze` is the only stage running at `-v info`, so it was the only one
+   * that collected them. Measured on a 60 s version of this file (thirty 60 s
+   * segments, 7.2 MB):
+   *
+   *   asetpts=N/SR/TB,atrim=end=1801      7 140 647 B of stderr, 57 191 warnings
+   *   atrim=end_sample=86 448 000            13 908 B of stderr,      0 warnings
+   *
+   * At 8 MiB — `FFMPEG_STDERR_MAX_BYTES` — the first overflows `execFile`'s
+   * buffer and the asset fails on `stderr maxBuffer length exceeded`: an opaque
+   * message, three times over, on a row the UI offered a Retry button for.
+   *
+   * Kept SHORT (2 s segments) because the property under test is the rebuild
+   * COUNT, not the duration; the byte volumes above were measured on the long
+   * version and do not need to be paid on every push. It must FAIL, permanently,
+   * naming its format changes — and it must do so from `analyze`'s measurement,
+   * before either encoder runs.
+   */
+  const manySegments = p('many-segments.mp3');
+  {
+    const parts: Buffer[] = [];
+    for (let i = 0; i < 30; i++) {
+      const seg = p(`seg-${i}.mp3`);
+      ffmpeg([
+        '-f',
+        'lavfi',
+        '-i',
+        `sine=frequency=${300 + i * 10}:duration=2:sample_rate=${i % 2 === 0 ? 44100 : 32000}`,
+        '-ac',
+        '2',
+        '-c:a',
+        'libmp3lame',
+        '-b:a',
+        '32k',
+        seg,
+      ]);
+      parts.push(readFileSync(seg));
+    }
+    writeFileSync(manySegments, Buffer.concat(parts));
+  }
 
   /*
    * THE FIXTURE THAT KILLS THE HEADER PRE-GATE.
@@ -651,6 +726,7 @@ export function buildFixtures(dir: string): Fixtures {
     gapTimeline,
     gapOverCap,
     multiRate,
+    manySegments,
     absurdHeaderClaim,
     adtsAac,
     oggOpus,

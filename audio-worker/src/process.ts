@@ -78,10 +78,64 @@ export { MAX_SOURCE_DURATION_MS, MEASURE_LIMIT_SECONDS, RENDER_LIMIT_SECONDS };
  * error — so ordinary music was permanently rejected as "truncated" with no way
  * back. A tolerance can only ever be as trustworthy as the number it is a
  * tolerance on.
- *
- * The check is still ONE-SIDED: padding can only make a rendition longer.
  */
 export const MAX_RENDITION_SHORTFALL_MS = 500;
+
+/**
+ * How far a rendition may run PAST the recorded duration: 250 ms.
+ *
+ * The check used to have no such side, and the comment above used to end "the
+ * check is still ONE-SIDED: padding can only make a rendition longer" — which
+ * is true about padding and false about the failure this guard exists for.
+ * Round 6's actual defect was a `ready` row recording 5 025 ms against
+ * 1 005 100 ms renditions. `decodedMs - renditionMs` is NEGATIVE there, roughly
+ * minus a million, so the shortfall test could not fire and did not. The one
+ * thing that caught it was `analyze` summing its segment reports — i.e. the
+ * guard was, once again, an argument made per commit rather than a check made
+ * per asset. This is the check.
+ *
+ * ASYMMETRIC, because the two directions have different benign causes.
+ *
+ * The overrun is NOT the handful of milliseconds of encoder padding it was
+ * previously described as. Driving the real chain over a duration sweep
+ * (4000 ms to 15 678 ms, 14 ms apart) shows the rendition's container duration
+ * is exactly the decoded length ROUNDED UP TO A WHOLE 100 ms:
+ *
+ *   decoded 4000 ms -> m4a 4000 ms (+0)      decoded 4013 -> 4100 (+87)
+ *   decoded 4027    -> 4100      (+73)       decoded 4097 -> 4100  (+3)
+ *   decoded 9999    -> 10 000    (+1)        decoded 12 345 -> 12 400 (+55)
+ *
+ * That is `loudnorm`'s frame: it processes in `sample_rate / 10` blocks and
+ * pads the final partial one. So the structural worst is
+ *
+ *   < 100 ms   loudnorm's final-frame padding
+ *   +  6.5 ms  Ogg/Opus pre-skip and end padding (the opus leg runs exactly
+ *              this much above the aac leg on every fixture measured)
+ *   +  0.479 ms the cap-rounding below
+ *   ------------------------------------------------------------------------
+ *   < 107 ms
+ *
+ * and the worst OBSERVED across the whole fixture corpus is 101 ms
+ * (`overCapTruncated`, opus). 250 ms is 2.3x the structural worst. Note this is
+ * the number to fix if `loudnorm` is ever replaced or its two-pass form adopted
+ * — it is a property of that filter, not of the encoders.
+ *
+ * The padding is TRAILING, not leading, which is what makes it safe to allow at
+ * all: an impulse test (transients in the first and last millisecond of a
+ * 4013 ms source) finds them at output samples 0 and 192 625 against input
+ * positions 0 and 192 576 — no shift. Phase 2's `loopEnd = durationSamples`
+ * therefore still lands on real content, with the padding beyond it.
+ *
+ * The 0.479 ms is real and covered deliberately rather than absorbed by a round
+ * number. `assertDecodedUsable` compares `Math.round(samples / 48)` against the
+ * cap, so the largest sample count it accepts is 86 400 023 — 23 samples past
+ * the 86 400 000 the render bound then cuts at. The recorded `durationSamples`
+ * can therefore sit up to 23 samples ahead of what the renditions hold.
+ *
+ * And 250 ms still catches the thing it is for by four orders of magnitude: the
+ * round 6 divergence was a 1 000 075 ms overrun.
+ */
+export const MAX_RENDITION_OVERRUN_MS = 250;
 
 /** Duration in whole minutes for a `lastError` a human reads, e.g. "47 minutes". */
 function formatMinutes(ms: number): string {
@@ -96,10 +150,37 @@ function formatMinutes(ms: number): string {
  * different answer, so they must not consume the retry budget or be reachable
  * from the Retry button.
  */
-export function assertDecodedUsable(decoded: { samples: number; peakDb: number }): {
+export function assertDecodedUsable(decoded: {
+  samples: number;
+  peakDb: number;
+  segments?: number;
+}): {
   durationMs: number;
   durationSamples: number;
 } {
+  if ((decoded.segments ?? 1) > 1) {
+    // A source that changes sample rate, sample format or channel layout part
+    // way through makes ffmpeg tear down and rebuild the whole filter graph at
+    // the change, which discards whatever `loudnorm` is holding in its
+    // 3-second lookahead. The renditions come out SHORT, by more the more
+    // often it happens: 7.12 s measured / 4.21 s rendered on a two-segment
+    // file, 1800 s measured / 60.1 s rendered on a thirty-segment one. Both
+    // are measured; neither is publishable.
+    //
+    // Refused HERE rather than left to `assertRenditionComplete`, which also
+    // catches it, for two reasons. It costs two full transcodes to reach that
+    // check — ~2 minutes of pinned CPU on a single-node cluster for a file
+    // already known to be unusable. And the summed measurement is not even a
+    // trustworthy duration for such a file: the trim resets with the graph, so
+    // thirty 60 s segments sum to 86 453 457 samples, 0.11 s past a cap the
+    // file is exactly at, and the rejection would name the wrong cause
+    // ("over the 30 minute limit") for a file whose real problem is its format
+    // changes.
+    throw new PermanentError(
+      `Audio changes audio format part way through (${decoded.segments} segments); ` +
+        `re-encode it to a single sample rate and channel layout, then upload it again`
+    );
+  }
   if (decoded.samples === 0) {
     // A 44-byte WAV with a valid `fmt ` chunk and an empty `data` chunk probes
     // as a legitimate 48 kHz stereo stream and transcodes without error into
@@ -133,8 +214,20 @@ export function assertDecodedUsable(decoded: { samples: number; peakDb: number }
   // still at the upload screen. The rendering bound exists to make the
   // invariant hold structurally, not as a product behaviour.
   if (durationMs > MAX_SOURCE_DURATION_MS) {
+    // The length is only quotable when the measurement is the file's WHOLE
+    // length. It usually is not: the measuring pass stops at
+    // `MEASURE_LIMIT_SECONDS`, so a 45-minute upload and a 14-hour one both
+    // measure 1 801 000 ms — which `formatMinutes` rounds to "30 minutes", and
+    // "Audio is 30 minutes long, over the 30 minute limit" is a sentence that
+    // makes the product look broken while telling the owner nothing. Say what
+    // is known instead. (Found while making the two-sided check: this fires on
+    // every over-cap source, because every over-cap source reads at the bound.)
+    const measurementIsComplete = durationSamples < MEASURE_LIMIT_SECONDS * RENDITION_SAMPLE_RATE;
+    const limit = `${MAX_SOURCE_DURATION_MS / 60_000} minute limit`;
     throw new PermanentError(
-      `Audio is ${formatMinutes(durationMs)} long, over the ${MAX_SOURCE_DURATION_MS / 60_000} minute limit`
+      measurementIsComplete
+        ? `Audio is ${formatMinutes(durationMs)} long, over the ${limit}`
+        : `Audio is longer than the ${limit}`
     );
   }
   return { durationMs, durationSamples };
@@ -155,18 +248,23 @@ export function assertDecodedUsable(decoded: { samples: number; peakDb: number }
  * measured by `analyze` cannot diverge from the renditions a LATER ffmpeg
  * invocation produced. The argument for why they agree is in `processAsset`;
  * this is what makes a violation of it a failed asset rather than a wrong row.
- * It earns its keep: a source that changes audio format mid-stream really does
- * render short (see below), and this is what stops it publishing.
  *
- * `segments` is `analyze`'s count of filter-graph segments, used only to
- * EXPLAIN a failure. More than one means the source changes sample rate, sample
- * format or channel layout partway through, which makes ffmpeg rebuild the
- * filter graph — discarding whatever `loudnorm` was holding in its 3-second
- * lookahead. Measured on a raw concatenation of a 3 s 44.1 kHz stereo MP3 and a
- * 4 s 8 kHz mono one: 7.12 s measured, 4.21 s rendered, so the file is refused
- * here. That is the correct outcome (the alternative is a `ready` row missing
- * 3 s of its audio), but "the rendition is incomplete" does not tell the owner
- * that re-encoding to a single format fixes it, and this does.
+ * TWO-SIDED, and that is the whole point of it. It was one-sided until now,
+ * testing only `decodedMs - renditionMs`, while the divergence it was cited as
+ * preventing — round 6's `ready` row recording 5 025 ms against 1 005 100 ms of
+ * renditions — is the other sign. The comment in `processAsset` claimed this
+ * function made such a row impossible; it did not, and nothing did. See
+ * `MAX_RENDITION_OVERRUN_MS` for why the two allowances differ.
+ *
+ * `segments` is `analyze`'s count of filter-graph segments, used to EXPLAIN a
+ * shortfall. More than one means the source changes sample rate, sample format
+ * or channel layout partway through, which makes ffmpeg rebuild the filter
+ * graph — discarding whatever `loudnorm` was holding in its 3-second lookahead.
+ * `assertDecodedUsable` now refuses such a source before either encoder runs,
+ * so this branch is a backstop rather than the primary rejection; it stays
+ * because the explanation is worth having if the earlier check is ever relaxed,
+ * and because "the rendition is incomplete" alone tells the owner nothing they
+ * can act on.
  *
  * NOTE what this deliberately does NOT do: it does not detect a truncated
  * SOURCE. It cannot. Detecting that means trusting the container header, and
@@ -192,6 +290,17 @@ export function assertRenditionComplete(
         : '';
     throw new PermanentError(
       `The ${codec} rendition is incomplete: the source decodes to ${decodedMs} ms but the rendition contains only ${renditionMs} ms${cause}`
+    );
+  }
+  if (renditionMs - decodedMs > MAX_RENDITION_OVERRUN_MS) {
+    // THE DIRECTION ROUND 6 ACTUALLY FAILED IN. A rendition holding more audio
+    // than the row records is not a smaller problem than one holding less: the
+    // row is what phase 2 loops on, so an asset recorded at 5 s with 1005 s of
+    // audio behind it plays 5 seconds and then loops over a track that is still
+    // going. It is also the shape that a bound applied to one pass and not
+    // another produces, which has now happened twice.
+    throw new PermanentError(
+      `The ${codec} rendition is longer than the source: the source decodes to ${decodedMs} ms but the rendition contains ${renditionMs} ms`
     );
   }
 }
@@ -605,8 +714,13 @@ export async function processAsset(
     //   SHORTER, never longer than the cap.
     // - And it is CHECKED per asset rather than argued per commit: every
     //   rendition is probed below and `assertRenditionComplete` refuses to
-    //   publish one that is short of this number. A divergence is a failed
-    //   asset, never a `ready` row with a wrong duration.
+    //   publish one that diverges from this number IN EITHER DIRECTION. That
+    //   last clause used to read "short of this number", and the check really
+    //   was one-sided, so the sentence that followed it — "a divergence is a
+    //   failed asset, never a `ready` row with a wrong duration" — was false
+    //   for exactly the divergence round 6 shipped, which was a rendition
+    //   LONGER than the row. It is true now because the check is two-sided,
+    //   not because the argument above got better.
     const decoded = await analyze(src, MEASURE_LIMIT_SECONDS);
     const { durationMs, durationSamples } = assertDecodedUsable(decoded);
     beat();
@@ -697,19 +811,40 @@ export async function processAsset(
       // same bound (see `RENDER_LIMIT_SECONDS` above), so the input to the
       // encoders is now genuinely 1800 s at most.
       //
-      // The nominal arithmetic is 1800 s x 128 kbit/s = 28.8 MB for AAC and
-      // 1800 s x 96 kbit/s = 21.6 MB for Opus, and NEITHER is a ceiling —
-      // measured on a real 30-minute source (a pure tone, the shape both
-      // encoders spend the most bits on):
+      // HOW BIG IS A RENDITION. This has now been answered wrong three times,
+      // each time by measuring ONE SIGNAL and generalising — 48 MB, then
+      // 46.5 MB, then "~30 MB". The third was measured on a pure 440 Hz tone,
+      // described as "the shape both encoders spend the most bits on". It is
+      // not. Measured at 1800 s through this exact chain:
       //
-      //   aac  -b:a 128k   29 132 201 B   129.5 kbit/s   (nominal + 1%)
-      //   opus -b:a  96k   28 250 409 B   125.6 kbit/s   (nominal + 31%)
+      //   signal                     opus kbit/s    opus bytes    aac bytes
+      //   440 Hz sine                    122.9      27 643 263   29 132 075
+      //   white noise                     64.1      14 422 201   29 205 924
+      //   five tones (440 Hz .. 21 kHz)  208.2      46 849 240   29 132 127
       //
-      // libopus's default VBR treats `-b:a` as a target it may exceed on tonal
-      // content, which is why the honest number to reason about is ~30 MB per
-      // rendition rather than the bitrate multiplied out. One at a time, so the
-      // peak is one rendition plus its PUT body — measured peak RSS for the
-      // whole 30-minute run was 258 MB against the pod's 768Mi.
+      // So the worst measured is 46.8 MB, 1.6x the number this comment used to
+      // give, and it is REACHABLE FROM AN ACCEPTED SOURCE: the same five-tone
+      // signal pre-encoded as a 128 kbit/s MP3 is 28.8 MB — comfortably inside
+      // `AUDIO_MAX_BYTES` — and still yields 208.3 kbit/s of opus, 46.9 MB.
+      //
+      // Rather than quote a fourth measurement as if it were a bound, here is
+      // the STRUCTURAL one. AAC at `-b:a 128k` is near-CBR and lands within 2%
+      // of 28.8 MB on every signal above. libopus's default VBR treats `-b:a`
+      // as a target it may exceed on tonal content, and its hard stereo maximum
+      // is 512 kbit/s = 115 MB at 1800 s. That is the real ceiling, and no
+      // signal tested comes near it. Read one at a time, so the peak is one
+      // rendition plus its PUT body — `readFile` plus the SDK's copy is ~2x the
+      // file, so the structural worst case is ~230 MB transient against the
+      // pod's 768Mi, and the worst MEASURED is ~94 MB.
+      //
+      // `-vbr constrained` on the opus leg pins every signal above to
+      // 97.0 kbit/s / 21.8 MB (measured, all four), which would make the ceiling
+      // 22 MB instead of 115 MB. NOT adopted: it costs quality on exactly the
+      // tonal content that provokes the bitrate, the measured worst fits the pod
+      // with room to spare, and 47 MB of R2 for a 30-minute asset is not a cost
+      // worth trading fidelity for. It is the lever to pull if per-asset storage
+      // ever becomes the binding constraint — which is the same open question as
+      // the missing per-user quota.
       //
       // Streaming them would also make the PUT body non-replayable, turning the
       // SDK's internal retry of a transient R2 blip into a hard failure.

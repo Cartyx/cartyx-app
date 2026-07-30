@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { PermanentError } from './errors.js';
 
 const run = promisify(execFile);
 
@@ -61,50 +62,138 @@ export const RENDITION_CHANNELS = 2;
  *
  * The invariant it enforces — see `MAX_SOURCE_DURATION_MS` in config.ts for the
  * full statement — is that no stage ever decodes more than the cap, in a unit
- * that cannot differ between stages. It is three filters and each is
- * load-bearing:
+ * that cannot differ between stages. Two filters, both load-bearing:
  *
- *   aresample=<rate>   pin the sample clock, so "seconds" below means the same
- *                      thing whatever the source's own rate was.
- *   asetpts=N/SR/TB    REBASE the timestamps onto the DECODED-SAMPLE CLOCK. `N`
- *                      is the count of samples the filter has seen, `SR` the
- *                      rate, so each frame's pts becomes exactly
- *                      `samples_so_far / rate`. This is the whole trick.
- *   atrim=end=<limit>  cut at `limit` on that rebased clock — i.e. after
- *                      `limit * rate` DECODED SAMPLES, not at a timeline
- *                      position.
+ *   aresample=<rate>          pin the sample clock, so the count below means
+ *                             the same thing whatever the source's own rate was.
+ *   atrim=end_sample=<n>      cut after exactly `n` DECODED SAMPLES. `end_sample`
+ *                             is an index into the samples the filter has
+ *                             actually been handed, counted by the filter
+ *                             itself — it is not derived from a timestamp, so
+ *                             nothing a container says about the timeline can
+ *                             move it.
  *
- * WHY NOT `-t`. `-t` (input or output) bounds TIMELINE POSITION, and a
+ * WHY NOT `-t`, AND WHY NOT `atrim=end`. Both bound TIMELINE POSITION, and a
  * container is free to advance the timeline without emitting audio. Measured on
  * a Matroska built by `ffmpeg -f concat` from a 5 s clip, a `duration 3000`
  * directive and a 1000 s clip (12.3 MB, every byte produced by stock ffmpeg):
  *
- *   -t 1801                        241 203 samples   (5.02 s)    0.01 s
- *   this chain, atrim=end=1801   48 242 406 samples (1005.05 s)  0.65 s
+ *   -t 1801                          241 203 samples   (5.02 s)
+ *   atrim=end_sample=86 448 000   48 242 406 samples (1005.05 s)
  *
- * The file really is 1005 s long. A pipeline that measures it with `-t` and
- * then encodes it unbounded writes a `ready` row claiming 5 s with 1005 s
+ * The file really is 1005 s long. A pipeline that measures it on the timeline
+ * and then encodes it unbounded writes a `ready` row claiming 5 s with 1005 s
  * renditions behind it — the duration is wrong by 200x and phase 2's loop
  * points are meaningless. That is round 6's defect, and no amount of adding
- * `-t` to the other stages fixes it, because `-t` is measuring the wrong thing.
+ * `-t` to the other stages fixes it, because `-t` measures the wrong quantity.
+ *
+ * WHY NOT `asetpts=N/SR/TB,atrim=end=<limit>`, which is what this was and which
+ * bounds the same quantity by a different route — rebasing every timestamp onto
+ * the decoded-sample clock so that a timeline cut becomes a sample cut. It
+ * works, and it costs a warning per output frame on any source that changes
+ * format mid-stream. ffmpeg REBUILDS THE FILTER GRAPH at such a change and
+ * `asetpts`'s sample counter restarts from zero, so the timestamps handed to
+ * the muxer jump backwards and every frame until they catch up draws
+ * "non monotonically increasing dts". Measured on a 7.2 MB MP3 of thirty
+ * alternating-sample-rate 60 s segments, at `analyze`'s `-v info`:
+ *
+ *   aresample,asetpts,atrim=end=1801     7 140 647 B of stderr, 57 191 warnings
+ *   aresample,atrim=end_sample=86448000     13 908 B of stderr,      0 warnings
+ *
+ * The first overruns `execFile`'s stderr buffer on a slightly longer source and
+ * fails the asset with `stderr maxBuffer length exceeded`, retryably, three
+ * times. Suppressing it at the muxer is not available: `-f wav` and `-f md5`
+ * trade it for 57 177 lines of "Non-monotonic DTS" instead, `-f null` with
+ * `-max_interleave_delta 0` and with `-avoid_negative_ts 0` are unchanged, and
+ * a zero-output filter graph (`anullsink`) is rejected outright by the CLI. All
+ * measured. `end_sample` removes the cause rather than the symptom, and it
+ * states the invariant directly: the bound is a sample count, so express it as
+ * one.
+ *
+ * `asetpts` has NOT disappeared — see `COMPACT_OUTPUT_TIMELINE`. It was doing a
+ * second job that only the stages writing a file need, and separating the two
+ * is why it can be dropped here.
  *
  * The chain still bounds COST, which is what `-t` was there for. `atrim`
  * propagates EOF upstream, so demuxing stops at the cut rather than running to
- * the end of the file. Measured on a 50 MB, 8 kbit/s, 13.9-hour MP3 — the
- * densest decode `AUDIO_MAX_BYTES` can buy:
+ * the end of the file. Measured on a 2-hour, 8 kbit/s MP3:
  *
- *   unbounded                  2 400 000 000 samples   26.33 s
- *   this chain, end=1801          86 448 000 samples    0.99 s
+ *   unbounded                    345 600 000 samples   3.56 s
+ *   end_sample=86 448 000         86 448 000 samples   0.92 s
  *
- * `end=1801` yields exactly 1801 x 48 000 samples, which is what makes the
- * cap decidable from the measuring pass: a source at the cap reads at the cap,
- * anything longer reads over it.
- *
- * `asetpts` also normalises a source whose first timestamp is not zero, which
- * `atrim` would otherwise measure `end` against.
+ * That count is exactly 1801 x 48 000, which is what makes the cap decidable
+ * from the measuring pass: a source at the cap reads at the cap, anything
+ * longer reads over it.
  */
 export function boundedDecodeFilters(sampleRate: number, limitSeconds: number): string {
-  return `aresample=${sampleRate},asetpts=N/SR/TB,atrim=end=${limitSeconds}`;
+  return `aresample=${sampleRate},atrim=end_sample=${sampleRate * limitSeconds}`;
+}
+
+/**
+ * Rebases output timestamps onto the decoded-sample clock: each frame's pts
+ * becomes `samples_so_far / rate`.
+ *
+ * This is NOT part of the bound and must not be confused with it — it is part
+ * of the OUTPUT CONTRACT, and it belongs only to the stages that write a file.
+ * A source can carry gaps in its timeline (a Matroska the `concat` demuxer
+ * assembled across a `duration` directive is the ordinary way to get one), and
+ * a rendition that preserves them is a file whose container duration is not the
+ * length of its audio. Measured on the 5 s + 3000 s hole + 200 s Matroska:
+ *
+ *   with this filter      205.107 s of container for 205.006 s of audio
+ *   without it           3200.100 s of container for 205.006 s of audio
+ *
+ * The byte counts are within 30 bytes of each other — the second file is not
+ * longer, it merely CLAIMS to be, which is precisely the class of lie this
+ * whole exercise exists to stop. `assertRenditionComplete` reads a rendition's
+ * container duration back, so without this the two-sided check would fail every
+ * gap-carrying source.
+ *
+ * `analyze` does not write a file — it counts samples — so it does not carry
+ * this, and not carrying it is what keeps its stderr readable. See
+ * `boundedDecodeFilters`.
+ */
+export const COMPACT_OUTPUT_TIMELINE = 'asetpts=N/SR/TB';
+
+/**
+ * The stderr ffmpeg is allowed to produce before its output is abandoned.
+ *
+ * `execFile` buffers stdout and stderr in memory up to this size EACH and
+ * rejects with `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` past it. The default is
+ * 1 MiB, and a source that emits a diagnostic per frame — a badly damaged MP3
+ * re-syncing on every frame, at `-v error` — passes that on length alone.
+ *
+ * The failure it produces is the reason this is not simply "a big number":
+ * `ERR_CHILD_PROCESS_STDIO_MAXBUFFER` is a plain `Error`, so it used to spend
+ * the whole retry budget and land the row on `lastError: "stderr maxBuffer
+ * length exceeded"` — an opaque message, on a `failed` row the UI offered a
+ * Retry button for, for a file that could never succeed. `runFfmpeg` converts
+ * it into a `PermanentError` instead: the volume of diagnostics a fixed byte
+ * stream provokes is a property of that byte stream, so it is identical on
+ * every run and retrying is guaranteed waste.
+ */
+export const FFMPEG_STDERR_MAX_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Runs ffmpeg with the worker's standard timeout and stderr ceiling, and turns
+ * a stderr overrun into a readable permanent failure rather than an opaque
+ * retryable one. Every ffmpeg invocation in this worker goes through it.
+ */
+async function runFfmpeg(args: string[], stage: string): Promise<{ stderr: string }> {
+  try {
+    return await run('ffmpeg', args, {
+      ...childProcOptions(),
+      maxBuffer: FFMPEG_STDERR_MAX_BYTES,
+    });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
+      throw new PermanentError(
+        `Audio file is too damaged to ${stage}: decoding it produces more than ` +
+          `${FFMPEG_STDERR_MAX_BYTES / (1024 * 1024)} MB of errors. Re-encode the file and upload it again`
+      );
+    }
+    throw err;
+  }
 }
 
 export type ProbeResult = { durationMs: number; sampleRate: number; channels: number };
@@ -217,8 +306,8 @@ export async function probe(path: string): Promise<ProbeResult> {
  * at different rates does exactly this, and so does a Matroska assembled by the
  * `concat` demuxer from mixed inputs), ffmpeg TEARS DOWN AND REBUILDS the whole
  * filter graph at the change. Every filter in it is re-instantiated: astats
- * emits its report and starts over, and — the part that matters — `asetpts`'s
- * sample counter and `atrim`'s cut both RESET.
+ * emits its report and starts over, and — the part that matters — `atrim`'s
+ * sample counter, and therefore its cut, RESETS with it.
  *
  * Reading only the last report was wrong twice over: it reported one segment's
  * length as the file's, and it hid the reset. Measured on a 3 s @ 44.1 kHz
@@ -240,19 +329,25 @@ export async function probe(path: string): Promise<ProbeResult> {
  * already caps at ~13.9 hours and which sums to far over the cap — so it is
  * refused after one bounded measuring pass and never reaches an encoder.
  *
- * `segments` is returned because the caller needs it to explain a failure: the
- * same teardown discards whatever `loudnorm` was holding in its 3-second
- * lookahead, so a multi-segment source RENDERS SHORTER THAN IT MEASURES (the
- * file above: 7.12 s measured, 4.21 s rendered). `assertRenditionComplete`
- * catches that and refuses to publish — the row is never `ready` with a
- * duration its audio does not have — but the reason is worth naming rather than
- * leaving as a bare "the rendition is incomplete".
+ * `segments` is returned because it DECIDES a failure, not merely explains one.
+ * The same teardown discards whatever `loudnorm` was holding in its 3-second
+ * lookahead, so a multi-segment source RENDERS SHORTER THAN IT MEASURES, and by
+ * a margin that grows with the number of changes: 7.12 s measured / 4.21 s
+ * rendered on the two-segment file above, and 1800 s measured / 60.1 s rendered
+ * on a thirty-segment one. `assertDecodedUsable` therefore refuses `segments >
+ * 1` outright, before either encoder runs, rather than paying for two 30-minute
+ * transcodes to arrive at the same permanent rejection from
+ * `assertRenditionComplete`. Both messages name the cause.
  */
 export type AnalyzeResult = { samples: number; peakDb: number; segments: number };
 
 export async function analyze(path: string, limitSeconds: number): Promise<AnalyzeResult> {
-  const { stderr } = await run(
-    'ffmpeg',
+  // NOT `COMPACT_OUTPUT_TIMELINE`. This stage writes no file, so it has no
+  // output timeline to compact — and rebasing timestamps here is what used to
+  // make a multi-format source emit a muxer warning per frame (57 191 of them
+  // on a 7.2 MB fixture, 7.1 MB of stderr) and fail the asset on the buffer
+  // rather than on its contents. See `boundedDecodeFilters`.
+  const { stderr } = await runFfmpeg(
     [
       '-v',
       'info',
@@ -269,10 +364,7 @@ export async function analyze(path: string, limitSeconds: number): Promise<Analy
       'null',
       '-',
     ],
-    // A damaged source can emit a decode warning per frame, and execFile's
-    // 1 MiB default would turn that into ENOBUFS instead of a usable report.
-    // The report itself is a fixed handful of lines regardless of duration.
-    { ...childProcOptions(), maxBuffer: 8 * 1024 * 1024 }
+    'measure'
   );
 
   // SUM, not `.pop()` — see the "one report per filter-graph segment" note
@@ -325,8 +417,7 @@ export async function transcode(
       ? ['-c:a', 'libopus', '-b:a', '96k']
       : ['-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart'];
 
-  await run(
-    'ffmpeg',
+  await runFfmpeg(
     [
       '-v',
       'error',
@@ -346,8 +437,13 @@ export async function transcode(
       // expensive filter, and trimming before it means a source longer than the
       // cap never reaches it. loudnorm neither adds nor drops samples relative
       // to what it is fed, so the trim's position does not change the content.
+      //
+      // `COMPACT_OUTPUT_TIMELINE` sits between them because this stage writes a
+      // FILE: without it a source carrying a timeline gap produces a rendition
+      // whose container claims 3200 s over 205 s of audio (measured). It goes
+      // after the trim so that what it renumbers is exactly the bounded stream.
       '-af',
-      `${boundedDecodeFilters(RENDITION_SAMPLE_RATE, limitSeconds)},${LOUDNORM}`,
+      `${boundedDecodeFilters(RENDITION_SAMPLE_RATE, limitSeconds)},${COMPACT_OUTPUT_TIMELINE},${LOUDNORM}`,
       // Must come after -af: these constrain the encoder, not the filter
       // chain, and loudnorm's own 192 kHz output is exactly what they undo.
       '-ar',
@@ -358,6 +454,6 @@ export async function transcode(
       '-y',
       out,
     ],
-    childProcOptions()
+    'transcode'
   );
 }

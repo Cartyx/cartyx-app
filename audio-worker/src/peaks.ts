@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { boundedDecodeFilters, childProcOptions } from './ffmpeg.js';
+import { boundedDecodeFilters, COMPACT_OUTPUT_TIMELINE, childProcOptions } from './ffmpeg.js';
 import { MAX_SOURCE_DURATION_MS } from './config.js';
 
 /** Mono s16 at this rate is what the peak decode below emits. */
@@ -87,8 +87,14 @@ export function extractPeaks(
         // "best stream" heuristic when the filter chain below assumes audio.
         '-map',
         '0:a:0',
+        // Same prefix as every other decoding stage, plus the same output
+        // compaction `transcode` uses: this writes raw s16le, where a timeline
+        // gap would otherwise land as bucket boundaries that do not correspond
+        // to the audio's own position. Its input is a rendition this worker
+        // already compacted, so the filter is a backstop here rather than a
+        // fix — which is the point, per the comment on `limitSeconds` above.
         '-af',
-        boundedDecodeFilters(PEAK_DECODE_SAMPLE_RATE, limitSeconds),
+        `${boundedDecodeFilters(PEAK_DECODE_SAMPLE_RATE, limitSeconds)},${COMPACT_OUTPUT_TIMELINE}`,
         '-ac',
         '1',
         '-ar',
