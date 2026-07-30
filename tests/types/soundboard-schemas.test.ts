@@ -20,7 +20,22 @@ describe('soundboard schemas', () => {
 
   it('rejects a non-ObjectId assetId before it can reach Mongo', async () => {
     const { packageItemSchema } = await import('~/types/schemas/soundboard');
-    expect(packageItemSchema.safeParse({ id: 'i1', assetId: 'nope' }).success).toBe(false);
+    // Otherwise-complete and valid: the ONLY invalid field is `assetId`, so a
+    // rejection can only be attributed to the ObjectId check. Without the
+    // rest of the required fields present, this would fail regardless of
+    // whether `assetId` were validated at all.
+    const item = (assetId: string) => ({
+      id: 'i1',
+      assetId,
+      volume: 0.8,
+      fadeSeconds: 1,
+      loop: true,
+    });
+    expect(packageItemSchema.safeParse(item('nope')).success).toBe(false);
+    // Positive control: the identical payload with a real ObjectId must
+    // parse, proving the rejection above is attributable to `assetId` and
+    // not to some other mistake in the fixture.
+    expect(packageItemSchema.safeParse(item('507f1f77bcf86cd799439011')).success).toBe(true);
   });
 
   it('mood overrides are optional but bounded when present', async () => {

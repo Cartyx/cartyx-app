@@ -59,7 +59,12 @@ export const packageItemSchema = z
     randomIntervalMax: randomIntervalSeconds.optional(),
     volumeJitter: z.number().min(0).max(1).optional(),
     panJitter: z.number().min(0).max(1).optional(),
-    sortIndex: z.number().int().min(0).max(MAX_PACKAGE_ITEMS).default(0),
+    sortIndex: z
+      .number()
+      .int()
+      .min(0)
+      .max(MAX_PACKAGE_ITEMS - 1)
+      .default(0),
   })
   .refine(validRandomInterval, randomIntervalRefinement);
 
@@ -70,8 +75,13 @@ export const packageItemSchema = z
  * `false` remain meaningful overrides (silence a track; don't autoplay it in
  * this mood). Defaulting any of these here would make "inherit" and "set to
  * the default" indistinguishable before the resolver ever runs.
+ *
+ * Module-private, like `boardItemStateSchema` below: both are embedded-array
+ * element schemas with no standalone caller, and the brief's export list
+ * names only the schemas a server function actually parses input with
+ * (`moodSchema` itself, not its `states[]` element type).
  */
-export const moodStateSchema = z
+const moodStateSchema = z
   .object({
     itemId: stableId,
     playing: z.boolean(),
@@ -119,6 +129,7 @@ export const clonePackageSchema = z.object({
 
 export const deletePackageSchema = z.object({ id: objectId });
 
+/** Module-private — see the comment on `moodStateSchema` above. */
 const boardItemStateSchema = z.object({
   itemId: stableId,
   playing: z.boolean(),
