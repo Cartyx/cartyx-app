@@ -83,7 +83,11 @@ Three separate times in phase 1, a test passed because its **fixture's shape mas
 
 `app/routes/audio.tsx` is a **flat** 17 KB leaf route. `app/routes/campaigns/$campaignId/` is a **directory** with no `$campaignId.tsx` layout beside it, so Task 17's `app/routes/campaigns/$campaignId/soundboard.tsx` matches the existing convention exactly and needs nothing special.
 
-Tasks 13 and 14 are the risk: adding a directory `app/routes/audio/` beside the flat `audio.tsx` makes `audio.tsx` a **layout** for its children, and `/audio` will render nothing new unless that file gains an `<Outlet />` — or breaks outright. **Verify what the generated `routeTree.gen.ts` actually produces and confirm `/audio` still renders its own page** before committing Task 13. If nesting is disruptive, use the flat dotted form (`app/routes/audio.packages.tsx`, `app/routes/audio.packages.$packageId.tsx`), which yields identical URLs with no change to `audio.tsx`. Report which you chose and why.
+Tasks 13 and 14 are the risk: adding a directory `app/routes/audio/` beside the flat `audio.tsx` makes `audio.tsx` a **layout** for its children, and `/audio` will render nothing new unless that file gains an `<Outlet />` — or breaks outright. **Verify what the generated `routeTree.gen.ts` actually produces and confirm `/audio` still renders its own page** before committing.
+
+**RESOLVED IN TASK 13 (2026-07-30).** This section originally suggested the flat dotted form `app/routes/audio.packages.tsx` as the non-nesting fallback. **That suggestion was wrong** — Task 13 built it, inspected the generated tree, and found `getParentRoute: () => AudioRoute`. A dot is a path separator in TanStack Router's flat convention, so it nests exactly like a directory does.
+
+The correct non-nesting convention is a **trailing underscore on the parent segment**: `app/routes/audio_.packages.tsx`, `app/routes/audio_.packages.$packageId.tsx`. Verified: `AudioRoute` came back a plain childless leaf and `app/routes/audio.tsx` has zero diff. **Task 14 must use `audio_.` too** — repeating the dotted form silently turns the library page into a layout.
 
 ---
 
