@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { createFileRoute, redirect, Link } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 
@@ -268,8 +268,21 @@ export function SoundboardPage() {
             query is in flight is silently never persisted — and if that query
             fails outright, the board would never save for the entire session
             with `saveError` left `null`. Failing visibly here is the whole
-            point; that class of silence is what this surface exists to remove. */}
-        {campaignError ? (
+            point; that class of silence is what this surface exists to remove.
+
+            `&& !campaign` is the load-bearing half. TanStack Query v5 keeps
+            `data` and sets `status: 'error'` when a BACKGROUND refetch fails
+            (`query-core`'s `onError` leaves `data` alone), and this query runs
+            with the default `refetchOnWindowFocus` at `staleTime: 0` — so a GM
+            alt-tabbing back during a network blip is the ordinary trigger.
+            Branching on the error alone unmounts `BoardSurface`, disposing the
+            `AudioContext` and stopping every sound mid-session. That is the
+            design's governing rule inverted: "audio is never interrupted by a
+            persistence or network failure. The engine owns sound; the server is
+            a mirror." A stale-but-present campaign answers the only question
+            this gate asks (is this caller the GM), so the board plays on and
+            the failure is a notice, not a teardown. */}
+        {campaignError && !campaign ? (
           <p role="alert" data-testid="campaign-error" className="text-sm text-red-400">
             {campaignError} — the board cannot be used until this campaign loads.
           </p>
@@ -278,18 +291,26 @@ export function SoundboardPage() {
             Loading campaign…
           </p>
         ) : (
-          <BoardSurface
-            key={boardGeneration}
-            campaignId={campaignId}
-            packageId={packageId}
-            pkg={pkg}
-            assets={assets}
-            initialState={initialState}
-            packagePending={packagePending}
-            persist={campaign?.isOwner === true}
-            boardUnavailable={Boolean(packageQuery.error ?? assetsQuery.error)}
-            boardStatePending={boardQuery.isPending}
-          />
+          <>
+            {campaignError && (
+              <p role="status" data-testid="campaign-stale" className="mb-4 text-sm text-amber-400">
+                Campaign details could not be refreshed ({campaignError}). The board is still live.
+              </p>
+            )}
+            <BoardSurface
+              key={boardGeneration}
+              campaignId={campaignId}
+              packageId={packageId}
+              pkg={pkg}
+              assets={assets}
+              cleared={clearedByGM}
+              initialState={initialState}
+              packagePending={packagePending}
+              persist={campaign?.isOwner === true}
+              boardUnavailable={Boolean(packageQuery.error ?? assetsQuery.error)}
+              boardStatePending={boardQuery.isPending}
+            />
+          </>
         )}
       </main>
     </div>
@@ -303,6 +324,11 @@ interface BoardSurfaceProps {
   pkg: AudioPackageData | null;
   /** `undefined` = the asset query has not resolved. NEVER coerced to `[]`. */
   assets: readonly AudioAssetData[] | undefined;
+  /**
+   * This instance exists because the GM cleared the board, so the empty board
+   * needs to be WRITTEN rather than merely displayed — see the mount effect.
+   */
+  cleared: boolean;
   initialState: BoardStateData | null | 'pending';
   packagePending: boolean;
   persist: boolean;
@@ -323,6 +349,7 @@ function BoardSurface({
   packageId,
   pkg,
   assets,
+  cleared,
   initialState,
   packagePending,
   persist,
@@ -359,6 +386,28 @@ function BoardSurface({
     [dispatch]
   );
   const handleStopAll = useCallback(() => dispatch({ type: 'stopAll' }), [dispatch]);
+
+  /**
+   * A clear must PERSIST, not merely render.
+   *
+   * This instance mounts with `pkg: null` and `initialState: null`, so the
+   * `[pkg]` effect never dispatches and nothing else arms a save — the GM
+   * clears the board, closes the tab, and the old package is back on reload.
+   * (The outgoing instance's unmount flush does not cover this: it only fires
+   * if a debounce happened to be pending, and what it writes is the OLD
+   * package.) `stopAll` is prompt-urgency and always returns a fresh state
+   * object, so it arms a write of exactly what the board now is:
+   * `packageId: null`, `moodId: null`, `items: []`.
+   *
+   * Ordering is safe by construction rather than by luck: `useSoundboard` is
+   * called first in this component, so ITS effects — including the hydration
+   * effect that flips `hydratedRef` — are registered before this one and run
+   * first. Were it the other way round, `scheduleSave`'s clobber gate would
+   * silently drop this write.
+   */
+  useEffect(() => {
+    if (cleared) dispatch({ type: 'stopAll' });
+  }, [cleared, dispatch]);
 
   const playingCount = state.items.filter((item) => item.playing).length;
 

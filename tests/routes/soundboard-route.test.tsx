@@ -213,15 +213,32 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+/**
+ * Re-render the ROUTE, so a test can make `SoundboardPage` re-read a mocked
+ * hook. Set by `renderBoard`.
+ *
+ * A FRESH element every call, deliberately: handing `rerender` the same
+ * element object lets React bail out of re-rendering the subtree entirely, and
+ * the test then passes without ever consuming the new mock value. (That is not
+ * hypothetical — the first version of this helper reused one element and the
+ * teeth-proof below reported the wrong failure as a result.)
+ */
+let rerenderRoute: () => void = () => {
+  throw new Error('renderBoard() has not been called');
+};
+
 function renderBoard() {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } },
   });
-  return render(
+  const tree = () => (
     <QueryClientProvider client={client}>
       <SoundboardPage />
     </QueryClientProvider>
   );
+  const result = render(tree());
+  rerenderRoute = () => result.rerender(tree());
+  return result;
 }
 
 /**
@@ -691,10 +708,11 @@ describe('SoundboardPage — clearing the board', () => {
     expect(screen.getByTestId('playing-count')).toHaveTextContent('Nothing playing');
     expect(engine.dispose).toHaveBeenCalled();
 
-    // ...and the clear survives a reload, because what gets written is an
-    // empty board rather than the package the GM just dismissed.
-    saveBoardStateFn.mockClear();
-    fireEvent.change(screen.getByLabelText('Master volume'), { target: { value: '0.3' } });
+    // ...and the clear survives a reload ON ITS OWN, with no follow-up command
+    // to carry it. The cleared instance mounts with `pkg: null` and
+    // `initialState: null`, so nothing in the hook arms a write; without the
+    // explicit `stopAll` a GM who clears and closes the tab gets the old
+    // package back.
     await act(async () => {
       vi.advanceTimersByTime(2000);
     });
@@ -703,6 +721,10 @@ describe('SoundboardPage — clearing the board', () => {
     expect(payload.packageId).toBeNull();
     expect(payload.moodId).toBeNull();
     expect(payload.items).toEqual([]);
+    // Nothing ever wrote the package the GM just dismissed.
+    for (const call of saveBoardStateFn.mock.calls) {
+      expect(call[0].data.packageId).toBeNull();
+    }
   });
 
   it('files no telemetry for a deliberate clear', async () => {
@@ -785,5 +807,64 @@ describe('SoundboardPage — a rendition that fails to load', () => {
     expect(screen.getByRole('button', { name: 'Play Rain' })).toBeDisabled();
     // Only the failed asset's pad — `Thunder` references a different asset.
     expect(screen.getByRole('button', { name: 'Stop Thunder' })).toBeEnabled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A background campaign refetch failure must not silence the table.
+// ---------------------------------------------------------------------------
+
+describe('SoundboardPage — a campaign refetch that fails mid-session', () => {
+  /**
+   * TanStack Query v5 sets `status: 'error'` while KEEPING `data` when a
+   * BACKGROUND refetch fails, and `getCampaignFn` runs with the default
+   * `refetchOnWindowFocus` at `staleTime: 0` — so a GM alt-tabbing back during
+   * a network blip is the trigger, not an exotic edge.
+   *
+   * Branching on the error alone unmounts `BoardSurface`, which disposes the
+   * `AudioContext` and stops every sound mid-session. That inverts the
+   * design's governing rule: "audio is never interrupted by a persistence or
+   * network failure. The engine owns sound; the server is a mirror."
+   */
+  it('keeps the board mounted and the audio alive when the error arrives with data still in hand', async () => {
+    renderBoard();
+    await waitFor(() => expect(screen.getByText('Rain')).toBeInTheDocument());
+    await enableAudioForReal();
+    // The persisted fixture has `itemB` playing — there is live sound to lose.
+    expect(screen.getByTestId('playing-count')).toHaveTextContent('1 playing');
+
+    // A background refetch fails. `data` survives, per query-core.
+    useCampaign.mockReturnValue({
+      campaign: { id: CAMPAIGN, isOwner: true },
+      isLoading: false,
+      error: 'Network request failed',
+    });
+    // Re-render the ROUTE, not the board: `useCampaign` is read in
+    // `SoundboardPage`, so a state update inside `BoardSurface` would never
+    // consume the new query result and the test would pass vacuously.
+    await act(async () => {
+      rerenderRoute();
+    });
+
+    // The board is still live: not unmounted, audio not disposed, still playing.
+    expect(screen.getByTestId('master-bar')).toBeInTheDocument();
+    expect(screen.getAllByTestId('board-pad').length).toBeGreaterThan(0);
+    expect(engine.dispose).not.toHaveBeenCalled();
+    expect(screen.getByTestId('playing-count')).toHaveTextContent('1 playing');
+    // ...and the GM is told, non-destructively.
+    expect(screen.getByTestId('campaign-stale')).toBeInTheDocument();
+    expect(screen.queryByTestId('campaign-error')).not.toBeInTheDocument();
+  });
+
+  it('still refuses the board when the error arrives with no campaign data at all', async () => {
+    useCampaign.mockReturnValue({
+      campaign: null,
+      isLoading: false,
+      error: 'Failed to load campaign',
+    });
+    renderBoard();
+
+    await waitFor(() => expect(screen.getByTestId('campaign-error')).toBeInTheDocument());
+    expect(screen.queryByTestId('master-bar')).not.toBeInTheDocument();
   });
 });
