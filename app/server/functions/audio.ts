@@ -391,6 +391,16 @@ export async function createOnceVariantUpload({
       {
         $set: {
           onceSourceKey: key,
+          // Paired with `onceSourceKey` above: the bytes field describes the
+          // object the key points at, and the key just moved to a brand-new,
+          // not-yet-confirmed object. Leaving the OLD measurement standing
+          // would misattribute it to a key that no longer exists — the exact
+          // "stale field describes destroyed bytes" bug the `onceRenditions:
+          // {}` clear below exists to prevent, applied to this field's own
+          // sibling. `confirmOnceVariantUpload`'s success write is the only
+          // place this is ever set to a real number again, once THIS attach's
+          // object is actually measured.
+          onceSourceBytes: null,
           // CLEARED, not left standing. The once rendition keys are
           // DETERMINISTIC per asset (`${base}.once.${ext}` —
           // `renditionKeyBase`'s callers in audio-worker/src/process.ts), and
@@ -542,6 +552,15 @@ export async function confirmOnceVariantUpload({
             status: 'ready',
             variant: 'main',
             onceSourceKey: null,
+            // Paired with `onceSourceKey` above, same as `createOnceVariantUpload`'s
+            // reset: the rejected object is deleted (above) and the row no
+            // longer has a once-source at all, so nothing may describe its
+            // size. In the normal case this attach's own `onceSourceBytes`
+            // was already `null` (set by `createOnceVariantUpload` when THIS
+            // attach started) — explicit here anyway so this write's own
+            // invariant does not depend on a different function having run
+            // first.
+            onceSourceBytes: null,
             onceLastError: reason,
             updatedAt: new Date(),
           },

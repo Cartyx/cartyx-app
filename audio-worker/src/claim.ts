@@ -388,6 +388,14 @@ async function reapAbandonedOnceUploads(
           status: 'ready',
           variant: 'main',
           onceSourceKey: null,
+          // Paired with `onceSourceKey` above, same reasoning as
+          // `markOnceFailed` in `process.ts`: cartyx-app's Task 3b review
+          // finding requires `onceSourceBytes` reset wherever
+          // `onceSourceKey` is cleared or replaced, so a row abandoned
+          // before it ever reached `confirmOnceVariantUpload` (this reaper's
+          // whole reason to exist) can't leave a PRIOR successful attach's
+          // stale byte count standing against a key that no longer exists.
+          onceSourceBytes: null,
           onceLastError: 'Once-variant upload never completed',
           claimedAt: null,
           claimedBy: null,

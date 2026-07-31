@@ -120,6 +120,45 @@ describe('createOnceVariantUpload', () => {
     expect(set.onceRenditions).toEqual({});
   });
 
+  /**
+   * Task 3b review fix (Important). `onceSourceBytes` mirrors `onceSourceKey`
+   * one field over — the byte count describes the object the key points at —
+   * so the same reset `onceRenditions: {}` gets above is required for this
+   * field too, and for the same reason: a prior SUCCESSFUL attach set it to
+   * a real number, this new attach mints a brand-new key the old number no
+   * longer describes, and the old value must not survive to be
+   * misattributed to the new (not-yet-confirmed) object.
+   *
+   * Fixture starts `onceSourceBytes` at a real non-null number (5,000,000),
+   * not null and not absent — a fixture that started null/absent would pass
+   * this assertion even with the reset deleted from the implementation,
+   * because `undefined === null` reads the same as an explicit reset from
+   * `toBe(null)`'s perspective only if nothing else supplies a value; a
+   * non-null start makes the assertion fail unless the code actually writes
+   * the reset.
+   */
+  it('resets onceSourceBytes to null when re-attaching, so a stale prior measurement cannot survive onto the new key', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      ...READY_MUSIC_ASSET,
+      onceSourceKey: 'uploads/audio/prefix/once-old.wav',
+      onceSourceBytes: 5_000_000,
+    } as never);
+    vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+      _id: 'a1',
+      status: 'uploading',
+    } as never);
+
+    const { createOnceVariantUpload } = await import('~/server/functions/audio');
+    await createOnceVariantUpload({
+      data: { assetId: 'a1', filename: 'ending2.wav', contentType: 'audio/wav', bytes: 2048 },
+      userId: 'u1',
+    });
+
+    const [, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
+    const set = (update as { $set: Record<string, unknown> }).$set;
+    expect(set.onceSourceBytes).toBeNull();
+  });
+
   it('refuses a non-music asset, without presigning or touching the row', async () => {
     vi.mocked(AudioAsset.findOne).mockResolvedValue({
       ...READY_MUSIC_ASSET,
@@ -341,6 +380,13 @@ describe('confirmOnceVariantUpload', () => {
       status: 'uploading',
       variant: 'once',
       onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      // Task 3b review fix: non-null on purpose, modelling a row where
+      // something (in production, always null by this point thanks to
+      // `createOnceVariantUpload`'s own reset — asserted separately above)
+      // left a real number here. This write's own reset must not depend on
+      // that other function having run; a fixture starting at null/absent
+      // would pass this test even if THIS write's reset were deleted.
+      onceSourceBytes: 5_000_000,
     } as never);
     send.mockResolvedValue({ ContentLength: 50 * 1024 * 1024 + 1, ContentType: 'audio/wav' });
     vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({ _id: 'a1' } as never);
@@ -377,6 +423,11 @@ describe('confirmOnceVariantUpload', () => {
     expect(set.status).toBe('ready');
     expect(set.variant).toBe('main');
     expect(set.onceSourceKey).toBeNull();
+    // Paired with onceSourceKey: cartyx-app Task 3b review fix. The rejected
+    // object is deleted (asserted above) and this row no longer has a
+    // once-source of any kind — nothing may describe its size, so this
+    // must reset to null in the same write, not merely stay unmentioned.
+    expect(set.onceSourceBytes).toBeNull();
     expect(set.onceLastError).toMatch(/too large/i);
     expect('permanentFailure' in set).toBe(false);
     expect('lastError' in set).toBe(false);

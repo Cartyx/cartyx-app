@@ -404,6 +404,11 @@ describe('Critical 2 fix: a failed once-variant run reverts to ready, never fail
         onceSourceKey: `${PREFIX_ROOT}silent-once.wav`,
         variant: 'once',
         attempts: 1,
+        // Task 3b review fix: models a row that had a PRIOR successful
+        // once-attach before this (now-failing) re-attach started — real
+        // number, not null, so a reset that got deleted would leave this
+        // exact stale value behind in the $set instead of null.
+        onceSourceBytes: 5_000_000,
       },
       WORKER
     );
@@ -415,6 +420,11 @@ describe('Critical 2 fix: a failed once-variant run reverts to ready, never fail
     expect(update.$set.variant).toBe('main');
     expect(update.$set.onceLastError).toMatch(/silent/i);
     expect(update.$set.onceSourceKey).toBeNull();
+    // Paired with onceSourceKey: cartyx-app Task 3b review fix. The bytes
+    // field describes the object the key points at, so clearing the key
+    // without also clearing this leaves the quota over-counting an asset
+    // that no longer has a once-source at all.
+    expect(update.$set.onceSourceBytes).toBeNull();
     // permanentFailure is not merely false — it is ABSENT from the $set, so
     // a real MongoDB $set leaves whatever the row already had (always
     // `false`, since the asset was `ready` before this attach started)

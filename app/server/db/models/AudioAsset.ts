@@ -67,6 +67,23 @@ const audioAssetSchema = new mongoose.Schema({
   // successful attach, which is why this field exists: without it those
   // bytes were measured once for the `AUDIO_MAX_BYTES` gate and then never
   // recorded anywhere the storage quota could see.
+  //
+  // INVARIANT, load-bearing: this field must be reset to `null` at EVERY
+  // site that clears or replaces `onceSourceKey` above, not only where it
+  // is set. It describes the object the key points at, so once the key
+  // stops pointing at that object, a standing byte count is a lie the
+  // storage quota can't detect — it just silently over-counts, forever,
+  // until (if ever) a future successful attach happens to overwrite it.
+  // Task 3b's review caught exactly this: the field was added and wired
+  // into the quota and the one write that SETS it, but not into the
+  // sites that clear/replace the key. Every current site that writes
+  // `onceSourceKey` also writes this field in the same `$set`:
+  // `createOnceVariantUpload` (replace, -> null) and
+  // `confirmOnceVariantUpload`'s reject path (clear, -> null) in
+  // `app/server/functions/audio.ts`; `markOnceFailed` in
+  // `audio-worker/src/process.ts` and `reapAbandonedOnceUploads` in
+  // `audio-worker/src/claim.ts` (both clear, -> null). If `onceSourceKey`
+  // ever grows a new writer, that writer owns this field too.
   onceSourceBytes: { type: Number, default: null },
   // Which pipeline pass the row's CURRENT status/attempts/claim state
   // describes: 'main' for the ordinary source -> renditions pipeline (every

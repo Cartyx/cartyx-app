@@ -695,6 +695,12 @@ describe('reapStale against a real filter-evaluating collection (Task 18 re-revi
         updatedAt: yesterday, // the attach itself is now stale too
         sourceKey: 'uploads/audio/p/main.wav',
         onceSourceKey: 'uploads/audio/p/once.wav',
+        // Task 3b review fix: a PRIOR successful attach set this to a real
+        // number; this abandoned attach (a re-attach after that prior
+        // success) must not leave it standing once its own onceSourceKey is
+        // cleared below — non-null on purpose, so a reset that got deleted
+        // would leave this exact value behind instead of null.
+        onceSourceBytes: 5_000_000,
       },
     ]);
     const deleteSource = vi.fn().mockResolvedValue(undefined);
@@ -707,6 +713,7 @@ describe('reapStale against a real filter-evaluating collection (Task 18 re-revi
       status: 'ready',
       variant: 'main',
       onceSourceKey: null,
+      onceSourceBytes: null,
     });
   });
 
