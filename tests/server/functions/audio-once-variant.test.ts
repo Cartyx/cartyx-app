@@ -24,6 +24,9 @@ vi.mock('~/server/functions/audio-storage', () => ({
   resolveAudioStoragePrefix: vi.fn(async () => 'a1b2c3d4e5f60718293a4b5c6d7e8f90'),
 }));
 
+const getUserStorageUsage = vi.fn();
+vi.mock('~/server/functions/audio-quota', () => ({ getUserStorageUsage }));
+
 import { AudioAsset } from '~/server/db/models/AudioAsset';
 import { serverCaptureEvent } from '~/server/utils/telemetry';
 
@@ -35,7 +38,13 @@ const READY_MUSIC_ASSET = {
 };
 
 describe('createOnceVariantUpload', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Safe default for every pre-existing test below, which predates the
+    // quota check and never mocks it: comfortably under any real limit.
+    // Tests that care about the quota itself override this explicitly.
+    getUserStorageUsage.mockResolvedValue({ bytes: 0, assetCount: 1 });
+  });
 
   it('presigns and flips the row to uploading with variant: once, for a ready music asset', async () => {
     vi.mocked(AudioAsset.findOne).mockResolvedValue(READY_MUSIC_ASSET as never);
@@ -293,6 +302,80 @@ describe('createOnceVariantUpload', () => {
     });
 
     expect(r.assetId).toBe('a1');
+  });
+
+  /**
+   * Review fix (Important): the quota check originally landed only on
+   * `createAudioUpload`. Task 3b made `onceSourceBytes` the sixth term in
+   * `getUserStorageUsage`'s aggregation specifically so once-variant bytes
+   * COUNT toward the quota — but counting them while leaving THIS path
+   * (the one that creates them) ungated meant a caller already at the
+   * limit could keep attaching once-variants to every `music` asset they
+   * own, roughly doubling the effective ceiling for a music-heavy library.
+   * These two tests hold this path to the same standard as
+   * `createAudioUpload`'s own quota tests in `audio-ingest.test.ts`, via
+   * the shared `assertUnderStorageQuota` helper both now call.
+   */
+  describe('storage quota', () => {
+    it('refuses over quota, issues no presign, and never looks up the asset', async () => {
+      const { getAudioUserQuotaBytes, createOnceVariantUpload } =
+        await import('~/server/functions/audio');
+      const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+      const limit = getAudioUserQuotaBytes();
+      getUserStorageUsage.mockResolvedValue({ bytes: limit + 1, assetCount: 5 });
+
+      await expect(
+        createOnceVariantUpload({
+          data: { assetId: 'a1', filename: 'ending.wav', contentType: 'audio/wav', bytes: 1024 },
+          userId: 'u1',
+        })
+      ).rejects.toThrow(/storage quota exceeded/i);
+
+      // Pinned on the quota message specifically, not merely "it threw": the
+      // asset-lookup mock is never configured to succeed in this test (it
+      // would resolve `undefined` and throw "Audio asset not found" instead
+      // if ever reached), so a version of this test that only asserted
+      // rejection would pass just as well with the quota check deleted.
+      // These negative assertions catch that — they fail unless the quota
+      // check runs BEFORE the asset lookup, not just before the presign.
+      expect(vi.mocked(getAudioUploadUrl)).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.findOne)).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.findOneAndUpdate)).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Its own test, not a branch of the one above — this fixture never sets
+     * a bytes value, only makes the aggregation call itself reject. Kept
+     * separate for the same reason `audio-ingest.test.ts`'s equivalent test
+     * is separate: merged into the over-quota case (which pins a resolved
+     * bytes VALUE), a missing fail-closed guard could still pass as long as
+     * something else downstream happened to throw.
+     */
+    it('refuses the attach when the usage aggregation itself rejects — fail closed', async () => {
+      const { createOnceVariantUpload } = await import('~/server/functions/audio');
+      const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+      getUserStorageUsage.mockRejectedValue(new Error('mongo unreachable'));
+
+      await expect(
+        createOnceVariantUpload({
+          data: { assetId: 'a1', filename: 'ending.wav', contentType: 'audio/wav', bytes: 1024 },
+          userId: 'u1',
+        })
+      ).rejects.toThrow(/unable to verify your storage usage/i);
+
+      expect(vi.mocked(getAudioUploadUrl)).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.findOne)).not.toHaveBeenCalled();
+
+      // The underlying fault is still captured, exactly once, tagged for
+      // THIS caller specifically — proves `assertUnderStorageQuota`'s
+      // `action` parameter is actually threaded through, not hardcoded to
+      // `createAudioUpload`'s own string.
+      expect(vi.mocked(serverCaptureException)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(serverCaptureException).mock.calls[0][2]).toMatchObject({
+        action: 'createOnceVariantUpload.quotaCheck',
+      });
+    });
   });
 });
 

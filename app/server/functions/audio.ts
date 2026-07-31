@@ -192,6 +192,96 @@ export function getAudioUserQuotaBytes(): number {
   return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_AUDIO_USER_QUOTA_BYTES;
 }
 
+/**
+ * The storage-quota gate, shared by every entry point that presigns an
+ * upload via `getAudioUploadUrl`: `createAudioUpload` (a new asset's
+ * source) and `createOnceVariantUpload` (Task 18's once-variant source,
+ * attached to an existing `music` asset). Both must run this BEFORE that
+ * presign — the only R2-touching step either function takes — for two
+ * reasons: refusing first means no R2 object exists yet for anything to
+ * reclaim, and the E2E suite (deliberately fake R2 credentials) can only
+ * tell a quota refusal apart from a credentials failure if the refusal
+ * never reaches the presign step at all.
+ *
+ * BOTH callers, not just `createAudioUpload`, because Task 3b deliberately
+ * made `onceSourceBytes` the sixth term in `getUserStorageUsage`'s
+ * aggregation specifically so once-variant bytes COUNT toward this quota
+ * (`app/server/functions/audio-quota.ts`). Gating only the path that
+ * creates the FIRST five terms' bytes while leaving the once-variant path
+ * ungated would mean the quota counts bytes it never enforced against —
+ * the exact hole Task 3b closed on the read side, reopened on the write
+ * side: a user sitting exactly at the limit could still attach a
+ * once-variant (its own source plus opus/aac renditions, ~126 MB at the
+ * design doc's figure) to every `music` asset they own, roughly doubling
+ * the effective ceiling for a music-heavy library.
+ *
+ * Throws `AudioClientError` on refusal (both the fail-closed and the
+ * over-quota shape); returns normally when the caller is under quota.
+ * `action` distinguishes which caller is asking, purely for the telemetry
+ * tag on a fail-closed capture (see below) — `createAudioUpload` passes
+ * `'createAudioUpload'`, `createOnceVariantUpload` passes
+ * `'createOnceVariantUpload'`, each producing the same
+ * `'<name>.quotaCheck'` action string this check has always used.
+ *
+ * Not exported: this module's two upload-presigning functions are its only
+ * callers, and this module is reached only via `await import(...)` from
+ * server-fn handlers and two server-only API routes (see the module
+ * comment in `~/utils/audio-server-fns.ts`), so there is no reason to widen
+ * this file's public surface for it.
+ */
+async function assertUnderStorageQuota(actor: Actor, action: string): Promise<void> {
+  const limitBytes = getAudioUserQuotaBytes();
+  let usage: AudioStorageUsage;
+  try {
+    usage = await getUserStorageUsage(actor.userId);
+  } catch (e) {
+    // FAIL CLOSED. An aggregation that cannot be measured is refused, not
+    // admitted — the easy bug here is a `catch` that logs and continues,
+    // which quietly turns the quota into a suggestion.
+    //
+    // This failure IS reported to GlitchTip, unlike the `AudioClientError`
+    // thrown right below — deliberately, and for a different reason than
+    // every other capture this file skips. Every other `AudioClientError`
+    // here refuses something the CALLER did (a guessable not-found, a rate
+    // limit, a resource cap) and is reachable by that caller at will, so
+    // reporting it would make report volume an attacker's parameter. An
+    // aggregation failure is the opposite: no request shape triggers it on
+    // demand, it is a genuine Mongo/index/connection fault, and it
+    // silently blocks every upload for this user — for every user, if
+    // systemic — until someone notices. Swallowing it here would make
+    // quota enforcement's own failure mode invisible. So the UNDERLYING
+    // fault is captured once, right here, while the REFUSAL that reaches
+    // the caller stays an `AudioClientError` — whether the fault deserves a
+    // report and whether the outward rejection may amplify are separate
+    // questions, and this answers them differently on purpose.
+    serverCaptureException(e, telemetryId(actor), { action: `${action}.quotaCheck` });
+    throw new AudioClientError(
+      'Unable to verify your storage usage right now. Please try again shortly.'
+    );
+  }
+
+  // `>=`, matching `assertPackageBudget`'s deliberate choice for
+  // `MAX_PACKAGES_PER_USER` (`~/server/functions/packages.ts`): usage is
+  // measured BEFORE this upload lands, so a caller already AT the limit is
+  // refused rather than allowed to land exactly on it. Same "resource
+  // bound, not exact invariant" reasoning too — this cannot be made
+  // airtight with a transaction because the incoming file's declared
+  // `data.bytes` is client-controlled and unverified until confirm's own
+  // `HeadObject` measures it (see the comment on `sourceBytes` in
+  // `createAudioUpload` below), so it is not part of this boundary check.
+  // The worst-case overshoot this admits is bounded by ONE accepted
+  // request's eventual total footprint — not just `AUDIO_MAX_BYTES`'s 50
+  // MiB source cap, but the source PLUS the opus/aac renditions the worker
+  // produces from it, ~126 MB per the design doc's own measurement — the
+  // same shape of slack two concurrent package creates can produce there.
+  if (usage.bytes >= limitBytes) {
+    throw new AudioClientError(
+      `Storage quota exceeded: ${usage.bytes} of ${limitBytes} bytes used. Delete an asset to make room.`,
+      { usageBytes: usage.bytes, limitBytes }
+    );
+  }
+}
+
 export async function createAudioUpload({
   data,
   userId,
@@ -202,64 +292,10 @@ export async function createAudioUpload({
   try {
     await ensureDb();
 
-    // Enforced FIRST, before `resolveAudioStoragePrefix` and before
-    // `getAudioUploadUrl` (the presign, the only R2-touching step in this
-    // function): refusing here means no R2 object exists yet for anything to
-    // reclaim, and no needless Mongo write mints a storage prefix for a
-    // request about to be refused anyway. It also means the E2E suite —
-    // which runs against deliberately fake R2 credentials — can tell a quota
-    // refusal apart from a credentials failure, because this refusal never
-    // reaches the presign step at all. See the design doc's "Quota
-    // enforcement point".
-    const limitBytes = getAudioUserQuotaBytes();
-    let usage: AudioStorageUsage;
-    try {
-      usage = await getUserStorageUsage(userId);
-    } catch (e) {
-      // FAIL CLOSED. An aggregation that cannot be measured is refused, not
-      // admitted — the easy bug here is a `catch` that logs and continues,
-      // which quietly turns the quota into a suggestion.
-      //
-      // This failure IS reported to GlitchTip, unlike the `AudioClientError`
-      // thrown right below — deliberately, and for a different reason than
-      // every other capture this file skips. Every other `AudioClientError`
-      // here refuses something the CALLER did (a guessable not-found, a rate
-      // limit, a resource cap) and is reachable by that caller at will, so
-      // reporting it would make report volume an attacker's parameter. An
-      // aggregation failure is the opposite: no request shape triggers it on
-      // demand, it is a genuine Mongo/index/connection fault, and it
-      // silently blocks every upload for this user — for every user, if
-      // systemic — until someone notices. Swallowing it here would make
-      // quota enforcement's own failure mode invisible. So the UNDERLYING
-      // fault is captured once, right here, while the REFUSAL that reaches
-      // the caller stays an `AudioClientError` — whether the fault deserves a
-      // report and whether the outward rejection may amplify are separate
-      // questions, and this answers them differently on purpose.
-      serverCaptureException(e, telemetryId({ userId, sessionUserId }), {
-        action: 'createAudioUpload.quotaCheck',
-      });
-      throw new AudioClientError(
-        'Unable to verify your storage usage right now. Please try again shortly.'
-      );
-    }
-
-    // `>=`, matching `assertPackageBudget`'s deliberate choice for
-    // `MAX_PACKAGES_PER_USER` (`~/server/functions/packages.ts`): usage is
-    // measured BEFORE this upload lands, so a caller already AT the limit is
-    // refused rather than allowed to land exactly on it. Same "resource
-    // bound, not exact invariant" reasoning too — this cannot be made
-    // airtight with a transaction because the incoming file's declared
-    // `data.bytes` is client-controlled and unverified until confirm's own
-    // `HeadObject` measures it (see the comment on `sourceBytes` below), so
-    // it is not part of this boundary check; the worst-case overshoot this
-    // admits is bounded by `AUDIO_MAX_BYTES` per accepted request, the same
-    // shape of slack two concurrent package creates can produce there.
-    if (usage.bytes >= limitBytes) {
-      throw new AudioClientError(
-        `Storage quota exceeded: ${usage.bytes} of ${limitBytes} bytes used. Delete an asset to make room.`,
-        { usageBytes: usage.bytes, limitBytes }
-      );
-    }
+    // Enforced FIRST, before `resolveAudioStoragePrefix` and before the
+    // presign — see `assertUnderStorageQuota`'s own doc comment for the
+    // full reasoning, shared verbatim with `createOnceVariantUpload` below.
+    await assertUnderStorageQuota({ userId, sessionUserId }, 'createAudioUpload');
 
     // Mints the user's R2 namespace if this is their first upload, and returns
     // the existing one otherwise — see `./audio-storage.ts`. It runs before the
@@ -482,6 +518,14 @@ export async function createOnceVariantUpload({
 } & Actor) {
   try {
     await ensureDb();
+
+    // Enforced FIRST, same as `createAudioUpload` and for the same reason —
+    // see `assertUnderStorageQuota`'s doc comment. This is the path Task 3b's
+    // `onceSourceBytes` aggregation term exists to gate: without this call, a
+    // caller already at the quota could still attach a once-variant (its own
+    // source plus renditions) to every `music` asset they own.
+    await assertUnderStorageQuota({ userId, sessionUserId }, 'createOnceVariantUpload');
+
     const asset = await AudioAsset.findOne({ _id: data.assetId, ownerId: userId });
     if (!asset) throw new AudioClientError('Audio asset not found');
     if (asset.kind !== 'music') {
