@@ -193,6 +193,46 @@ export function getAudioUserQuotaBytes(): number {
 }
 
 /**
+ * How many transcode jobs (`status: 'pending' | 'processing'`) one user may
+ * occupy at once. This is the fairness control the design doc calls for:
+ * "cap pending jobs per user, not round-robin claim" — `claimNext`
+ * (audio-worker/src/claim.ts) is a single atomic `findOneAndUpdate` sorted
+ * `createdAt` ascending across ALL users with no per-owner term, and nothing
+ * across three phases has broken it, so bounding what one user can put INTO
+ * that queue is the cheaper correct move over adding a fairness term to it.
+ *
+ * 20. The design's dropzone is per-file (each file is its own
+ * `createAudioUpload` -> PUT -> `confirmAudioUpload` round trip), but
+ * `AudioUploadDropzone`'s own doc comment states the realistic legitimate
+ * burst this has to admit: uploads within one drop run SEQUENTIALLY, only
+ * one batch runs at a time, and "GM upload sessions are 'drop a folder, wait,
+ * drop the next,' not a firehose." A folder of ambience/SFX for a session is
+ * the shape of burst this cap exists to let through — tens of files, not
+ * hundreds. 20 admits that folder-sized drop with room to spare while still
+ * meaningfully bounding the other side of the trade: with one worker
+ * replica and a global FIFO claim, every job a flood occupies is a job every
+ * OTHER user's asset waits behind, so the cap has to be small enough that a
+ * single account's worst-case backlog is minutes, not hours, of head-of-line
+ * blocking for everyone else.
+ */
+const DEFAULT_MAX_PENDING_JOBS_PER_USER = 20;
+
+/**
+ * `MAX_PENDING_JOBS_PER_USER`, read fresh on every call — same idiom as
+ * `getAudioUserQuotaBytes` immediately above, for the identical reasons: a
+ * value change takes effect on the next request with no re-import, and it is
+ * guarded against the empty-string case Helm renders for an unset
+ * `values.yaml` key (`Number('')` is `0`, not `NaN`, so `raw > 0` still has
+ * to be the gate — a bare `Number.isFinite` check alone would admit it and
+ * refuse every confirm for every user). Server env only, never
+ * `VITE_PUBLIC_*` — see that function's comment for why.
+ */
+export function getMaxPendingJobsPerUser(): number {
+  const raw = Number(process.env.MAX_PENDING_JOBS_PER_USER);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_MAX_PENDING_JOBS_PER_USER;
+}
+
+/**
  * The storage-quota gate, shared by every entry point that presigns an
  * upload via `getAudioUploadUrl`: `createAudioUpload` (a new asset's
  * source) and `createOnceVariantUpload` (Task 18's once-variant source,
@@ -379,6 +419,70 @@ export async function confirmAudioUpload({
     }
 
     const { client, bucket } = createR2();
+
+    // The per-user queue-depth bound (see `getMaxPendingJobsPerUser`'s doc
+    // comment) — checked HERE, before `HeadObject`, because this is "the
+    // point where a row becomes claimable": nothing before this line can
+    // put a row into `pending`/`processing`, and everything after it is
+    // building toward exactly that. Checking before `HeadObject` also means
+    // a caller already at the cap is refused without spending an R2 round
+    // trip on an object that is about to be rejected regardless of what it
+    // turns out to be.
+    //
+    // Scoped `{ ownerId: userId, ... }` — never a bare status filter — for
+    // the same reason every cap in this codebase is: an unscoped count
+    // would refuse EVERY user once the GLOBAL queue reached the limit,
+    // which is a different (and wrong) control than "one account cannot
+    // occupy more than N slots of it".
+    const maxPendingJobs = getMaxPendingJobsPerUser();
+    const pendingCount = await AudioAsset.countDocuments({
+      ownerId: userId,
+      status: { $in: ['pending', 'processing'] },
+    });
+    if (pendingCount >= maxPendingJobs) {
+      // The object already exists in R2 by the time confirm runs (the
+      // browser's PUT to the presigned URL already landed) — refusing here
+      // does not avoid creating an object the way the storage-quota check
+      // in `createAudioUpload` does by refusing before the presign. It has
+      // to be deleted explicitly or it is stranded: nothing else will ever
+      // reference it, and the orphan scanner is the only other path back,
+      // on a later manual sweep instead of immediately.
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.sourceKey }));
+      const reason = `Too many pending transcode jobs (${pendingCount} of ${maxPendingJobs} already queued). Wait for one to finish before uploading more.`;
+      // FENCED on `status: 'uploading', variant: { $ne: 'once' }` — the
+      // identical ordering trap the tooLarge/badType write below closes,
+      // and the identical fix: this request can be suspended inside the
+      // `DeleteObjectCommand` await above for the length of one R2 round
+      // trip, and a concurrent confirm for the SAME asset (a client retry
+      // racing this request) could complete in that window and move the
+      // row to `pending` — or the worker could claim and finish it, moving
+      // it to `ready` — before this write runs. An identity-only write
+      // would then stamp `status: 'failed'` over a row that is now
+      // legitimately queued or already done, after this request's own
+      // delete has already destroyed the (still-referenced, still-good)
+      // object that row pointed at. The fence makes the stale write a
+      // no-op instead: the row this path means to fail is by definition
+      // still `uploading` and still not the once pipeline's, so a narrower
+      // filter cannot cost this path anything it should have done.
+      await AudioAsset.findOneAndUpdate(
+        { _id: data.assetId, ownerId: userId, status: 'uploading', variant: { $ne: 'once' } },
+        {
+          $set: {
+            status: 'failed',
+            lastError: reason,
+            updatedAt: new Date(),
+          },
+        }
+      );
+      // AudioClientError: this is the caller's own doing (they queued more
+      // than their share) and is reachable at will by uploading and
+      // confirming repeatedly, so it must not file a GlitchTip event — same
+      // shape as `assertUnderStorageQuota`'s refusal. The count is embedded
+      // in the message so the caller knows to wait rather than retry
+      // immediately.
+      throw new AudioClientError(reason);
+    }
+
     const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: asset.sourceKey }));
 
     const bytes = head.ContentLength ?? 0;

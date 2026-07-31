@@ -7,7 +7,12 @@ vi.mock('~/server/utils/telemetry', () => ({
   serverCaptureEvent: vi.fn(),
 }));
 vi.mock('~/server/db/models/AudioAsset', () => ({
-  AudioAsset: { create: vi.fn(), findOne: vi.fn(), findOneAndUpdate: vi.fn() },
+  AudioAsset: {
+    create: vi.fn(),
+    findOne: vi.fn(),
+    findOneAndUpdate: vi.fn(),
+    countDocuments: vi.fn(),
+  },
 }));
 
 const send = vi.fn();
@@ -263,7 +268,15 @@ describe('createAudioUpload', () => {
 });
 
 describe('confirmAudioUpload', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Safe default for every pre-existing test below, which predates the
+    // pending-job cap and never mocks it: zero pending jobs is comfortably
+    // under any real cap, so the happy-path/precondition assertions those
+    // tests make are unaffected. Tests that care about the cap itself
+    // override this explicitly.
+    vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0);
+  });
 
   it('flips to pending when the real object matches the declared size', async () => {
     vi.mocked(AudioAsset.findOne).mockResolvedValue({
@@ -507,5 +520,115 @@ describe('confirmAudioUpload', () => {
     // change that dropped the ownerId filter would still return null here from the
     // mock, but this assertion would catch it.
     expect(AudioAsset.findOne).toHaveBeenCalledWith({ _id: 'a1', ownerId: 'u2' });
+  });
+
+  describe('pending job cap', () => {
+    /**
+     * Pins the ACTUAL count filter `AudioAsset.countDocuments` is called
+     * with, not merely that some refusal or admission happened. A fixture
+     * shape that would make a weaker assertion pass for the wrong reason:
+     * asserting only "it was called" (any arguments) would still pass with
+     * `ownerId` dropped from the filter, or with `status` narrowed to just
+     * `'pending'` (silently ignoring `processing` rows), or with the field
+     * name typo'd — `toHaveBeenCalledWith` is a deep-equality check on the
+     * exact object the production code built, so all three mutations fail
+     * it.
+     */
+    it('counts pending+processing jobs scoped to the caller before allowing the row to become claimable', async () => {
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        sourceKey: 'k',
+        status: 'uploading',
+      } as never);
+      send.mockResolvedValue({ ContentLength: 1024, ContentType: 'audio/wav' });
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+        _id: 'a1',
+        status: 'pending',
+      } as never);
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0);
+
+      const { confirmAudioUpload } = await import('~/server/functions/audio');
+      await confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' });
+
+      expect(vi.mocked(AudioAsset.countDocuments)).toHaveBeenCalledWith({
+        ownerId: 'u1',
+        status: { $in: ['pending', 'processing'] },
+      });
+    });
+
+    /**
+     * THE global-count catch. A single-user fixture cannot tell "counts
+     * this user's jobs" apart from "counts everyone's jobs" — both shapes
+     * produce the same refuse/admit outcome for one caller. This test uses
+     * a `countDocuments` fake that only ONE of those two implementations
+     * can satisfy: it inspects the filter's `ownerId` and answers per-user
+     * (u1 sits at the cap, u2 sits at zero). A count that is global, or
+     * scoped to the wrong field, cannot route to the right branch here —
+     * see the teeth-proof below, which drops `ownerId` from the production
+     * filter and confirms this exact test fails.
+     *
+     * Also proves: the refusal happens BEFORE `HeadObject` (no wasted R2
+     * round trip on a file that's refused regardless of its contents), the
+     * refusal message carries the count, the refusal is an
+     * `AudioClientError` (no GlitchTip event for the caller's own doing),
+     * and a DIFFERENT user with room in their queue is admitted through the
+     * normal success path in the same run.
+     */
+    it('refuses a user already at the cap while a different user at zero is admitted', async () => {
+      const { getMaxPendingJobsPerUser, confirmAudioUpload, AudioClientError } =
+        await import('~/server/functions/audio');
+      const cap = getMaxPendingJobsPerUser();
+
+      vi.mocked(AudioAsset.countDocuments).mockImplementation((async (
+        filter: Record<string, unknown>
+      ) => {
+        if (filter.ownerId === 'u1') return cap; // already at the cap
+        if (filter.ownerId === 'u2') return 0; // fresh, nothing queued
+        // Any other shape (ownerId missing/wrong, or a global count that
+        // ignores it) cannot be answered correctly for either caller —
+        // failing loudly here is what makes the mutation below fail this
+        // test instead of silently passing it.
+        throw new Error(`unscoped countDocuments filter: ${JSON.stringify(filter)}`);
+      }) as never);
+      send.mockResolvedValue({ ContentLength: 1024, ContentType: 'audio/wav' });
+
+      // u1: at the cap, refused.
+      vi.mocked(AudioAsset.findOne).mockResolvedValueOnce({
+        _id: 'a1',
+        ownerId: 'u1',
+        sourceKey: 'k1',
+        status: 'uploading',
+      } as never);
+      const err = await confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' }).catch(
+        (e: unknown) => e
+      );
+      expect(err).toBeInstanceOf(AudioClientError);
+      expect((err as Error).message).toContain(String(cap));
+      // Exactly one R2 call: the delete of the already-uploaded object.
+      // HeadObject never runs — the cap refusal happens before it.
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0][0]).toBeInstanceOf(DeleteObjectCommand);
+      expect((send.mock.calls[0][0] as DeleteObjectCommand).input).toEqual({
+        Bucket: 'b',
+        Key: 'k1',
+      });
+
+      send.mockClear();
+
+      // u2: a DIFFERENT user, zero pending jobs, admitted normally.
+      vi.mocked(AudioAsset.findOne).mockResolvedValueOnce({
+        _id: 'a2',
+        ownerId: 'u2',
+        sourceKey: 'k2',
+        status: 'uploading',
+      } as never);
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+        _id: 'a2',
+        status: 'pending',
+      } as never);
+      const r = await confirmAudioUpload({ data: { assetId: 'a2' }, userId: 'u2' });
+      expect(r.status).toBe('pending');
+    });
   });
 });

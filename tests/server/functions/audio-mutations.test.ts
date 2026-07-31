@@ -32,6 +32,7 @@ vi.mock('~/server/db/models/AudioAsset', () => ({
     updateMany: vi.fn(),
     findOne: vi.fn(),
     deleteOne: vi.fn(),
+    countDocuments: vi.fn(),
   },
 }));
 
@@ -320,7 +321,14 @@ describe('bulkTagAudioAssets', () => {
 });
 
 describe('retryAudioAsset', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Safe default for the nested `confirmAudioUpload` calls below (this
+    // describe's property tests drive the real confirm path to build
+    // fixture rows): zero pending jobs is under any real cap, so it does
+    // not interfere with what those tests are actually checking.
+    vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0);
+  });
 
   it('requeues a failed asset and resets the entire queue state', async () => {
     mockUpdateResult({
