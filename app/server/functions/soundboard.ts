@@ -14,9 +14,17 @@ import type { saveBoardStateSchema, loadBoardStateSchema } from '~/types/schemas
  * save function the client-side GM gating exists to prevent them from calling.
  */
 export class SoundboardClientError extends Error {
-  constructor(message: string) {
+  /**
+   * Set only when the refusal is a rate-limit rejection thrown by
+   * `~/utils/soundboard-server-fns.ts`'s wrapper gate — same field, same
+   * meaning, as `AudioClientError.retryAfterMs`.
+   */
+  readonly retryAfterMs?: number;
+
+  constructor(message: string, options?: { retryAfterMs?: number }) {
     super(message);
     this.name = 'SoundboardClientError';
+    this.retryAfterMs = options?.retryAfterMs;
   }
 }
 

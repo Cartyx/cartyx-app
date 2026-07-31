@@ -41,28 +41,66 @@ vi.mock('~/server/db/models/User', () => ({
   User: { findOne: vi.fn() },
 }));
 
+// `AudioClientError` is a real class here rather than a `vi.fn()` because the
+// wrapper's rate-limit gate constructs one (`new AudioClientError(msg, {
+// retryAfterMs })`) and the tests below assert `instanceof` on what comes
+// back — that `instanceof` is the whole GlitchTip proof, since
+// `reportAudioError` in the real module excludes exactly this class. It
+// mirrors the real constructor signature; `npm run typecheck` is what keeps
+// the two from drifting, because the wrapper is typechecked against the real
+// module, not this stand-in.
 vi.mock('~/server/functions/audio', () => ({
+  AudioClientError: class AudioClientError extends Error {
+    readonly retryAfterMs?: number;
+    constructor(message: string, options?: { retryAfterMs?: number }) {
+      super(message);
+      this.name = 'AudioClientError';
+      this.retryAfterMs = options?.retryAfterMs;
+    }
+  },
   createAudioUpload: vi.fn(),
   confirmAudioUpload: vi.fn(),
+  createOnceVariantUpload: vi.fn(),
+  confirmOnceVariantUpload: vi.fn(),
+  retryAudioAsset: vi.fn(),
   listAudioAssets: vi.fn(),
   updateAudioAsset: vi.fn(),
   bulkTagAudioAssets: vi.fn(),
   deleteAudioAsset: vi.fn(),
 }));
 
+// Not in the wrapper's import graph at all (the server functions that would
+// call it are mocked above), so this assertion cannot fail today — which is
+// the point. It fails the day someone "helpfully" reports a rate-limit
+// rejection from the wrapper itself, which is the telemetry-amplification
+// mistake this phase exists to avoid: the rejection volume is the attacker's
+// parameter.
+vi.mock('~/server/utils/telemetry', () => ({
+  serverCaptureException: vi.fn(),
+  serverCaptureEvent: vi.fn(),
+}));
+
 import { getSession } from '~/server/session';
 import { User } from '~/server/db/models/User';
 import {
+  AudioClientError,
   createAudioUpload,
   confirmAudioUpload,
+  createOnceVariantUpload,
+  confirmOnceVariantUpload,
+  retryAudioAsset,
   listAudioAssets,
   updateAudioAsset,
   bulkTagAudioAssets,
   deleteAudioAsset,
 } from '~/server/functions/audio';
+import { serverCaptureException } from '~/server/utils/telemetry';
 import {
   createAudioUploadFn,
   confirmAudioUploadFn,
+  createOnceVariantUploadFn,
+  confirmOnceVariantUploadFn,
+  retryAudioAssetFn,
   listAudioAssetsFn,
   updateAudioAssetFn,
   bulkTagAudioAssetsFn,
@@ -262,6 +300,144 @@ describe('bulkTagAudioAssetsFn', () => {
       sessionUserId: SESSION_USER.id,
     });
     expect(r).toEqual({ modified: 2 });
+  });
+});
+
+/**
+ * The wrapper-layer rate limit (`audioIngestLimiter`, see
+ * `~/lib/audio-rate-limits.ts`).
+ *
+ * Every test here uses its OWN `DB_USER_ID`, because the limiter is a
+ * module-scope singleton with no reset hook — `vi.clearAllMocks()` cannot
+ * empty its buckets, and the bucket key IS the resolved Mongo `_id`. A shared
+ * id would make these tests order-dependent and would poison the pass-through
+ * tests above. A distinct id per test is a fresh, full bucket by construction.
+ *
+ * The `60` below is `audioIngestLimiter`'s capacity, written as a literal on
+ * purpose: raising it makes the "61st is refused" assertion fail, and lowering
+ * it makes the drain loop throw early. The number is pinned in both
+ * directions rather than read from the module under test.
+ */
+describe('ingest rate limit', () => {
+  const uploadData = {
+    filename: 'storm.wav',
+    contentType: 'audio/wav',
+    bytes: 1024,
+    kind: 'ambience' as const,
+    environment: [],
+    mood: [],
+    tags: [] as string[],
+  };
+
+  /** Spends the whole ingest bucket for `userId` via `createAudioUploadFn`. */
+  async function drainIngestBucket(userId: string) {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(userId);
+    vi.mocked(createAudioUpload).mockResolvedValue({
+      assetId: 'a1',
+      uploadUrl: 'https://put',
+      key: 'k',
+    });
+    for (let i = 0; i < 60; i++) {
+      await createAudioUploadFn({ data: uploadData });
+    }
+    expect(createAudioUpload).toHaveBeenCalledTimes(60);
+    vi.mocked(createAudioUpload).mockClear();
+  }
+
+  it('lets a full 60-call burst through, then refuses the 61st without calling createAudioUpload', async () => {
+    await drainIngestBucket('mongo-ingest-create');
+
+    await expect(createAudioUploadFn({ data: uploadData })).rejects.toThrow(
+      /Too many upload requests/
+    );
+    // The gate is the ONLY reason this call failed: the underlying server
+    // function was never reached. Without this assertion the test would still
+    // pass with the limiter deleted, because something further down throws.
+    expect(createAudioUpload).not.toHaveBeenCalled();
+  });
+
+  it('refuses with AudioClientError carrying retryAfterMs, and files no GlitchTip event', async () => {
+    await drainIngestBucket('mongo-ingest-shape');
+
+    const err = await createAudioUploadFn({ data: uploadData }).catch((e: unknown) => e);
+    // `reportAudioError` excludes exactly this class from
+    // `serverCaptureException` — the class is the no-telemetry contract.
+    expect(err).toBeInstanceOf(AudioClientError);
+    expect((err as AudioClientError).retryAfterMs).toBeGreaterThan(0);
+    expect(serverCaptureException).not.toHaveBeenCalled();
+    expect(createAudioUpload).not.toHaveBeenCalled();
+  });
+
+  it('shares one bucket across confirmAudioUploadFn, so a drained bucket refuses a confirm too', async () => {
+    await drainIngestBucket('mongo-ingest-confirm');
+
+    await expect(confirmAudioUploadFn({ data: { assetId: 'a1' } })).rejects.toThrow(
+      /Too many upload requests/
+    );
+    expect(confirmAudioUpload).not.toHaveBeenCalled();
+    expect(serverCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('shares one bucket across createOnceVariantUploadFn, so a drained bucket refuses a once-variant presign too', async () => {
+    await drainIngestBucket('mongo-ingest-once-create');
+
+    await expect(
+      createOnceVariantUploadFn({
+        data: { assetId: 'a1', filename: 'once.wav', contentType: 'audio/wav', bytes: 1024 },
+      })
+    ).rejects.toThrow(/Too many upload requests/);
+    expect(createOnceVariantUpload).not.toHaveBeenCalled();
+    expect(serverCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('shares one bucket across confirmOnceVariantUploadFn, so a drained bucket refuses a once-variant confirm too', async () => {
+    await drainIngestBucket('mongo-ingest-once-confirm');
+
+    await expect(confirmOnceVariantUploadFn({ data: { assetId: 'a1' } })).rejects.toThrow(
+      /Too many upload requests/
+    );
+    expect(confirmOnceVariantUpload).not.toHaveBeenCalled();
+    expect(serverCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('shares one bucket with retryAudioAssetFn, so a drained bucket refuses a retry too', async () => {
+    await drainIngestBucket('mongo-ingest-retry');
+
+    // `retryAudioAsset` makes a `failed` row claimable again — the same act as
+    // a confirm, so it draws on the same bucket. Note the message says "retry"
+    // rather than "upload", which is why this asserts a different string.
+    await expect(retryAudioAssetFn({ data: { id: 'a1' } })).rejects.toThrow(
+      /Too many retry requests/
+    );
+    expect(retryAudioAsset).not.toHaveBeenCalled();
+    expect(serverCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('is keyed per account: draining one user does not refuse another', async () => {
+    await drainIngestBucket('mongo-ingest-victim');
+
+    mockDbUser('mongo-ingest-bystander');
+    vi.mocked(createAudioUpload).mockResolvedValue({
+      assetId: 'a2',
+      uploadUrl: 'https://put',
+      key: 'k',
+    });
+    await expect(createAudioUploadFn({ data: uploadData })).resolves.toEqual({
+      assetId: 'a2',
+      uploadUrl: 'https://put',
+      key: 'k',
+    });
+  });
+
+  it('does not gate reads: listAudioAssetsFn survives far past the ingest capacity', async () => {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser('mongo-ingest-reader');
+    vi.mocked(listAudioAssets).mockResolvedValue({ items: [FAKE_ASSET], nextCursor: null });
+    for (let i = 0; i < 120; i++) {
+      await listAudioAssetsFn({ data: { limit: 50 } });
+    }
+    expect(listAudioAssets).toHaveBeenCalledTimes(120);
   });
 });
 

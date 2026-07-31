@@ -38,9 +38,18 @@ async function ensureDb() {
  * this class covers the fail-closed paths behind it rather than the common case.
  */
 export class AudioClientError extends Error {
-  constructor(message: string) {
+  /**
+   * Set only when the refusal is a rate-limit rejection thrown by
+   * `~/utils/audio-server-fns.ts`'s wrapper gate: how long until the caller's
+   * bucket has a token again, so the UI can say WHEN to retry rather than
+   * just "no". Absent on every other client error, which is not time-based.
+   */
+  readonly retryAfterMs?: number;
+
+  constructor(message: string, options?: { retryAfterMs?: number }) {
     super(message);
     this.name = 'AudioClientError';
+    this.retryAfterMs = options?.retryAfterMs;
   }
 }
 

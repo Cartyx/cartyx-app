@@ -42,9 +42,17 @@ async function ensureDb() {
  * GlitchTip volume path if left unguarded.
  */
 export class PackageClientError extends Error {
-  constructor(message: string) {
+  /**
+   * Set only when the refusal is a rate-limit rejection thrown by
+   * `~/utils/soundboard-server-fns.ts`'s wrapper gate — same field, same
+   * meaning, as `AudioClientError.retryAfterMs`.
+   */
+  readonly retryAfterMs?: number;
+
+  constructor(message: string, options?: { retryAfterMs?: number }) {
     super(message);
     this.name = 'PackageClientError';
+    this.retryAfterMs = options?.retryAfterMs;
   }
 }
 

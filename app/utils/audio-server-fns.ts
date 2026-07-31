@@ -1,4 +1,5 @@
 import { createServerFn } from '@tanstack/react-start';
+import { audioIngestLimiter, rateLimitMessage } from '~/lib/audio-rate-limits';
 import {
   createAudioUploadSchema,
   confirmAudioUploadSchema,
@@ -65,41 +66,97 @@ import {
 // same human stays one person in GlitchTip and Umami whether they are
 // uploading an image or an audio file. See the `Actor` type in
 // `~/server/functions/audio.ts`.
+//
+// RATE LIMITING. The five ingest handlers below (both upload halves, both
+// once-variant halves, and `retryAudioAssetFn`) share one per-account token
+// bucket, `audioIngestLimiter` — see `~/lib/audio-rate-limits.ts` for the
+// numbers and the legitimate-burst reasoning behind each. Three properties of
+// how it is applied here are load-bearing:
+//
+//  1. It runs AFTER `requireActor()`, so the key is the caller's Mongo `_id`
+//     rather than an IP. An abuser cannot rotate out of their own bucket, and
+//     a shared NAT is not one bucket.
+//  2. It runs BEFORE the `~/server/functions/audio` call, so a refused
+//     request never reaches Mongo or R2. That is what the
+//     `not.toHaveBeenCalled()` assertions in
+//     `tests/utils/audio-server-fns.test.ts` pin: a test that only asserted
+//     the rejection would still pass with this gate deleted, because
+//     something further down throws anyway.
+//  3. It refuses with `AudioClientError`, which `reportAudioError` excludes
+//     from GlitchTip. A limiter that filed an event per rejection would hand
+//     an attacker the exact telemetry-amplification lever this phase exists
+//     to close — the rejection volume is the attacker's parameter.
+//
+// `~/lib/audio-rate-limits` is imported STATICALLY, unlike everything else
+// reached from these handlers, and that is safe precisely because it is
+// import-free apart from `~/lib/rate-limit` (also import-free). Nothing that
+// touches mongoose or `@sentry/node` may be added to it — see
+// `~/utils/require-actor.ts`.
 
 export const createAudioUploadFn = createServerFn({ method: 'POST' })
   .inputValidator(createAudioUploadSchema)
   .handler(async ({ data }) => {
-    const { createAudioUpload } = await import('~/server/functions/audio');
+    const { createAudioUpload, AudioClientError } = await import('~/server/functions/audio');
     const { requireActor } = await import('~/utils/require-actor');
-    return createAudioUpload({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = audioIngestLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      throw new AudioClientError(rateLimitMessage('upload', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return createAudioUpload({ data, ...actor });
   });
 
 export const confirmAudioUploadFn = createServerFn({ method: 'POST' })
   .inputValidator(confirmAudioUploadSchema)
   .handler(async ({ data }) => {
-    const { confirmAudioUpload } = await import('~/server/functions/audio');
+    const { confirmAudioUpload, AudioClientError } = await import('~/server/functions/audio');
     const { requireActor } = await import('~/utils/require-actor');
-    return confirmAudioUpload({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = audioIngestLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      throw new AudioClientError(rateLimitMessage('upload', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return confirmAudioUpload({ data, ...actor });
   });
 
 // Task 18: attach a `∞`/`1×` once-variant to an existing `music` asset.
 // Same presign -> PUT -> confirm shape as createAudioUploadFn/
 // confirmAudioUploadFn above, just targeting an existing row instead of
-// creating one.
+// creating one — and so the same ingest bucket: a once-variant confirm
+// enqueues transcode work exactly like a source confirm does, and a bucket
+// that skipped it would leave the queue-starvation lever half-open.
 export const createOnceVariantUploadFn = createServerFn({ method: 'POST' })
   .inputValidator(attachOnceVariantUploadSchema)
   .handler(async ({ data }) => {
-    const { createOnceVariantUpload } = await import('~/server/functions/audio');
+    const { createOnceVariantUpload, AudioClientError } = await import('~/server/functions/audio');
     const { requireActor } = await import('~/utils/require-actor');
-    return createOnceVariantUpload({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = audioIngestLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      throw new AudioClientError(rateLimitMessage('upload', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return createOnceVariantUpload({ data, ...actor });
   });
 
 export const confirmOnceVariantUploadFn = createServerFn({ method: 'POST' })
   .inputValidator(confirmOnceVariantUploadSchema)
   .handler(async ({ data }) => {
-    const { confirmOnceVariantUpload } = await import('~/server/functions/audio');
+    const { confirmOnceVariantUpload, AudioClientError } = await import('~/server/functions/audio');
     const { requireActor } = await import('~/utils/require-actor');
-    return confirmOnceVariantUpload({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = audioIngestLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      throw new AudioClientError(rateLimitMessage('upload', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return confirmOnceVariantUpload({ data, ...actor });
   });
 
 export const listAudioAssetsFn = createServerFn({ method: 'POST' })
@@ -126,12 +183,27 @@ export const bulkTagAudioAssetsFn = createServerFn({ method: 'POST' })
     return bulkTagAudioAssets({ data, ...(await requireActor()) });
   });
 
+// On the SAME ingest bucket as the four upload halves above, which the
+// design's table does not name explicitly. It belongs there on effect rather
+// than on name: `retryAudioAsset` flips a `failed` asset back to `pending`
+// with `attempts: 0`, which is precisely what a confirm does — it makes a row
+// claimable by the single-replica worker. Called in a loop against ONE asset
+// it enqueues unbounded transcode work, so a limiter that covered `confirm`
+// but not `retry` would leave the queue-starvation lever the design names
+// open under a different verb.
 export const retryAudioAssetFn = createServerFn({ method: 'POST' })
   .inputValidator(retryAudioAssetSchema)
   .handler(async ({ data }) => {
-    const { retryAudioAsset } = await import('~/server/functions/audio');
+    const { retryAudioAsset, AudioClientError } = await import('~/server/functions/audio');
     const { requireActor } = await import('~/utils/require-actor');
-    return retryAudioAsset({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = audioIngestLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      throw new AudioClientError(rateLimitMessage('retry', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return retryAudioAsset({ data, ...actor });
   });
 
 export const deleteAudioAssetFn = createServerFn({ method: 'POST' })

@@ -29,7 +29,22 @@ vi.mock('~/server/db/models/User', () => ({
   User: { findOne: vi.fn() },
 }));
 
+// `PackageClientError`/`SoundboardClientError` are real classes rather than
+// `vi.fn()`s because the wrappers' rate-limit gates construct one and the
+// tests below assert `instanceof` on what comes back — that `instanceof` is
+// the GlitchTip proof, since `reportPackageError`/`reportSoundboardError` in
+// the real modules exclude exactly these classes. They mirror the real
+// constructor signatures; `npm run typecheck` is what keeps the stand-ins from
+// drifting, because the wrappers are typechecked against the real modules.
 vi.mock('~/server/functions/packages', () => ({
+  PackageClientError: class PackageClientError extends Error {
+    readonly retryAfterMs?: number;
+    constructor(message: string, options?: { retryAfterMs?: number }) {
+      super(message);
+      this.name = 'PackageClientError';
+      this.retryAfterMs = options?.retryAfterMs;
+    }
+  },
   listPackages: vi.fn(),
   getPackage: vi.fn(),
   createPackage: vi.fn(),
@@ -40,13 +55,31 @@ vi.mock('~/server/functions/packages', () => ({
 }));
 
 vi.mock('~/server/functions/soundboard', () => ({
+  SoundboardClientError: class SoundboardClientError extends Error {
+    readonly retryAfterMs?: number;
+    constructor(message: string, options?: { retryAfterMs?: number }) {
+      super(message);
+      this.name = 'SoundboardClientError';
+      this.retryAfterMs = options?.retryAfterMs;
+    }
+  },
   loadBoardState: vi.fn(),
   saveBoardState: vi.fn(),
+}));
+
+// Not in the wrappers' import graph (the server functions that would call it
+// are mocked above), so this assertion cannot fail today — which is the
+// point. It fails the day someone reports a rate-limit rejection from the
+// wrapper itself, which would hand an attacker a telemetry-volume lever.
+vi.mock('~/server/utils/telemetry', () => ({
+  serverCaptureException: vi.fn(),
+  serverCaptureEvent: vi.fn(),
 }));
 
 import { getSession } from '~/server/session';
 import { User } from '~/server/db/models/User';
 import {
+  PackageClientError,
   listPackages,
   getPackage,
   createPackage,
@@ -55,7 +88,12 @@ import {
   clonePackage,
   listPackageAssets,
 } from '~/server/functions/packages';
-import { loadBoardState, saveBoardState } from '~/server/functions/soundboard';
+import {
+  SoundboardClientError,
+  loadBoardState,
+  saveBoardState,
+} from '~/server/functions/soundboard';
+import { serverCaptureException } from '~/server/utils/telemetry';
 import {
   listPackagesFn,
   getPackageFn,
@@ -326,6 +364,166 @@ describe('loadBoardStateFn', () => {
       sessionUserId: SESSION_USER.id,
     });
     expect(r).toEqual(FAKE_BOARD_STATE);
+  });
+});
+
+/**
+ * The wrapper-layer rate limits (`packageWriteLimiter` /`boardStateLimiter`,
+ * see `~/lib/audio-rate-limits.ts`).
+ *
+ * As in `tests/utils/audio-server-fns.test.ts`, every test uses its OWN
+ * `DB_USER_ID`: the limiters are module-scope singletons with no reset hook,
+ * `vi.clearAllMocks()` cannot empty their buckets, and the bucket key IS the
+ * resolved Mongo `_id`. A distinct id per test is a fresh, full bucket.
+ *
+ * The `15` and `40` below are the two capacities, written as literals on
+ * purpose: raising a capacity makes the "next call is refused" assertion
+ * fail, lowering it makes the drain loop throw early. Both directions pinned.
+ */
+describe('package-write rate limit', () => {
+  const createData = { name: 'Storm Set', items: [], moods: [] };
+
+  /** Spends the whole package-write bucket for `userId` via `createPackageFn`. */
+  async function drainPackageBucket(userId: string) {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(userId);
+    vi.mocked(createPackage).mockResolvedValue(FAKE_PACKAGE);
+    for (let i = 0; i < 15; i++) {
+      await createPackageFn({ data: createData });
+    }
+    expect(createPackage).toHaveBeenCalledTimes(15);
+    vi.mocked(createPackage).mockClear();
+  }
+
+  it('lets a full 15-call burst through, then refuses the 16th without calling createPackage', async () => {
+    await drainPackageBucket('mongo-pkg-create');
+
+    await expect(createPackageFn({ data: createData })).rejects.toThrow(
+      /Too many sound package requests/
+    );
+    // Without this, the test would still pass with the gate deleted.
+    expect(createPackage).not.toHaveBeenCalled();
+  });
+
+  it('refuses with PackageClientError carrying retryAfterMs, and files no GlitchTip event', async () => {
+    await drainPackageBucket('mongo-pkg-shape');
+
+    const err = await createPackageFn({ data: createData }).catch((e: unknown) => e);
+    // `reportPackageError` excludes exactly this class from
+    // `serverCaptureException` — the class is the no-telemetry contract.
+    expect(err).toBeInstanceOf(PackageClientError);
+    expect((err as PackageClientError).retryAfterMs).toBeGreaterThan(0);
+    expect(serverCaptureException).not.toHaveBeenCalled();
+    expect(createPackage).not.toHaveBeenCalled();
+  });
+
+  it('shares one bucket with clonePackageFn, so a drained bucket refuses a clone too', async () => {
+    await drainPackageBucket('mongo-pkg-clone');
+
+    await expect(clonePackageFn({ data: { id: 'p1' } })).rejects.toThrow(
+      /Too many sound package requests/
+    );
+    expect(clonePackage).not.toHaveBeenCalled();
+    expect(serverCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('is keyed per account: draining one user does not refuse another', async () => {
+    await drainPackageBucket('mongo-pkg-victim');
+
+    mockDbUser('mongo-pkg-bystander');
+    vi.mocked(createPackage).mockResolvedValue(FAKE_PACKAGE);
+    await expect(createPackageFn({ data: createData })).resolves.toEqual(FAKE_PACKAGE);
+  });
+
+  it('does not gate updatePackageFn or deletePackageFn — neither can grow the footprint', async () => {
+    await drainPackageBucket('mongo-pkg-update-delete');
+
+    vi.mocked(updatePackage).mockResolvedValue(FAKE_PACKAGE);
+    vi.mocked(deletePackage).mockResolvedValue({ deleted: true });
+    await expect(updatePackageFn({ data: { id: 'p1', name: 'Renamed' } })).resolves.toEqual(
+      FAKE_PACKAGE
+    );
+    await expect(deletePackageFn({ data: { id: 'p1' } })).resolves.toEqual({ deleted: true });
+  });
+
+  it('does not gate reads: listPackagesFn/getPackageFn/listPackageAssetsFn survive past the capacity', async () => {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser('mongo-pkg-reader');
+    vi.mocked(listPackages).mockResolvedValue({ items: [FAKE_PACKAGE_SUMMARY] });
+    vi.mocked(getPackage).mockResolvedValue(FAKE_PACKAGE);
+    vi.mocked(listPackageAssets).mockResolvedValue({ items: [] });
+    for (let i = 0; i < 40; i++) {
+      await listPackagesFn();
+      await getPackageFn({ data: { id: 'p1' } });
+      await listPackageAssetsFn({ data: { packageId: 'p1' } });
+    }
+    expect(listPackages).toHaveBeenCalledTimes(40);
+    expect(getPackage).toHaveBeenCalledTimes(40);
+    expect(listPackageAssets).toHaveBeenCalledTimes(40);
+  });
+});
+
+describe('board-save rate limit', () => {
+  const saveData = { campaignId: 'c1', items: [], masterVolume: 1 };
+
+  /** Spends the whole board-state bucket for `userId`. */
+  async function drainBoardBucket(userId: string) {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(userId);
+    vi.mocked(saveBoardState).mockResolvedValue(FAKE_BOARD_STATE);
+    for (let i = 0; i < 40; i++) {
+      await saveBoardStateFn({ data: saveData });
+    }
+    expect(saveBoardState).toHaveBeenCalledTimes(40);
+    vi.mocked(saveBoardState).mockClear();
+  }
+
+  it('lets a full 40-call burst through, then refuses the 41st without calling saveBoardState', async () => {
+    await drainBoardBucket('mongo-board-save');
+
+    await expect(saveBoardStateFn({ data: saveData })).rejects.toThrow(
+      /Too many board save requests/
+    );
+    // Without this, the test would still pass with the gate deleted.
+    expect(saveBoardState).not.toHaveBeenCalled();
+  });
+
+  it('refuses with SoundboardClientError carrying retryAfterMs, and files no GlitchTip event', async () => {
+    await drainBoardBucket('mongo-board-shape');
+
+    const err = await saveBoardStateFn({ data: saveData }).catch((e: unknown) => e);
+    // `reportSoundboardError` excludes exactly this class from
+    // `serverCaptureException` — the class is the no-telemetry contract.
+    expect(err).toBeInstanceOf(SoundboardClientError);
+    expect((err as SoundboardClientError).retryAfterMs).toBeGreaterThan(0);
+    expect(serverCaptureException).not.toHaveBeenCalled();
+    expect(saveBoardState).not.toHaveBeenCalled();
+  });
+
+  it('is a separate bucket from the package writes: a drained board bucket still allows createPackage', async () => {
+    await drainBoardBucket('mongo-board-vs-package');
+
+    vi.mocked(createPackage).mockResolvedValue(FAKE_PACKAGE);
+    await expect(
+      createPackageFn({ data: { name: 'Storm Set', items: [], moods: [] } })
+    ).resolves.toEqual(FAKE_PACKAGE);
+  });
+
+  it('is keyed per account: draining one GM does not refuse another', async () => {
+    await drainBoardBucket('mongo-board-victim');
+
+    mockDbUser('mongo-board-bystander');
+    vi.mocked(saveBoardState).mockResolvedValue(FAKE_BOARD_STATE);
+    await expect(saveBoardStateFn({ data: saveData })).resolves.toEqual(FAKE_BOARD_STATE);
+  });
+
+  it('does not gate loadBoardStateFn — a board reload must not be refused', async () => {
+    await drainBoardBucket('mongo-board-reload');
+
+    vi.mocked(loadBoardState).mockResolvedValue(FAKE_BOARD_STATE);
+    await expect(loadBoardStateFn({ data: { campaignId: 'c1' } })).resolves.toEqual(
+      FAKE_BOARD_STATE
+    );
   });
 });
 
