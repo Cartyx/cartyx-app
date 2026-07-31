@@ -555,6 +555,11 @@ export async function confirmOnceVariantUpload({
       {
         $set: {
           status: 'pending',
+          // The HeadObject-measured size of the once-source object, recorded
+          // so the storage quota (`getUserStorageUsage`) can see it — this is
+          // the same `bytes` already computed above for the AUDIO_MAX_BYTES
+          // gate, not a new measurement or a new outbound R2 call.
+          onceSourceBytes: bytes,
           confirmedAt: new Date(),
           updatedAt: new Date(),
         },

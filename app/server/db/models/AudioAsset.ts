@@ -54,6 +54,20 @@ const audioAssetSchema = new mongoose.Schema({
   // (see `variant` below and `renditionKeyBase`'s callers in
   // audio-worker/src/process.ts).
   onceSourceKey: { type: String, default: null },
+  // The once-source object's REAL size, measured by
+  // `confirmOnceVariantUpload`'s HeadObject — mirrors `sourceBytes` above,
+  // same shape and same nullability, for the same reason: null until
+  // confirm, never seeded from anything client-declared. Set by
+  // `confirmOnceVariantUpload`'s success path and by nothing else. Rows
+  // written before this field existed simply lack it; `getUserStorageUsage`
+  // treats absent the same as null (see `audio-quota.ts`'s `$ifNull`
+  // guard). The worker's terminal write for a successful once-attach
+  // (`audio-worker/src/process.ts`) does not clear this alongside
+  // `onceSourceKey` — the once-source object stays live and billed after a
+  // successful attach, which is why this field exists: without it those
+  // bytes were measured once for the `AUDIO_MAX_BYTES` gate and then never
+  // recorded anywhere the storage quota could see.
+  onceSourceBytes: { type: Number, default: null },
   // Which pipeline pass the row's CURRENT status/attempts/claim state
   // describes: 'main' for the ordinary source -> renditions pipeline (every
   // asset, including every one that predates this field), 'once' while a

@@ -118,7 +118,7 @@ describe('getUserStorageUsage — scoping', () => {
 });
 
 describe('getUserStorageUsage — pipeline arithmetic (interpreted, not hard-coded)', () => {
-  it('sums a pending asset (source only) and a ready asset (all rendition slots) across both, for both users mixed in the collection', async () => {
+  it('sums a pending asset (source only) and a ready asset (all rendition/once-source slots) across both, for both users mixed in the collection', async () => {
     aggregate.mockResolvedValue([{ assetCount: 2, bytes: 999 }]); // mocked return is deliberately wrong-looking; the assertions below never read it.
 
     await getUserStorageUsage(OWNER);
@@ -139,6 +139,7 @@ describe('getUserStorageUsage — pipeline arithmetic (interpreted, not hard-cod
       ownerId: OWNER,
       status: 'ready',
       sourceBytes: 4_000_000,
+      onceSourceBytes: 250_000,
       renditions: { opus: { bytes: 900_000 }, aac: { bytes: 1_100_000 } },
       onceRenditions: { opus: { bytes: 300_000 }, aac: { bytes: 400_000 } },
     };
@@ -153,10 +154,12 @@ describe('getUserStorageUsage — pipeline arithmetic (interpreted, not hard-cod
     const result = simulate(pipeline, [pendingSourceOnly, readyAllFields, otherUsersAsset]);
 
     expect(result.assetCount).toBe(2); // both statuses counted; the other owner's row excluded
-    expect(result.bytes).toBe(5_000_000 + 4_000_000 + 900_000 + 1_100_000 + 300_000 + 400_000);
+    expect(result.bytes).toBe(
+      5_000_000 + 4_000_000 + 250_000 + 900_000 + 1_100_000 + 300_000 + 400_000
+    );
   });
 
-  it('sums exactly the five byte-bearing fields the brief names, in the schema shape audio-cleanup.ts also reads', async () => {
+  it('sums exactly the six byte-bearing fields — the five from before Task 3b plus onceSourceBytes — in the schema shape audio-cleanup.ts also reads', async () => {
     aggregate.mockResolvedValue([{ assetCount: 1, bytes: 0 }]);
 
     await getUserStorageUsage(OWNER);
@@ -168,6 +171,7 @@ describe('getUserStorageUsage — pipeline arithmetic (interpreted, not hard-cod
 
     expect(fieldRefs).toEqual([
       '$sourceBytes',
+      '$onceSourceBytes',
       '$renditions.opus.bytes',
       '$renditions.aac.bytes',
       '$onceRenditions.opus.bytes',
@@ -197,6 +201,37 @@ describe('getUserStorageUsage — pipeline arithmetic (interpreted, not hard-cod
 
     expect(result.assetCount).toBe(1);
     expect(result.bytes).toBe(0);
+    expect(Number.isNaN(result.bytes)).toBe(false);
+  });
+
+  it('a row written before Task 3b (onceSourceBytes absent entirely, not merely null) contributes 0, not NaN — the backward-compat case', async () => {
+    aggregate.mockResolvedValue([{ assetCount: 1, bytes: 0 }]);
+
+    await getUserStorageUsage(OWNER);
+    const pipeline = aggregate.mock.calls[0][0] as Array<Record<string, unknown>>;
+
+    // Pre-Task-3b row shape: a fully ready, fully populated asset that
+    // predates `onceSourceBytes` landing on the schema. The key is entirely
+    // ABSENT here, not `null` — a fixture that set `onceSourceBytes: 0`
+    // would pass even if the implementation's $ifNull guard were missing
+    // (0 + 0 looks identical to 0 + (null collapsed to 0)), and a fixture
+    // that set it to `null` wouldn't distinguish "never confirmed" from
+    // "the field didn't exist yet on this row" — Mongo treats both the
+    // same, but the fixture should still model the real legacy-row shape.
+    const preTask3bRow = {
+      ownerId: OWNER,
+      status: 'ready',
+      sourceBytes: 4_000_000,
+      renditions: { opus: { bytes: 900_000 }, aac: { bytes: 1_100_000 } },
+      onceRenditions: { opus: { bytes: 300_000 }, aac: { bytes: 400_000 } },
+      // onceSourceKey/onceSourceBytes: absent — no once-variant was ever
+      // attached to this row, and it was written before the field existed.
+    };
+
+    const result = simulate(pipeline, [preTask3bRow]);
+
+    expect(result.assetCount).toBe(1);
+    expect(result.bytes).toBe(4_000_000 + 900_000 + 1_100_000 + 300_000 + 400_000);
     expect(Number.isNaN(result.bytes)).toBe(false);
   });
 

@@ -29,29 +29,27 @@ export interface AudioStorageUsage {
  * The byte-bearing fields on one `AudioAsset` row.
  *
  * This mirrors `audio-cleanup.ts`'s `referencedKeys`, one level down
- * (`.bytes` instead of `.key`), over the same five rendition slots — but it
- * is NOT the same list, and is not imported from there:
+ * (`.bytes` instead of `.key`), over the same six object slots — and, as of
+ * `onceSourceBytes` landing on the schema, the same COUNT too:
  *
- * - `referencedKeys` enumerates SIX key fields because it also tracks
- *   `onceSourceKey` — the once-variant's own uploaded source object, needed
- *   so the orphan scanner doesn't report a live in-flight once-attach as
- *   unreferenced. That object's size is never persisted anywhere on the
- *   row (`onceSourceBytes` does not exist in `AudioAsset`'s schema — see
- *   `../db/models/AudioAsset.ts`); only its two RENDITIONS, once produced,
- *   record `bytes`. So the byte-bearing enumeration below has five entries,
- *   not six, and the discrepancy is a property of the schema, not an
- *   oversight here.
- * - Because the two lists name different leaf fields (`.key` vs `.bytes`)
- *   and differ in count for the reason above, a single shared array can't
- *   drive both without either fabricating an unused `onceSourceBytes`
- *   placeholder or adding structure whose only real consumer is a five-line
- *   list. Copied instead, deliberately, with this comment as the
- *   cross-reference: if `AudioAsset` ever grows a new rendition slot (or an
- *   `onceSourceBytes` field), add its `.key` path to `referencedKeys` in
- *   `audio-cleanup.ts` AND its `.bytes` path here.
+ * - `referencedKeys` enumerates six key fields: `sourceKey`, `onceSourceKey`,
+ *   and the four rendition `.key` slots. This list enumerates their `.bytes`
+ *   counterparts — `onceSourceKey`'s is `onceSourceBytes`, set by
+ *   `confirmOnceVariantUpload`'s success write, the once-variant analogue of
+ *   `sourceBytes`/`confirmAudioUpload`.
+ * - Rows written before `onceSourceBytes` existed simply lack the field; the
+ *   `$ifNull` guard below treats that the same as any other unconfirmed slot
+ *   and contributes 0, not `null`/`NaN`. No migration needed.
+ * - The two lists still name different leaf fields (`.key` vs `.bytes`), so a
+ *   single shared array can't drive both without adding structure whose only
+ *   real consumer is a six-line list. Copied instead, deliberately, with this
+ *   comment as the cross-reference: if `AudioAsset` ever grows a new
+ *   rendition slot or source field, add its `.key` path to `referencedKeys`
+ *   in `audio-cleanup.ts` AND its `.bytes` path here.
  */
 const BYTES_FIELD_PATHS = [
   'sourceBytes',
+  'onceSourceBytes',
   'renditions.opus.bytes',
   'renditions.aac.bytes',
   'onceRenditions.opus.bytes',

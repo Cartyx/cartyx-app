@@ -294,8 +294,19 @@ describe('confirmOnceVariantUpload', () => {
     const [filter, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
     expect(filter).toEqual({ _id: 'a1', ownerId: 'u1', status: 'uploading', variant: 'once' });
     const set = (update as { $set: Record<string, unknown> }).$set;
-    expect(Object.keys(set).sort()).toEqual(['confirmedAt', 'status', 'updatedAt']);
+    expect(Object.keys(set).sort()).toEqual([
+      'confirmedAt',
+      'onceSourceBytes',
+      'status',
+      'updatedAt',
+    ]);
     expect(set.status).toBe('pending');
+    // Task 3b: the HeadObject size already computed for the AUDIO_MAX_BYTES
+    // gate (`ContentLength: 2048` mocked above) must be the exact number
+    // persisted — not re-derived, not a different mocked value threaded
+    // through, and not merely present. This is what makes the byte count
+    // visible to `getUserStorageUsage`.
+    expect(set.onceSourceBytes).toBe(2048);
     expect('renditions' in set).toBe(false);
     expect('onceRenditions' in set).toBe(false);
     expect('sourceKey' in set).toBe(false);
