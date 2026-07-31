@@ -50,6 +50,22 @@ export type AudioAssetStatus = (typeof AUDIO_STATUSES)[number];
  */
 export const AUDIO_MAX_BYTES = 50 * 1024 * 1024;
 
+/**
+ * The rate EVERY rendition is produced at, and therefore the rate
+ * `durationSamples` counts in — not the source's own rate, which is recorded
+ * separately on the model (`sampleRate`) and is not even serialized to the
+ * client. `durationSamples / AUDIO_RENDITION_SAMPLE_RATE` is the exact content
+ * length in seconds that phase 2's engine sets `source.loopEnd` to.
+ *
+ * DUPLICATED as `RENDITION_SAMPLE_RATE` in `audio-worker/src/ffmpeg.ts` — the
+ * worker is an independent package and imports nothing from `app/`. Drift is
+ * not cosmetic: the worker measures in its units and the board divides in
+ * these, so a mismatch makes every loop point wrong by the ratio, silently.
+ * `tests/server/functions/audio-cross-service-contract.test.ts` reads the
+ * worker's source and fails when the two disagree.
+ */
+export const AUDIO_RENDITION_SAMPLE_RATE = 48_000;
+
 /** Source uploads we accept. Output is always Opus + AAC regardless. */
 export const AUDIO_SOURCE_TYPES: ReadonlyMap<string, string> = new Map([
   ['audio/wav', 'wav'],
@@ -87,6 +103,20 @@ export type AudioAssetData = {
   loudnessTargetLufs: number | null;
   peaks: number[];
   renditions: { opus?: AudioRendition; aac?: AudioRendition };
+  /**
+   * The phase 2 ∞/1× music variant (`kind: 'music'` only) — a second,
+   * composed-ending encode of the same source, attached via
+   * `createOnceVariantUpload`/`confirmOnceVariantUpload`
+   * (`~/utils/uploadAudio.ts`'s `uploadOnceVariantFile`) and written by the
+   * SAME worker pipeline into this field instead of `renditions` (Task 18).
+   * `serializeAudioAsset` now puts it on the wire whenever the underlying
+   * row has it, defaulting to `{}` otherwise — mirroring `renditions`
+   * above. Still optional: every reader must treat it as possibly absent on
+   * ANY asset, forever — an asset attached before Task 18, or one whose
+   * owner never attaches a once-variant, has it absent permanently, same as
+   * `renditions.opus`/`.aac` already are treated.
+   */
+  onceRenditions?: { opus?: AudioRendition; aac?: AudioRendition };
   lastError: string | null;
   /**
    * True when the worker rejected the SOURCE ITSELF, so no rerun of the same

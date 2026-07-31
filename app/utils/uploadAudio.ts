@@ -1,4 +1,9 @@
-import { createAudioUploadFn, confirmAudioUploadFn } from '~/utils/audio-server-fns';
+import {
+  createAudioUploadFn,
+  confirmAudioUploadFn,
+  createOnceVariantUploadFn,
+  confirmOnceVariantUploadFn,
+} from '~/utils/audio-server-fns';
 import { captureException } from '~/utils/telemetry-client';
 import { isBackendDown, reportBackendFailure } from '~/utils/backend-health';
 import { BackendUnavailableError } from '~/utils/error-classification';
@@ -56,6 +61,48 @@ export async function uploadAudioFile(
   } catch (e) {
     reportBackendFailure(e);
     captureException(e, { action: 'uploadAudioFile', fileName: file.name, fileSize: file.size });
+    throw e;
+  }
+}
+
+/**
+ * Task 18: attach a `∞`/`1×` once-variant to an existing `music` asset.
+ * Same presign -> PUT -> confirm shape as `uploadAudioFile` above (same
+ * reason: a failed PUT must never be confirmed), targeting an existing
+ * `assetId` instead of minting a new one.
+ */
+export async function uploadOnceVariantFile(
+  assetId: string,
+  file: File
+): Promise<{ assetId: string }> {
+  if (isBackendDown()) throw new BackendUnavailableError();
+  try {
+    const { uploadUrl } = await createOnceVariantUploadFn({
+      data: {
+        assetId,
+        filename: file.name,
+        contentType: file.type,
+        bytes: file.size,
+      },
+    });
+
+    const res = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type },
+      body: file,
+    });
+    if (!res.ok) throw new Error(`R2 upload failed: ${res.status}`);
+
+    await confirmOnceVariantUploadFn({ data: { assetId } });
+    return { assetId };
+  } catch (e) {
+    reportBackendFailure(e);
+    captureException(e, {
+      action: 'uploadOnceVariantFile',
+      assetId,
+      fileName: file.name,
+      fileSize: file.size,
+    });
     throw e;
   }
 }

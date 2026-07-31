@@ -149,6 +149,31 @@ describe('ObjectId validation on every id field', () => {
     expect(mod[name].safeParse({ [field]: OID }).success).toBe(true);
   });
 
+  /**
+   * CASE-CANONICAL. The regex accepts either case — Mongo's own cast is
+   * case-insensitive, so refusing upper-case hex would refuse ids Mongo
+   * resolves fine — but the value the schema PRODUCES is always lower-case,
+   * which is the form `String(someObjectId)` renders on the server.
+   *
+   * Without this, an id's case survived into comparisons between a
+   * client-supplied id and a server-derived one, and `deleteAudioAsset`'s
+   * package prune was silently a no-op for an upper-cased id: the asset and
+   * its R2 objects went, every referencing package item stayed behind forever
+   * against the 64-item cap.
+   */
+  it('lower-cases the id it produces, while still accepting upper-case input', async () => {
+    const { deleteAudioAssetSchema } = await import('~/types/schemas/audio');
+    const parsed = deleteAudioAssetSchema.safeParse({ id: OID.toUpperCase() });
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.id).toBe(OID);
+  });
+
+  it('lower-cases every id in a batch', async () => {
+    const { bulkTagAudioAssetsSchema } = await import('~/types/schemas/audio');
+    const parsed = bulkTagAudioAssetsSchema.safeParse({ ids: [OID.toUpperCase(), OID] });
+    expect(parsed.success && parsed.data.ids).toEqual([OID, OID]);
+  });
+
   it('bulkTagAudioAssetsSchema rejects the whole batch when any id is malformed', async () => {
     const { bulkTagAudioAssetsSchema } = await import('~/types/schemas/audio');
     expect(bulkTagAudioAssetsSchema.safeParse({ ids: [OID, 'x'] }).success).toBe(false);

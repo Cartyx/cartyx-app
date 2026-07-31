@@ -21,10 +21,13 @@ import { Route as CampaignsNewRouteImport } from './routes/campaigns/new'
 import { Route as CampaignJoinRouteImport } from './routes/campaign/join'
 import { Route as AuthLogoutRouteImport } from './routes/auth/logout'
 import { Route as AuthProviderRouteImport } from './routes/auth/$provider'
+import { Route as AudioPackagesRouteImport } from './routes/audio_.packages'
+import { Route as CampaignsCampaignIdSoundboardRouteImport } from './routes/campaigns/$campaignId/soundboard'
 import { Route as CampaignsCampaignIdSessionsRouteImport } from './routes/campaigns/$campaignId/sessions'
 import { Route as CampaignsCampaignIdPlayRouteImport } from './routes/campaigns/$campaignId/play'
 import { Route as CampaignsCampaignIdEditRouteImport } from './routes/campaigns/$campaignId/edit'
 import { Route as AuthCallbackProviderRouteImport } from './routes/auth/callback/$provider'
+import { Route as AudioPackagesPackageIdRouteImport } from './routes/audio_.packages_.$packageId'
 import { Route as ApiAudioUploadsRouteImport } from './routes/api/audio/uploads'
 import { Route as ApiAudioUploadsIdConfirmRouteImport } from './routes/api/audio/uploads.$id.confirm'
 
@@ -88,6 +91,17 @@ const AuthProviderRoute = AuthProviderRouteImport.update({
   path: '/auth/$provider',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AudioPackagesRoute = AudioPackagesRouteImport.update({
+  id: '/audio_/packages',
+  path: '/audio/packages',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CampaignsCampaignIdSoundboardRoute =
+  CampaignsCampaignIdSoundboardRouteImport.update({
+    id: '/campaigns/$campaignId/soundboard',
+    path: '/campaigns/$campaignId/soundboard',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const CampaignsCampaignIdSessionsRoute =
   CampaignsCampaignIdSessionsRouteImport.update({
     id: '/campaigns/$campaignId/sessions',
@@ -107,6 +121,11 @@ const CampaignsCampaignIdEditRoute = CampaignsCampaignIdEditRouteImport.update({
 const AuthCallbackProviderRoute = AuthCallbackProviderRouteImport.update({
   id: '/auth/callback/$provider',
   path: '/auth/callback/$provider',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AudioPackagesPackageIdRoute = AudioPackagesPackageIdRouteImport.update({
+  id: '/audio_/packages_/$packageId',
+  path: '/audio/packages/$packageId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ApiAudioUploadsRoute = ApiAudioUploadsRouteImport.update({
@@ -129,16 +148,19 @@ export interface FileRoutesByFullPath {
   '/privacy': typeof PrivacyRoute
   '/readyz': typeof ReadyzRoute
   '/terms': typeof TermsRoute
+  '/audio/packages': typeof AudioPackagesRoute
   '/auth/$provider': typeof AuthProviderRoute
   '/auth/logout': typeof AuthLogoutRoute
   '/campaign/join': typeof CampaignJoinRoute
   '/campaigns/new': typeof CampaignsNewRoute
   '/campaigns/': typeof CampaignsIndexRoute
   '/api/audio/uploads': typeof ApiAudioUploadsRouteWithChildren
+  '/audio/packages/$packageId': typeof AudioPackagesPackageIdRoute
   '/auth/callback/$provider': typeof AuthCallbackProviderRoute
   '/campaigns/$campaignId/edit': typeof CampaignsCampaignIdEditRoute
   '/campaigns/$campaignId/play': typeof CampaignsCampaignIdPlayRoute
   '/campaigns/$campaignId/sessions': typeof CampaignsCampaignIdSessionsRoute
+  '/campaigns/$campaignId/soundboard': typeof CampaignsCampaignIdSoundboardRoute
   '/api/audio/uploads/$id/confirm': typeof ApiAudioUploadsIdConfirmRoute
 }
 export interface FileRoutesByTo {
@@ -149,16 +171,19 @@ export interface FileRoutesByTo {
   '/privacy': typeof PrivacyRoute
   '/readyz': typeof ReadyzRoute
   '/terms': typeof TermsRoute
+  '/audio/packages': typeof AudioPackagesRoute
   '/auth/$provider': typeof AuthProviderRoute
   '/auth/logout': typeof AuthLogoutRoute
   '/campaign/join': typeof CampaignJoinRoute
   '/campaigns/new': typeof CampaignsNewRoute
   '/campaigns': typeof CampaignsIndexRoute
   '/api/audio/uploads': typeof ApiAudioUploadsRouteWithChildren
+  '/audio/packages/$packageId': typeof AudioPackagesPackageIdRoute
   '/auth/callback/$provider': typeof AuthCallbackProviderRoute
   '/campaigns/$campaignId/edit': typeof CampaignsCampaignIdEditRoute
   '/campaigns/$campaignId/play': typeof CampaignsCampaignIdPlayRoute
   '/campaigns/$campaignId/sessions': typeof CampaignsCampaignIdSessionsRoute
+  '/campaigns/$campaignId/soundboard': typeof CampaignsCampaignIdSoundboardRoute
   '/api/audio/uploads/$id/confirm': typeof ApiAudioUploadsIdConfirmRoute
 }
 export interface FileRoutesById {
@@ -170,16 +195,19 @@ export interface FileRoutesById {
   '/privacy': typeof PrivacyRoute
   '/readyz': typeof ReadyzRoute
   '/terms': typeof TermsRoute
+  '/audio_/packages': typeof AudioPackagesRoute
   '/auth/$provider': typeof AuthProviderRoute
   '/auth/logout': typeof AuthLogoutRoute
   '/campaign/join': typeof CampaignJoinRoute
   '/campaigns/new': typeof CampaignsNewRoute
   '/campaigns/': typeof CampaignsIndexRoute
   '/api/audio/uploads': typeof ApiAudioUploadsRouteWithChildren
+  '/audio_/packages_/$packageId': typeof AudioPackagesPackageIdRoute
   '/auth/callback/$provider': typeof AuthCallbackProviderRoute
   '/campaigns/$campaignId/edit': typeof CampaignsCampaignIdEditRoute
   '/campaigns/$campaignId/play': typeof CampaignsCampaignIdPlayRoute
   '/campaigns/$campaignId/sessions': typeof CampaignsCampaignIdSessionsRoute
+  '/campaigns/$campaignId/soundboard': typeof CampaignsCampaignIdSoundboardRoute
   '/api/audio/uploads/$id/confirm': typeof ApiAudioUploadsIdConfirmRoute
 }
 export interface FileRouteTypes {
@@ -192,16 +220,19 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/readyz'
     | '/terms'
+    | '/audio/packages'
     | '/auth/$provider'
     | '/auth/logout'
     | '/campaign/join'
     | '/campaigns/new'
     | '/campaigns/'
     | '/api/audio/uploads'
+    | '/audio/packages/$packageId'
     | '/auth/callback/$provider'
     | '/campaigns/$campaignId/edit'
     | '/campaigns/$campaignId/play'
     | '/campaigns/$campaignId/sessions'
+    | '/campaigns/$campaignId/soundboard'
     | '/api/audio/uploads/$id/confirm'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -212,16 +243,19 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/readyz'
     | '/terms'
+    | '/audio/packages'
     | '/auth/$provider'
     | '/auth/logout'
     | '/campaign/join'
     | '/campaigns/new'
     | '/campaigns'
     | '/api/audio/uploads'
+    | '/audio/packages/$packageId'
     | '/auth/callback/$provider'
     | '/campaigns/$campaignId/edit'
     | '/campaigns/$campaignId/play'
     | '/campaigns/$campaignId/sessions'
+    | '/campaigns/$campaignId/soundboard'
     | '/api/audio/uploads/$id/confirm'
   id:
     | '__root__'
@@ -232,16 +266,19 @@ export interface FileRouteTypes {
     | '/privacy'
     | '/readyz'
     | '/terms'
+    | '/audio_/packages'
     | '/auth/$provider'
     | '/auth/logout'
     | '/campaign/join'
     | '/campaigns/new'
     | '/campaigns/'
     | '/api/audio/uploads'
+    | '/audio_/packages_/$packageId'
     | '/auth/callback/$provider'
     | '/campaigns/$campaignId/edit'
     | '/campaigns/$campaignId/play'
     | '/campaigns/$campaignId/sessions'
+    | '/campaigns/$campaignId/soundboard'
     | '/api/audio/uploads/$id/confirm'
   fileRoutesById: FileRoutesById
 }
@@ -253,16 +290,19 @@ export interface RootRouteChildren {
   PrivacyRoute: typeof PrivacyRoute
   ReadyzRoute: typeof ReadyzRoute
   TermsRoute: typeof TermsRoute
+  AudioPackagesRoute: typeof AudioPackagesRoute
   AuthProviderRoute: typeof AuthProviderRoute
   AuthLogoutRoute: typeof AuthLogoutRoute
   CampaignJoinRoute: typeof CampaignJoinRoute
   CampaignsNewRoute: typeof CampaignsNewRoute
   CampaignsIndexRoute: typeof CampaignsIndexRoute
   ApiAudioUploadsRoute: typeof ApiAudioUploadsRouteWithChildren
+  AudioPackagesPackageIdRoute: typeof AudioPackagesPackageIdRoute
   AuthCallbackProviderRoute: typeof AuthCallbackProviderRoute
   CampaignsCampaignIdEditRoute: typeof CampaignsCampaignIdEditRoute
   CampaignsCampaignIdPlayRoute: typeof CampaignsCampaignIdPlayRoute
   CampaignsCampaignIdSessionsRoute: typeof CampaignsCampaignIdSessionsRoute
+  CampaignsCampaignIdSoundboardRoute: typeof CampaignsCampaignIdSoundboardRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -351,6 +391,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthProviderRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/audio_/packages': {
+      id: '/audio_/packages'
+      path: '/audio/packages'
+      fullPath: '/audio/packages'
+      preLoaderRoute: typeof AudioPackagesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/campaigns/$campaignId/soundboard': {
+      id: '/campaigns/$campaignId/soundboard'
+      path: '/campaigns/$campaignId/soundboard'
+      fullPath: '/campaigns/$campaignId/soundboard'
+      preLoaderRoute: typeof CampaignsCampaignIdSoundboardRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/campaigns/$campaignId/sessions': {
       id: '/campaigns/$campaignId/sessions'
       path: '/campaigns/$campaignId/sessions'
@@ -377,6 +431,13 @@ declare module '@tanstack/react-router' {
       path: '/auth/callback/$provider'
       fullPath: '/auth/callback/$provider'
       preLoaderRoute: typeof AuthCallbackProviderRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/audio_/packages_/$packageId': {
+      id: '/audio_/packages_/$packageId'
+      path: '/audio/packages/$packageId'
+      fullPath: '/audio/packages/$packageId'
+      preLoaderRoute: typeof AudioPackagesPackageIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/audio/uploads': {
@@ -416,16 +477,19 @@ const rootRouteChildren: RootRouteChildren = {
   PrivacyRoute: PrivacyRoute,
   ReadyzRoute: ReadyzRoute,
   TermsRoute: TermsRoute,
+  AudioPackagesRoute: AudioPackagesRoute,
   AuthProviderRoute: AuthProviderRoute,
   AuthLogoutRoute: AuthLogoutRoute,
   CampaignJoinRoute: CampaignJoinRoute,
   CampaignsNewRoute: CampaignsNewRoute,
   CampaignsIndexRoute: CampaignsIndexRoute,
   ApiAudioUploadsRoute: ApiAudioUploadsRouteWithChildren,
+  AudioPackagesPackageIdRoute: AudioPackagesPackageIdRoute,
   AuthCallbackProviderRoute: AuthCallbackProviderRoute,
   CampaignsCampaignIdEditRoute: CampaignsCampaignIdEditRoute,
   CampaignsCampaignIdPlayRoute: CampaignsCampaignIdPlayRoute,
   CampaignsCampaignIdSessionsRoute: CampaignsCampaignIdSessionsRoute,
+  CampaignsCampaignIdSoundboardRoute: CampaignsCampaignIdSoundboardRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

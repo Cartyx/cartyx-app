@@ -252,9 +252,11 @@ describe('getSessionCatchUp', () => {
       members: [{ userId: 'someone-else', role: 'player' }],
     });
 
+    // Collapsed message — see `CampaignAccessError`. A non-member and a
+    // missing campaign are deliberately indistinguishable to the caller.
     await expect(
       _getSessionCatchUp({ data: { campaignId: 'camp-1', sessionId: 's1' } })
-    ).rejects.toThrow('Forbidden');
+    ).rejects.toThrow('Campaign not found');
   });
 });
 

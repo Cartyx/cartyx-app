@@ -578,6 +578,56 @@ async function markFailed(
 }
 
 /**
+ * Terminal outcome for a FAILED once-variant run — and the fix for a Task 18
+ * review Critical: `markFailed` must NEVER be called for a once-variant job.
+ * Reusing the row's single status field for a second job type (the design
+ * doc's own accepted trade-off) means `status: 'failed'` describes the WHOLE
+ * row, not just the once job — a once-variant that is over-cap, silent, or
+ * otherwise permanently unusable would set `permanentFailure: true` on a
+ * fully-transcoded, previously-`ready` music asset, and `retryAudioAsset`
+ * refuses rows carrying that flag. There is no path back to `ready` from
+ * there: a wrong second file bricks a working asset on every board,
+ * permanently, with delete-and-re-upload as the only remedy.
+ *
+ * Instead: the row goes straight back to `ready`/`main` — a fully playable
+ * asset, exactly as it was before the attach — and the reason is recorded in
+ * `onceLastError`, a field dedicated to the once job so it can never be
+ * confused with `lastError` (which describes the MAIN pipeline and must stay
+ * whatever it already was). `onceSourceKey` is cleared: nothing will ever
+ * download it again once `variant` is back to `'main'`, and clearing the
+ * reference is what lets the orphan scanner (`audio-cleanup.ts`) reclaim the
+ * object instead of it being invisibly kept "in use" forever.
+ *
+ * This is reached from BOTH terminal once-variant paths in `processAsset`'s
+ * catch block — a `PermanentError` (over-cap, silent, incomplete rendition,
+ * ...) and a transient failure that exhausted `MAX_ATTEMPTS` — because both
+ * are "this once job cannot succeed right now," and neither may ever read as
+ * "this asset is broken."
+ */
+async function markOnceFailed(
+  model: Model,
+  id: unknown,
+  workerId: string,
+  message: string
+): Promise<void> {
+  await fencedWrite(
+    model,
+    id,
+    workerId,
+    {
+      status: 'ready',
+      variant: 'main',
+      onceSourceKey: null,
+      onceLastError: message,
+      claimedAt: null,
+      claimedBy: null,
+      updatedAt: new Date(),
+    },
+    'once-failed-reverted-to-ready'
+  );
+}
+
+/**
  * Return a claimed row to `pending` so a later `claimNext` picks it back up,
  * after `computeBackoffMs(attempts)` has elapsed. `lastError` is still recorded
  * so the reason for the retry stays visible. Only valid under the attempt cap —
@@ -616,10 +666,23 @@ async function requeueForRetry(
 
 export async function processAsset(
   model: Model,
-  asset: { _id: unknown; sourceKey?: string; attempts?: number },
+  asset: {
+    _id: unknown;
+    sourceKey?: string;
+    // Task 18: the once-variant's own uploaded source object, and which
+    // pipeline pass this claim is for. `variant` defaults to 'main' on
+    // every row that predates this field (Mongo equality-to-undefined
+    // semantics), so `isOnceVariant` below is false for the overwhelming
+    // majority of claimed rows without either side needing to know the
+    // field exists.
+    onceSourceKey?: string;
+    variant?: 'main' | 'once';
+    attempts?: number;
+  },
   workerId: string
 ): Promise<void> {
   const id = asset._id;
+  const isOnceVariant = asset.variant === 'once';
 
   // claimNext<T>() is generically typed and the worker talks to the raw
   // Mongo driver, not the mongoose model — so nothing at the type level
@@ -634,12 +697,48 @@ export async function processAsset(
   // no sourceKey — so it goes straight to `failed` rather than through the
   // retry path below, and it does so before any temp dir or R2 client is
   // created.
+  //
+  // Task 18 review Important A: routed through `markOnceFailed` when this
+  // claim is a once-variant job, same as every other terminal once-variant
+  // failure. A row with no `sourceKey` at all is a deeply malformed row
+  // regardless of variant, but Critical 2's guarantee — "a variant failure
+  // cannot brick a working asset, by construction" — only holds if it holds
+  // on EVERY path that can terminate a once claim, this one included.
   if (!asset.sourceKey) {
     logger.error({ assetId: String(id) }, 'asset has no sourceKey, cannot transcode');
-    await markFailed(model, id, workerId, 'Asset has no sourceKey', true);
+    if (isOnceVariant) {
+      await markOnceFailed(model, id, workerId, 'Asset has no sourceKey');
+    } else {
+      await markFailed(model, id, workerId, 'Asset has no sourceKey', true);
+    }
     return;
   }
   const sourceKey = asset.sourceKey;
+
+  // Task 18: a row claimed for the once-variant pipeline must actually carry
+  // the once-variant's own source object. This should be unreachable through
+  // the app's own flow — `createOnceVariantUpload` sets `onceSourceKey` and
+  // `variant: 'once'` together, in the same write — but a malformed or
+  // hand-edited row must not reach GetObjectCommand with an undefined Key.
+  // Permanent: no amount of retrying invents a source key that was never
+  // recorded.
+  if (isOnceVariant && !asset.onceSourceKey) {
+    logger.error(
+      { assetId: String(id) },
+      'once-variant row has no onceSourceKey, cannot transcode'
+    );
+    // markOnceFailed, not markFailed: this is a once-variant job, so it must
+    // never turn `status: 'failed'`/`permanentFailure: true` on what may be a
+    // perfectly good, already-`ready` main asset. See markOnceFailed's doc
+    // comment.
+    await markOnceFailed(model, id, workerId, 'Once-variant asset has no onceSourceKey');
+    return;
+  }
+  // What this run actually downloads and transcodes: the once-variant's own
+  // source when this claim is for that pipeline, the ordinary source
+  // otherwise. `renditionBase` below is deliberately NOT derived from this —
+  // see its own comment.
+  const effectiveSourceKey = isOnceVariant ? (asset.onceSourceKey as string) : sourceKey;
 
   // Renditions go BESIDE their source, inside the owner's storage namespace
   // (`uploads/audio/<prefix>/renditions/<id>.<ext>`), which is derived from the
@@ -649,16 +748,41 @@ export async function processAsset(
   // listing prefix, where the app's cleanup cannot see them and no owner can
   // ever reclaim them. Permanent, not retryable — the source key is fixed, so
   // a second attempt lands in exactly the same place.
+  // Always from the MAIN sourceKey, even when this claim is for the
+  // once-variant: both variants live under the same owner namespace (the
+  // once-variant's own source key was minted from that same prefix — see
+  // `createOnceVariantUpload`), and deriving from one fixed key means the
+  // main and once rendition bases can never disagree about which prefix
+  // they're under. The two are kept from colliding at the extension below
+  // instead (`.once.<ext>` vs `.<ext>`), not by using a different base.
   const renditionBase = renditionKeyBase(sourceKey, String(id));
   if (!renditionBase) {
     logger.error({ assetId: String(id), sourceKey }, 'source key is not in the per-owner layout');
-    await markFailed(
-      model,
-      id,
-      workerId,
-      'Source key predates the per-owner storage layout; re-upload this file',
-      true
-    );
+    // Task 18 review Important A: this guard derives from the MAIN
+    // sourceKey, so it fires for a legacy-layout row regardless of which
+    // pipeline claimed it. A legacy row is necessarily `ready` (it had to
+    // pass its own main transcode once, before this layout existed) and
+    // therefore ATTACHABLE — `createOnceVariantUpload` has no check against
+    // storage-layout age. Without the branch below, attaching a once-variant
+    // to such an asset bricked it exactly as Critical 2 described:
+    // `permanentFailure: true` on a fully-transcoded, previously-`ready`
+    // asset, with no path back.
+    if (isOnceVariant) {
+      await markOnceFailed(
+        model,
+        id,
+        workerId,
+        'Source key predates the per-owner storage layout; re-upload the main asset first'
+      );
+    } else {
+      await markFailed(
+        model,
+        id,
+        workerId,
+        'Source key predates the per-owner storage layout; re-upload this file',
+        true
+      );
+    }
     return;
   }
 
@@ -676,7 +800,7 @@ export async function processAsset(
     const { client, bucket, cdnUrl } = r2();
 
     const src = join(dir, 'source');
-    await downloadSource(client, bucket, sourceKey, src, maxSourceBytes());
+    await downloadSource(client, bucket, effectiveSourceKey, src, maxSourceBytes());
     // EVERY child process and every R2 call is followed by a beat, and
     // `downloadSource` beats as bytes arrive. The liveness probe reads loop
     // PROGRESS, and a single asset can legitimately occupy the loop for tens of
@@ -849,7 +973,11 @@ export async function processAsset(
       // Streaming them would also make the PUT body non-replayable, turning the
       // SDK's internal retry of a transient R2 blip into a hard failure.
       const body = await readFile(path);
-      const key = `${base}.${ext}`;
+      // `.once.<ext>` for the once-variant, `.<ext>` for main — this is what
+      // makes the two renditions land at DIFFERENT keys under the same
+      // `base` (see `renditionBase` above) instead of the once-variant
+      // silently overwriting the main rendition it shares an id with.
+      const key = isOnceVariant ? `${base}.once.${ext}` : `${base}.${ext}`;
       await client.send(
         new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: type })
       );
@@ -857,48 +985,67 @@ export async function processAsset(
       beat();
     }
 
-    await fencedWrite(
-      model,
-      id,
-      workerId,
-      {
-        status: 'ready',
-        // Both durations describe the DECODED content, so they can never
-        // disagree with each other. `durationSamples` is the one phase 2's
-        // gapless looping reads: `durationMs` is rounded to whole
-        // milliseconds, which at 48 kHz is 48 samples of slop on every
-        // asset before any format-specific error, and the container's own
-        // duration adds more (+312 samples for Ogg/Opus, +1440 for ADTS
-        // AAC, measured). `durationMs` stays for display.
-        durationMs,
-        durationSamples,
-        // The SOURCE's rate and channel count, kept as provenance. The
-        // renditions are always 48 kHz stereo (see RENDITION_SAMPLE_RATE),
-        // and `durationSamples` is expressed at that rate, not at this one.
-        sampleRate: meta.sampleRate,
-        channels: meta.channels,
-        // The loudnorm TARGET (`I=-20` — see LOUDNORM in ffmpeg.ts), which
-        // is exactly what the field name now says. Single-pass loudnorm
-        // does not guarantee the output lands on exactly -20 LUFS; a real
-        // measurement needs the two-pass workflow (analyze, then re-encode
-        // with the measured input_i/input_tp/input_lra/target_offset), and
-        // that is out of scope here. The value is still worth recording:
-        // if the canonical target ever changes, phase 2's gain logic needs
-        // to know which target each asset in a mixed-vintage library was
-        // normalized against. A measured value, when it lands, belongs in a
-        // separate `loudnessLufs` field alongside this one.
-        loudnessTargetLufs: -20,
-        peaks,
-        renditions,
-        lastError: null,
-        permanentFailure: false,
-        claimedAt: null,
-        claimedBy: null,
-        updatedAt: new Date(),
-      },
-      'ready'
-    );
-    logger.info({ assetId: String(id) }, 'transcoded');
+    // Task 18: "same pipeline, different destination field" — everything
+    // above this point (probe/analyze/transcode/peaks) ran identically
+    // regardless of variant. Only the terminal write differs, and it
+    // differs COMPLETELY between the two branches rather than sharing a
+    // partial object: the once-variant write touches `onceRenditions` and
+    // NOTHING that describes the main content (durationMs/durationSamples/
+    // sampleRate/channels/loudnessTargetLufs/peaks/renditions all stay
+    // exactly as the main pipeline last wrote them), and `variant` resets to
+    // 'main' since this job is done. A failed once-variant run does NOT go
+    // through here at all (see the catch block below) — `variant` stays
+    // 'once' on failure, so Retry retries the SAME job rather than silently
+    // re-running the (already-ready) main transcode.
+    const resultSet = isOnceVariant
+      ? {
+          status: 'ready',
+          variant: 'main',
+          onceRenditions: renditions,
+          lastError: null,
+          permanentFailure: false,
+          claimedAt: null,
+          claimedBy: null,
+          updatedAt: new Date(),
+        }
+      : {
+          status: 'ready',
+          // Both durations describe the DECODED content, so they can never
+          // disagree with each other. `durationSamples` is the one phase 2's
+          // gapless looping reads: `durationMs` is rounded to whole
+          // milliseconds, which at 48 kHz is 48 samples of slop on every
+          // asset before any format-specific error, and the container's own
+          // duration adds more (+312 samples for Ogg/Opus, +1440 for ADTS
+          // AAC, measured). `durationMs` stays for display.
+          durationMs,
+          durationSamples,
+          // The SOURCE's rate and channel count, kept as provenance. The
+          // renditions are always 48 kHz stereo (see RENDITION_SAMPLE_RATE),
+          // and `durationSamples` is expressed at that rate, not at this one.
+          sampleRate: meta.sampleRate,
+          channels: meta.channels,
+          // The loudnorm TARGET (`I=-20` — see LOUDNORM in ffmpeg.ts), which
+          // is exactly what the field name now says. Single-pass loudnorm
+          // does not guarantee the output lands on exactly -20 LUFS; a real
+          // measurement needs the two-pass workflow (analyze, then re-encode
+          // with the measured input_i/input_tp/input_lra/target_offset), and
+          // that is out of scope here. The value is still worth recording:
+          // if the canonical target ever changes, phase 2's gain logic needs
+          // to know which target each asset in a mixed-vintage library was
+          // normalized against. A measured value, when it lands, belongs in a
+          // separate `loudnessLufs` field alongside this one.
+          loudnessTargetLufs: -20,
+          peaks,
+          renditions,
+          lastError: null,
+          permanentFailure: false,
+          claimedAt: null,
+          claimedBy: null,
+          updatedAt: new Date(),
+        };
+
+    await fencedWrite(model, id, workerId, resultSet, 'ready');
+    logger.info({ assetId: String(id), variant: isOnceVariant ? 'once' : 'main' }, 'transcoded');
   } catch (err) {
     // Every caught error here — a corrupt/unsupported source ffmpeg can
     // never decode, an R2 timeout, a momentary network blip, a missing R2
@@ -942,13 +1089,29 @@ export async function processAsset(
     // pattern-matching an ffmpeg exit code. Retrying it is guaranteed waste,
     // so it skips the budget entirely and is stamped as un-retryable so a
     // human clicking Retry can't buy another pass either. See errors.ts.
+    // Task 18 review Critical 2: a once-variant run must NEVER reach
+    // `markFailed`. Both terminal branches below (permanent, and
+    // budget-exhausted) route a once-variant claim through `markOnceFailed`
+    // instead — see that function's doc comment for why. `requeueForRetry`
+    // is UNCHANGED for once: a transient failure still gets its normal
+    // backoff-and-retry within the attempt budget, re-downloading the SAME
+    // `onceSourceKey` on the next claim, exactly like the main pipeline's
+    // transient retries. Only once the budget (or a PermanentError) makes
+    // this the LAST word on the job does it need to avoid landing on
+    // `failed`.
     if (err instanceof PermanentError) {
-      await markFailed(model, id, workerId, message, true);
+      if (isOnceVariant) {
+        await markOnceFailed(model, id, workerId, message);
+      } else {
+        await markFailed(model, id, workerId, message, true);
+      }
       return;
     }
 
     if (attempts < MAX_ATTEMPTS) {
       await requeueForRetry(model, id, workerId, message, attempts);
+    } else if (isOnceVariant) {
+      await markOnceFailed(model, id, workerId, message);
     } else {
       await markFailed(model, id, workerId, message);
     }

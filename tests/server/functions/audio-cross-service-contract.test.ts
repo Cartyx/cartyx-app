@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { AUDIO_MAX_BYTES } from '~/types/audio';
+import { AUDIO_MAX_BYTES, AUDIO_RENDITION_SAMPLE_RATE } from '~/types/audio';
 import { AUDIO_STORAGE_PREFIX_RE, audioUserRoot } from '~/server/functions/audio-storage';
 
 /**
@@ -73,6 +73,23 @@ describe('audio size cap, app vs worker', () => {
 
   it('is still 50 MB, so a change on either side is a deliberate one', () => {
     expect(AUDIO_MAX_BYTES).toBe(50 * 1024 * 1024);
+  });
+});
+
+describe('rendition sample rate, app vs worker', () => {
+  /**
+   * The worker measures `durationSamples` at its own `RENDITION_SAMPLE_RATE`;
+   * the board (`app/lib/soundboard/engine.ts`) divides by this constant to get
+   * the `source.loopEnd` that makes AAC loops gapless on Safari. If the two
+   * numbers ever disagree, every loop point is wrong by exactly their ratio —
+   * and wrong SILENTLY: nothing throws, the audio just drifts or ticks. Neither
+   * package's own tests can see the other's literal, so the check lives here.
+   */
+  it('is the same number in both packages', () => {
+    const src = workerSource('ffmpeg.ts');
+    const match = /export const RENDITION_SAMPLE_RATE = ([^;]+);/.exec(src);
+    expect(match, 'RENDITION_SAMPLE_RATE not found in audio-worker/src/ffmpeg.ts').toBeTruthy();
+    expect(productLiteral(match![1])).toBe(AUDIO_RENDITION_SAMPLE_RATE);
   });
 });
 

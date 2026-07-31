@@ -679,6 +679,35 @@ describe('deleteAudioAsset', () => {
     expect(res).toEqual({ deleted: true });
   });
 
+  /**
+   * Task 18: an asset with a once-variant attached has THREE extra R2
+   * objects (its own source, plus opus/aac renditions) that live under the
+   * same owner prefix as the rest. Before this task `onceRenditions` was
+   * never written, so there was nothing to clean up here; this asserts the
+   * gap was closed, not just that the field is now read.
+   */
+  it('also removes the once-variant source and renditions when present', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      _id: 'a1',
+      ownerId: 'u1',
+      sourceKey: 'src-key',
+      renditions: { opus: { key: 'opus-key' }, aac: { key: 'aac-key' } },
+      onceSourceKey: 'once-src-key',
+      onceRenditions: { opus: { key: 'once-opus-key' }, aac: { key: 'once-aac-key' } },
+    } as never);
+    vi.mocked(AudioAsset.deleteOne).mockResolvedValue({ deletedCount: 1 } as never);
+
+    const { deleteAudioAsset } = await import('~/server/functions/audio');
+    const res = await deleteAudioAsset({ data: { id: 'a1' }, userId: 'u1' });
+
+    expect(send).toHaveBeenCalledTimes(6);
+    const keys = send.mock.calls.map(([cmd]) => (cmd as DeleteObjectCommand).input.Key).sort();
+    expect(keys).toEqual(
+      ['aac-key', 'once-aac-key', 'once-opus-key', 'once-src-key', 'opus-key', 'src-key'].sort()
+    );
+    expect(res).toEqual({ deleted: true });
+  });
+
   it('deletes only the objects that exist when a rendition is missing', async () => {
     vi.mocked(AudioAsset.findOne).mockResolvedValue({
       _id: 'a1',

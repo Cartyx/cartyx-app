@@ -53,10 +53,19 @@ async function main(): Promise<void> {
       // running the whole batch out and waiting for the 900 s grace period to
       // end in a SIGKILL.
       await reapStale(model, STALE_MS, UPLOAD_STALE_MS, deleteSource, () => running);
-      const asset = await claimNext<{ _id: unknown; sourceKey?: string; attempts?: number }>(
-        model,
-        WORKER_ID
-      );
+      const asset = await claimNext<{
+        _id: unknown;
+        sourceKey?: string;
+        // Task 18: carried through so `processAsset` can see them — the
+        // real claimed document already has them (this is only a TS
+        // annotation of what claimNext returns, not a projection), but
+        // without naming them here the type at this call site would hide
+        // them from readers even though processAsset's own param type
+        // declares and uses both.
+        onceSourceKey?: string;
+        variant?: 'main' | 'once';
+        attempts?: number;
+      }>(model, WORKER_ID);
       if (!asset) {
         await new Promise((r) => setTimeout(r, POLL_MS));
         continue;

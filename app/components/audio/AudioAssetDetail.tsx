@@ -39,6 +39,19 @@ export interface AudioAssetDetailProps {
   saving?: boolean;
   /** Surfaced above the fields when the last save attempt failed. */
   error?: string | null;
+  /**
+   * Task 18: attach a `∞`/`1×` once-variant source file for a `music`
+   * asset. Omitted entirely hides the control — same "owns no fetching, no
+   * mutations" contract as `onSave`/`onClose`: this component only hands
+   * the picked `File` back to the caller, which owns the actual
+   * presign/PUT/confirm sequence (`~/utils/uploadAudio.ts`'s
+   * `uploadOnceVariantFile`).
+   */
+  onAttachOnceVariant?: (file: File) => void;
+  /** True while a once-variant upload is presigning/PUTting/confirming. */
+  attachingOnceVariant?: boolean;
+  /** Surfaced above the once-variant control when the last attach attempt failed. */
+  onceVariantError?: string | null;
 }
 
 const MAX_FACETS = 10;
@@ -96,6 +109,9 @@ export function AudioAssetDetail({
   onClose,
   saving = false,
   error = null,
+  onAttachOnceVariant,
+  attachingOnceVariant = false,
+  onceVariantError = null,
 }: AudioAssetDetailProps) {
   const trapRef = useFocusTrap<HTMLFormElement>();
 
@@ -192,6 +208,13 @@ export function AudioAssetDetail({
 
   const fieldClass =
     'w-full rounded border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-sm text-slate-200 focus:border-blue-500/50 focus:outline-none disabled:opacity-50';
+
+  // "A once-variant exists on this asset": at least one composed once
+  // rendition came back from the worker. This was written to match
+  // `BoardPad`'s gating for its ∞/1× control; that control no longer exists
+  // (final review — it could not play the variant), so this expression now
+  // stands alone and governs only THIS dialog's copy and replace affordance.
+  const hasOnceVariant = Boolean(asset.onceRenditions?.opus ?? asset.onceRenditions?.aac);
 
   return createPortal(
     <div
@@ -353,6 +376,54 @@ export function AudioAssetDetail({
               className={fieldClass}
             />
           </label>
+
+          {asset.kind === 'music' && onAttachOnceVariant && (
+            <div>
+              <span className="mb-1.5 block text-xs font-semibold tracking-wide text-slate-400">
+                Once-variant (1× ending)
+              </span>
+              <p className="text-xs text-slate-500">
+                {/*
+                 * Says "stored", NOT "played". The board cannot play a
+                 * once-variant on this branch: `BoardPad` has no ∞/1×
+                 * control (the one Task 16 shipped was wired to nothing and
+                 * the final review removed it), `SoundboardCommand` carries
+                 * no variant, and `useSoundboard`'s `loadAsset` picks only
+                 * from `asset.renditions`. The upload, the transcode and the
+                 * R2 object are all real and are what a later phase will
+                 * play; promising playback today would have a GM pay for all
+                 * three for a file that cannot sound.
+                 */}
+                {hasOnceVariant
+                  ? 'A once-variant is attached and stored. Choose a new file to replace it.'
+                  : 'Optional. A 1× (non-looping) ending for this music track. It is uploaded and transcoded now; the board plays the looping version until once-playback ships.'}
+              </p>
+              {onceVariantError && (
+                <p role="alert" className="mt-1 text-xs text-red-400">
+                  {onceVariantError}
+                </p>
+              )}
+              <input
+                type="file"
+                accept="audio/*"
+                aria-label="Attach once-variant audio file"
+                disabled={saving || attachingOnceVariant || asset.status !== 'ready'}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  // Reset so picking the same file again still fires onChange.
+                  e.target.value = '';
+                  if (file) onAttachOnceVariant(file);
+                }}
+                className="mt-1.5 block w-full text-xs text-slate-400 file:mr-2 file:rounded file:border-0 file:bg-blue-600 file:px-2.5 file:py-1.5 file:text-xs file:font-semibold file:text-white hover:file:bg-blue-500 disabled:opacity-50"
+              />
+              {attachingOnceVariant && <p className="mt-1 text-xs text-slate-400">Uploading…</p>}
+              {asset.status !== 'ready' && !attachingOnceVariant && (
+                <p className="mt-1 text-xs text-slate-500">
+                  Available once the main audio finishes processing.
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         <footer className="flex shrink-0 items-center justify-end gap-3 border-t border-white/[0.07] px-4 py-3">

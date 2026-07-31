@@ -32,8 +32,31 @@ const tagFilter = z.array(z.string().min(1).max(40)).max(30);
  * - A parse failure is a 400 with no telemetry, which is what a syntactically
  *   invalid id deserves. A *well-formed* id that matches nothing still reaches
  *   the function and still produces its "not found" error, unchanged.
+ *
+ * CASE-CANONICAL: the regex accepts either case (Mongo's own cast is
+ * case-insensitive, so rejecting upper-case hex would refuse ids Mongo happily
+ * resolves and break any client that upper-cases one), but the value this
+ * schema PRODUCES is always lower-case. That is the form `String(objectId)`
+ * renders on the server, so every server-derived id a request value is
+ * compared against is lower-case too — and a comparison between a lower-case
+ * server value and an upper-case client value silently returns "different" for
+ * a pair Mongo considers the same document.
+ *
+ * That is not hypothetical: `deleteAudioAsset`'s package prune compared
+ * `String(item.assetId) !== data.id`, so an upper-cased id deleted the asset
+ * and every one of its R2 objects while leaving every referencing package item
+ * behind as a permanent tombstone against the 64-item cap — the whole prune,
+ * silently defeated by the case of a request field. Normalising here fixes
+ * that class of bug at the boundary for every id in every audio and soundboard
+ * schema at once, rather than one comparison at a time. It changes nothing
+ * about which requests are ACCEPTED (the regex is untouched) and nothing about
+ * which documents Mongo resolves — only that two spellings of one id stop
+ * being two values downstream.
  */
-const objectId = z.string().regex(/^[0-9a-fA-F]{24}$/, 'Invalid id');
+export const objectId = z
+  .string()
+  .regex(/^[0-9a-fA-F]{24}$/, 'Invalid id')
+  .transform((v) => v.toLowerCase());
 
 /**
  * `<createdAt epoch ms>_<ObjectId>` — the exact shape `encodeAudioCursor`
@@ -65,6 +88,24 @@ export const createAudioUploadSchema = z.object({
 });
 
 export const confirmAudioUploadSchema = z.object({
+  assetId: objectId,
+});
+
+/**
+ * Task 18: attach a `∞`/`1×` once-variant to an EXISTING `music` asset.
+ * Deliberately mirrors `createAudioUploadSchema` minus the classification
+ * fields (`kind`/`environment`/`mood`/`intensity`/`tags`/`title`) — those
+ * describe the asset as a whole and the once-variant doesn't get its own
+ * copy, only its own audio object.
+ */
+export const attachOnceVariantUploadSchema = z.object({
+  assetId: objectId,
+  filename: z.string().min(1).max(255),
+  contentType: z.string().min(1),
+  bytes: z.number().int().positive().max(AUDIO_MAX_BYTES),
+});
+
+export const confirmOnceVariantUploadSchema = z.object({
   assetId: objectId,
 });
 

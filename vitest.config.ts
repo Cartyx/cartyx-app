@@ -34,6 +34,34 @@ export default defineConfig({
         },
       },
       {
+        // Real-browser tests for code that is NOT a component and must not be
+        // dressed as one to get a browser. `app/lib/soundboard/engine.ts` is
+        // the first: Web Audio does not exist in happy-dom, and mocking it
+        // would make the suite green while measuring nothing.
+        //
+        // A `*.stories.tsx` under `app/lib/` would NOT have worked — the
+        // storybook project collects `.storybook/main.ts`'s
+        // `../app/components/**/*.stories.@(ts|tsx)` only, so such a file is
+        // never collected and `test:storybook` would exit 0 having run zero
+        // assertions.
+        //
+        // `setupFiles: []` is deliberate: the root `tests/setup.ts` mocks
+        // mongoose, which is irrelevant here and pulls node-only modules into
+        // a browser bundle.
+        extends: true,
+        test: {
+          name: 'browser',
+          include: ['app/**/*.browser.test.ts'],
+          browser: {
+            enabled: true,
+            headless: true,
+            provider: playwright(),
+            instances: [{ browser: 'chromium' }],
+          },
+          setupFiles: [],
+        },
+      },
+      {
         extends: true,
         plugins: [storybookTest({ configDir: path.join(__dirname, '.storybook') })],
         test: {

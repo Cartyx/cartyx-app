@@ -79,3 +79,49 @@ export const Saving: Story = {
 export const WithError: Story = {
   args: { asset: base, error: 'Failed to save changes. Please try again.' },
 };
+
+const musicAsset: AudioAssetData = { ...base, kind: 'music' };
+
+/**
+ * Task 18: the once-variant control only renders for `kind: 'music'` AND
+ * only when the caller supplies `onAttachOnceVariant` — omitting it (every
+ * story above) hides the control entirely, matching `onSave`/`onClose`'s
+ * "no fetching, no mutations" contract.
+ */
+export const MusicWithoutOnceVariant: Story = {
+  args: { asset: musicAsset, onAttachOnceVariant: () => {} },
+};
+
+export const MusicWithOnceVariantAttached: Story = {
+  args: {
+    asset: {
+      ...musicAsset,
+      onceRenditions: { opus: { key: 'k', url: 'https://cdn.test/once.opus', bytes: 1 } },
+    },
+    onAttachOnceVariant: () => {},
+  },
+};
+
+export const AttachingOnceVariant: Story = {
+  args: { asset: musicAsset, onAttachOnceVariant: () => {}, attachingOnceVariant: true },
+};
+
+export const OnceVariantAttachFailed: Story = {
+  args: {
+    asset: musicAsset,
+    onAttachOnceVariant: () => {},
+    onceVariantError: 'Unsupported audio type: video/mp4',
+  },
+};
+
+/**
+ * The attach control is disabled while the main asset itself hasn't
+ * finished processing — matching the server's own `status: 'ready'`
+ * precondition on `createOnceVariantUpload`.
+ */
+export const MusicNotYetReadyForOnceVariant: Story = {
+  args: {
+    asset: { ...musicAsset, status: 'processing', durationMs: null, peaks: [] },
+    onAttachOnceVariant: () => {},
+  },
+};

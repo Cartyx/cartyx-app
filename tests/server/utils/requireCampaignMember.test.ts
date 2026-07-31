@@ -16,7 +16,7 @@ import { getSession } from '~/server/session';
 import { connectDB, isDBConnected } from '~/server/db/connection';
 import { User } from '~/server/db/models/User';
 import { Campaign } from '~/server/db/models/Campaign';
-import { requireCampaignMember } from '~/server/utils/requireCampaignMember';
+import { requireCampaignMember, CampaignAccessError } from '~/server/utils/requireCampaignMember';
 
 const mockSession = {
   id: 'session-user-1',
@@ -71,14 +71,42 @@ describe('requireCampaignMember', () => {
     });
   });
 
-  it('rejects a user who is not a member of the campaign', async () => {
+  it('rejects a user who is not a member of the campaign, as a CampaignAccessError', async () => {
     vi.mocked(Campaign.findById).mockResolvedValue({
       _id: 'camp-A',
       gameMasterId: 'someone-else',
       members: [{ userId: 'another-member', role: 'player' }],
     } as never);
 
-    await expect(requireCampaignMember('camp-A')).rejects.toThrow('Forbidden');
+    // The TYPE is what `reportSoundboardError` keys off to keep an
+    // attacker-driven `loadBoardStateFn` loop out of GlitchTip, so it is
+    // asserted directly and not inferred from the message. Still an `Error`
+    // subclass — the ~30 other callers of this helper catch generically and
+    // are unaffected.
+    const err = await requireCampaignMember('camp-A').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(CampaignAccessError);
+    expect(err).toBeInstanceOf(Error);
+  });
+
+  /**
+   * The two caller-reachable failures must be INDISTINGUISHABLE. Separate
+   * messages ("Forbidden" vs "Campaign not found") let any authenticated user
+   * enumerate which guessed 24-hex ids name real campaigns, purely from which
+   * error comes back — an existence oracle over every campaign in the system.
+   */
+  it('answers a non-member and a missing campaign with the identical message', async () => {
+    vi.mocked(Campaign.findById).mockResolvedValue({
+      _id: 'camp-A',
+      gameMasterId: 'someone-else',
+      members: [{ userId: 'another-member', role: 'player' }],
+    } as never);
+    const nonMember = await requireCampaignMember('camp-A').catch((e: unknown) => e);
+
+    vi.mocked(Campaign.findById).mockResolvedValue(null as never);
+    const missing = await requireCampaignMember('camp-A').catch((e: unknown) => e);
+
+    expect((nonMember as Error).message).toBe((missing as Error).message);
+    expect((missing as Error).message).toBe('Campaign not found');
   });
 
   it('rejects when not authenticated', async () => {
@@ -100,9 +128,10 @@ describe('requireCampaignMember', () => {
     await expect(requireCampaignMember('camp-A')).rejects.toThrow('User not found');
   });
 
-  it('throws when the campaign is not found', async () => {
+  it('throws a CampaignAccessError when the campaign is not found', async () => {
     vi.mocked(Campaign.findById).mockResolvedValue(null as never);
 
     await expect(requireCampaignMember('camp-A')).rejects.toThrow('Campaign not found');
+    await expect(requireCampaignMember('camp-A')).rejects.toBeInstanceOf(CampaignAccessError);
   });
 });

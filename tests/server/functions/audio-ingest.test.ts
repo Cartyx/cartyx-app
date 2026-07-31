@@ -210,6 +210,34 @@ describe('confirmAudioUpload', () => {
     expect(AudioAsset.findOneAndUpdate).not.toHaveBeenCalled();
   });
 
+  /**
+   * Task 18 nit fix: this function measures/confirms `sourceKey` only — it
+   * has no idea `onceSourceKey` exists. A row `createOnceVariantUpload`
+   * flipped to `uploading` (`variant: 'once'`) is not a main upload
+   * awaiting confirmation, and confirming it here would hand the worker a
+   * `pending` row whose once pipeline may not have a real `onceSourceKey`
+   * yet. Symmetric with `reapAbandonedUploads`'s `variant: { $ne: 'once' }`
+   * split in the worker.
+   */
+  it('refuses to confirm a row mid-once-attach — that belongs to confirmOnceVariantUpload', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      _id: 'a1',
+      ownerId: 'u1',
+      sourceKey: 'k',
+      status: 'uploading',
+      variant: 'once',
+    } as never);
+
+    const { confirmAudioUpload } = await import('~/server/functions/audio');
+    await expect(confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' })).rejects.toThrow(
+      /not awaiting confirmation/i
+    );
+    // Refused before ever touching R2 — same as every other precondition
+    // failure in this function.
+    expect(send).not.toHaveBeenCalled();
+    expect(AudioAsset.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
   it('scopes the pending flip to status uploading so a concurrent confirm cannot double-apply', async () => {
     vi.mocked(AudioAsset.findOne).mockResolvedValue({
       _id: 'a1',
@@ -229,7 +257,104 @@ describe('confirmAudioUpload', () => {
       _id: 'a1',
       ownerId: 'u1',
       status: 'uploading',
+      // Task 18 nit fix: symmetric with the reaper's `variant: { $ne: 'once' }`
+      // split — confirmAudioUpload must never confirm a row a concurrent
+      // createOnceVariantUpload has claimed for the once pipeline.
+      variant: { $ne: 'once' },
     });
+  });
+
+  /**
+   * THE INTERLEAVE, staged rather than asserted about.
+   *
+   * Both writes in this function race for the same row, and only the filter on
+   * each write decides which one wins. The success write has always carried
+   * `status: 'uploading', variant: { $ne: 'once' }` and says so in its comment
+   * ("only the filter on the write makes exactly one of them win"); the REJECT
+   * write carried identity alone, and it is the more dangerous of the two to
+   * leave open because it stamps `permanentFailure: true` — a flag
+   * `retryAudioAsset` refuses, so there is no path back.
+   *
+   * One client, no privileged timing, window = one `DeleteObject` round trip:
+   *
+   *   1. Confirm a refused blob (over-cap here). Request #1 measures it and
+   *      enters the `DeleteObjectCommand` await.
+   *   2. While it is in there, re-PUT good audio to the same presigned URL
+   *      (valid 300s, reusable) and confirm again. Request #2's fenced write
+   *      matches the still-`uploading` row and flips it to `pending` — a
+   *      legitimately queued asset the worker will pick up.
+   *   3. Request #1 resumes. Its delete has already destroyed the GOOD object,
+   *      and an unfenced write then stamps `failed`/`permanentFailure` over a
+   *      row that is now queued (or, if the worker was quick, `ready`).
+   *
+   * So the model here is STATEFUL: `findOneAndUpdate` evaluates the filter it
+   * is actually given against a mutable row, exactly as Mongo would. A test
+   * that asserted the filter's SHAPE would pass against an implementation that
+   * built the right object and passed it to the wrong call; this one fails on
+   * the outcome that matters — the row's final state.
+   */
+  it('a slow reject cannot brick a row that a concurrent confirm has already re-claimed', async () => {
+    const row: Record<string, unknown> = {
+      _id: 'a1',
+      ownerId: 'u1',
+      sourceKey: 'k',
+      status: 'uploading',
+    };
+
+    /** Mongo's own filter semantics, cut down to the operators these writes use. */
+    const matches = (filter: Record<string, unknown>) =>
+      Object.entries(filter).every(([field, expected]) => {
+        if (expected && typeof expected === 'object' && '$ne' in expected) {
+          return row[field] !== (expected as { $ne: unknown }).$ne;
+        }
+        return row[field] === expected;
+      });
+
+    vi.mocked(AudioAsset.findOne).mockImplementation(
+      // A snapshot, like a real read: neither request sees the other's write
+      // through this handle.
+      (() => Promise.resolve({ ...row })) as never
+    );
+    vi.mocked(AudioAsset.findOneAndUpdate).mockImplementation(((
+      filter: Record<string, unknown>,
+      update: { $set: Record<string, unknown> }
+    ) => {
+      if (!matches(filter)) return Promise.resolve(null);
+      Object.assign(row, update.$set);
+      return Promise.resolve({ ...row });
+    }) as never);
+
+    const { confirmAudioUpload } = await import('~/server/functions/audio');
+
+    let raced = false;
+    send.mockImplementation(async (cmd: unknown) => {
+      if (cmd instanceof HeadObjectCommand) {
+        // Request #1 measures the refused blob; request #2 measures the good
+        // audio the attacker PUT over it at the same presigned URL.
+        return raced
+          ? { ContentLength: 1024, ContentType: 'audio/wav' }
+          : { ContentLength: 50 * 1024 * 1024 + 1, ContentType: 'audio/wav' };
+      }
+      // Request #1 is now inside its delete. This is the window.
+      if (!raced) {
+        raced = true;
+        await confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' });
+      }
+      return {};
+    });
+
+    await expect(confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' })).rejects.toThrow(
+      /too large/i
+    );
+
+    // Request #2 won the row and it STAYED won. Unfenced, the reject write
+    // that resumed afterwards would have left `status: 'failed'` and
+    // `permanentFailure: true` on a queued asset whose bytes are already
+    // deleted — unretryable by construction.
+    expect(row.status).toBe('pending');
+    expect(row.permanentFailure).toBeUndefined();
+    expect(row.lastError).toBeUndefined();
+    expect(row.confirmedAt).toBeInstanceOf(Date);
   });
 
   it("refuses another user's asset", async () => {

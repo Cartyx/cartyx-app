@@ -12,14 +12,34 @@
  *    fixtures.ts`) owned by that GM user, so `audio-library.spec.ts` has real
  *    rows — including `ready` ones — without depending on the transcode
  *    worker, which does not run in E2E.
- * 6. Writes the cookie to `e2e/.auth/storageState.json` so every test starts authed.
- * 7. Writes campaign/location/screen ids to `e2e/.auth/seed-data.json` for fixtures.
+ * 6. Idempotently seeds the soundboard fixtures (`seedSoundboardFixtures`): a
+ *    system package to clone, a foreign-owned package that must stay
+ *    invisible, and a foreign-owned asset the system package references —
+ *    plus the two per-run resets `soundboard.spec.ts` depends on.
+ * 7. Writes the cookie to `e2e/.auth/storageState.json` so every test starts authed.
+ * 8. Writes campaign/location/screen/package ids to `e2e/.auth/seed-data.json`
+ *    for fixtures.
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SignJWT } from 'jose';
 import mongoose from 'mongoose';
 import { AUDIO_FIXTURE_TITLES } from './fixtures/audio-fixtures';
+import {
+  FOREIGN_ASSET_SOURCE_KEY,
+  FOREIGN_OWNER_ID,
+  SOUNDBOARD_FIXTURES,
+} from './fixtures/soundboard-fixtures';
+
+/**
+ * Local, not imported from `~/server/utils/helpers`'s own `escapeRegExp` —
+ * this file runs as a standalone Node script under Playwright's
+ * `globalSetup`, outside the app's bundling/alias setup, and the one caller
+ * below needs nothing beyond the standard escape.
+ */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 // Image titled to be stable across runs — the lightbox spec asserts on this alt text.
 const E2E_IMAGE_TITLE = 'E2E Lightbox Fixture';
@@ -157,6 +177,150 @@ async function seedAudioFixtures(
         { upsert: true }
       );
   }
+}
+
+/**
+ * Idempotently seeds everything `soundboard.spec.ts` drives, and resets the
+ * two things that run-to-run accumulation would otherwise poison.
+ *
+ * Seeds (see `e2e/fixtures/soundboard-fixtures.ts` for why each row exists):
+ *
+ * - a foreign-owned `AudioAsset` (`ready`, with renditions — so the ONLY
+ *   reason the board cannot resolve it is `listPackageAssets`' ownership
+ *   gate, not its status),
+ * - a system `AudioPackage` (`ownerId: null`) whose single item references
+ *   that asset,
+ * - a foreign-owned `AudioPackage`.
+ *
+ * Resets:
+ *
+ * - **Every previous run's clone.** Task 22 gave `PackagesListPage` a
+ *   client-computed `"${name} (copy)"` suffix on clone (previously
+ *   `clonePackage` copied the source name verbatim with no rename
+ *   affordance at all), so a previous run's clone is no longer an EXACT name
+ *   match for `SOUNDBOARD_FIXTURES.systemPackageName` — it's that name plus
+ *   the suffix. The reset below matches by PREFIX (`$regex: '^' + escaped
+ *   name`), which catches both the pre-Task-22 verbatim shape and the
+ *   current suffixed one, so a stale exact-match filter can't silently stop
+ *   cleaning these up the moment the naming convention changes again.
+ *   Without this, each run leaves another row behind and the spec's "exactly
+ *   one clone" assertion drifts into meaninglessness — this is not
+ *   hypothetical: it is exactly what broke when Task 22 shipped the suffix
+ *   and this reset still matched on the old exact name.
+ * - **This campaign's `SoundboardState`.** The reload assertion is only worth
+ *   anything if the board starts from nothing: a row left over from a
+ *   previous run names a package id that was just deleted, which puts the
+ *   board into `board-unavailable` before the spec touches it.
+ */
+async function seedSoundboardFixtures(
+  db: NonNullable<typeof mongoose.connection.db>,
+  ownerId: mongoose.Types.ObjectId,
+  campaignId: mongoose.Types.ObjectId
+): Promise<{ systemPackageId: string; foreignPackageId: string }> {
+  const foreignOwnerId = new mongoose.Types.ObjectId(FOREIGN_OWNER_ID);
+
+  // --- the asset the caller may NOT read ------------------------------------
+  const foreignAsset = await db.collection('audioassets').findOneAndUpdate(
+    { ownerId: foreignOwnerId, sourceKey: FOREIGN_ASSET_SOURCE_KEY },
+    {
+      $set: {
+        ownerId: foreignOwnerId,
+        title: 'E2E Foreign-owned Asset',
+        kind: 'ambience',
+        environment: [],
+        mood: [],
+        intensity: null,
+        tags: [],
+        sourceKey: FOREIGN_ASSET_SOURCE_KEY,
+        sourceBytes: 654_321,
+        confirmedAt: new Date(),
+        status: 'ready',
+        attempts: 1,
+        lastError: null,
+        claimedAt: null,
+        claimedBy: null,
+        durationMs: 42_000,
+        loudnessTargetLufs: -20,
+        sampleRate: 48_000,
+        channels: 2,
+        peaks: fakePeaks(),
+        renditions: {
+          opus: fakeRendition(FOREIGN_ASSET_SOURCE_KEY, 'opus'),
+          aac: fakeRendition(FOREIGN_ASSET_SOURCE_KEY, 'aac'),
+        },
+        updatedAt: new Date(),
+      },
+      $setOnInsert: { createdAt: new Date() },
+    },
+    { upsert: true, returnDocument: 'after' }
+  );
+  const foreignAssetId = (foreignAsset as { _id: mongoose.Types.ObjectId })._id;
+
+  // --- the system package the spec clones ------------------------------------
+  // One item, pointing at the asset above. `id` is a fixed string rather than
+  // a fresh uuid so a re-run's `$set` genuinely replaces the same item (and so
+  // any mood a previous run wrote still references something).
+  const systemPackage = await db.collection('audiopackages').findOneAndUpdate(
+    { ownerId: null, name: SOUNDBOARD_FIXTURES.systemPackageName },
+    {
+      $set: {
+        ownerId: null,
+        name: SOUNDBOARD_FIXTURES.systemPackageName,
+        description: 'Cloneable fixture package for the soundboard E2E.',
+        items: [
+          {
+            id: 'e2e-foreign-item',
+            assetId: foreignAssetId,
+            label: SOUNDBOARD_FIXTURES.foreignItemLabel,
+            volume: 1,
+            fadeSeconds: 2,
+            loop: false,
+            randomIntervalMin: null,
+            randomIntervalMax: null,
+            volumeJitter: null,
+            panJitter: null,
+            sortIndex: 0,
+          },
+        ],
+        moods: [],
+        updatedAt: new Date(),
+      },
+      $setOnInsert: { createdAt: new Date() },
+    },
+    { upsert: true, returnDocument: 'after' }
+  );
+
+  // --- the package that must stay invisible ----------------------------------
+  const foreignPackage = await db.collection('audiopackages').findOneAndUpdate(
+    { ownerId: foreignOwnerId, name: SOUNDBOARD_FIXTURES.foreignPackageName },
+    {
+      $set: {
+        ownerId: foreignOwnerId,
+        name: SOUNDBOARD_FIXTURES.foreignPackageName,
+        description: 'Owned by another user. Visible to nobody in this suite.',
+        items: [],
+        moods: [],
+        updatedAt: new Date(),
+      },
+      $setOnInsert: { createdAt: new Date() },
+    },
+    { upsert: true, returnDocument: 'after' }
+  );
+
+  // --- resets ----------------------------------------------------------------
+  // PREFIX match, not exact — see the doc comment above for why: Task 22's
+  // clone-naming suffix means a previous run's clone is
+  // `${systemPackageName} (copy)`, not `systemPackageName` verbatim.
+  await db.collection('audiopackages').deleteMany({
+    ownerId,
+    name: { $regex: `^${escapeRegExp(SOUNDBOARD_FIXTURES.systemPackageName)}` },
+  });
+  await db.collection('soundboardstates').deleteMany({ campaignId });
+
+  return {
+    systemPackageId: String((systemPackage as { _id: unknown })._id),
+    foreignPackageId: String((foreignPackage as { _id: unknown })._id),
+  };
 }
 
 export default async function globalSetup(): Promise<void> {
@@ -308,6 +472,11 @@ export default async function globalSetup(): Promise<void> {
   }
 
   await seedAudioFixtures(db, user._id);
+  const soundboard = await seedSoundboardFixtures(
+    db,
+    user._id as mongoose.Types.ObjectId,
+    campaign._id as mongoose.Types.ObjectId
+  );
 
   // Mirror SessionUser shape from app/server/session.ts
   const sessionUser = {
@@ -354,6 +523,8 @@ export default async function globalSetup(): Promise<void> {
     locationName: location.name,
     screenId: String(screenId),
     fixtureImageTitle: E2E_IMAGE_TITLE,
+    soundboardSystemPackageId: soundboard.systemPackageId,
+    soundboardForeignPackageId: soundboard.foreignPackageId,
   };
   writeFileSync(SEED_DATA_PATH, JSON.stringify(seedData, null, 2));
 
