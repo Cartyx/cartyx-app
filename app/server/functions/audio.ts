@@ -6,6 +6,7 @@ import { AudioPackage } from '../db/models/AudioPackage';
 import { escapeRegExp, normalizeTags } from '../utils/helpers';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { resolveAudioStoragePrefix } from './audio-storage';
+import { getUserStorageUsage, type AudioStorageUsage } from './audio-quota';
 import { createR2, getAudioUploadUrl } from './uploads';
 import { pruneOrphanedMoodStates } from '~/lib/soundboard/prune';
 import { AUDIO_MAX_BYTES, AUDIO_SOURCE_TYPES } from '~/types/audio';
@@ -65,10 +66,26 @@ export class AudioClientError extends Error {
    */
   readonly retryAfterMs?: number;
 
-  constructor(message: string, options?: { retryAfterMs?: number }) {
+  /**
+   * Set only by the storage-quota refusal in `createAudioUpload`: the
+   * caller's measured usage and the limit it was checked against, at the
+   * moment of refusal. The message already embeds both as text, but a
+   * structured pair is what lets the UI (Task 5) render "X of Y used"
+   * without re-parsing prose or making a second round trip. Absent on every
+   * other client error, which is not quota-based.
+   */
+  readonly usageBytes?: number;
+  readonly limitBytes?: number;
+
+  constructor(
+    message: string,
+    options?: { retryAfterMs?: number; usageBytes?: number; limitBytes?: number }
+  ) {
     super(message);
     this.name = 'AudioClientError';
     this.retryAfterMs = options?.retryAfterMs;
+    this.usageBytes = options?.usageBytes;
+    this.limitBytes = options?.limitBytes;
   }
 }
 
@@ -138,6 +155,43 @@ function titleFromFilename(filename: string): string {
   return filename.replace(/\.[^.]+$/, '').slice(0, 200) || 'Untitled';
 }
 
+/**
+ * 2 GiB. The design doc measures ~126 MB per asset at the ingest caps (50
+ * MiB source + ~47 MB opus + ~29 MB aac renditions) — this admits 16 assets
+ * at that worst case, and considerably more at realistic file sizes, since
+ * most uploads are well under the 50 MiB source cap. This is a conservative
+ * starting point for a self-hosted, single-node app with OPEN REGISTRATION —
+ * bounding what an unknown stranger can cost in R2 storage is this task's
+ * whole point — not a measured figure; the design doc's own open-questions
+ * table defers tuning to real usage, and Task 11 wires this env var name
+ * into the Helm chart so raising it needs no image rebuild.
+ */
+const DEFAULT_AUDIO_USER_QUOTA_BYTES = 2 * 1024 * 1024 * 1024;
+
+/**
+ * `AUDIO_USER_QUOTA_BYTES`, read fresh on every call rather than baked into a
+ * module-level constant at import time — same idiom `~/server/session.ts`'s
+ * `setSession` uses for `APP_ENV`/`NODE_ENV`, and it means a value change
+ * takes effect on the next request with no need to re-import this module.
+ *
+ * Server env only, never `VITE_PUBLIC_*` — a `VITE_PUBLIC_*` name gets
+ * INLINED by Vite into the client bundle wherever it is referenced, module
+ * boundary or not, and changing a limit must not require an image rebuild
+ * (see the `deploying` skill's client-baked env rules).
+ *
+ * Guarded the same way the audio worker's `envPositive` is
+ * (`audio-worker/src/config.ts` — a separate npm package, so its helper
+ * cannot be imported here): `Number(process.env.X)` on an unset OR EMPTY
+ * string is `NaN`, and Helm renders an empty string for a `values.yaml` key
+ * nobody set, so a bare `?? DEFAULT` would not catch that case. A configured
+ * `0` or negative value is caught too — it would refuse every upload for
+ * every user, which is a misconfiguration, not a deliberate zero-byte quota.
+ */
+export function getAudioUserQuotaBytes(): number {
+  const raw = Number(process.env.AUDIO_USER_QUOTA_BYTES);
+  return Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_AUDIO_USER_QUOTA_BYTES;
+}
+
 export async function createAudioUpload({
   data,
   userId,
@@ -147,6 +201,66 @@ export async function createAudioUpload({
 } & Actor) {
   try {
     await ensureDb();
+
+    // Enforced FIRST, before `resolveAudioStoragePrefix` and before
+    // `getAudioUploadUrl` (the presign, the only R2-touching step in this
+    // function): refusing here means no R2 object exists yet for anything to
+    // reclaim, and no needless Mongo write mints a storage prefix for a
+    // request about to be refused anyway. It also means the E2E suite —
+    // which runs against deliberately fake R2 credentials — can tell a quota
+    // refusal apart from a credentials failure, because this refusal never
+    // reaches the presign step at all. See the design doc's "Quota
+    // enforcement point".
+    const limitBytes = getAudioUserQuotaBytes();
+    let usage: AudioStorageUsage;
+    try {
+      usage = await getUserStorageUsage(userId);
+    } catch (e) {
+      // FAIL CLOSED. An aggregation that cannot be measured is refused, not
+      // admitted — the easy bug here is a `catch` that logs and continues,
+      // which quietly turns the quota into a suggestion.
+      //
+      // This failure IS reported to GlitchTip, unlike the `AudioClientError`
+      // thrown right below — deliberately, and for a different reason than
+      // every other capture this file skips. Every other `AudioClientError`
+      // here refuses something the CALLER did (a guessable not-found, a rate
+      // limit, a resource cap) and is reachable by that caller at will, so
+      // reporting it would make report volume an attacker's parameter. An
+      // aggregation failure is the opposite: no request shape triggers it on
+      // demand, it is a genuine Mongo/index/connection fault, and it
+      // silently blocks every upload for this user — for every user, if
+      // systemic — until someone notices. Swallowing it here would make
+      // quota enforcement's own failure mode invisible. So the UNDERLYING
+      // fault is captured once, right here, while the REFUSAL that reaches
+      // the caller stays an `AudioClientError` — whether the fault deserves a
+      // report and whether the outward rejection may amplify are separate
+      // questions, and this answers them differently on purpose.
+      serverCaptureException(e, telemetryId({ userId, sessionUserId }), {
+        action: 'createAudioUpload.quotaCheck',
+      });
+      throw new AudioClientError(
+        'Unable to verify your storage usage right now. Please try again shortly.'
+      );
+    }
+
+    // `>=`, matching `assertPackageBudget`'s deliberate choice for
+    // `MAX_PACKAGES_PER_USER` (`~/server/functions/packages.ts`): usage is
+    // measured BEFORE this upload lands, so a caller already AT the limit is
+    // refused rather than allowed to land exactly on it. Same "resource
+    // bound, not exact invariant" reasoning too — this cannot be made
+    // airtight with a transaction because the incoming file's declared
+    // `data.bytes` is client-controlled and unverified until confirm's own
+    // `HeadObject` measures it (see the comment on `sourceBytes` below), so
+    // it is not part of this boundary check; the worst-case overshoot this
+    // admits is bounded by `AUDIO_MAX_BYTES` per accepted request, the same
+    // shape of slack two concurrent package creates can produce there.
+    if (usage.bytes >= limitBytes) {
+      throw new AudioClientError(
+        `Storage quota exceeded: ${usage.bytes} of ${limitBytes} bytes used. Delete an asset to make room.`,
+        { usageBytes: usage.bytes, limitBytes }
+      );
+    }
+
     // Mints the user's R2 namespace if this is their first upload, and returns
     // the existing one otherwise — see `./audio-storage.ts`. It runs before the
     // presign because the key cannot be built without it, and before the row is

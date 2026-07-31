@@ -24,6 +24,9 @@ vi.mock('~/server/functions/audio-storage', () => ({
   resolveAudioStoragePrefix: vi.fn(async () => 'a1b2c3d4e5f60718293a4b5c6d7e8f90'),
 }));
 
+const getUserStorageUsage = vi.fn();
+vi.mock('~/server/functions/audio-quota', () => ({ getUserStorageUsage }));
+
 import { AudioAsset } from '~/server/db/models/AudioAsset';
 
 const VALID = {
@@ -37,7 +40,14 @@ const VALID = {
 };
 
 describe('createAudioUpload', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Safe default for every pre-existing test below, which predates the
+    // quota check and never mocks it: comfortably under any real limit, so
+    // the happy-path assertions those tests make are unaffected. Tests that
+    // care about the quota itself override this explicitly.
+    getUserStorageUsage.mockResolvedValue({ bytes: 0, assetCount: 1 });
+  });
 
   it('creates an asset in uploading status and returns the signed url', async () => {
     vi.mocked(AudioAsset.create).mockResolvedValue({ _id: 'a1' } as never);
@@ -119,6 +129,136 @@ describe('createAudioUpload', () => {
     );
     expect(vi.mocked(getAudioUploadUrl)).not.toHaveBeenCalled();
     expect(vi.mocked(AudioAsset.create)).not.toHaveBeenCalled();
+  });
+
+  describe('storage quota', () => {
+    /**
+     * A fixture shape that would make this pass for the wrong reason: `VALID`
+     * missing some other required field. That would throw before the quota
+     * check ever ran (or, worse, before it was ever reached at all), and
+     * `not.toHaveBeenCalled()` on the presign would pass vacuously — the
+     * point of these tests is that the check itself fired, not merely that
+     * SOMETHING threw. `VALID` is the same fully-populated fixture the
+     * pre-existing happy-path tests above use, and every assertion below also
+     * pins the rejection message to quota-specific text (or, for the
+     * aggregation-failure test, to the fail-closed message), so a mutation
+     * that made some unrelated line throw first would fail these tests too.
+     */
+    it('refuses over quota, issues no presign, resolves no storage prefix, and creates no row', async () => {
+      const { getAudioUserQuotaBytes } = await import('~/server/functions/audio');
+      const limit = getAudioUserQuotaBytes();
+      getUserStorageUsage.mockResolvedValue({ bytes: limit + 1, assetCount: 5 });
+      const { createAudioUpload } = await import('~/server/functions/audio');
+      const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+      const { resolveAudioStoragePrefix } = await import('~/server/functions/audio-storage');
+
+      await expect(createAudioUpload({ data: VALID, userId: 'u1' })).rejects.toThrow(
+        /storage quota exceeded/i
+      );
+
+      // The negative assertion is the point: a test that only asserted the
+      // rejection would still pass with the quota check deleted, because
+      // AudioAsset.create's mock (unconfigured in this describe block) would
+      // eventually throw on its own. Asserting no presign AND no prefix
+      // resolution AND no row creation proves the refusal happened FIRST,
+      // before any of the function's other work.
+      expect(vi.mocked(getAudioUploadUrl)).not.toHaveBeenCalled();
+      expect(vi.mocked(resolveAudioStoragePrefix)).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.create)).not.toHaveBeenCalled();
+    });
+
+    it('carries the current usage and the limit on the refusal, for the UI to render', async () => {
+      const audioModule = await import('~/server/functions/audio');
+      const limit = audioModule.getAudioUserQuotaBytes();
+      getUserStorageUsage.mockResolvedValue({ bytes: limit + 500, assetCount: 3 });
+
+      const err = await audioModule
+        .createAudioUpload({ data: VALID, userId: 'u1' })
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(audioModule.AudioClientError);
+      const clientErr = err as InstanceType<typeof audioModule.AudioClientError>;
+      expect(clientErr.usageBytes).toBe(limit + 500);
+      expect(clientErr.limitBytes).toBe(limit);
+    });
+
+    it('does not report the quota refusal itself to GlitchTip', async () => {
+      const { getAudioUserQuotaBytes, createAudioUpload } =
+        await import('~/server/functions/audio');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+      getUserStorageUsage.mockResolvedValue({ bytes: getAudioUserQuotaBytes(), assetCount: 4 });
+
+      await expect(createAudioUpload({ data: VALID, userId: 'u1' })).rejects.toThrow();
+      expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The stated boundary rule: usage measured BEFORE this upload lands is
+     * checked with `>=` against the limit, exactly matching
+     * `assertPackageBudget`'s deliberate `count >= MAX_PACKAGES_PER_USER` in
+     * `~/server/functions/packages.ts` — a caller already sitting AT the
+     * limit is refused, symmetric with a caller already AT the package cap
+     * being refused a new package.
+     */
+    it('refuses exactly at the limit', async () => {
+      const { getAudioUserQuotaBytes, createAudioUpload } =
+        await import('~/server/functions/audio');
+      const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+      const limit = getAudioUserQuotaBytes();
+      getUserStorageUsage.mockResolvedValue({ bytes: limit, assetCount: 4 });
+
+      await expect(createAudioUpload({ data: VALID, userId: 'u1' })).rejects.toThrow(
+        /storage quota exceeded/i
+      );
+      expect(vi.mocked(getAudioUploadUrl)).not.toHaveBeenCalled();
+    });
+
+    /** The symmetric case: one byte under the limit is allowed through. */
+    it('allows the upload that lands one byte under the limit', async () => {
+      const { getAudioUserQuotaBytes, createAudioUpload } =
+        await import('~/server/functions/audio');
+      const limit = getAudioUserQuotaBytes();
+      getUserStorageUsage.mockResolvedValue({ bytes: limit - 1, assetCount: 4 });
+      vi.mocked(AudioAsset.create).mockResolvedValue({ _id: 'a1' } as never);
+
+      await expect(createAudioUpload({ data: VALID, userId: 'u1' })).resolves.toMatchObject({
+        assetId: 'a1',
+      });
+    });
+
+    /**
+     * Its own test, not a branch of another: this fixture never sets a
+     * bytes value at all, only makes the aggregation call itself reject —
+     * a shape that would pass for the wrong reason if merged into the
+     * over-quota test above (which pins a bytes VALUE, not a rejected
+     * promise) and could pass even if the fail-closed catch were missing,
+     * as long as SOMETHING downstream also happened to throw.
+     */
+    it('refuses the upload when the usage aggregation itself rejects — fail closed', async () => {
+      getUserStorageUsage.mockRejectedValue(new Error('mongo unreachable'));
+      const { createAudioUpload } = await import('~/server/functions/audio');
+      const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+      const { resolveAudioStoragePrefix } = await import('~/server/functions/audio-storage');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+
+      await expect(createAudioUpload({ data: VALID, userId: 'u1' })).rejects.toThrow(
+        /unable to verify your storage usage/i
+      );
+      expect(vi.mocked(getAudioUploadUrl)).not.toHaveBeenCalled();
+      expect(vi.mocked(resolveAudioStoragePrefix)).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.create)).not.toHaveBeenCalled();
+
+      // The UNDERLYING fault is still captured, deliberately, even though the
+      // outward refusal is an AudioClientError the outer catch will not
+      // report a second time: a Mongo/index/connection fault is not
+      // something a caller can trigger on demand the way a guessable
+      // not-found or a resource cap is, and swallowing it entirely would
+      // make the quota's own failure mode invisible in GlitchTip.
+      expect(vi.mocked(serverCaptureException)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(serverCaptureException).mock.calls[0][2]).toMatchObject({
+        action: 'createAudioUpload.quotaCheck',
+      });
+    });
   });
 });
 

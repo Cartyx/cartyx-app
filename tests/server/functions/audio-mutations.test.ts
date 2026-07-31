@@ -18,6 +18,13 @@ vi.mock('~/server/functions/uploads', () => ({
 vi.mock('~/server/functions/audio-storage', () => ({
   resolveAudioStoragePrefix: vi.fn(async () => 'a1b2c3d4e5f60718293a4b5c6d7e8f90'),
 }));
+// Comfortably under any real quota — this file's `createAudioUpload` calls
+// are exercising unrelated behaviour (retry eligibility, the unverified-size
+// guard), not the quota check itself; that check has its own coverage in
+// `audio-ingest.test.ts`.
+vi.mock('~/server/functions/audio-quota', () => ({
+  getUserStorageUsage: vi.fn(async () => ({ bytes: 0, assetCount: 0 })),
+}));
 vi.mock('~/server/db/models/AudioAsset', () => ({
   AudioAsset: {
     create: vi.fn(),
