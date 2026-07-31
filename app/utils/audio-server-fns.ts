@@ -1,6 +1,7 @@
 import { createServerFn } from '@tanstack/react-start';
 import {
   audioIngestLimiter,
+  libraryMutationLimiter,
   orphanCleanupLimiter,
   rateLimitMessage,
 } from '~/lib/audio-rate-limits';
@@ -91,11 +92,27 @@ import {
 //     an attacker the exact telemetry-amplification lever this phase exists
 //     to close — the rejection volume is the attacker's parameter.
 //
-// A SECOND, tighter bucket (`orphanCleanupLimiter`) covers the two orphan-
-// cleanup wrappers at the bottom of this file — see the note above them.
-// Everything else here (reads, and the metadata mutations `updateAudioAsset`
-// / `bulkTagAudioAssets` / `deleteAudioAsset`) is deliberately ungated: none
-// enqueues work, spends R2, or grows the caller's footprint.
+// TWO MORE buckets cover the rest of this file's writes:
+// `libraryMutationLimiter` on `updateAudioAssetFn`/`deleteAudioAssetFn`, and
+// the tighter `orphanCleanupLimiter` on the two orphan-cleanup wrappers at the
+// bottom. See the note above each, and `~/lib/audio-rate-limits.ts` for the
+// sizing.
+//
+// EXACTLY TWO ENDPOINTS HERE ARE UNGATED, and the reason is specific to each
+// rather than a blanket claim. An earlier version of this comment asserted
+// that every non-ingest endpoint "enqueues no work, spends no R2, and grows no
+// footprint"; review found that false for `deleteAudioAsset` on both counts,
+// so the list below states only what is true of the endpoint it names:
+//
+//  - `listAudioAssetsFn` — a read. Bounded by its projection and its `limit`;
+//    a cursor it cannot decode raises `AudioClientError`, which files nothing.
+//  - `bulkTagAudioAssetsFn` — an `updateMany` that returns `{ modified: 0 }`
+//    when nothing matches. It has NO not-found throw, so unlike its two
+//    single-asset siblings it has no caller-triggerable capture path at all,
+//    and its `ids` array is bounded by `.max(200)` in the schema.
+//
+// If a new endpoint is added here, it needs a bucket unless one of those two
+// sentences can be written truthfully about it.
 //
 // `~/lib/audio-rate-limits` is imported STATICALLY, unlike everything else
 // reached from these handlers, and that is safe precisely because it is
@@ -180,9 +197,16 @@ export const listAudioAssetsFn = createServerFn({ method: 'POST' })
 export const updateAudioAssetFn = createServerFn({ method: 'POST' })
   .inputValidator(updateAudioAssetSchema)
   .handler(async ({ data }) => {
-    const { updateAudioAsset } = await import('~/server/functions/audio');
+    const { updateAudioAsset, AudioClientError } = await import('~/server/functions/audio');
     const { requireActor } = await import('~/utils/require-actor');
-    return updateAudioAsset({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = libraryMutationLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      throw new AudioClientError(rateLimitMessage('library edit', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return updateAudioAsset({ data, ...actor });
   });
 
 export const bulkTagAudioAssetsFn = createServerFn({ method: 'POST' })
@@ -216,12 +240,22 @@ export const retryAudioAssetFn = createServerFn({ method: 'POST' })
     return retryAudioAsset({ data, ...actor });
   });
 
+// On `libraryMutationLimiter` with `updateAudioAssetFn`: this one spends R2 —
+// up to six `DeleteObjectCommand` calls per request — and both share a
+// caller-triggerable not-found path. See `~/lib/audio-rate-limits.ts`.
 export const deleteAudioAssetFn = createServerFn({ method: 'POST' })
   .inputValidator(deleteAudioAssetSchema)
   .handler(async ({ data }) => {
-    const { deleteAudioAsset } = await import('~/server/functions/audio');
+    const { deleteAudioAsset, AudioClientError } = await import('~/server/functions/audio');
     const { requireActor } = await import('~/utils/require-actor');
-    return deleteAudioAsset({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = libraryMutationLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      throw new AudioClientError(rateLimitMessage('library edit', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return deleteAudioAsset({ data, ...actor });
   });
 
 // ---------------------------------------------------------------------------

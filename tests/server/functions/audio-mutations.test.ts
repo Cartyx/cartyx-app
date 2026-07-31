@@ -44,6 +44,48 @@ function mockUpdateResult(doc: Record<string, unknown> | null) {
   } as never);
 }
 
+describe("the 'Audio asset not found' throws", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /**
+   * These fire when `findOne`/`findOneAndUpdate` misses on
+   * `{ _id: <caller-supplied id>, ownerId }`. The schemas are
+   * `z.object({ id: objectId })`, so any authenticated user can trigger one at
+   * will by generating well-formed ObjectIds — which as a plain `Error` filed
+   * one GlitchTip event per request, making the report volume the caller's
+   * parameter. `AudioClientError` is the class `reportAudioError` excludes, so
+   * the type IS the no-telemetry contract; asserting only that it rejects
+   * would pass with the type reverted.
+   */
+  it('updateAudioAsset: throws AudioClientError and files no GlitchTip event', async () => {
+    mockUpdateResult(null);
+    const { updateAudioAsset, AudioClientError } = await import('~/server/functions/audio');
+    const err = await updateAudioAsset({ data: { id: 'a1', title: 'New' }, userId: 'u1' }).catch(
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(AudioClientError);
+    // The message is unchanged by the type change — `~/routes/api/audio/
+    // uploads.$id.confirm.ts` classifies these by message regex, and the UI
+    // renders `.message` verbatim.
+    expect((err as Error).message).toBe('Audio asset not found');
+    expect(serverCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('deleteAudioAsset: throws AudioClientError, files no GlitchTip event, and issues no R2 delete', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue(null as never);
+    const { deleteAudioAsset, AudioClientError } = await import('~/server/functions/audio');
+    const err = await deleteAudioAsset({ data: { id: 'a1' }, userId: 'u1' }).catch(
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(AudioClientError);
+    expect((err as Error).message).toBe('Audio asset not found');
+    expect(serverCaptureException).not.toHaveBeenCalled();
+    // A miss must not reach the R2 client at all.
+    expect(send).not.toHaveBeenCalled();
+    expect(AudioAsset.deleteOne).not.toHaveBeenCalled();
+  });
+});
+
 describe('updateAudioAsset', () => {
   beforeEach(() => vi.clearAllMocks());
 

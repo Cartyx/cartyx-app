@@ -101,6 +101,39 @@ export const packageWriteLimiter = createRateLimiter({ capacity: 15, refillPerSe
 export const boardStateLimiter = createRateLimiter({ capacity: 40, refillPerSec: 2 });
 
 /**
+ * Library mutations: `deleteAudioAsset` and `updateAudioAsset`. Not in the
+ * design's table; added after review found the original in-code justification
+ * for leaving them ungated was factually wrong on both counts.
+ *
+ * `deleteAudioAsset` **does** spend R2 — up to six `DeleteObjectCommand`
+ * calls per request (source, both renditions, and the three once-variant
+ * objects). And both it and `updateAudioAsset` throw on a caller-supplied id
+ * that misses `findOne({ _id, ownerId })`, which any authenticated user can
+ * trigger by generating well-formed ObjectIds against a schema of
+ * `z.object({ id: objectId })`. That throw is now an `AudioClientError` (see
+ * `~/server/functions/audio.ts`), which closes the GlitchTip-amplification
+ * half at its source; this bucket bounds the R2 spend and the write volume
+ * that the type change does not touch.
+ *
+ * Capacity 60 — generous on purpose, because clearing out or re-tagging a
+ * library is a genuine session-length activity. The UI drives both one asset
+ * at a time (a confirm dialog per delete, a modal save per edit — there is no
+ * bulk-delete endpoint), so 60 covers a user disposing of or editing sixty
+ * assets in one sitting without ever meeting the limiter.
+ *
+ * Refill 0.5/s — one every two seconds, deliberately slower than the ingest
+ * bucket's. A human clicking through a confirm dialog per asset cannot
+ * sustain much more than that, while a scripted loop drops from thousands per
+ * second to one per two seconds.
+ *
+ * `bulkTagAudioAssets` is NOT on this bucket, and that reason is real rather
+ * than assumed: it is an `updateMany` that returns `{ modified: 0 }` when
+ * nothing matches, so it has no not-found throw and no capture path at all,
+ * and its `ids` array is already bounded by `.max(200)` in the schema.
+ */
+export const libraryMutationLimiter = createRateLimiter({ capacity: 60, refillPerSec: 0.5 });
+
+/**
  * Orphan cleanup: `scanOrphanAudio` and `deleteOrphanAudio`. Not in the
  * design's table; added on the same reasoning that put `retryAudioAsset` on
  * the ingest bucket — the table names endpoint GROUPS, and the placement

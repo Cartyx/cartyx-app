@@ -450,6 +450,110 @@ describe('ingest rate limit', () => {
 });
 
 /**
+ * The library-mutation bucket (`libraryMutationLimiter`), shared by
+ * `updateAudioAssetFn` and `deleteAudioAssetFn`.
+ *
+ * Added after review found the original in-code claim that these were safe to
+ * leave ungated was wrong: `deleteAudioAsset` issues up to six R2
+ * `DeleteObjectCommand` calls per request, and both throw on a caller-supplied
+ * id that misses `findOne({ _id, ownerId })` — reachable by generating
+ * well-formed ObjectIds.
+ *
+ * Same isolation rule as the buckets above: one `DB_USER_ID` per test. `60` is
+ * the capacity, a literal so it is pinned in both directions.
+ */
+describe('library mutation rate limit', () => {
+  /** Spends the whole library-mutation bucket for `userId` via `deleteAudioAssetFn`. */
+  async function drainLibraryBucket(userId: string) {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(userId);
+    vi.mocked(deleteAudioAsset).mockResolvedValue({ deleted: true });
+    for (let i = 0; i < 60; i++) {
+      await deleteAudioAssetFn({ data: { id: 'a1' } });
+    }
+    expect(deleteAudioAsset).toHaveBeenCalledTimes(60);
+    vi.mocked(deleteAudioAsset).mockClear();
+  }
+
+  it('lets a full 60-call burst through, then refuses the 61st without calling deleteAudioAsset', async () => {
+    await drainLibraryBucket('mongo-library-delete');
+
+    // The message is pinned, not just "it rejected": every other failure mode
+    // in this handler (no session, no User doc) throws a DIFFERENT message, so
+    // matching the rate-limit text is what stops this passing for the wrong
+    // reason.
+    await expect(deleteAudioAssetFn({ data: { id: 'a1' } })).rejects.toThrow(
+      /Too many library edit requests/
+    );
+    // Up to six R2 DeleteObjectCommand calls live inside `deleteAudioAsset`.
+    // This assertion is what proves none of them were issued.
+    expect(deleteAudioAsset).not.toHaveBeenCalled();
+  });
+
+  it('refuses with AudioClientError carrying retryAfterMs, and files no GlitchTip event', async () => {
+    await drainLibraryBucket('mongo-library-shape');
+
+    const err = await deleteAudioAssetFn({ data: { id: 'a1' } }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AudioClientError);
+    expect((err as AudioClientError).retryAfterMs).toBeGreaterThan(0);
+    expect(serverCaptureException).not.toHaveBeenCalled();
+    expect(deleteAudioAsset).not.toHaveBeenCalled();
+  });
+
+  it('shares one bucket with updateAudioAssetFn, so a drained bucket refuses an edit too', async () => {
+    await drainLibraryBucket('mongo-library-update');
+
+    await expect(updateAudioAssetFn({ data: { id: 'a1', title: 'New title' } })).rejects.toThrow(
+      /Too many library edit requests/
+    );
+    expect(updateAudioAsset).not.toHaveBeenCalled();
+    expect(serverCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('does not gate bulkTagAudioAssetsFn — an updateMany with no not-found throw', async () => {
+    await drainLibraryBucket('mongo-library-bulktag');
+
+    vi.mocked(bulkTagAudioAssets).mockResolvedValue({ modified: 2 });
+    await expect(
+      bulkTagAudioAssetsFn({
+        data: { ids: ['a1', 'a2'], tags: ['storm'], tagMode: 'add' as const },
+      })
+    ).resolves.toEqual({ modified: 2 });
+  });
+
+  it('is a separate bucket from the ingest one: a drained library bucket still allows an upload', async () => {
+    await drainLibraryBucket('mongo-library-vs-ingest');
+
+    vi.mocked(createAudioUpload).mockResolvedValue({
+      assetId: 'a1',
+      uploadUrl: 'https://put',
+      key: 'k',
+    });
+    await expect(
+      createAudioUploadFn({
+        data: {
+          filename: 'storm.wav',
+          contentType: 'audio/wav',
+          bytes: 1024,
+          kind: 'ambience' as const,
+          environment: [],
+          mood: [],
+          tags: [] as string[],
+        },
+      })
+    ).resolves.toEqual({ assetId: 'a1', uploadUrl: 'https://put', key: 'k' });
+  });
+
+  it('is keyed per account: draining one user does not refuse another', async () => {
+    await drainLibraryBucket('mongo-library-victim');
+
+    mockDbUser('mongo-library-bystander');
+    vi.mocked(deleteAudioAsset).mockResolvedValue({ deleted: true });
+    await expect(deleteAudioAssetFn({ data: { id: 'a1' } })).resolves.toEqual({ deleted: true });
+  });
+});
+
+/**
  * The orphan-cleanup bucket (`orphanCleanupLimiter`) — the tightest of the
  * four, and shared by both cleanup endpoints. Same isolation rule as the
  * ingest tests above: one `DB_USER_ID` per test, because the limiter is a

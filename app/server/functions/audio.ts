@@ -36,6 +36,25 @@ async function ensureDb() {
  *
  * `~/types/schemas/audio.ts` rejects these shapes at the request boundary, so
  * this class covers the fail-closed paths behind it rather than the common case.
+ *
+ * IT ALSO COVERS EVERY `'Audio asset not found'` THROW IN THIS FILE, and that
+ * is deliberate. Each one fires when `findOne({ _id: <caller-supplied id>,
+ * ownerId: userId })` misses — which for a schema of `z.object({ id: objectId
+ * })` any authenticated user can trigger at will by generating well-formed
+ * ObjectIds. As a plain `Error` those reached `reportAudioError` and filed one
+ * GlitchTip event per request, making the report volume the caller's
+ * parameter — the same shape `packages.ts` documents on `getPackage` and the
+ * reason `PackageClientError` exists. The message is unchanged, so nothing the
+ * user or the phase-3 bearer adapter sees changes: `~/routes/api/audio/
+ * uploads.$id.confirm.ts` classifies these by `e instanceof Error` plus a
+ * message regex, and `AudioClientError` satisfies both.
+ *
+ * NOT converted: the sibling precondition throws on the same functions
+ * ('Audio asset is not awaiting confirmation', 'Only music assets can have a
+ * once-variant attached', ...). Those require the caller to already OWN a real
+ * asset in a specific state, so they are not reachable by guessing ids and
+ * their volume is bounded by the caller's own library. Leaving them as plain
+ * `Error`s keeps a genuine state-machine surprise visible in GlitchTip.
  */
 export class AudioClientError extends Error {
   /**
@@ -179,7 +198,7 @@ export async function confirmAudioUpload({
   try {
     await ensureDb();
     const asset = await AudioAsset.findOne({ _id: data.assetId, ownerId: userId });
-    if (!asset) throw new Error('Audio asset not found');
+    if (!asset) throw new AudioClientError('Audio asset not found');
     // Confirm is only meaningful for a row still awaiting its upload. Without
     // this precondition a logged-in user could replay confirm against an
     // already-`ready` asset to flip it back to `pending` and make the worker
@@ -350,7 +369,7 @@ export async function createOnceVariantUpload({
   try {
     await ensureDb();
     const asset = await AudioAsset.findOne({ _id: data.assetId, ownerId: userId });
-    if (!asset) throw new Error('Audio asset not found');
+    if (!asset) throw new AudioClientError('Audio asset not found');
     if (asset.kind !== 'music') {
       throw new Error('Only music assets can have a once-variant attached');
     }
@@ -459,7 +478,7 @@ export async function confirmOnceVariantUpload({
   try {
     await ensureDb();
     const asset = await AudioAsset.findOne({ _id: data.assetId, ownerId: userId });
-    if (!asset) throw new Error('Audio asset not found');
+    if (!asset) throw new AudioClientError('Audio asset not found');
     if (asset.status !== 'uploading' || asset.variant !== 'once' || !asset.onceSourceKey) {
       throw new Error('Once-variant asset is not awaiting confirmation');
     }
@@ -792,7 +811,7 @@ export async function updateAudioAsset({
       { $set: set },
       { new: true }
     ).lean();
-    if (!doc) throw new Error('Audio asset not found');
+    if (!doc) throw new AudioClientError('Audio asset not found');
     return serializeAudioAsset(doc as unknown as AudioDoc);
   } catch (e) {
     reportAudioError(e, { userId, sessionUserId }, { action: 'updateAudioAsset' });
@@ -957,7 +976,7 @@ export async function deleteAudioAsset({
   try {
     await ensureDb();
     const asset = await AudioAsset.findOne({ _id: data.id, ownerId: userId });
-    if (!asset) throw new Error('Audio asset not found');
+    if (!asset) throw new AudioClientError('Audio asset not found');
 
     const { client, bucket } = createR2();
     // Task 18 made onceRenditions/onceSourceKey real: an asset with a once-
