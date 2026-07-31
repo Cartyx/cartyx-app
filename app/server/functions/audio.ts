@@ -233,6 +233,60 @@ export function getMaxPendingJobsPerUser(): number {
 }
 
 /**
+ * The per-user queue-depth check, shared by every path that can move a row
+ * into `pending`/`processing`: `confirmAudioUpload` (a new source),
+ * `confirmOnceVariantUpload` (a once-variant source, Task 18), and
+ * `retryAudioAsset` (requeueing a `failed` row). All three are doors into
+ * the SAME bounded resource `getMaxPendingJobsPerUser` describes, so the
+ * counting/threshold logic has exactly one definition. The cap originally
+ * shipped on `confirmAudioUpload` alone — the entry point new uploads
+ * enqueue through — but `confirmOnceVariantUpload` enqueues a fresh
+ * transcode job the identical way, and `retryAudioAsset` pushes an
+ * already-existing row back into `pending` one click at a time with no
+ * depth check of its own (it IS rate-limited, by Task 2's
+ * `audioIngestLimiter`, but a rate limit bounds how FAST a caller can act,
+ * not how DEEP the queue they build gets — a caller patient enough to stay
+ * under the rate limit could otherwise requeue every failed row they own,
+ * unbounded). Left open, either door defeats the whole point of this cap:
+ * one stranger putting unbounded work in front of everyone else on a
+ * single-replica FIFO worker.
+ *
+ * Returns `null` when the caller has room to enqueue one more job.
+ * Otherwise returns the numbers each call site needs to build ITS OWN
+ * refusal — deliberately just numbers, not a thrown error and not a
+ * side-effecting action: what happens next differs across the three
+ * callers (an R2 object to delete or not, a row to revert to `failed` vs.
+ * back to `ready` vs. left untouched entirely), so this function does
+ * exactly one thing and each call site owns its own cleanup. See each call
+ * site's comment for why its cleanup is shaped the way it is.
+ *
+ * Scoped `{ ownerId: userId, ... }` — never a bare status filter — for the
+ * same reason every cap in this codebase is: an unscoped count would refuse
+ * EVERY user once the GLOBAL queue reached the limit, a different (and
+ * wrong) control than "one account cannot occupy more than N slots of it".
+ *
+ * `>=`, matching `assertUnderStorageQuota`/`assertPackageBudget`'s
+ * deliberate boundary below: the count is read before the row that would
+ * consume a slot actually lands, so a caller already AT the cap is refused
+ * rather than landing exactly on it. Like those checks, this is a resource
+ * bound, not an exact invariant, and the same slack `assertUnderStorageQuota`
+ * documents applies here unmodified: two concurrent requests from the same
+ * user can both read `count == max - 1` and both proceed, landing the user
+ * one job over the cap — closing that with a transaction would cost more
+ * than the one extra queued job it prevents.
+ */
+async function checkPendingJobCap(
+  userId: string
+): Promise<{ pendingCount: number; maxPendingJobs: number } | null> {
+  const maxPendingJobs = getMaxPendingJobsPerUser();
+  const pendingCount = await AudioAsset.countDocuments({
+    ownerId: userId,
+    status: { $in: ['pending', 'processing'] },
+  });
+  return pendingCount >= maxPendingJobs ? { pendingCount, maxPendingJobs } : null;
+}
+
+/**
  * The storage-quota gate, shared by every entry point that presigns an
  * upload via `getAudioUploadUrl`: `createAudioUpload` (a new asset's
  * source) and `createOnceVariantUpload` (Task 18's once-variant source,
@@ -420,26 +474,17 @@ export async function confirmAudioUpload({
 
     const { client, bucket } = createR2();
 
-    // The per-user queue-depth bound (see `getMaxPendingJobsPerUser`'s doc
-    // comment) — checked HERE, before `HeadObject`, because this is "the
-    // point where a row becomes claimable": nothing before this line can
-    // put a row into `pending`/`processing`, and everything after it is
+    // The per-user queue-depth bound (see `checkPendingJobCap`'s doc
+    // comment for the shared counting logic and `getMaxPendingJobsPerUser`
+    // for the default) — checked HERE, before `HeadObject`, because this is
+    // "the point where a row becomes claimable": nothing before this line
+    // can put a row into `pending`/`processing`, and everything after it is
     // building toward exactly that. Checking before `HeadObject` also means
     // a caller already at the cap is refused without spending an R2 round
     // trip on an object that is about to be rejected regardless of what it
     // turns out to be.
-    //
-    // Scoped `{ ownerId: userId, ... }` — never a bare status filter — for
-    // the same reason every cap in this codebase is: an unscoped count
-    // would refuse EVERY user once the GLOBAL queue reached the limit,
-    // which is a different (and wrong) control than "one account cannot
-    // occupy more than N slots of it".
-    const maxPendingJobs = getMaxPendingJobsPerUser();
-    const pendingCount = await AudioAsset.countDocuments({
-      ownerId: userId,
-      status: { $in: ['pending', 'processing'] },
-    });
-    if (pendingCount >= maxPendingJobs) {
+    const cap = await checkPendingJobCap(userId);
+    if (cap) {
       // The object already exists in R2 by the time confirm runs (the
       // browser's PUT to the presigned URL already landed) — refusing here
       // does not avoid creating an object the way the storage-quota check
@@ -448,7 +493,7 @@ export async function confirmAudioUpload({
       // reference it, and the orphan scanner is the only other path back,
       // on a later manual sweep instead of immediately.
       await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.sourceKey }));
-      const reason = `Too many pending transcode jobs (${pendingCount} of ${maxPendingJobs} already queued). Wait for one to finish before uploading more.`;
+      const reason = `Too many pending transcode jobs (${cap.pendingCount} of ${cap.maxPendingJobs} already queued). Wait for one to finish before uploading more.`;
       // FENCED on `status: 'uploading', variant: { $ne: 'once' }` — the
       // identical ordering trap the tooLarge/badType write below closes,
       // and the identical fix: this request can be suspended inside the
@@ -756,6 +801,62 @@ export async function confirmOnceVariantUpload({
     }
 
     const { client, bucket } = createR2();
+
+    // The same per-user queue-depth bound `confirmAudioUpload` checks, and
+    // for the identical reason: this is the point where a once-variant job
+    // becomes claimable (the success write below flips `status` to
+    // `pending`), so it is checked before `HeadObject` for the same
+    // "don't pay for a round trip you're about to refuse anyway" reason.
+    // See `checkPendingJobCap`'s doc comment for why this function is one
+    // of three doors into the same bounded resource and cannot be left
+    // uncapped just because the brief that introduced this control named
+    // `confirmAudioUpload` specifically.
+    //
+    // The refusal below is NOT a copy of `confirmAudioUpload`'s: THIS
+    // row is an existing, previously-`ready` `music` asset borrowing its
+    // `status` field for the once-attach's own state machine — see the
+    // `tooLarge`/`badType` branch immediately below for why writing
+    // `status: 'failed'` here would brick that asset rather than merely
+    // failing a fresh row. A cap refusal reverts the SAME way that branch
+    // does: back to `ready`/`main`, with the once-source object gone and
+    // the reason recorded on `onceLastError`, not `lastError`.
+    const cap = await checkPendingJobCap(userId);
+    if (cap) {
+      // The once-source object already exists in R2 (the browser's PUT
+      // already landed) — must be deleted explicitly or it is stranded,
+      // same reasoning as every other reject branch in this function.
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.onceSourceKey }));
+      const reason = `Too many pending transcode jobs (${cap.pendingCount} of ${cap.maxPendingJobs} already queued). Wait for one to finish before uploading more.`;
+      // FENCED identically to the tooLarge/badType write below, and for the
+      // identical ordering-trap reason documented there: this request can
+      // be suspended inside the `DeleteObjectCommand` await above, and a
+      // concurrent confirm for the SAME once-attach could complete in that
+      // window. An identity-only write would then revert a row a different,
+      // later request had already legitimately queued, after this
+      // request's own delete had destroyed the object that later request's
+      // success depended on.
+      await AudioAsset.findOneAndUpdate(
+        { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
+        {
+          $set: {
+            status: 'ready',
+            variant: 'main',
+            onceSourceKey: null,
+            // Paired with `onceSourceKey` above — see `createOnceVariantUpload`'s
+            // identical reset for why a cleared key must never leave a stale
+            // byte count standing.
+            onceSourceBytes: null,
+            onceLastError: reason,
+            updatedAt: new Date(),
+          },
+        }
+      );
+      // AudioClientError: the caller's own doing, reachable at will, must
+      // not file a GlitchTip event — same shape as every other cap/quota
+      // refusal in this file.
+      throw new AudioClientError(reason);
+    }
+
     const head = await client.send(
       new HeadObjectCommand({ Bucket: bucket, Key: asset.onceSourceKey })
     );
@@ -1215,6 +1316,46 @@ export async function retryAudioAsset({
 } & Actor): Promise<AudioAssetData> {
   try {
     await ensureDb();
+
+    // The same per-user queue-depth bound `confirmAudioUpload` and
+    // `confirmOnceVariantUpload` check, and for the same underlying reason
+    // — see `checkPendingJobCap`'s doc comment: this is the third of three
+    // doors into `pending`/`processing`, and Task 2's `audioIngestLimiter`
+    // rate-limits how FAST a caller can click Retry but not how DEEP the
+    // queue they build gets, so it does not substitute for this.
+    //
+    // Checked BEFORE the eligibility write below, so a caller at the cap is
+    // refused without even attempting a write the fenced filter would very
+    // likely have granted.
+    //
+    // Unlike the other two doors, refusal here touches NEITHER R2 nor the
+    // row. `confirmAudioUpload`/`confirmOnceVariantUpload` each just
+    // finished a fresh upload's PUT — there is a brand-new R2 object that
+    // will never be confirmed and must be reclaimed, and a row mid-transition
+    // that needs to land somewhere definite. Retry starts from a different
+    // place: `sourceKey` already exists, was already measured by the
+    // original confirm, and is untouched by a retry either way — there is
+    // no new object to strand. And the row is already `failed`; refusing
+    // to requeue it doesn't put it in a new state, it just leaves it in the
+    // one it was already in, still eligible the moment the caller's queue
+    // has room. So the correct action is the cheapest one: throw, and
+    // change nothing.
+    const cap = await checkPendingJobCap(userId);
+    if (cap) {
+      // AudioClientError: the caller's own doing, reachable at will by
+      // clicking Retry repeatedly, must not file a GlitchTip event — same
+      // shape as every other cap/quota refusal in this file. Deliberately
+      // NOT the plain `Error` the "cannot be retried" throw below uses:
+      // that one requires the caller to already own a real `failed` row in
+      // a specific state (see the class doc comment at the top of this
+      // file), but this refusal fires purely from the caller's OWN queue
+      // depth and is reachable on any retry attempt regardless of which
+      // row it names.
+      throw new AudioClientError(
+        `Too many pending transcode jobs (${cap.pendingCount} of ${cap.maxPendingJobs} already queued). Wait for one to finish before retrying.`
+      );
+    }
+
     const doc = await AudioAsset.findOneAndUpdate(
       {
         _id: data.id,

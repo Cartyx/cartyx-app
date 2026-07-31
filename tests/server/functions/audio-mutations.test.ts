@@ -377,6 +377,92 @@ describe('retryAudioAsset', () => {
     );
   });
 
+  describe('pending job cap', () => {
+    /**
+     * Controller-ordered fix (review of Task 6): the cap originally only
+     * gated `confirmAudioUpload`. `retryAudioAsset` is a second, unguarded
+     * door into the same `pending` queue — a caller can push N failed rows
+     * back in one at a time with no depth check, defeating the point of the
+     * cap regardless of how tightly `confirmAudioUpload` is bounded.
+     *
+     * Pins the ACTUAL count filter, same standard as every other cap test
+     * in this phase — a weaker "it was called" assertion would pass with
+     * `ownerId` dropped.
+     */
+    it('counts pending+processing jobs scoped to the caller before requeueing a failed row', async () => {
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0);
+      mockUpdateResult({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'pending',
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      });
+      const { retryAudioAsset } = await import('~/server/functions/audio');
+      await retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' });
+
+      expect(vi.mocked(AudioAsset.countDocuments)).toHaveBeenCalledWith({
+        ownerId: 'u1',
+        status: { $in: ['pending', 'processing'] },
+      });
+    });
+
+    /**
+     * The global-count catch, same technique as `confirmAudioUpload`'s
+     * equivalent test in `audio-ingest.test.ts` (see that test's comment for
+     * why a single-user fixture cannot distinguish "counts this caller" from
+     * "counts everyone"): a `countDocuments` fake that only answers a
+     * filter carrying the right `ownerId`, and throws otherwise, so an
+     * unscoped or wrongly-scoped count fails loudly instead of silently
+     * routing both users to the same outcome.
+     *
+     * Also proves: retry's refusal writes NOTHING and calls no R2 method —
+     * unlike `confirmAudioUpload`/`confirmOnceVariantUpload`, there is no
+     * fresh R2 object to strand and the row is already `failed`, so the
+     * correct action on refusal is exactly "throw, touch nothing" (see the
+     * production comment on this check for the reasoning). The refusal
+     * message carries the count, is an `AudioClientError`, and files no
+     * GlitchTip event.
+     */
+    it('refuses a user already at the cap while a different user at zero is admitted', async () => {
+      const { getMaxPendingJobsPerUser, retryAudioAsset, AudioClientError } =
+        await import('~/server/functions/audio');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+      const cap = getMaxPendingJobsPerUser();
+
+      vi.mocked(AudioAsset.countDocuments).mockImplementation((async (
+        filter: Record<string, unknown>
+      ) => {
+        if (filter.ownerId === 'u1') return cap; // already at the cap
+        if (filter.ownerId === 'u2') return 0; // fresh, nothing queued
+        throw new Error(`unscoped countDocuments filter: ${JSON.stringify(filter)}`);
+      }) as never);
+
+      // u1: at the cap, refused.
+      const err = await retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' }).catch(
+        (e: unknown) => e
+      );
+      expect(err).toBeInstanceOf(AudioClientError);
+      expect((err as Error).message).toContain(String(cap));
+      // Refusal touches neither R2 nor the row.
+      expect(send).not.toHaveBeenCalled();
+      expect(AudioAsset.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+
+      // u2: a DIFFERENT user, zero pending jobs, admitted through the normal
+      // eligibility write.
+      mockUpdateResult({
+        _id: 'a2',
+        ownerId: 'u2',
+        status: 'pending',
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      });
+      const res = await retryAudioAsset({ data: { id: 'a2' }, userId: 'u2' });
+      expect(res.status).toBe('pending');
+    });
+  });
+
   /**
    * The property, not the shape.
    *

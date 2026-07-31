@@ -7,7 +7,7 @@ vi.mock('~/server/utils/telemetry', () => ({
   serverCaptureEvent: vi.fn(),
 }));
 vi.mock('~/server/db/models/AudioAsset', () => ({
-  AudioAsset: { findOne: vi.fn(), findOneAndUpdate: vi.fn() },
+  AudioAsset: { findOne: vi.fn(), findOneAndUpdate: vi.fn(), countDocuments: vi.fn() },
 }));
 
 const send = vi.fn();
@@ -380,7 +380,14 @@ describe('createOnceVariantUpload', () => {
 });
 
 describe('confirmOnceVariantUpload', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Safe default for every pre-existing test below, which predates the
+    // pending-job cap and never mocks it: zero pending jobs is comfortably
+    // under any real cap. Tests that care about the cap itself override
+    // this explicitly.
+    vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0);
+  });
 
   /**
    * THE LOAD-BEARING CASE the task brief names explicitly: a once-variant
@@ -565,6 +572,102 @@ describe('confirmOnceVariantUpload', () => {
     await expect(
       confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u2' })
     ).rejects.toThrow(/not found/i);
+  });
+
+  describe('pending job cap', () => {
+    /**
+     * Pins the ACTUAL count filter, not merely that a refusal happened —
+     * same standard `audio-ingest.test.ts` holds `confirmAudioUpload` to. A
+     * weaker assertion (`toHaveBeenCalled()` with no argument check) would
+     * pass with `ownerId` dropped from the shared `checkPendingJobCap`
+     * filter, or `status` narrowed to just `'pending'`.
+     */
+    it('counts pending+processing jobs scoped to the caller before allowing a once-variant to become claimable', async () => {
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      } as never);
+      send.mockResolvedValue({ ContentLength: 2048, ContentType: 'audio/wav' });
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+        _id: 'a1',
+        status: 'pending',
+      } as never);
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0);
+
+      const { confirmOnceVariantUpload } = await import('~/server/functions/audio');
+      await confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' });
+
+      expect(vi.mocked(AudioAsset.countDocuments)).toHaveBeenCalledWith({
+        ownerId: 'u1',
+        status: { $in: ['pending', 'processing'] },
+      });
+    });
+
+    /**
+     * The load-bearing difference from `confirmAudioUpload`'s cap refusal:
+     * THIS row is the main asset's own document, already `ready` before the
+     * once-attach started, so a cap refusal must revert it the same way the
+     * tooLarge/badType branch above does (`status: 'ready', variant:
+     * 'main'`) — never `status: 'failed'`, which would brick the whole
+     * asset. A fixture shape that would make a weaker version of this test
+     * pass for the wrong reason: asserting only that SOME write happened,
+     * without pinning `set.status`/`set.variant` — that would still pass
+     * against an implementation that copied `confirmAudioUpload`'s
+     * `status: 'failed'` write verbatim, which is exactly the bug this test
+     * exists to catch. Also pins: refusal happens before `HeadObject` (only
+     * one R2 call — the delete), the message carries the count, no
+     * GlitchTip event, and the once-source object is deleted so it isn't
+     * stranded.
+     */
+    it('refuses over the cap by reverting to ready/main (not failed) and deleting the once-source object', async () => {
+      const { getMaxPendingJobsPerUser, confirmOnceVariantUpload, AudioClientError } =
+        await import('~/server/functions/audio');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+      const cap = getMaxPendingJobsPerUser();
+
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      } as never);
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(cap);
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({ _id: 'a1' } as never);
+      send.mockResolvedValue({ ContentLength: 2048, ContentType: 'audio/wav' });
+
+      const err = await confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' }).catch(
+        (e: unknown) => e
+      );
+      expect(err).toBeInstanceOf(AudioClientError);
+      expect((err as Error).message).toContain(String(cap));
+
+      // Exactly one R2 call: the delete of the once-source object.
+      // HeadObject never runs — the cap refusal happens before it.
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0][0]).toBeInstanceOf(DeleteObjectCommand);
+      expect((send.mock.calls[0][0] as DeleteObjectCommand).input).toEqual({
+        Bucket: 'b',
+        Key: 'uploads/audio/prefix/once-src.wav',
+      });
+
+      const [filter, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
+      expect(filter).toEqual({ _id: 'a1', ownerId: 'u1', status: 'uploading', variant: 'once' });
+      const set = (update as { $set: Record<string, unknown> }).$set;
+      expect(set.status).toBe('ready');
+      expect(set.variant).toBe('main');
+      expect(set.onceSourceKey).toBeNull();
+      expect(set.onceSourceBytes).toBeNull();
+      expect(set.onceLastError).toContain(String(cap));
+      expect('permanentFailure' in set).toBe(false);
+      expect('lastError' in set).toBe(false);
+
+      // The caller's own doing — must not file a GlitchTip event.
+      expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+    });
   });
 });
 

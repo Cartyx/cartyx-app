@@ -578,6 +578,7 @@ describe('confirmAudioUpload', () => {
     it('refuses a user already at the cap while a different user at zero is admitted', async () => {
       const { getMaxPendingJobsPerUser, confirmAudioUpload, AudioClientError } =
         await import('~/server/functions/audio');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
       const cap = getMaxPendingJobsPerUser();
 
       vi.mocked(AudioAsset.countDocuments).mockImplementation((async (
@@ -613,6 +614,13 @@ describe('confirmAudioUpload', () => {
         Bucket: 'b',
         Key: 'k1',
       });
+      // The comment above CLAIMS "no GlitchTip event" — this is what
+      // actually pins that constraint, rather than the error-class check
+      // above (`toBeInstanceOf(AudioClientError)`) standing in for it.
+      // `AudioClientError` is the MECHANISM `reportAudioError` uses to
+      // decide; asserting on the mechanism is not the same as asserting on
+      // the effect it's supposed to produce.
+      expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
 
       send.mockClear();
 
