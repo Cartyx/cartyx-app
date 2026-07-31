@@ -248,7 +248,10 @@ describe('createPackageFn', () => {
 });
 
 describe('updatePackageFn', () => {
-  const data = { id: 'p1', name: 'Renamed' };
+  // `expectedUpdatedAt` is required by `updatePackageSchema` (Task 7's
+  // optimistic-concurrency precondition) — this wrapper passes `data` straight
+  // through, so it travels with everything else.
+  const data = { id: 'p1', expectedUpdatedAt: '2026-01-01T00:00:00.000Z', name: 'Renamed' };
 
   it('rejects with "Not authenticated" and never calls updatePackage when there is no session', async () => {
     vi.mocked(getSession).mockResolvedValue(null);
@@ -440,9 +443,11 @@ describe('package-write rate limit', () => {
 
     vi.mocked(updatePackage).mockResolvedValue(FAKE_PACKAGE);
     vi.mocked(deletePackage).mockResolvedValue({ deleted: true });
-    await expect(updatePackageFn({ data: { id: 'p1', name: 'Renamed' } })).resolves.toEqual(
-      FAKE_PACKAGE
-    );
+    await expect(
+      updatePackageFn({
+        data: { id: 'p1', expectedUpdatedAt: '2026-01-01T00:00:00.000Z', name: 'Renamed' },
+      })
+    ).resolves.toEqual(FAKE_PACKAGE);
     await expect(deletePackageFn({ data: { id: 'p1' } })).resolves.toEqual({ deleted: true });
   });
 

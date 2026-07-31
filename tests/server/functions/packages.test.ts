@@ -260,24 +260,81 @@ describe('createPackage', () => {
   });
 });
 
+/**
+ * What the stored `p1` is at, and the older revision a second tab would still
+ * be holding. Deliberately an hour apart rather than a millisecond: a fixture
+ * whose two timestamps differed only in sub-second digits would still pass if
+ * the precondition were compared as a truncated string somewhere.
+ */
+const STORED_UPDATED_AT = new Date('2026-07-31T10:00:00.000Z');
+const STALE_UPDATED_AT = new Date('2026-07-31T09:00:00.000Z');
+
+const storedDoc = () => ({ ...baseDoc(), updatedAt: STORED_UPDATED_AT });
+
+/**
+ * A filter-EVALUATING fake, not a canned answer, and that distinction is the
+ * whole test.
+ *
+ * A mock returns whatever it was told regardless of what the query asked, so
+ * `findOneAndUpdateLean.mockResolvedValue(null)` would make a "stale write is
+ * refused" test pass with the precondition deleted from the source — the
+ * function would still see no document, still run the discriminating read,
+ * and still throw the stale-write error. This fake instead applies the filter
+ * it is actually handed to a stored document.
+ *
+ * Note the shape of the `updatedAt` clause specifically: an ABSENT
+ * precondition MATCHES here. That is the property that gives the stale test
+ * teeth — delete `updatedAt` from `updatePackage`'s filter and this fake
+ * happily returns the document, so the write succeeds and the test fails on
+ * its "rejects" assertion. A fake that refused whenever the clause was
+ * missing would fail the same test for the opposite reason, and would prove
+ * nothing about the source.
+ */
+function fenceTheModel() {
+  findOneAndUpdateLean.mockImplementation(async () => {
+    const filter = (vi.mocked(findOneAndUpdate).mock.calls.at(-1)?.[0] ?? {}) as {
+      _id?: string;
+      ownerId?: string;
+      updatedAt?: Date;
+    };
+    if (filter._id !== 'p1' || filter.ownerId !== 'u1') return null;
+    if (
+      filter.updatedAt !== undefined &&
+      filter.updatedAt.getTime() !== STORED_UPDATED_AT.getTime()
+    ) {
+      return null;
+    }
+    return storedDoc();
+  });
+  // The discriminating read `staleWriteOrNotFound` performs on the failure
+  // path: `p1` DOES exist and IS `u1`'s, so a refusal for `u1` can only be a
+  // stale write.
+  findOneLean.mockResolvedValue({ _id: 'p1', updatedAt: STORED_UPDATED_AT });
+}
+
 describe('updatePackage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    fenceTheModel();
   });
 
   it('updates are owner-scoped, so a system package cannot be mutated', async () => {
-    findOneAndUpdateLean.mockResolvedValue(null);
     const { updatePackage } = await import('~/server/functions/packages');
-    await updatePackage({ data: { id: 'p1', name: 'x' }, userId: 'u1' }).catch(() => {});
+    await updatePackage({
+      data: { id: 'p1', expectedUpdatedAt: STORED_UPDATED_AT.toISOString(), name: 'x' },
+      userId: 'u1',
+    }).catch(() => {});
     const filter = vi.mocked(findOneAndUpdate).mock.calls[0][0];
-    expect(filter).toEqual({ _id: 'p1', ownerId: 'u1' });
+    expect(filter).toEqual({ _id: 'p1', ownerId: 'u1', updatedAt: STORED_UPDATED_AT });
     expect(filter).not.toHaveProperty('$or');
   });
 
   it('sets only the fields actually provided', async () => {
-    findOneAndUpdateLean.mockResolvedValue(baseDoc());
     const { updatePackage } = await import('~/server/functions/packages');
-    await updatePackage({ data: { id: 'p1', name: 'New Name' }, userId: 'u1' });
+    await updatePackage({
+      data: { id: 'p1', expectedUpdatedAt: STORED_UPDATED_AT.toISOString(), name: 'New Name' },
+      userId: 'u1',
+    });
     const [, update] = vi.mocked(findOneAndUpdate).mock.calls[0] as [
       unknown,
       { $set: Record<string, unknown> },
@@ -300,7 +357,7 @@ describe('updatePackage', () => {
     findOneAndUpdateLean.mockResolvedValue(baseDoc());
     const { updatePackage } = await import('~/server/functions/packages');
     await updatePackage({
-      data: { id: 'p1', name: 'New Name' },
+      data: { id: 'p1', expectedUpdatedAt: STORED_UPDATED_AT.toISOString(), name: 'New Name' },
       userId: 'mongo-id-1',
       sessionUserId: 'provider-id-1',
     });
@@ -312,11 +369,158 @@ describe('updatePackage', () => {
   });
 
   it('throws "not found" when the model returns no document (does not distinguish absent vs. another owner)', async () => {
-    findOneAndUpdateLean.mockResolvedValue(null);
+    // `u2` fails the fake's ownership clause, and the discriminating read
+    // finds nothing for `u2` either — a package that is not yours must stay
+    // indistinguishable from one that does not exist.
+    findOneLean.mockResolvedValue(null);
     const { updatePackage } = await import('~/server/functions/packages');
-    await expect(updatePackage({ data: { id: 'p1', name: 'x' }, userId: 'u2' })).rejects.toThrow(
-      /not found/i
+    await expect(
+      updatePackage({
+        data: { id: 'p1', expectedUpdatedAt: STORED_UPDATED_AT.toISOString(), name: 'x' },
+        userId: 'u2',
+      })
+    ).rejects.toThrow(/not found/i);
+  });
+});
+
+/**
+ * Task 7: the editor replaces `items` and `moods` wholesale, so an unfenced
+ * update is last-write-wins over entire arrays — an idle tab does not merely
+ * lose the newer edit, it resurrects whatever the newer write removed
+ * (including items `deleteAudioAsset`'s prune took out because their asset is
+ * gone).
+ */
+describe('updatePackage optimistic concurrency', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fenceTheModel();
+  });
+
+  /**
+   * The stale write. Both halves matter:
+   *
+   * - the FILTER assertion pins the precondition actually handed to Mongo, as
+   *   a `Date` (a BSON date never equals a string, so shipping the raw ISO
+   *   would refuse every save rather than only the stale ones — the "guard
+   *   must not make every save fail" failure mode, arriving through the type
+   *   rather than through the logic);
+   * - the REJECTION comes from the filter-evaluating fake above, so it is the
+   *   precondition doing the refusing rather than a canned `null`.
+   */
+  it('refuses a save built on a stale read, and hands Mongo the precondition as a Date', async () => {
+    const { updatePackage } = await import('~/server/functions/packages');
+    await expect(
+      updatePackage({
+        data: {
+          id: 'p1',
+          expectedUpdatedAt: STALE_UPDATED_AT.toISOString(),
+          name: 'From the idle tab',
+          items: [],
+        },
+        userId: 'u1',
+      })
+    ).rejects.toThrow(/changed somewhere else/i);
+
+    const filter = vi.mocked(findOneAndUpdate).mock.calls[0][0] as { updatedAt?: unknown };
+    expect(filter).toEqual({ _id: 'p1', ownerId: 'u1', updatedAt: STALE_UPDATED_AT });
+    expect(filter.updatedAt).toBeInstanceOf(Date);
+  });
+
+  /**
+   * "Distinguishable from a not-found" means two identities, not two
+   * spellings of one. This asserts the identity the BROWSER sees — `.name`,
+   * via the shared predicate — because the server's class does not survive
+   * the server-fn wire and a UI keyed on `instanceof` would silently stop
+   * recognising the refusal in production while every unit test still passed.
+   */
+  it('refuses with an identity distinguishable from a not-found, and files no GlitchTip event', async () => {
+    const { serverCaptureException } = await import('~/server/utils/telemetry');
+    const { isStalePackageWriteError } = await import('~/lib/soundboard/stale-write');
+    const { updatePackage, PackageStaleWriteError, PackageClientError } =
+      await import('~/server/functions/packages');
+
+    const stale = await updatePackage({
+      data: { id: 'p1', expectedUpdatedAt: STALE_UPDATED_AT.toISOString(), name: 'x' },
+      userId: 'u1',
+    }).catch((e: unknown) => e);
+
+    expect(stale).toBeInstanceOf(PackageStaleWriteError);
+    expect(isStalePackageWriteError(stale)).toBe(true);
+    expect((stale as Error).name).toBe('PackageStaleWriteError');
+    // Not a not-found, by message as well as by type: the two failures are
+    // adjacent enough that a copy-paste of the wrong string is the likely
+    // regression.
+    expect((stale as Error).message).not.toMatch(/not found/i);
+    // The token a "keep my edits" retry needs, so the retry is a fresh
+    // compare-and-swap rather than an unfenced force.
+    expect((stale as { currentUpdatedAt?: string }).currentUpdatedAt).toBe(
+      STORED_UPDATED_AT.toISOString()
     );
+
+    // The same run, through the OTHER door: nothing to update because the
+    // package is not this caller's. Same `findOneAndUpdate` miss, different
+    // refusal — which is exactly what the second read exists to decide.
+    findOneLean.mockResolvedValue(null);
+    const missing = await updatePackage({
+      data: { id: 'p1', expectedUpdatedAt: STALE_UPDATED_AT.toISOString(), name: 'x' },
+      userId: 'u2',
+    }).catch((e: unknown) => e);
+
+    expect(missing).toBeInstanceOf(PackageClientError);
+    expect(missing).not.toBeInstanceOf(PackageStaleWriteError);
+    expect(isStalePackageWriteError(missing)).toBe(false);
+    expect((missing as Error).message).toMatch(/not found/i);
+
+    // Neither refusal is a server fault, and both are caller-triggerable at
+    // will (an open second tab; a guessed id) — so neither may author a
+    // GlitchTip event.
+    expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The guard must not make every save fail. Same fixture, same fake, same
+   * code path — only the caller's expectation is current — and this must go
+   * all the way through to the serialized result and the telemetry event, not
+   * merely "not throw".
+   */
+  it('lets a save built on the current revision through', async () => {
+    const { serverCaptureEvent } = await import('~/server/utils/telemetry');
+    const { updatePackage } = await import('~/server/functions/packages');
+
+    const res = await updatePackage({
+      data: {
+        id: 'p1',
+        expectedUpdatedAt: STORED_UPDATED_AT.toISOString(),
+        name: 'Storm Set',
+        items: [],
+      },
+      userId: 'u1',
+    });
+
+    expect(res.id).toBe('p1');
+    expect(vi.mocked(serverCaptureEvent)).toHaveBeenCalledTimes(1);
+    // The success path must NOT pay for the discriminating read — that one
+    // exists only to tell the two refusals apart.
+    expect(vi.mocked(findOne)).not.toHaveBeenCalled();
+    const filter = vi.mocked(findOneAndUpdate).mock.calls[0][0];
+    expect(filter).toEqual({ _id: 'p1', ownerId: 'u1', updatedAt: STORED_UPDATED_AT });
+  });
+
+  /**
+   * The discriminating read must repeat the ownership scope. Re-reading by
+   * `_id` alone would answer "does this document exist" instead of "does it
+   * exist for you", turning a probe against somebody else's package id into a
+   * stale-write refusal — an existence oracle for documents the caller cannot
+   * see. Asserted on the filter argument, because a mock that was told to
+   * return a document returns it whatever the filter said.
+   */
+  it('scopes the discriminating read to the same owner, so another user stays invisible', async () => {
+    const { updatePackage } = await import('~/server/functions/packages');
+    await updatePackage({
+      data: { id: 'p1', expectedUpdatedAt: STALE_UPDATED_AT.toISOString(), name: 'x' },
+      userId: 'u1',
+    }).catch(() => {});
+    expect(vi.mocked(findOne).mock.calls[0][0]).toEqual({ _id: 'p1', ownerId: 'u1' });
   });
 });
 

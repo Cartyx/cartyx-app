@@ -11,11 +11,53 @@ describe('soundboard schemas', () => {
       fadeSeconds: 1,
       loop: true,
     });
+    // `expectedUpdatedAt` is present and valid so the ONLY invalid thing here
+    // is the item count — otherwise this would reject for a missing required
+    // field and prove nothing about `.max()`.
     const r = updatePackageSchema.safeParse({
       id: '507f1f77bcf86cd799439011',
+      expectedUpdatedAt: '2026-07-31T10:00:00.000Z',
       items: Array.from({ length: MAX_PACKAGE_ITEMS + 1 }, item),
     });
     expect(r.success).toBe(false);
+    // Positive control: the same payload one item shorter parses, so the
+    // rejection above is attributable to the cap.
+    expect(
+      updatePackageSchema.safeParse({
+        id: '507f1f77bcf86cd799439011',
+        expectedUpdatedAt: '2026-07-31T10:00:00.000Z',
+        items: Array.from({ length: MAX_PACKAGE_ITEMS }, item),
+      }).success
+    ).toBe(true);
+  });
+
+  /**
+   * Task 7. `expectedUpdatedAt` is the optimistic-concurrency precondition,
+   * and it is REQUIRED for a reason: every field `updatePackage` writes is a
+   * whole-value replace, so an update that reached the server without a
+   * precondition would be the last-write-wins clobber the fence exists to
+   * stop. An optional fence protects only the callers that did not need it.
+   */
+  it('requires a well-formed expectedUpdatedAt on every package update', async () => {
+    const { updatePackageSchema } = await import('~/types/schemas/soundboard');
+    const base = { id: '507f1f77bcf86cd799439011', name: 'Storm Set' };
+
+    // Omitted entirely — the shape a client written before the fence existed,
+    // or a hand-rolled request, would send.
+    expect(updatePackageSchema.safeParse(base).success).toBe(false);
+    // Present but not a timestamp.
+    expect(updatePackageSchema.safeParse({ ...base, expectedUpdatedAt: 'yesterday' }).success).toBe(
+      false
+    );
+    expect(updatePackageSchema.safeParse({ ...base, expectedUpdatedAt: '' }).success).toBe(false);
+    // Positive control: exactly what `Date.prototype.toISOString` produces,
+    // which is the only thing that ever populates this field.
+    expect(
+      updatePackageSchema.safeParse({
+        ...base,
+        expectedUpdatedAt: new Date('2026-07-31T10:00:00.000Z').toISOString(),
+      }).success
+    ).toBe(true);
   });
 
   it('rejects a non-ObjectId assetId before it can reach Mongo', async () => {

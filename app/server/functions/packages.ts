@@ -5,6 +5,7 @@ import { AudioPackage } from '../db/models/AudioPackage';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { serializeAudioAsset } from './audio';
 import type { AudioAssetData } from '~/types/audio';
+import { PACKAGE_STALE_WRITE_ERROR_NAME } from '~/lib/soundboard/stale-write';
 import {
   DEFAULT_VOLUME,
   DEFAULT_FADE_SECONDS,
@@ -53,6 +54,48 @@ export class PackageClientError extends Error {
     super(message);
     this.name = 'PackageClientError';
     this.retryAfterMs = options?.retryAfterMs;
+  }
+}
+
+/**
+ * The optimistic-concurrency refusal: the caller's `expectedUpdatedAt` did
+ * not match the stored document, so somebody else wrote to it between the
+ * caller's read and their save.
+ *
+ * A `PackageClientError` SUBCLASS, deliberately — it is the caller's own
+ * doing in exactly the same sense (a save built on a read that has since gone
+ * out of date), so `reportPackageError` keeps filing no GlitchTip event for
+ * it: a second tab left open on an editor would otherwise author one error
+ * report per Save click. But it is a DIFFERENT identity from the bare
+ * `PackageClientError('Package not found')` its sibling failure throws, and
+ * that separation is the point. "Not found" and "changed underneath you" mean
+ * opposite things — one says the package is gone or was never yours, the
+ * other says it is very much there and newer than you think — and the editor
+ * has to offer completely different affordances for each. Nothing downstream
+ * should have to regex a message to tell them apart; see
+ * `~/lib/soundboard/stale-write.ts` for how the browser recognises this one.
+ */
+export class PackageStaleWriteError extends PackageClientError {
+  /**
+   * The `updatedAt` the stored document actually carries, ISO-encoded the way
+   * `serializePackage` encodes it. This is the token a client needs to retry
+   * the SAME edit as a deliberate overwrite — the editor's "keep my edits"
+   * path replays the identical draft with this value as its
+   * `expectedUpdatedAt`, which is still a compare-and-swap: if a third write
+   * lands in the meantime it is refused again, rather than the retry
+   * degrading into an unfenced write.
+   *
+   * No leak: the update filter this follows is already `ownerId`-scoped, so
+   * this value only ever describes a document the caller owns.
+   */
+  readonly currentUpdatedAt: string;
+
+  constructor(currentUpdatedAt: string) {
+    super(
+      'This package changed somewhere else after you opened it. Nothing has been lost — your unsaved edits are still here, and the saved version is still stored. Choose which one to keep.'
+    );
+    this.name = PACKAGE_STALE_WRITE_ERROR_NAME;
+    this.currentUpdatedAt = currentUpdatedAt;
   }
 }
 
@@ -420,6 +463,83 @@ export async function createPackage({
   }
 }
 
+/**
+ * Server-only, NOT exported — same discipline as `assertPackageBudget` above.
+ * Decides WHICH refusal a failed `updatePackage` filter earned, and it is the
+ * only thing that can: `findOneAndUpdate` returning `null` is a single answer
+ * to three different questions ANDed together (does the id exist, does the
+ * caller own it, is it still at the revision they read), so on its own it
+ * cannot tell "gone or not yours" from "changed underneath you".
+ *
+ * One extra read, on the failure path only, with the precondition dropped and
+ * everything else — `_id` AND `ownerId` — held identical. Holding `ownerId`
+ * is load-bearing: re-reading by `_id` alone would answer "does this document
+ * exist" rather than "does it exist FOR YOU", which would turn a probe against
+ * another user's package id into a stale-write refusal and leak the existence
+ * of documents the caller cannot see. Another owner's package must stay
+ * indistinguishable from an absent one, exactly as it is for every other read
+ * in this file.
+ */
+async function staleWriteOrNotFound(id: string, userId: string): Promise<PackageClientError> {
+  const current = (await AudioPackage.findOne(
+    { _id: id, ownerId: userId },
+    { updatedAt: 1 }
+  ).lean()) as unknown as { updatedAt?: Date } | null;
+  if (!current) return new PackageClientError('Package not found');
+  // Same `instanceof Date` normalisation `serializePackage` applies to the
+  // same field, for the same reason — this value is going to a client that
+  // will hand it straight back as the next `expectedUpdatedAt`.
+  return new PackageStaleWriteError(
+    current.updatedAt instanceof Date ? current.updatedAt.toISOString() : ''
+  );
+}
+
+/**
+ * OPTIMISTIC CONCURRENCY. Every field this function writes is a whole-value
+ * replace — `items` and `moods` most of all — so without a precondition the
+ * write is last-write-wins over entire arrays. That is data loss, not
+ * staleness: an editor tab left open for ten minutes and then saved does not
+ * merely lose the newer edit, it RESURRECTS whatever the newer write removed,
+ * including the items `deleteAudioAsset`'s prune took out because their asset
+ * no longer exists (`app/server/functions/audio.ts`) — putting the document
+ * back into a state the rest of the system has already moved past.
+ *
+ * The fence is `updatedAt`, ANDed into the update filter, and the choice
+ * between it and a dedicated version counter came down to two properties of
+ * THIS collection:
+ *
+ * 1. Every writer of an `AudioPackage` already advances it, and the one that
+ *    matters most already does. `deleteAudioAsset`'s prune (audio.ts) `$set`s
+ *    `updatedAt` on every package it rewrites; `createPackage`/`clonePackage`
+ *    insert with the schema's own default. So the fence closes the
+ *    resurrection case above against the writer that exists today, with no
+ *    change to another module. A `version` counter would have to be threaded
+ *    into that writer by hand, and into every future one.
+ * 2. Every stored document already HAS it. `version: { type: Number, default:
+ *    0 }` does not retro-apply to documents already in Mongo, and `{ version:
+ *    0 }` does not match a document where the field is absent — so a counter
+ *    would have made every package created before this change permanently
+ *    unsaveable, unless paired with a `$exists` special case that then lives
+ *    forever or a backfill this phase has no migration mechanism for.
+ *
+ * The cost is stated honestly: `updatedAt` has millisecond resolution, so two
+ * writes to the same package inside the same clock tick can both satisfy the
+ * precondition and the later one still clobbers. Both writers are behind a
+ * human click, both are scoped to the same single owner, and the outcome in
+ * that window is merely today's behaviour — a bounded, non-escalating
+ * residual, and one a counter would not have paid for at the price above.
+ *
+ * NOT the same mistake as Task 10's. That defect is `updateAudioAsset`
+ * bumping `updatedAt` and thereby resetting a clock the once-upload reaper
+ * reads as "how long since this JOB progressed" — a second, different
+ * question inferred from the field. This asks `updatedAt` exactly the
+ * question it answers: has this document been modified since I read it. A
+ * writer that modifies the document and stamps `updatedAt` is CORRECTLY
+ * invalidating the caller's read, not accidentally defeating a mechanism.
+ * The invariant this does rely on, and which nothing mechanically enforces:
+ * any future writer of an `AudioPackage` must stamp `updatedAt`, or it will
+ * be invisible to this fence.
+ */
 export async function updatePackage({
   data,
   userId,
@@ -439,12 +559,15 @@ export async function updatePackage({
 
     // Owner-scoped, NEVER the visibility filter — see `packageVisibilityFilter`'s
     // doc comment. This is the query that keeps a system package immutable.
+    // `updatedAt` is the precondition; it must be a `Date`, because Mongo
+    // compares a BSON date against a string as a type mismatch that never
+    // matches — which would refuse every save rather than only the stale ones.
     const doc = await AudioPackage.findOneAndUpdate(
-      { _id: data.id, ownerId: userId },
+      { _id: data.id, ownerId: userId, updatedAt: new Date(data.expectedUpdatedAt) },
       { $set: set },
       { new: true }
     ).lean();
-    if (!doc) throw new PackageClientError('Package not found');
+    if (!doc) throw await staleWriteOrNotFound(data.id, userId);
     serverCaptureEvent(telemetryId({ userId, sessionUserId }), 'package_updated', {
       packageId: data.id,
     });

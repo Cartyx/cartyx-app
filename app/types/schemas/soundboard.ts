@@ -111,6 +111,25 @@ export const createPackageSchema = z.object({
 
 export const updatePackageSchema = z.object({
   id: objectId,
+  /**
+   * The `updatedAt` the caller last SAW, as the ISO string `serializePackage`
+   * emitted — the optimistic-concurrency precondition. `updatePackage` ANDs
+   * it into the update filter, so a write built from a stale read matches no
+   * document and is refused instead of replacing `items`/`moods` wholesale
+   * over whatever landed in between (see `updatePackage`'s doc comment).
+   *
+   * REQUIRED, not optional. Every field below is a whole-array replace, so an
+   * unfenced update is a last-write-wins clobber by construction; making the
+   * fence opt-in would mean any caller that simply omitted it — a stale
+   * bundle, a hand-rolled request — got the old destructive behaviour back
+   * and the guard would protect only the callers that did not need
+   * protecting.
+   *
+   * `.datetime()` (the same form `~/types/schemas/sessions.ts` uses) accepts
+   * exactly what `Date.prototype.toISOString` produces, which is the only
+   * thing that ever populates this field.
+   */
+  expectedUpdatedAt: z.string().datetime(),
   name: z.string().min(1).max(200).optional(),
   description: z.string().max(2000).optional(),
   items: z.array(packageItemSchema).max(MAX_PACKAGE_ITEMS).optional(),

@@ -67,6 +67,15 @@ const audioPackageSchema = new mongoose.Schema({
   moods: { type: [moodSchema], default: [] },
 
   createdAt: { type: Date, default: Date.now },
+  // `updatedAt` is not only a display value here: `updatePackage`
+  // (`~/server/functions/packages`) uses it as its optimistic-concurrency
+  // precondition, ANDing the caller's last-seen value into the update filter
+  // so a save built on a stale read is refused rather than replacing
+  // `items`/`moods` wholesale over a newer write. EVERY writer of this
+  // collection must therefore stamp it — `deleteAudioAsset`'s package prune
+  // (`~/server/functions/audio`) does, and any new one must too. A write that
+  // changes the document without advancing this field is invisible to that
+  // fence and silently reopens the clobber.
   updatedAt: { type: Date, default: Date.now },
 });
 
