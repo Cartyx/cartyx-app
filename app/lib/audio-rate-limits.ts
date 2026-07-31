@@ -101,6 +101,37 @@ export const packageWriteLimiter = createRateLimiter({ capacity: 15, refillPerSe
 export const boardStateLimiter = createRateLimiter({ capacity: 40, refillPerSec: 2 });
 
 /**
+ * Orphan cleanup: `scanOrphanAudio` and `deleteOrphanAudio`. Not in the
+ * design's table; added on the same reasoning that put `retryAudioAsset` on
+ * the ingest bucket — the table names endpoint GROUPS, and the placement
+ * rationale it states ("no server function added later can silently skip it")
+ * argues for covering the surface rather than the list.
+ *
+ * This is the tightest bucket of the four, because these two are the only
+ * endpoints on the surface where a single call has an unbounded EXTERNAL
+ * cost. Both run `findOrphans`, which pages an R2 `ListObjectsV2` over the
+ * caller's prefix up to `AUDIO_ORPHAN_SCAN_MAX_KEYS` (10,000) — up to ten
+ * Class-A operations per call — and both fire an un-awaited
+ * `serverCaptureEvent` (`audio_orphan_scan` / `audio_orphan_delete`) on every
+ * success. Ungated, a loop makes both R2 spend and Umami event volume an
+ * attacker-controlled parameter; the second is the same telemetry-
+ * amplification shape 2a's review found twice.
+ *
+ * Capacity 10 — orphan cleanup is an operator-cadence action, not a user-loop
+ * one. `/audio` drives it from two explicit buttons: one scan, then one
+ * batched delete for the whole selection (the key list is a single
+ * `.max()`ed array, not a call per key). A whole session is
+ * scan -> delete -> re-scan to verify, i.e. three calls; 10 covers three such
+ * cycles back to back.
+ *
+ * Refill 1/30s — one call every thirty seconds sustained. That is far above
+ * any human's cleanup cadence (nothing about the result changes within thirty
+ * seconds) and caps the sustained cost at ~120 scans/hour rather than
+ * thousands.
+ */
+export const orphanCleanupLimiter = createRateLimiter({ capacity: 10, refillPerSec: 1 / 30 });
+
+/**
  * NO BUCKET ON READS — `listPackages`, `getPackage`, `listPackageAssets`,
  * `listAudioAssets`, `loadBoardState`. Per the design: they are bounded by
  * their projections and by the `$in` over a package's <=64 items, and a read

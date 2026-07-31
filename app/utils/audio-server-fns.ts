@@ -1,5 +1,9 @@
 import { createServerFn } from '@tanstack/react-start';
-import { audioIngestLimiter, rateLimitMessage } from '~/lib/audio-rate-limits';
+import {
+  audioIngestLimiter,
+  orphanCleanupLimiter,
+  rateLimitMessage,
+} from '~/lib/audio-rate-limits';
 import {
   createAudioUploadSchema,
   confirmAudioUploadSchema,
@@ -86,6 +90,12 @@ import {
 //     from GlitchTip. A limiter that filed an event per rejection would hand
 //     an attacker the exact telemetry-amplification lever this phase exists
 //     to close — the rejection volume is the attacker's parameter.
+//
+// A SECOND, tighter bucket (`orphanCleanupLimiter`) covers the two orphan-
+// cleanup wrappers at the bottom of this file — see the note above them.
+// Everything else here (reads, and the metadata mutations `updateAudioAsset`
+// / `bulkTagAudioAssets` / `deleteAudioAsset`) is deliberately ungated: none
+// enqueues work, spends R2, or grows the caller's footprint.
 //
 // `~/lib/audio-rate-limits` is imported STATICALLY, unlike everything else
 // reached from these handlers, and that is safe precisely because it is
@@ -219,20 +229,51 @@ export const deleteAudioAssetFn = createServerFn({ method: 'POST' })
 // Neither takes a user id from the client — both are scoped entirely by the
 // session-resolved actor, which is the whole point of them existing separately
 // from the campaign image scanner.
+//
+// Both are gated by `orphanCleanupLimiter`, the tightest bucket on this
+// surface: each call pages an R2 `ListObjectsV2` over the caller's prefix
+// (up to 10,000 keys) and fires a `serverCaptureEvent`, so an ungated loop
+// makes R2 spend AND Umami event volume attacker-controlled. See
+// `~/lib/audio-rate-limits.ts` for the sizing.
+//
+// The refusal is an `AudioClientError` — the audio surface's client-error
+// class — dynamically imported from `~/server/functions/audio` rather than
+// from `audio-cleanup`, which has no client-error class of its own. Note that
+// `audio-cleanup.ts`'s own `catch` calls `serverCaptureException`
+// unconditionally, with no `report*Error`-style exclusion; that is fine here
+// precisely BECAUSE the gate throws before the call, so a rejection never
+// enters that try/catch and no event is filed either way. Anyone later moving
+// this check inside `audio-cleanup.ts` must add the exclusion first.
 // ---------------------------------------------------------------------------
 
 export const scanOrphanAudioFn = createServerFn({ method: 'POST' })
   .inputValidator(scanOrphanAudioSchema)
   .handler(async ({ data }) => {
     const { scanOrphanAudio } = await import('~/server/functions/audio-cleanup');
+    const { AudioClientError } = await import('~/server/functions/audio');
     const { requireActor } = await import('~/utils/require-actor');
-    return scanOrphanAudio({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = orphanCleanupLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      throw new AudioClientError(rateLimitMessage('orphan cleanup', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return scanOrphanAudio({ data, ...actor });
   });
 
 export const deleteOrphanAudioFn = createServerFn({ method: 'POST' })
   .inputValidator(deleteOrphanAudioSchema)
   .handler(async ({ data }) => {
     const { deleteOrphanAudio } = await import('~/server/functions/audio-cleanup');
+    const { AudioClientError } = await import('~/server/functions/audio');
     const { requireActor } = await import('~/utils/require-actor');
-    return deleteOrphanAudio({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = orphanCleanupLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      throw new AudioClientError(rateLimitMessage('orphan cleanup', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return deleteOrphanAudio({ data, ...actor });
   });

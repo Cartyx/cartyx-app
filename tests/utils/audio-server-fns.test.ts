@@ -69,6 +69,11 @@ vi.mock('~/server/functions/audio', () => ({
   deleteAudioAsset: vi.fn(),
 }));
 
+vi.mock('~/server/functions/audio-cleanup', () => ({
+  scanOrphanAudio: vi.fn(),
+  deleteOrphanAudio: vi.fn(),
+}));
+
 // Not in the wrapper's import graph at all (the server functions that would
 // call it are mocked above), so this assertion cannot fail today — which is
 // the point. It fails the day someone "helpfully" reports a rate-limit
@@ -94,6 +99,7 @@ import {
   bulkTagAudioAssets,
   deleteAudioAsset,
 } from '~/server/functions/audio';
+import { scanOrphanAudio, deleteOrphanAudio } from '~/server/functions/audio-cleanup';
 import { serverCaptureException } from '~/server/utils/telemetry';
 import {
   createAudioUploadFn,
@@ -101,6 +107,8 @@ import {
   createOnceVariantUploadFn,
   confirmOnceVariantUploadFn,
   retryAudioAssetFn,
+  scanOrphanAudioFn,
+  deleteOrphanAudioFn,
   listAudioAssetsFn,
   updateAudioAssetFn,
   bulkTagAudioAssetsFn,
@@ -438,6 +446,98 @@ describe('ingest rate limit', () => {
       await listAudioAssetsFn({ data: { limit: 50 } });
     }
     expect(listAudioAssets).toHaveBeenCalledTimes(120);
+  });
+});
+
+/**
+ * The orphan-cleanup bucket (`orphanCleanupLimiter`) — the tightest of the
+ * four, and shared by both cleanup endpoints. Same isolation rule as the
+ * ingest tests above: one `DB_USER_ID` per test, because the limiter is a
+ * module-scope singleton `vi.clearAllMocks()` cannot reset.
+ *
+ * The `10` is the capacity, a literal for the same reason: raising it makes
+ * the "11th is refused" assertion fail, lowering it makes the drain loop throw.
+ */
+describe('orphan cleanup rate limit', () => {
+  const FAKE_SCAN = {
+    orphans: [],
+    scannedObjectCount: 0,
+    truncated: false,
+    r2Disabled: false,
+  };
+
+  /** Spends the whole orphan-cleanup bucket for `userId` via `scanOrphanAudioFn`. */
+  async function drainOrphanBucket(userId: string) {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(userId);
+    vi.mocked(scanOrphanAudio).mockResolvedValue(FAKE_SCAN);
+    for (let i = 0; i < 10; i++) {
+      await scanOrphanAudioFn({ data: {} });
+    }
+    expect(scanOrphanAudio).toHaveBeenCalledTimes(10);
+    vi.mocked(scanOrphanAudio).mockClear();
+  }
+
+  it('lets a full 10-call burst through, then refuses the 11th without calling scanOrphanAudio', async () => {
+    await drainOrphanBucket('mongo-orphan-scan');
+
+    await expect(scanOrphanAudioFn({ data: {} })).rejects.toThrow(
+      /Too many orphan cleanup requests/
+    );
+    // The R2 ListObjectsV2 and the `audio_orphan_scan` Umami event both live
+    // inside `scanOrphanAudio`. This assertion is what proves neither happened.
+    expect(scanOrphanAudio).not.toHaveBeenCalled();
+  });
+
+  it('refuses with AudioClientError carrying retryAfterMs, and files no GlitchTip event', async () => {
+    await drainOrphanBucket('mongo-orphan-shape');
+
+    const err = await scanOrphanAudioFn({ data: {} }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AudioClientError);
+    expect((err as AudioClientError).retryAfterMs).toBeGreaterThan(0);
+    expect(serverCaptureException).not.toHaveBeenCalled();
+    expect(scanOrphanAudio).not.toHaveBeenCalled();
+  });
+
+  it('shares one bucket with deleteOrphanAudioFn, so a drained bucket refuses a delete too', async () => {
+    await drainOrphanBucket('mongo-orphan-delete');
+
+    await expect(deleteOrphanAudioFn({ data: { keys: ['audio/u/1/source.wav'] } })).rejects.toThrow(
+      /Too many orphan cleanup requests/
+    );
+    expect(deleteOrphanAudio).not.toHaveBeenCalled();
+    expect(serverCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('is a separate bucket from the ingest one: a drained cleanup bucket still allows an upload', async () => {
+    await drainOrphanBucket('mongo-orphan-vs-ingest');
+
+    vi.mocked(createAudioUpload).mockResolvedValue({
+      assetId: 'a1',
+      uploadUrl: 'https://put',
+      key: 'k',
+    });
+    await expect(
+      createAudioUploadFn({
+        data: {
+          filename: 'storm.wav',
+          contentType: 'audio/wav',
+          bytes: 1024,
+          kind: 'ambience' as const,
+          environment: [],
+          mood: [],
+          tags: [] as string[],
+        },
+      })
+    ).resolves.toEqual({ assetId: 'a1', uploadUrl: 'https://put', key: 'k' });
+  });
+
+  it('is keyed per account: draining one user does not refuse another', async () => {
+    await drainOrphanBucket('mongo-orphan-victim');
+
+    mockDbUser('mongo-orphan-bystander');
+    vi.mocked(scanOrphanAudio).mockResolvedValue(FAKE_SCAN);
+    await expect(scanOrphanAudioFn({ data: {} })).resolves.toEqual(FAKE_SCAN);
   });
 });
 
