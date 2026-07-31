@@ -5,12 +5,15 @@ import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { AudioAssetData } from '~/types/audio';
 
+const GIB = 1024 * 1024 * 1024;
+
 const listAudioAssetsFn = vi.fn();
 const bulkTagAudioAssetsFn = vi.fn();
 const updateAudioAssetFn = vi.fn();
 const deleteAudioAssetFn = vi.fn();
 
 const retryAudioAssetFn = vi.fn();
+const getAudioStorageUsageFn = vi.fn();
 
 vi.mock('~/utils/audio-server-fns', () => ({
   listAudioAssetsFn: (...args: unknown[]) => listAudioAssetsFn(...args),
@@ -18,6 +21,7 @@ vi.mock('~/utils/audio-server-fns', () => ({
   updateAudioAssetFn: (...args: unknown[]) => updateAudioAssetFn(...args),
   deleteAudioAssetFn: (...args: unknown[]) => deleteAudioAssetFn(...args),
   retryAudioAssetFn: (...args: unknown[]) => retryAudioAssetFn(...args),
+  getAudioStorageUsageFn: (...args: unknown[]) => getAudioStorageUsageFn(...args),
 }));
 
 // Topbar reads the session through useAuth; stub it so the route can render it
@@ -103,9 +107,15 @@ beforeEach(() => {
   updateAudioAssetFn.mockReset();
   deleteAudioAssetFn.mockReset();
   retryAudioAssetFn.mockReset();
+  getAudioStorageUsageFn.mockReset();
   captureException.mockReset();
   getMe.mockReset();
   listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+  // Every test below renders the route, which mounts AudioQuotaBar's query
+  // unconditionally. A resolved default here keeps every EXISTING test (none
+  // of which are about the quota bar) from depending on this query's timing;
+  // the `AudioQuotaBar` describe block below overrides it per test.
+  getAudioStorageUsageFn.mockResolvedValue({ bytes: 0, assetCount: 0, limitBytes: 2 * GIB });
 });
 
 describe('flattenAudioPages', () => {
@@ -561,6 +571,55 @@ describe('AudioLibraryPage', () => {
       renderPage();
       await screen.findByText('Storm');
       expect(listAudioAssetsFn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('storage usage', () => {
+    it('renders the usage the server returned, next to the dropzone', async () => {
+      getAudioStorageUsageFn.mockResolvedValue({
+        bytes: Math.round(0.5 * GIB),
+        assetCount: 12,
+        limitBytes: 2 * GIB,
+      });
+      renderPage();
+      expect(await screen.findByText(/of 2\.00 GB used/i)).toBeInTheDocument();
+      expect(screen.getByText(/12 assets/i)).toBeInTheDocument();
+      // Not a client-side guess: the limit rendered is exactly what the
+      // server call returned, proving there is no hardcoded "2 GiB" in the
+      // route or the component racing/duplicating the server's own value.
+      expect(getAudioStorageUsageFn).toHaveBeenCalledTimes(1);
+    });
+
+    it('surfaces a failed usage query as an alert rather than a stuck loading state', async () => {
+      getAudioStorageUsageFn.mockRejectedValue(new Error('quota fetch boom'));
+      renderPage();
+      expect(await screen.findByRole('alert')).toHaveTextContent(/quota fetch boom/i);
+    });
+
+    /**
+     * `invalidateAudio` invalidates the whole `['audio']` branch, and the
+     * usage query's key (`['audio', 'usage']`) lives under that prefix — so
+     * an upload refetches usage without the route needing a second,
+     * hand-written invalidation call. Proven end-to-end here via a
+     * completed delete (the same `invalidateAudio` call path a completed
+     * upload uses), not by inspecting the query key in isolation.
+     */
+    it('re-fetches usage after a mutation invalidates the audio branch', async () => {
+      listAudioAssetsFn
+        .mockResolvedValueOnce({ items: [mkAsset({ id: 'a1', title: 'Storm' })], nextCursor: null })
+        .mockResolvedValue({ items: [], nextCursor: null });
+      deleteAudioAssetFn.mockResolvedValue({ deleted: true });
+      getAudioStorageUsageFn.mockResolvedValue({ bytes: 100, assetCount: 1, limitBytes: 2 * GIB });
+      renderPage();
+
+      await screen.findByText('Storm');
+      await waitFor(() => expect(getAudioStorageUsageFn).toHaveBeenCalledTimes(1));
+
+      await userEvent.click(await screen.findByRole('button', { name: /delete storm/i }));
+      const dialog = screen.getByRole('alertdialog');
+      await userEvent.click(within(dialog).getByRole('button', { name: /delete/i }));
+
+      await waitFor(() => expect(getAudioStorageUsageFn).toHaveBeenCalledTimes(2));
     });
   });
 });

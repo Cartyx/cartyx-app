@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { createFileRoute, redirect } from '@tanstack/react-router';
-import { useMutation, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { InfiniteData, QueryKey } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { getMe } from '~/server/functions/rpc';
 import { Topbar } from '~/components/Topbar';
 import { AudioLibraryBrowser } from '~/components/audio/AudioLibraryBrowser';
 import { AudioUploadDropzone } from '~/components/audio/AudioUploadDropzone';
+import { AudioQuotaBar } from '~/components/audio/AudioQuotaBar';
 import { AudioBulkTagBar } from '~/components/audio/AudioBulkTagBar';
 import type { BulkTagPayload } from '~/components/audio/AudioBulkTagBar';
 import { AudioAssetDetail } from '~/components/audio/AudioAssetDetail';
@@ -23,6 +24,7 @@ import {
   retryAudioAssetFn,
   scanOrphanAudioFn,
   deleteOrphanAudioFn,
+  getAudioStorageUsageFn,
 } from '~/utils/audio-server-fns';
 import { uploadOnceVariantFile } from '~/utils/uploadAudio';
 import { queryKeys } from '~/utils/queryKeys';
@@ -152,6 +154,15 @@ export function AudioLibraryPage() {
     // user has paged down to must keep the poll alive, and a settled library
     // must still go quiet.
     refetchInterval: (q) => (shouldPoll(flattenAudioPages(q.state.data)) ? POLL_MS : false),
+  });
+
+  // Task 5: usage against the storage quota, shown near the dropzone. Not
+  // part of the poll above — the quota only moves on ingest/delete, not on
+  // transcode progress, so it doesn't need the 4s refetch. `invalidateAudio`
+  // covers it below alongside every other audio-branch query.
+  const usageQuery = useQuery({
+    queryKey: queryKeys.audio.usage(),
+    queryFn: () => getAudioStorageUsageFn(),
   });
 
   const assets = useMemo(() => flattenAudioPages(query.data), [query.data]);
@@ -330,6 +341,17 @@ export function AudioLibraryPage() {
           </h1>
 
           <AudioUploadDropzone onUploaded={invalidateAudio} />
+
+          <AudioQuotaBar
+            usageBytes={usageQuery.data?.bytes ?? null}
+            assetCount={usageQuery.data?.assetCount ?? 0}
+            limitBytes={usageQuery.data?.limitBytes ?? null}
+            error={
+              usageQuery.error
+                ? errorMessage(usageQuery.error, 'Failed to load storage usage.')
+                : null
+            }
+          />
 
           {nowPlaying && playbackSources.length > 0 && (
             <div className="mt-4 flex items-center gap-3 rounded border border-white/[0.07] bg-white/[0.02] p-3">

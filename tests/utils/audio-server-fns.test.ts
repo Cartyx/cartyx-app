@@ -19,6 +19,11 @@ vi.mock('@tanstack/react-start', () => ({
     inputValidator: () => ({
       handler: (fn: unknown) => fn,
     }),
+    // `getAudioStorageUsageFn` (Task 5) has no `.inputValidator()` call — it
+    // takes no input, same shape as `~/utils/soundboard-server-fns.ts`'s
+    // `listPackagesFn` — so `.handler()` must also be reachable directly off
+    // the builder, mirroring that file's own mock.
+    handler: (fn: unknown) => fn,
   }),
 }));
 
@@ -67,11 +72,16 @@ vi.mock('~/server/functions/audio', () => ({
   updateAudioAsset: vi.fn(),
   bulkTagAudioAssets: vi.fn(),
   deleteAudioAsset: vi.fn(),
+  getAudioUserQuotaBytes: vi.fn(),
 }));
 
 vi.mock('~/server/functions/audio-cleanup', () => ({
   scanOrphanAudio: vi.fn(),
   deleteOrphanAudio: vi.fn(),
+}));
+
+vi.mock('~/server/functions/audio-quota', () => ({
+  getUserStorageUsage: vi.fn(),
 }));
 
 // Not in the wrapper's import graph at all (the server functions that would
@@ -98,8 +108,10 @@ import {
   updateAudioAsset,
   bulkTagAudioAssets,
   deleteAudioAsset,
+  getAudioUserQuotaBytes,
 } from '~/server/functions/audio';
 import { scanOrphanAudio, deleteOrphanAudio } from '~/server/functions/audio-cleanup';
+import { getUserStorageUsage } from '~/server/functions/audio-quota';
 import { serverCaptureException } from '~/server/utils/telemetry';
 import {
   createAudioUploadFn,
@@ -113,6 +125,7 @@ import {
   updateAudioAssetFn,
   bulkTagAudioAssetsFn,
   deleteAudioAssetFn,
+  getAudioStorageUsageFn,
 } from '~/utils/audio-server-fns';
 
 const SESSION_USER = {
@@ -666,5 +679,45 @@ describe('deleteAudioAssetFn', () => {
       sessionUserId: SESSION_USER.id,
     });
     expect(r).toEqual({ deleted: true });
+  });
+});
+
+/**
+ * Task 5: `getAudioStorageUsageFn` takes no input, so it is called directly
+ * (`getAudioStorageUsageFn()`, no `{ data }` wrapper) — same shape as
+ * `listPackagesFn` in `~/utils/soundboard-server-fns.ts`.
+ */
+describe('getAudioStorageUsageFn', () => {
+  it('rejects with "Not authenticated" and never calls getUserStorageUsage when there is no session', async () => {
+    vi.mocked(getSession).mockResolvedValue(null);
+    await expect(getAudioStorageUsageFn()).rejects.toThrow('Not authenticated');
+    expect(getUserStorageUsage).not.toHaveBeenCalled();
+  });
+
+  it('calls getUserStorageUsage with the resolved Mongo userId, and returns the limit alongside usage', async () => {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(DB_USER_ID);
+    vi.mocked(getUserStorageUsage).mockResolvedValue({ bytes: 512, assetCount: 3 });
+    vi.mocked(getAudioUserQuotaBytes).mockReturnValue(2 * 1024 * 1024 * 1024);
+
+    const r = await getAudioStorageUsageFn();
+
+    expect(getUserStorageUsage).toHaveBeenCalledTimes(1);
+    // The resolved Mongo `_id`, NOT the session's provider id — passing
+    // `SESSION_USER.id` here would cast-error against a real ObjectId query,
+    // the exact split-identity bug this repo's identity split exists to
+    // prevent.
+    expect(getUserStorageUsage).toHaveBeenCalledWith(DB_USER_ID);
+    // `limitBytes` comes from calling `getAudioUserQuotaBytes()` itself, not
+    // from a value baked into this test or the wrapper — proving the wrapper
+    // returns whatever the server-side quota function says, not a copy of it.
+    expect(r).toEqual({ bytes: 512, assetCount: 3, limitBytes: 2 * 1024 * 1024 * 1024 });
+  });
+
+  it('rejects with "User not found" and never calls getUserStorageUsage when the session has no matching User doc', async () => {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(null);
+    await expect(getAudioStorageUsageFn()).rejects.toThrow('User not found');
+    expect(getUserStorageUsage).not.toHaveBeenCalled();
   });
 });

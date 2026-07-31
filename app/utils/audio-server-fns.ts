@@ -98,7 +98,7 @@ import {
 // bottom. See the note above each, and `~/lib/audio-rate-limits.ts` for the
 // sizing.
 //
-// EXACTLY TWO ENDPOINTS HERE ARE UNGATED, and the reason is specific to each
+// EXACTLY THREE ENDPOINTS HERE ARE UNGATED, and the reason is specific to each
 // rather than a blanket claim. An earlier version of this comment asserted
 // that every non-ingest endpoint "enqueues no work, spends no R2, and grows no
 // footprint"; review found that false for `deleteAudioAsset` on both counts,
@@ -110,8 +110,14 @@ import {
 //    when nothing matches. It has NO not-found throw, so unlike its two
 //    single-asset siblings it has no caller-triggerable capture path at all,
 //    and its `ids` array is bounded by `.max(200)` in the schema.
+//  - `getAudioStorageUsageFn` (Task 5) — a read with no caller input at all,
+//    so there is no shape for a caller to vary and nothing to raise
+//    `AudioClientError` over. It runs the one `$group` aggregation the design
+//    doc already costs at "tens of milliseconds" (see
+//    `~/server/functions/audio-quota.ts`), touches no R2, and its cost scales
+//    with the caller's own asset count, not with how often they call it.
 //
-// If a new endpoint is added here, it needs a bucket unless one of those two
+// If a new endpoint is added here, it needs a bucket unless one of those
 // sentences can be written truthfully about it.
 //
 // `~/lib/audio-rate-limits` is imported STATICALLY, unlike everything else
@@ -257,6 +263,33 @@ export const deleteAudioAssetFn = createServerFn({ method: 'POST' })
     }
     return deleteAudioAsset({ data, ...actor });
   });
+
+// Task 5: the usage figure `/audio` renders as "X of Y used" near the
+// dropzone. Wraps TWO functions, both already used server-side by
+// `assertUnderStorageQuota` (`~/server/functions/audio.ts`) to enforce the
+// write-side quota:
+//
+//  - `getUserStorageUsage` (`~/server/functions/audio-quota.ts`) — the same
+//    aggregation the quota check runs, scoped to the caller's own `ownerId`.
+//  - `getAudioUserQuotaBytes` (`~/server/functions/audio.ts`) — reads
+//    `AUDIO_USER_QUOTA_BYTES` fresh from server env on every call, the exact
+//    function the enforcement path calls. Returning ITS result, rather than
+//    hand-copying "2 GiB" into a client-side constant, is what keeps the
+//    number this bar shows from ever drifting off the number that actually
+//    refuses an upload — including after Task 11 lets an operator change the
+//    env var without an image rebuild: the next call to this function picks
+//    the new value up with no client change at all.
+//
+// No `.inputValidator()` — this takes nothing from the caller, same shape as
+// `listPackagesFn` in `~/utils/soundboard-server-fns.ts`.
+export const getAudioStorageUsageFn = createServerFn({ method: 'GET' }).handler(async () => {
+  const { getUserStorageUsage } = await import('~/server/functions/audio-quota');
+  const { getAudioUserQuotaBytes } = await import('~/server/functions/audio');
+  const { requireActor } = await import('~/utils/require-actor');
+  const { userId } = await requireActor();
+  const usage = await getUserStorageUsage(userId);
+  return { ...usage, limitBytes: getAudioUserQuotaBytes() };
+});
 
 // ---------------------------------------------------------------------------
 // Owner-scoped orphan cleanup (see ~/server/functions/audio-cleanup.ts).
