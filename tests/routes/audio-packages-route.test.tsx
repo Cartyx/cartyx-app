@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { AudioPackageData } from '~/types/soundboard';
+import type { AudioPackageData, AudioPackageSummaryData } from '~/types/soundboard';
 
 const listPackagesFn = vi.fn();
 const createPackageFn = vi.fn();
@@ -55,6 +55,27 @@ function mkPackage(overrides: Partial<AudioPackageData> = {}): AudioPackageData 
     description: null,
     items: [],
     moods: [],
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+/**
+ * What `listPackages` returns — a SUMMARY row. Deliberately a different shape
+ * from `mkPackage` above (which is what `createPackage`/`clonePackage` return):
+ * the list never receives `items[]`/`moods[]` at all, only their sizes, because
+ * shipping ~410 KiB of embedded arrays per row on an unpaginated list was an
+ * out-of-memory path on a single 512Mi pod.
+ */
+function mkSummary(overrides: Partial<AudioPackageSummaryData> = {}): AudioPackageSummaryData {
+  return {
+    id: 'p1',
+    ownerId: 'u1',
+    name: 'Tavern Ambience',
+    description: null,
+    itemCount: 0,
+    moodCount: 0,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -120,7 +141,7 @@ describe('PackagesListPage — name a clone', () => {
   // was called with SOME `name`.
   it('clones a system package with a "(copy)"-suffixed name computed client-side, distinguishing it from the source', async () => {
     const user = userEvent.setup();
-    const systemPkg = mkPackage({ id: 'sys1', ownerId: null, name: 'Storm Basics' });
+    const systemPkg = mkSummary({ id: 'sys1', ownerId: null, name: 'Storm Basics' });
     listPackagesFn.mockResolvedValue({ items: [systemPkg] });
     clonePackageFn.mockResolvedValue(mkPackage({ id: 'clone1', name: 'Storm Basics (copy)' }));
 

@@ -8,7 +8,9 @@ vi.mock('~/server/utils/telemetry', () => ({
 
 const findLean = vi.fn();
 const findSort = vi.fn((_sort?: Record<string, unknown>) => ({ lean: findLean }));
-const find = vi.fn((_query?: Record<string, unknown>) => ({ sort: findSort }));
+const find = vi.fn((_query?: Record<string, unknown>, _projection?: Record<string, unknown>) => ({
+  sort: findSort,
+}));
 const findOneLean = vi.fn();
 const findOne = vi.fn((_query?: Record<string, unknown>) => ({ lean: findOneLean }));
 const findOneAndUpdateLean = vi.fn();
@@ -17,9 +19,10 @@ const findOneAndUpdate = vi.fn((_query?: unknown, _update?: unknown, _opts?: unk
 }));
 const create = vi.fn();
 const deleteOne = vi.fn();
+const countDocuments = vi.fn(async (_filter?: Record<string, unknown>) => 0);
 
 vi.mock('~/server/db/models/AudioPackage', () => ({
-  AudioPackage: { find, findOne, findOneAndUpdate, create, deleteOne },
+  AudioPackage: { find, findOne, findOneAndUpdate, create, deleteOne, countDocuments },
 }));
 
 const baseDoc = () => ({
@@ -45,7 +48,59 @@ describe('packageVisibilityFilter', () => {
 describe('listPackages', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    countDocuments.mockResolvedValue(0);
     findLean.mockResolvedValue([]);
+  });
+
+  /**
+   * The list is the ONLY unbounded read in this file — every other one is
+   * `_id`-scoped to a single document — and it fires on every
+   * `/audio/packages` visit and every soundboard mount. A maxed package (64
+   * items with 200-char labels, 32 moods of 64 states, a 2000-char
+   * description) serializes to ~410 KiB, essentially all of it `items`/
+   * `moods`, and the web pod is `replicaCount: 1` at 512Mi. Loading whole
+   * documents here made one user's package count an out-of-memory kill for
+   * every user of the site, retriggered by the victim's own next page load.
+   *
+   * Asserted on the projection actually handed to the model, not on the
+   * serialized output: a mock returns whatever it was told regardless of what
+   * the query asked for, so only the argument itself proves the arrays never
+   * left Mongo.
+   */
+  it('projects items/moods away and asks Mongo for their sizes instead', async () => {
+    const { listPackages } = await import('~/server/functions/packages');
+    await listPackages({ userId: 'u1' });
+    const projection = vi.mocked(find).mock.calls[0][1] as unknown as Record<string, unknown>;
+    expect(projection).toBeDefined();
+    // Neither array may be requested — not as `1`, and not as `0` either: a
+    // `{ items: 0 }` exclusion projection cannot coexist with the inclusions
+    // this needs, and would silently return every other field too.
+    expect(projection).not.toHaveProperty('items');
+    expect(projection).not.toHaveProperty('moods');
+    expect(projection.itemCount).toEqual({ $size: { $ifNull: ['$items', []] } });
+    expect(projection.moodCount).toEqual({ $size: { $ifNull: ['$moods', []] } });
+  });
+
+  it('serializes counts, and never an items/moods array', async () => {
+    findLean.mockResolvedValue([{ ...baseDoc(), itemCount: 7, moodCount: 3 }]);
+    const { listPackages } = await import('~/server/functions/packages');
+    const res = await listPackages({ userId: 'u1' });
+    expect(res.items[0].itemCount).toBe(7);
+    expect(res.items[0].moodCount).toBe(3);
+    expect(res.items[0]).not.toHaveProperty('items');
+    expect(res.items[0]).not.toHaveProperty('moods');
+  });
+
+  /**
+   * A document written before the counts existed — or any document Mongo
+   * returns without the field — must serialize as 0, not `NaN` or a crash.
+   */
+  it('treats a missing count as zero', async () => {
+    findLean.mockResolvedValue([baseDoc()]);
+    const { listPackages } = await import('~/server/functions/packages');
+    const res = await listPackages({ userId: 'u1' });
+    expect(res.items[0].itemCount).toBe(0);
+    expect(res.items[0].moodCount).toBe(0);
   });
 
   it('reads are visible to the owner and to everyone for system packages', async () => {
@@ -123,6 +178,62 @@ describe('getPackage', () => {
 describe('createPackage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    countDocuments.mockResolvedValue(0);
+  });
+
+  /**
+   * The cap, and the query that enforces it. `ownerId: userId` ALONE — never
+   * `packageVisibilityFilter`'s `$or`, which also matches `ownerId: null`:
+   * counting the shared system catalogue against a user's own allowance would
+   * mean phase 3 publishing packages silently consumed everyone's budget, and
+   * (once the catalogue passed the cap) locked every user out of creating any
+   * package at all. Asserted on the filter itself, because a mocked count
+   * returns the same number whatever it was asked.
+   */
+  it("counts only the caller's own packages before inserting", async () => {
+    create.mockResolvedValue({ toObject: () => baseDoc() });
+    const { createPackage } = await import('~/server/functions/packages');
+    await createPackage({ data: { name: 'Storm Set', items: [], moods: [] }, userId: 'u1' });
+    expect(countDocuments).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(countDocuments).mock.calls[0][0]).toEqual({ ownerId: 'u1' });
+  });
+
+  it('refuses a create at the cap, and writes nothing', async () => {
+    const { MAX_PACKAGES_PER_USER } = await import('~/types/soundboard');
+    countDocuments.mockResolvedValue(MAX_PACKAGES_PER_USER);
+    const { createPackage } = await import('~/server/functions/packages');
+    await expect(
+      createPackage({ data: { name: 'Storm Set', items: [], moods: [] }, userId: 'u1' })
+    ).rejects.toThrow(/maximum of 100 sound packages/i);
+    // The count is taken BEFORE the insert precisely so a refused create has
+    // not already written the document it is refusing.
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('allows the create that lands exactly on the cap', async () => {
+    const { MAX_PACKAGES_PER_USER } = await import('~/types/soundboard');
+    countDocuments.mockResolvedValue(MAX_PACKAGES_PER_USER - 1);
+    create.mockResolvedValue({ toObject: () => baseDoc() });
+    const { createPackage } = await import('~/server/functions/packages');
+    await expect(
+      createPackage({ data: { name: 'Storm Set', items: [], moods: [] }, userId: 'u1' })
+    ).resolves.toBeDefined();
+  });
+
+  /**
+   * Hitting a resource cap is the caller's own doing and entirely expected —
+   * a client retrying at the cap would otherwise author one GlitchTip event
+   * per click, which is the exact hazard `PackageClientError` exists for.
+   */
+  it('does not report a cap rejection to GlitchTip', async () => {
+    const { MAX_PACKAGES_PER_USER } = await import('~/types/soundboard');
+    const { serverCaptureException } = await import('~/server/utils/telemetry');
+    countDocuments.mockResolvedValue(MAX_PACKAGES_PER_USER);
+    const { createPackage } = await import('~/server/functions/packages');
+    await expect(
+      createPackage({ data: { name: 'Storm Set', items: [], moods: [] }, userId: 'u1' })
+    ).rejects.toThrow();
+    expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
   });
 
   it('creates a package owned by the caller', async () => {

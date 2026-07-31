@@ -169,6 +169,16 @@ export function AudioLibraryPage() {
     void qc.invalidateQueries({ queryKey: queryKeys.audio.all });
   }, [qc]);
 
+  /**
+   * The whole `packages` key space, not one package's detail: this page never
+   * learns WHICH packages referenced the asset that was just deleted — the
+   * server-side prune does — so the only honest invalidation is the branch.
+   * See `deleteMutation` below for why an asset delete is a package mutation.
+   */
+  const invalidatePackages = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: queryKeys.packages.all });
+  }, [qc]);
+
   const bulk = useMutation({
     mutationFn: (payload: BulkTagPayload) =>
       bulkTagAudioAssetsFn({ data: { ids: selectedIds, ...payload } }),
@@ -212,6 +222,19 @@ export function AudioLibraryPage() {
     onSuccess: (_data, asset) => {
       setSelectedIds((prev) => prev.filter((id) => id !== asset.id));
       invalidateAudio();
+      // Deleting an asset is not only an AUDIO mutation: `deleteAudioAsset`
+      // (Task 20) also prunes every package item that referenced it, and every
+      // mood state that referenced those items. Invalidating `audio.all` alone
+      // left every cached `packages.*` query describing a package that no
+      // longer exists in that shape — and the editor route seeds its local
+      // draft from that cache exactly once, so an editor tab opened before the
+      // delete would `$set` the pruned item and its mood states straight back,
+      // pointing at an `assetId` Mongo no longer has. No race needed: the
+      // stale tab only has to still be open. The prune's own comment calls
+      // this tombstone accumulation "a slow leak"; refilling it by hand is
+      // worse than never pruning, because the row it recreates cannot be
+      // cleaned up by deleting the asset again.
+      invalidatePackages();
     },
     onError: (e) => captureException(e, { action: 'AudioLibraryPage.deleteAsset' }),
   });

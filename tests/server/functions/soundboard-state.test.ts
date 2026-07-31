@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { CampaignAccessError } from '~/server/utils/requireCampaignMember';
 
 vi.mock('~/server/db/connection', () => ({ connectDB: vi.fn(), isDBConnected: vi.fn(() => true) }));
 vi.mock('~/server/utils/telemetry', () => ({
@@ -7,7 +8,14 @@ vi.mock('~/server/utils/telemetry', () => ({
 }));
 
 const requireCampaignMember = vi.fn();
-vi.mock('~/server/utils/requireCampaignMember', () => ({
+/**
+ * PARTIAL mock: the function is faked, but `CampaignAccessError` comes from
+ * the real module. It has to — `reportSoundboardError` does an `instanceof`
+ * against it, and a locally-redeclared stand-in class would make that check
+ * pass here while proving nothing about the class the helper actually throws.
+ */
+vi.mock('~/server/utils/requireCampaignMember', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('~/server/utils/requireCampaignMember')>()),
   requireCampaignMember: (...args: unknown[]) => requireCampaignMember(...args),
 }));
 
@@ -62,12 +70,48 @@ describe('loadBoardState', () => {
   });
 
   it('refuses a caller who is not in the campaign, before any model call', async () => {
-    requireCampaignMember.mockRejectedValue(new Error('Forbidden'));
+    requireCampaignMember.mockRejectedValue(new CampaignAccessError());
     const { loadBoardState } = await import('~/server/functions/soundboard');
     await expect(loadBoardState({ data: { campaignId: 'c1' }, userId: 'u1' })).rejects.toThrow(
-      'Forbidden'
+      'Campaign not found'
     );
     expect(findOne).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The GlitchTip amplification path, and the only one an attacker with NO
+   * relationship to a campaign can reach: `loadBoardState` takes
+   * `data.campaignId` straight from the request, so any authenticated user can
+   * loop `loadBoardStateFn` over random 24-hex ids. Every rejection used to
+   * file an exception against a shared single-node GlitchTip — one attacker,
+   * unbounded event volume, no rate limit anywhere on the path.
+   *
+   * `packages.ts` already defends the identical hazard with
+   * `PackageClientError`, and this file already classified the non-GM save
+   * correctly; the not-a-member case was the one left loud.
+   */
+  it('does not report a not-a-member rejection to GlitchTip — attacker-controlled event volume otherwise', async () => {
+    requireCampaignMember.mockRejectedValue(new CampaignAccessError());
+    const { serverCaptureException } = await import('~/server/utils/telemetry');
+    const { loadBoardState } = await import('~/server/functions/soundboard');
+    await expect(loadBoardState({ data: { campaignId: 'c1' }, userId: 'u1' })).rejects.toThrow();
+    expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The exclusion is scoped to the ONE error class the caller controls. A
+   * session that resolves to no user, an unreachable Atlas, a genuine model
+   * failure — all still report. Without this, "don't report auth failures"
+   * quietly becomes "don't report anything `requireCampaignMember` throws".
+   */
+  it('still reports a genuine failure from the membership check', async () => {
+    requireCampaignMember.mockRejectedValue(new Error('Database not available'));
+    const { serverCaptureException } = await import('~/server/utils/telemetry');
+    const { loadBoardState } = await import('~/server/functions/soundboard');
+    await expect(loadBoardState({ data: { campaignId: 'c1' }, userId: 'u1' })).rejects.toThrow(
+      'Database not available'
+    );
+    expect(vi.mocked(serverCaptureException)).toHaveBeenCalledTimes(1);
   });
 
   it('reads are scoped to the requested campaignId', async () => {
@@ -126,7 +170,7 @@ describe('saveBoardState', () => {
   });
 
   it('refuses a caller who is not in the campaign, before any model call', async () => {
-    requireCampaignMember.mockRejectedValue(new Error('Forbidden'));
+    requireCampaignMember.mockRejectedValue(new CampaignAccessError());
     const { saveBoardState } = await import('~/server/functions/soundboard');
     await expect(saveBoardState({ data: nothingLoaded(), userId: 'u1' })).rejects.toThrow();
     expect(findOneAndUpdate).not.toHaveBeenCalled();

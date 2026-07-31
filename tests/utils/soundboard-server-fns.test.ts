@@ -104,6 +104,23 @@ const FAKE_PACKAGE = {
   updatedAt: '2026-07-30T00:00:00.000Z',
 };
 
+/**
+ * What `listPackages` returns — a SUMMARY row (`itemCount`/`moodCount`), not
+ * a full package. The two shapes are deliberately different: the list view
+ * never renders an item or a mood, and a maxed package is ~410 KiB of
+ * embedded arrays it would otherwise ship per row.
+ */
+const FAKE_PACKAGE_SUMMARY = {
+  id: 'p1',
+  ownerId: DB_USER_ID,
+  name: 'Storm Set',
+  description: null,
+  itemCount: 0,
+  moodCount: 0,
+  createdAt: '2026-07-30T00:00:00.000Z',
+  updatedAt: '2026-07-30T00:00:00.000Z',
+};
+
 const FAKE_BOARD_STATE = {
   campaignId: 'c1',
   packageId: null,
@@ -126,14 +143,14 @@ describe('listPackagesFn', () => {
   it("calls listPackages with the resolved Mongo userId (not the session's provider id) once authenticated", async () => {
     vi.mocked(getSession).mockResolvedValue(SESSION_USER);
     mockDbUser(DB_USER_ID);
-    vi.mocked(listPackages).mockResolvedValue({ items: [FAKE_PACKAGE] });
+    vi.mocked(listPackages).mockResolvedValue({ items: [FAKE_PACKAGE_SUMMARY] });
     const r = await listPackagesFn();
     expect(listPackages).toHaveBeenCalledTimes(1);
     expect(listPackages).toHaveBeenCalledWith({
       userId: DB_USER_ID,
       sessionUserId: SESSION_USER.id,
     });
-    expect(r).toEqual({ items: [FAKE_PACKAGE] });
+    expect(r).toEqual({ items: [FAKE_PACKAGE_SUMMARY] });
   });
 
   it('rejects with "User not found" and never calls listPackages when the session has no matching User doc', async () => {

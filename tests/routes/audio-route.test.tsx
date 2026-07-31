@@ -332,6 +332,48 @@ describe('AudioLibraryPage', () => {
       await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
       expect(deleteAudioAssetFn).toHaveBeenCalledWith({ data: { id: 'a1' } });
     });
+
+    /**
+     * Deleting an asset is a PACKAGE mutation too: `deleteAudioAsset` prunes
+     * every package item that referenced it, and every mood state that
+     * referenced those items. Invalidating `['audio']` alone left every cached
+     * `['packages', …]` query describing a package that no longer exists in
+     * that shape — and the package EDITOR seeds its local `items`/`moods`
+     * draft from that cache exactly once, then saves with a whole-array
+     * `$set`. So an editor tab left open across a delete writes the pruned
+     * item and its mood states straight back, pointing at an `assetId` Mongo
+     * no longer has. No race is involved; the tab only has to still be open.
+     *
+     * Asserted on the invalidation call rather than on a refetch, because the
+     * package queries live in other route components that aren't mounted here
+     * — the contract this page owns is "tell the cache".
+     */
+    it('invalidates the packages cache too, so a stale editor draft cannot resurrect a pruned item', async () => {
+      listAudioAssetsFn
+        .mockResolvedValueOnce({ items: [mkAsset({ id: 'a1', title: 'Storm' })], nextCursor: null })
+        .mockResolvedValue({ items: [], nextCursor: null });
+      deleteAudioAssetFn.mockResolvedValue({ deleted: true });
+
+      const queryClient = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+      });
+      const invalidateQueries = vi.spyOn(queryClient, 'invalidateQueries');
+      render(
+        <QueryClientProvider client={queryClient}>
+          <AudioLibraryPage />
+        </QueryClientProvider>
+      );
+
+      await userEvent.click(await screen.findByRole('button', { name: /delete storm/i }));
+      const dialog = screen.getByRole('alertdialog');
+      await userEvent.click(within(dialog).getByRole('button', { name: /delete/i }));
+
+      await waitFor(() =>
+        expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['packages'] })
+      );
+      // And still the audio branch — this is an addition, not a swap.
+      expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['audio'] });
+    });
   });
 
   describe('edit', () => {

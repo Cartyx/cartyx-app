@@ -10,6 +10,34 @@
 export const MAX_PACKAGE_ITEMS = 64;
 export const MAX_PACKAGE_MOODS = 32;
 
+/**
+ * Packages a single user may own, enforced with a `countDocuments` before
+ * every insert — `createPackage` and `clonePackage` — exactly the way
+ * `mapAoE.ts`'s `MAX_AOE_PER_MAP`, `gmscreens.ts` and the tabletop screens do
+ * it. System packages (`ownerId: null`) are never counted: they are not the
+ * caller's, and one user creating packages must not push another user (or the
+ * shared catalogue) against a cap.
+ *
+ * 100, and the number comes from the memory arithmetic rather than taste. A
+ * MAXED package — 64 items with 200-char labels and 24-char ids, 32 moods of
+ * 64 states each, a 2000-char description — serializes to roughly 410 KiB.
+ * The web pod is `replicaCount: 1` at `limits.memory: 512Mi`
+ * (`deploy/charts/cartyx/values.yaml`), so a read that loads every package a
+ * user owns is bounded at ~41 MiB of JSON — several times that once it is
+ * live JS objects, but still a fraction of the pod rather than a multiple of
+ * it. At the ~1,200 packages an uncapped account could reach, the same read
+ * is ~480 MiB of JSON alone and the pod is OOMKilled for every user, not just
+ * the one who did it.
+ *
+ * `listPackages` no longer performs that read at all (it projects `items`/
+ * `moods` away and returns counts), so this cap is the second of two
+ * independent defences, not the only one: it bounds what a future
+ * un-projected read — or a Mongo-side working set — can cost. 100 is also far
+ * past any plausible use: a package is a scene set, and a campaign runs on a
+ * handful.
+ */
+export const MAX_PACKAGES_PER_USER = 100;
+
 export const DEFAULT_VOLUME = 1;
 export const DEFAULT_FADE_SECONDS = 2;
 
@@ -81,6 +109,28 @@ export type AudioPackageData = {
   moods: MoodData[];
   createdAt: string;
   updatedAt: string;
+};
+
+/**
+ * What a package LIST row is: everything `AudioPackageData` carries except
+ * the two embedded arrays, plus their sizes.
+ *
+ * `listPackages` returns these, not full packages, and the distinction is a
+ * memory bound rather than a tidiness one. The list view (`PackageList`) and
+ * the board's package picker between them read `id`, `ownerId`, `name`,
+ * `description` and the two array LENGTHS — never an item or a mood itself —
+ * while a maxed package serializes to ~410 KiB, essentially all of it
+ * `items`/`moods`. Sending the arrays so a component can call `.length` on
+ * them made every visit to `/audio/packages` proportional to the caller's
+ * whole library on a `replicaCount: 1`, 512Mi pod. The counts come from
+ * Mongo's own `$size`, so the arrays never leave the database.
+ *
+ * `getPackage` still returns the full `AudioPackageData` — the editor and the
+ * board genuinely need every item and mood, for exactly one package at a time.
+ */
+export type AudioPackageSummaryData = Omit<AudioPackageData, 'items' | 'moods'> & {
+  itemCount: number;
+  moodCount: number;
 };
 
 /** One item's live playback state on the board. */

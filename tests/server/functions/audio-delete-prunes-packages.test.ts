@@ -113,6 +113,82 @@ describe('deleteAudioAsset — package/mood pruning', () => {
     expect(update.$set.moods[0].states[0]).toEqual(survivorState);
   });
 
+  /**
+   * An UPPER-CASED asset id. `objectId` is `/^[0-9a-fA-F]{24}$/`, so upper-case
+   * hex passes validation, and Mongo's own ObjectId cast is case-insensitive,
+   * so the `find` above matches the package and the asset delete proceeds — but
+   * `String(item.assetId)` always renders LOWER-case, so the original
+   * `String(item.assetId) !== data.id` comparison was `true` for every item and
+   * the `$set` wrote the array back untouched.
+   *
+   * The result was the worst possible combination: the asset and all six of its
+   * R2 objects deleted, every referencing item surviving as a permanent
+   * tombstone against the 64-item cap, and `pruneOrphanedMoodStates` no-opping
+   * too because the "surviving items" it was handed were the unchanged
+   * original. Task 20, defeated by the case of one request field.
+   *
+   * Uses a REAL 24-hex id, not the short `a1` fixtures the other tests use:
+   * `a1` has no case to get wrong, which is exactly why nothing caught this.
+   */
+  it('prunes the item when the caller supplies the id in upper-case hex', async () => {
+    const LOWER = '507f1f77bcf86cd799439011';
+    const UPPER = LOWER.toUpperCase();
+
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      _id: LOWER,
+      ownerId: 'u1',
+      sourceKey: 'src-key',
+    } as never);
+
+    const doomed = {
+      id: 'i1',
+      // Server-derived, as a lean document renders it: lower-case.
+      assetId: LOWER,
+      volume: 1,
+      fadeSeconds: 2,
+      loop: false,
+      sortIndex: 0,
+    };
+    const survivor = {
+      id: 'i2',
+      assetId: '507f1f77bcf86cd799439012',
+      volume: 1,
+      fadeSeconds: 2,
+      loop: true,
+      sortIndex: 1,
+    };
+    mockAffectedPackages([
+      {
+        _id: 'p1',
+        ownerId: 'u1',
+        items: [doomed, survivor],
+        moods: [
+          {
+            id: 'm1',
+            name: 'Overhead',
+            states: [
+              { itemId: 'i1', playing: true },
+              { itemId: 'i2', playing: false },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    const { deleteAudioAsset } = await import('~/server/functions/audio');
+    await deleteAudioAsset({ data: { id: UPPER }, userId: 'u1' });
+
+    const [, update] = vi.mocked(AudioPackage.updateOne).mock.calls[0] as unknown as [
+      unknown,
+      { $set: { items: { id: string }[]; moods: { states: { itemId: string }[] }[] } },
+    ];
+    expect(update.$set.items).toEqual([survivor]);
+    // And the mood state that named the removed item went with it — the prune
+    // is driven by the surviving-items list, so a no-op on items silently
+    // no-ops here too.
+    expect(update.$set.moods[0].states).toEqual([{ itemId: 'i2', playing: false }]);
+  });
+
   it("never touches another owner's packages", async () => {
     vi.mocked(AudioAsset.findOne).mockResolvedValue({
       _id: 'a1',

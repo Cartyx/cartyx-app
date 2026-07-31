@@ -287,7 +287,12 @@ describe('createMapAoE', () => {
           color: '#ff0000',
         },
       })
-    ).rejects.toThrow('Forbidden');
+      // `requireCampaignMember` now answers a non-member with the SAME
+      // `CampaignAccessError('Campaign not found')` it answers a missing
+      // campaign with — the two messages were a campaign-existence oracle for
+      // any authenticated caller guessing ids. What this test actually pins is
+      // unchanged: a non-member is refused, and nothing is written.
+    ).rejects.toThrow('Campaign not found');
 
     expect(MapAoE.create).not.toHaveBeenCalled();
   });

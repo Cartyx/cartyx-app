@@ -2,16 +2,16 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PackageList } from '~/components/soundboard/PackageList';
-import type { AudioPackageData } from '~/types/soundboard';
+import type { AudioPackageSummaryData } from '~/types/soundboard';
 
-function makePackage(overrides: Partial<AudioPackageData> = {}): AudioPackageData {
+function makePackage(overrides: Partial<AudioPackageSummaryData> = {}): AudioPackageSummaryData {
   return {
     id: 'p1',
     ownerId: 'u1',
     name: 'Tavern Ambience',
     description: 'Crowd chatter and mugs',
-    items: [],
-    moods: [],
+    itemCount: 0,
+    moodCount: 0,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -102,32 +102,13 @@ describe('PackageList', () => {
     expect(screen.getByText(/no.*packages/i)).toBeInTheDocument();
   });
 
-  it('shows item and mood counts without rendering the full items/moods arrays', () => {
-    // listPackages is unpaginated and returns full items[]/moods[] per
-    // package (a known deferred issue) — the row must summarize cheaply
-    // (counts) rather than render every item/mood, so a package with many
-    // items doesn't produce a heavy per-row DOM.
-    const pkg = makePackage({
-      items: [
-        {
-          id: 'i1',
-          assetId: '507f1f77bcf86cd799439011',
-          volume: 1,
-          fadeSeconds: 0,
-          loop: false,
-          sortIndex: 0,
-        },
-        {
-          id: 'i2',
-          assetId: '507f1f77bcf86cd799439012',
-          volume: 1,
-          fadeSeconds: 0,
-          loop: false,
-          sortIndex: 1,
-        },
-      ],
-      moods: [{ id: 'm1', name: 'Overhead', states: [] }],
-    });
+  it('summarizes a package from server-supplied counts, never from the arrays themselves', () => {
+    // The row renders `itemCount`/`moodCount` — the numbers Mongo's `$size`
+    // computed — because `listPackages` deliberately never sends `items[]` or
+    // `moods[]`. A maxed package is ~410 KiB of embedded arrays, and shipping
+    // them per row so a component could call `.length` made an unpaginated
+    // list an OOM path on a single 512Mi pod.
+    const pkg = makePackage({ itemCount: 2, moodCount: 1 });
     render(<PackageList packages={[pkg]} />);
     expect(screen.getByText(/2 items?/i)).toBeInTheDocument();
     expect(screen.getByText(/1 mood/i)).toBeInTheDocument();

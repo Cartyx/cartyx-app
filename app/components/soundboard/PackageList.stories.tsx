@@ -1,15 +1,15 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { PackageList } from './PackageList';
-import type { AudioPackageData } from '~/types/soundboard';
+import type { AudioPackageSummaryData } from '~/types/soundboard';
 
-function makePackage(overrides: Partial<AudioPackageData> = {}): AudioPackageData {
+function makePackage(overrides: Partial<AudioPackageSummaryData> = {}): AudioPackageSummaryData {
   return {
     id: 'p1',
     ownerId: 'u1',
     name: 'Tavern Ambience',
     description: 'Crowd chatter, mugs clinking, a distant fiddle.',
-    items: [],
-    moods: [],
+    itemCount: 0,
+    moodCount: 0,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
@@ -37,25 +37,8 @@ export const Mixed: Story = {
         ownerId: null,
         name: 'Storm Basics',
         description: 'Rain, distant thunder, wind gusts.',
-        items: [
-          {
-            id: 'i1',
-            assetId: '507f1f77bcf86cd799439011',
-            volume: 1,
-            fadeSeconds: 2,
-            loop: true,
-            sortIndex: 0,
-          },
-          {
-            id: 'i2',
-            assetId: '507f1f77bcf86cd799439012',
-            volume: 0.6,
-            fadeSeconds: 1,
-            loop: false,
-            sortIndex: 1,
-          },
-        ],
-        moods: [{ id: 'm1', name: 'Overhead', states: [] }],
+        itemCount: 2,
+        moodCount: 1,
       }),
       makePackage({ id: 'own1', ownerId: 'u1', name: 'My Tavern' }),
       makePackage({

@@ -9,9 +9,10 @@ vi.mock('~/server/utils/telemetry', () => ({
 const findOneLean = vi.fn();
 const findOne = vi.fn((_query?: Record<string, unknown>) => ({ lean: findOneLean }));
 const create = vi.fn();
+const countDocuments = vi.fn(async (_filter?: Record<string, unknown>) => 0);
 
 vi.mock('~/server/db/models/AudioPackage', () => ({
-  AudioPackage: { findOne, create },
+  AudioPackage: { findOne, create, countDocuments },
 }));
 
 /**
@@ -70,6 +71,7 @@ const sourceDoc = () => ({
 describe('clonePackage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    countDocuments.mockResolvedValue(0);
     findOneLean.mockResolvedValue(sourceDoc());
     create.mockResolvedValue({
       toObject: () => ({ ...sourceDoc(), _id: 'clone1', ownerId: 'u1' }),
@@ -158,6 +160,33 @@ describe('clonePackage', () => {
       /not found/i
     );
     expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Cloning is capped exactly like creating, and it is the cheaper of the two
+   * to drive in a loop: one request per new document, no body to build, and
+   * cloning a maxed system package mints a ~410 KiB document every time.
+   * Capping `createPackage` alone would leave the whole hazard reachable
+   * through the button next to it.
+   */
+  it('refuses a clone at the cap, and writes nothing', async () => {
+    const { MAX_PACKAGES_PER_USER } = await import('~/types/soundboard');
+    countDocuments.mockResolvedValue(MAX_PACKAGES_PER_USER);
+    const { clonePackage } = await import('~/server/functions/packages');
+    await expect(clonePackage({ data: { id: 'sys1' }, userId: 'u1' })).rejects.toThrow(
+      /maximum of 100 sound packages/i
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it("counts only the caller's own packages, never the system catalogue it is cloning from", async () => {
+    const { clonePackage } = await import('~/server/functions/packages');
+    await clonePackage({ data: { id: 'sys1' }, userId: 'u1' });
+    const filter = vi.mocked(countDocuments).mock.calls[0][0] as unknown as Record<string, unknown>;
+    // A `packageVisibilityFilter` `$or` here would count every system package
+    // against every user's own allowance.
+    expect(filter).toEqual({ ownerId: 'u1' });
+    expect(filter).not.toHaveProperty('$or');
   });
 
   it('tags telemetry with the session identity, not the Mongo id', async () => {

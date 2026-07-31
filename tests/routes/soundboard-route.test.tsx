@@ -3,7 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-import type { AudioPackageData, BoardStateData } from '~/types/soundboard';
+import type { AudioPackageSummaryData, AudioPackageData, BoardStateData } from '~/types/soundboard';
 import type { AudioAssetData, AudioKind } from '~/types/audio';
 import type { BoardState } from '~/lib/soundboard/reducer';
 import type { BoardPadProps } from '~/components/soundboard/BoardPad';
@@ -137,6 +137,17 @@ const pkg: AudioPackageData = {
   createdAt: '',
   updatedAt: '',
 };
+
+/**
+ * The package as the LIST sees it: counts, no arrays. `listPackages` projects
+ * `items`/`moods` away in Mongo, so a fixture that still carried them would let
+ * a component quietly go back to reading `pkg.items.length` and pass here while
+ * failing against the real server response.
+ */
+function toSummary(p: AudioPackageData): AudioPackageSummaryData {
+  const { items, moods, ...rest } = p;
+  return { ...rest, itemCount: items.length, moodCount: moods.length };
+}
 
 function mkAsset(id: string, kind: AudioKind, over: Partial<AudioAssetData> = {}): AudioAssetData {
   return {
@@ -281,7 +292,12 @@ beforeEach(() => {
   vi.stubGlobal('AudioContext', function AudioContextMock() {
     return ctx;
   });
-  listPackagesFn.mockResolvedValue({ items: [pkg, { ...pkg, id: OTHER_PKG_ID, name: 'Tavern' }] });
+  // `listPackages` returns SUMMARY rows — no `items[]`/`moods[]`. The picker
+  // only ever reads `id`/`name`; the loaded package's contents come from
+  // `getPackageFn` below, which is the one read that still returns everything.
+  listPackagesFn.mockResolvedValue({
+    items: [{ ...toSummary(pkg) }, { ...toSummary(pkg), id: OTHER_PKG_ID, name: 'Tavern' }],
+  });
   getPackageFn.mockResolvedValue(pkg);
   listPackageAssetsFn.mockResolvedValue({ items: assets });
   // The default fixture is a campaign whose board WAS saved — that is what

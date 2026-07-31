@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 import { SoundboardState } from '../db/models/SoundboardState';
-import { requireCampaignMember } from '../utils/requireCampaignMember';
+import { requireCampaignMember, CampaignAccessError } from '../utils/requireCampaignMember';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { DEFAULT_VOLUME, type BoardStateData, type BoardItemStateData } from '~/types/soundboard';
 import type { saveBoardStateSchema, loadBoardStateSchema } from '~/types/schemas/soundboard';
@@ -41,9 +41,26 @@ function telemetryId(actor: Actor): string {
   return actor.sessionUserId ?? actor.userId;
 }
 
-/** Report to GlitchTip unless the failure was the caller's own doing. */
+/**
+ * Report to GlitchTip unless the failure was the caller's own doing.
+ *
+ * `CampaignAccessError` counts, and it is the one that mattered: both
+ * functions below take `data.campaignId` straight from the request and hand it
+ * to `requireCampaignMember` before anything else, so any authenticated user
+ * can call `loadBoardStateFn` in a loop with random 24-hex ids and mint one
+ * GlitchTip exception per call against a shared single-node service — the
+ * volume becomes an attacker's parameter. A campaign the caller is not a
+ * member of is not a server fault; it is the same class as
+ * `SoundboardClientError` and the same class `packages.ts` already excludes
+ * for exactly this reason.
+ *
+ * Everything else still reports, including `requireCampaignMember`'s
+ * `Not authenticated`/`User not found`/`Database not available` — a session
+ * that resolves to no user, or an unreachable Atlas, is a genuine fault and
+ * neither is reachable by guessing ids.
+ */
 function reportSoundboardError(e: unknown, actor: Actor, context: Record<string, unknown>) {
-  if (e instanceof SoundboardClientError) return;
+  if (e instanceof SoundboardClientError || e instanceof CampaignAccessError) return;
   serverCaptureException(e, telemetryId(actor), context);
 }
 

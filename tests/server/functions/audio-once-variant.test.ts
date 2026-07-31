@@ -68,11 +68,56 @@ describe('createOnceVariantUpload', () => {
       attempts: 0,
       nextAttemptAt: null,
     });
-    // This write must never touch either rendition field — it only presigns
-    // and stamps queue state; nothing has been transcoded yet.
+    // The MAIN renditions are untouched — this attach has nothing to do with
+    // them, and clobbering them would break a fully-transcoded asset.
     const set = (update as { $set: Record<string, unknown> }).$set;
     expect('renditions' in set).toBe(false);
-    expect('onceRenditions' in set).toBe(false);
+  });
+
+  /**
+   * Adversarial-review fix. This assertion is the whole of it: the write must
+   * CLEAR `onceRenditions`.
+   *
+   * The once rendition keys are DETERMINISTIC per asset
+   * (`${base}.once.${ext}` — `renditionKeyBase`'s callers in
+   * audio-worker/src/process.ts), and the worker PUTs both objects BEFORE any
+   * DB write. So a second attach's job overwrites the first attach's live
+   * objects in place. If that job then fails partway — one R2 blip on the
+   * second PUT, an evicted pod — `markOnceFailed` reverts the row to `ready`
+   * still pointing at those keys, and the asset now serves attach #2's audio
+   * to a browser that picks `.opus` and attach #1's to one that picks `.aac`,
+   * with `bytes`/`durationMs` describing neither. No race is required and
+   * nothing reports it.
+   *
+   * Leaving the field standing did not preserve anything — the bytes behind
+   * those keys are gone the moment the second job runs — it only made the row
+   * claim a once-variant it could no longer play correctly.
+   */
+  it('clears onceRenditions when re-attaching, so a failed second attach cannot leave mismatched renditions', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      ...READY_MUSIC_ASSET,
+      // A previous, SUCCESSFUL attach: both renditions live, both at the
+      // deterministic keys the next attach's worker run will overwrite.
+      onceSourceKey: 'uploads/audio/prefix/once-old.wav',
+      onceRenditions: {
+        opus: { key: 'uploads/audio/prefix/a1.once.opus', bytes: 111 },
+        aac: { key: 'uploads/audio/prefix/a1.once.m4a', bytes: 222 },
+      },
+    } as never);
+    vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+      _id: 'a1',
+      status: 'uploading',
+    } as never);
+
+    const { createOnceVariantUpload } = await import('~/server/functions/audio');
+    await createOnceVariantUpload({
+      data: { assetId: 'a1', filename: 'ending2.wav', contentType: 'audio/wav', bytes: 2048 },
+      userId: 'u1',
+    });
+
+    const [, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
+    const set = (update as { $set: Record<string, unknown> }).$set;
+    expect(set.onceRenditions).toEqual({});
   });
 
   it('refuses a non-music asset, without presigning or touching the row', async () => {

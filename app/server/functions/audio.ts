@@ -79,6 +79,33 @@ function reportAudioError(e: unknown, actor: Actor, context: Record<string, unkn
   serverCaptureException(e, telemetryId(actor), context);
 }
 
+/**
+ * Compares a SERVER-derived ObjectId (a lean document's field, which
+ * `String()` always renders as lowercase hex) against a CLIENT-supplied id,
+ * case-insensitively.
+ *
+ * Mongo's own ObjectId cast is case-insensitive — `find({_id: 'AABB…'})`
+ * matches the document whose id prints as `aabb…` — so a query can succeed
+ * while a naive `String(field) !== id` comparison over the same value is
+ * `true` for every row. `deleteAudioAsset`'s package prune did exactly that:
+ * an upper-cased 24-hex id (which `objectId`'s `[0-9a-fA-F]` regex accepts)
+ * deleted the asset and all six of its R2 objects while EVERY referencing
+ * package item survived as a permanent tombstone against the 64-item cap, and
+ * `pruneOrphanedMoodStates` then no-opped too, because the surviving-items
+ * list it was handed was the unchanged original.
+ *
+ * The `objectId` schema now lower-cases at the boundary (see
+ * `~/types/schemas/audio.ts`), so in practice `data.id` reaches here already
+ * canonical. This is the second, independent defence: the ingest surface is
+ * deliberately auth-agnostic and phase 3's bearer adapter may not route every
+ * call through the same Zod object, and a comparison that is only correct
+ * because something upstream normalised is a comparison that breaks silently
+ * when the upstream moves.
+ */
+function sameObjectId(serverValue: unknown, clientId: string): boolean {
+  return String(serverValue).toLowerCase() === clientId.toLowerCase();
+}
+
 function titleFromFilename(filename: string): string {
   return filename.replace(/\.[^.]+$/, '').slice(0, 200) || 'Untitled';
 }
@@ -188,7 +215,26 @@ export async function confirmAudioUpload({
         ? `File too large: ${bytes} bytes exceeds ${AUDIO_MAX_BYTES}`
         : `Unsupported audio type: ${type}`;
       await AudioAsset.findOneAndUpdate(
-        { _id: data.assetId, ownerId: userId },
+        // FENCED, with exactly the clauses the success write below carries,
+        // and for exactly the same reason its comment gives: "only the filter
+        // on the write makes exactly one of them win." This one is the more
+        // dangerous of the two to leave open, because it writes
+        // `permanentFailure: true` and `retryAudioAsset` refuses those rows —
+        // an unfenced version has no path back.
+        //
+        // The interleave, one client, no special timing beyond a single
+        // `DeleteObject` round trip: confirm a refused blob; while THIS
+        // request is inside the `DeleteObjectCommand` await above, re-PUT
+        // good audio to the same presigned URL (valid 300s, reusable) and
+        // confirm again. Request #2's fenced success write wins — the row is
+        // now a legitimately queued `pending` asset, or, if the worker got
+        // there first, a `ready` one — and then this request resumes and
+        // stamps `failed`/`permanentFailure` over it, having already deleted
+        // the GOOD object. That is precisely the shape `markOnceFailed` exists
+        // to prevent, reached from a path `markOnceFailed` does not cover. The
+        // fence makes the stale write a no-op: the row this path means to fail
+        // is by definition still `uploading` and still not the once pipeline's.
+        { _id: data.assetId, ownerId: userId, status: 'uploading', variant: { $ne: 'once' } },
         {
           $set: {
             status: 'failed',
@@ -317,6 +363,28 @@ export async function createOnceVariantUpload({
       {
         $set: {
           onceSourceKey: key,
+          // CLEARED, not left standing. The once rendition keys are
+          // DETERMINISTIC per asset (`${base}.once.${ext}` —
+          // `renditionKeyBase`'s callers in audio-worker/src/process.ts), and
+          // the worker PUTs both objects BEFORE it writes the row. So the
+          // moment a second attach's job runs, it overwrites attach #1's live
+          // objects in place — the bytes behind these keys are already gone,
+          // whatever this field still says. If that job then fails partway
+          // (one R2 blip on the second PUT, an evicted pod), `markOnceFailed`
+          // reverts the row to `ready` still pointing here, and the asset
+          // serves attach #2's audio to a browser that picks `.opus` and
+          // attach #1's to one that picks `.aac`, with `bytes`/`durationMs`
+          // describing neither. Nothing detects it and nothing reports it.
+          //
+          // `markOnceFailed`'s stated contract is "leave the row exactly as it
+          // was before the attach". Clearing here does not break that promise
+          // — it makes it TRUE. Before this line the promise was unkeepable:
+          // "as it was before the attach" named two R2 objects the attach had
+          // already destroyed. A cleared field means the GM sees "no
+          // once-variant attached" and can re-attach, which is exactly the
+          // recoverable state; the previous behaviour was an asset that
+          // claimed a once-variant it could no longer play correctly.
+          onceRenditions: {},
           variant: 'once',
           status: 'uploading',
           attempts: 0,
@@ -965,7 +1033,7 @@ export async function deleteAudioAsset({
         // leave every mood state that named the removed item pointing at
         // an id that no longer exists — exactly the orphan Task 14 had to
         // go back and fix for the editor's own item-removal path.
-        const survivingItems = pkg.items.filter((item) => String(item.assetId) !== data.id);
+        const survivingItems = pkg.items.filter((item) => !sameObjectId(item.assetId, data.id));
         const survivingMoods = pruneOrphanedMoodStates(pkg.moods, survivingItems);
         await AudioPackage.updateOne(
           { _id: pkg._id, ownerId: userId },

@@ -1,6 +1,6 @@
 import { Copy, Lock, Pencil, Trash2 } from 'lucide-react';
 import { OverflowMenu, type MenuItem } from '~/components/shared/OverflowMenu';
-import type { AudioPackageData } from '~/types/soundboard';
+import type { AudioPackageSummaryData } from '~/types/soundboard';
 
 export interface PackageListProps {
   /**
@@ -14,13 +14,13 @@ export interface PackageListProps {
    * client-side `getMe()` user id is the OAuth provider id, not the Mongo
    * `_id` that `ownerId` stores).
    */
-  packages: AudioPackageData[];
+  packages: AudioPackageSummaryData[];
   /** Owned rows only — system packages are read-only, so no Edit affordance is ever offered for them. */
-  onEdit?: (pkg: AudioPackageData) => void;
+  onEdit?: (pkg: AudioPackageSummaryData) => void;
   /** Every row may be cloned — the only affordance a system row offers. */
-  onClone?: (pkg: AudioPackageData) => void;
+  onClone?: (pkg: AudioPackageSummaryData) => void;
   /** Owned rows only. */
-  onDelete?: (pkg: AudioPackageData) => void;
+  onDelete?: (pkg: AudioPackageSummaryData) => void;
   /** id of the package currently being cloned, so a slow clone can't be double-fired. */
   cloningId?: string | null;
 }
@@ -34,11 +34,13 @@ export interface PackageListProps {
  * fail server-side.
  *
  * Purely presentational, like `AudioAssetRow`: no fetching, no mutations.
- * `listPackages` is unpaginated and returns full `items[]`/`moods[]` per
- * package (a known deferred issue — see the plan) — this component only
- * ever reads `.length` off those arrays for the row summary, never renders
- * their contents, so a package with many items doesn't produce a heavy
- * per-row DOM even before pagination lands.
+ * Takes `AudioPackageSummaryData` — `itemCount`/`moodCount` rather than the
+ * `items[]`/`moods[]` arrays themselves. This component never rendered an
+ * item or a mood; it only ever called `.length` on them, and shipping ~410
+ * KiB of embedded arrays per row so a `.length` could be read here is what
+ * made an unpaginated `listPackages` an out-of-memory path on a single 512Mi
+ * pod. The counts now come from Mongo's `$size` and the arrays never leave
+ * the database (see `listPackages`).
  */
 export function PackageList({ packages, onEdit, onClone, onDelete, cloningId }: PackageListProps) {
   if (packages.length === 0) {
@@ -106,8 +108,8 @@ export function PackageList({ packages, onEdit, onClone, onDelete, cloningId }: 
                 <p className="mt-0.5 truncate text-xs text-slate-500">{pkg.description}</p>
               )}
               <p className="mt-1 text-xs text-slate-500">
-                {pkg.items.length} {pkg.items.length === 1 ? 'item' : 'items'} · {pkg.moods.length}{' '}
-                {pkg.moods.length === 1 ? 'mood' : 'moods'}
+                {pkg.itemCount} {pkg.itemCount === 1 ? 'item' : 'items'} · {pkg.moodCount}{' '}
+                {pkg.moodCount === 1 ? 'mood' : 'moods'}
               </p>
             </div>
 

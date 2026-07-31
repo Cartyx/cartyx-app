@@ -16,7 +16,7 @@ import {
 import type { createPackageSchema } from '~/types/schemas/soundboard';
 import { queryKeys } from '~/utils/queryKeys';
 import { captureException } from '~/utils/telemetry-client';
-import type { AudioPackageData } from '~/types/soundboard';
+import type { AudioPackageSummaryData } from '~/types/soundboard';
 
 /**
  * `createPackageSchema`'s shape, not a structural literal (per the brief) —
@@ -159,20 +159,20 @@ export function PackagesListPage() {
     // than the default suffix. This needs NO server change: `clonePackage`'s
     // `data.name ?? src.name` already does exactly the right thing with a
     // supplied name.
-    mutationFn: (pkg: AudioPackageData) =>
+    mutationFn: (pkg: AudioPackageSummaryData) =>
       clonePackageFn({ data: { id: pkg.id, name: cloneDisplayName(pkg.name) } }),
     onSuccess: invalidatePackages,
     onError: (e) => captureException(e, { action: 'PackagesListPage.clonePackage' }),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (pkg: AudioPackageData) => deletePackageFn({ data: { id: pkg.id } }),
+    mutationFn: (pkg: AudioPackageSummaryData) => deletePackageFn({ data: { id: pkg.id } }),
     onSuccess: invalidatePackages,
     onError: (e) => captureException(e, { action: 'PackagesListPage.deletePackage' }),
   });
 
   const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
-    useDeleteConfirm<AudioPackageData>(
+    useDeleteConfirm<AudioPackageSummaryData>(
       (pkg) => deleteMutation.mutateAsync(pkg),
       'Failed to delete package. Please try again.'
     );

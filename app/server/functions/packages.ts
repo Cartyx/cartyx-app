@@ -8,7 +8,9 @@ import type { AudioAssetData } from '~/types/audio';
 import {
   DEFAULT_VOLUME,
   DEFAULT_FADE_SECONDS,
+  MAX_PACKAGES_PER_USER,
   type AudioPackageData,
+  type AudioPackageSummaryData,
   type PackageItemData,
   type MoodData,
   type MoodStateData,
@@ -184,19 +186,111 @@ export function serializePackage(p: PackageDoc): AudioPackageData {
   };
 }
 
+/**
+ * The projection `listPackages` reads through, and the reason it exists.
+ *
+ * `items`/`moods` are ~99% of a package document — a maxed one (64 items with
+ * 200-char labels, 32 moods of 64 states, a 2000-char description) is about
+ * 410 KiB serialized, of which the scalar fields below are a few hundred
+ * bytes. `listPackages` is unpaginated and fires on every `/audio/packages`
+ * visit and every soundboard mount, so returning whole documents made one
+ * user's package count the memory cost of their own page load on a
+ * `replicaCount: 1` pod capped at 512Mi (`deploy/charts/cartyx/values.yaml`) —
+ * an OOMKill that takes the site down for every other user and recurs on
+ * restart, because the victim's own next page load fires the same read.
+ *
+ * `$size` (a Mongo aggregation expression, supported in `find` projections
+ * since 4.4) gives the list exactly what it renders — the counts — without
+ * either array crossing the wire or the process boundary. `$ifNull` guards a
+ * document written before the field existed; `$size` throws on a missing
+ * field rather than returning 0.
+ *
+ * NOT applied to `getPackage`/`listPackageAssets`/`clonePackage`: each of
+ * those reads ONE document and genuinely needs its items (to edit it, to
+ * resolve its assets, to copy it). The hazard here is the unbounded row
+ * count, not the document.
+ */
+const PACKAGE_SUMMARY_PROJECTION = {
+  ownerId: 1,
+  name: 1,
+  description: 1,
+  createdAt: 1,
+  updatedAt: 1,
+  itemCount: { $size: { $ifNull: ['$items', []] } },
+  moodCount: { $size: { $ifNull: ['$moods', []] } },
+} as const;
+
+/** Same `null` handling as `serializePackage`, minus the arrays it never sees. */
+export function serializePackageSummary(p: PackageDoc): AudioPackageSummaryData {
+  const d = p as {
+    _id: unknown;
+    ownerId: unknown;
+    name?: string;
+    description?: string | null;
+    itemCount?: number;
+    moodCount?: number;
+    createdAt?: Date;
+    updatedAt?: Date;
+  };
+  return {
+    id: String(d._id),
+    // Nullable by design: null IS the system-package marker.
+    ownerId: d.ownerId == null ? null : String(d.ownerId),
+    name: d.name ?? '',
+    description: d.description ?? null,
+    itemCount: d.itemCount ?? 0,
+    moodCount: d.moodCount ?? 0,
+    createdAt: d.createdAt instanceof Date ? d.createdAt.toISOString() : '',
+    updatedAt: d.updatedAt instanceof Date ? d.updatedAt.toISOString() : '',
+  };
+}
+
 export async function listPackages({
   userId,
   sessionUserId,
-}: Actor): Promise<{ items: AudioPackageData[] }> {
+}: Actor): Promise<{ items: AudioPackageSummaryData[] }> {
   try {
     await ensureDb();
-    const rows = (await AudioPackage.find(packageVisibilityFilter(userId))
+    const rows = (await AudioPackage.find(
+      packageVisibilityFilter(userId),
+      PACKAGE_SUMMARY_PROJECTION
+    )
       .sort({ name: 1 })
       .lean()) as PackageDoc[];
-    return { items: rows.map(serializePackage) };
+    return { items: rows.map(serializePackageSummary) };
   } catch (e) {
     reportPackageError(e, { userId, sessionUserId }, { action: 'listPackages' });
     throw e;
+  }
+}
+
+/**
+ * The per-user package cap, checked before every insert in this file.
+ *
+ * `ownerId: userId` and nothing else — never `packageVisibilityFilter`, whose
+ * `$or` also matches `ownerId: null`. Counting system packages against a
+ * user's own cap would mean phase 3 publishing a catalogue silently consumed
+ * every user's allowance, and (once the catalogue grew past the cap) locked
+ * every user out of creating any package at all.
+ *
+ * `>=`, not `>`: the count is taken BEFORE the insert, so a user already at
+ * the cap must be refused rather than allowed to reach cap+1. Two concurrent
+ * creates can both read `cap - 1` and both insert — the same benign
+ * off-by-one every `countDocuments`-then-insert cap in this codebase has
+ * (`mapAoE.ts`, `gmscreens.ts`). This is a resource bound, not an invariant;
+ * a transaction to make it exact would cost more than the one extra document
+ * it prevents.
+ */
+async function assertPackageBudget(userId: string): Promise<void> {
+  const count = await AudioPackage.countDocuments({ ownerId: userId });
+  if (count >= MAX_PACKAGES_PER_USER) {
+    // A `PackageClientError`: the caller asked for one package too many. It is
+    // their own doing, it is entirely expected, and it must not file a
+    // GlitchTip event — a client retrying a create at the cap would otherwise
+    // author one error report per click.
+    throw new PackageClientError(
+      `You already have the maximum of ${MAX_PACKAGES_PER_USER} sound packages. Delete one to make room.`
+    );
   }
 }
 
@@ -291,6 +385,9 @@ export async function createPackage({
 } & Actor): Promise<AudioPackageData> {
   try {
     await ensureDb();
+    // Before the insert, same order as `createMapAoE` — a refused create must
+    // not have written a document first.
+    await assertPackageBudget(userId);
     const doc = await AudioPackage.create({
       ownerId: userId,
       name: data.name,
@@ -395,6 +492,13 @@ export async function clonePackage({
     //   on both subdocument schemas exists for exactly this: the
     //   client-supplied `id` is the only identity these subdocuments need,
     //   so there is no Mongo-generated `_id` to strip either.
+    //
+    // Capped exactly like `createPackage` — a clone is an insert, and it is
+    // the CHEAPER of the two to drive in a loop: one request per new document,
+    // no body to build, and cloning a maxed system package mints a maxed
+    // ~410 KiB document every time. Capping only `createPackage` would leave
+    // the whole hazard reachable through the button next to it.
+    await assertPackageBudget(userId);
     const doc = await AudioPackage.create({
       ownerId: userId,
       name: data.name ?? src.name ?? '',
