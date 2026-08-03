@@ -859,4 +859,66 @@ describe('createEngine — decoded-buffer cache cap', () => {
     // Not just "no error" — actually sounding, at the volume x was given.
     expect(at(rendered, 0.005)).toBeCloseTo(1, 4);
   });
+
+  it('fires a cold one-shot correctly even when the cache is fully saturated with playing assets', async () => {
+    // Stereo, and the two beds vs. the one-shot are put on separate channels
+    // (the same isolation trick the fades tests use) — on a single shared
+    // channel, "the beds are playing" and "the one-shot also played" sum
+    // together and become indistinguishable in the rendered output.
+    const ctx = new OfflineAudioContext(2, SR, SR);
+    const bedBuffer = () => dcBuffer(ctx, 0.01, { channels: 2, activeChannel: 0 });
+    const oneShotBuffer = () => dcBuffer(ctx, 0.01, { channels: 2, activeChannel: 1 });
+    const bytesPerStereoAsset = 480 * 2 * 4; // 3840 bytes.
+    const fixtures: Record<string, EngineAsset> = {
+      p1: { buffer: bedBuffer(), durationSamples: 480 },
+      p2: { buffer: bedBuffer(), durationSamples: 480 },
+      c: { buffer: oneShotBuffer(), durationSamples: 480 },
+    };
+    const { loadAsset, calls } = countingLoader(fixtures);
+    const errors: Array<{ assetId: string; error: unknown }> = [];
+    // Room for exactly the two beds below — zero idle headroom once both are
+    // playing. This is not a contrived corner: the cap's own derivation notes
+    // that two long ambience beds playing together already consume the whole
+    // 1 GiB production cap, so "nothing evictable" is the normal state of a
+    // busy board, not an edge case.
+    const assetCacheCapBytes = bytesPerStereoAsset * 2;
+    const engine = createEngine(ctx, {
+      loadAsset,
+      assetCacheCapBytes,
+      onLoadError: (assetId, error) => errors.push({ assetId, error }),
+    });
+
+    const p1 = boardItem({ itemId: 'p1', assetId: 'p1', playing: true, volume: 1, loop: true });
+    const p2 = boardItem({ itemId: 'p2', assetId: 'p2', playing: true, volume: 1, loop: true });
+    // Never played as a pad (`playing: false`) — only ever reached through
+    // `fireOneShot`, so its asset is genuinely cold when fired below.
+    const cItem = boardItem({ itemId: 'c', assetId: 'c', playing: false, volume: 1, loop: false });
+
+    // Both beds load and are left playing. The cache is now exactly at cap,
+    // nothing idle to reclaim.
+    engine.apply(board([p1, p2]));
+    await engine.ready();
+    expect(calls.p1).toBe(1);
+    expect(calls.p2).toBe(1);
+
+    // Fire a one-shot on the third, never-loaded asset. Decoding it pushes
+    // the cache over cap with both beds still playing — the only thing
+    // `evictAssets` could otherwise reach for is the one-shot's own
+    // just-landed buffer, before `fireOneShot`'s own continuation ever gets a
+    // turn to call `start` and mark it playing. That race is exactly what
+    // `firingOneShots` exists to close.
+    engine.apply(board([p1, p2, cItem]));
+    engine.fireOneShot('c');
+    await engine.ready();
+
+    expect(calls.c).toBe(1);
+    expect(errors).toEqual([]);
+
+    const rendered = await ctx.startRendering();
+    // c's own channel: silence here would mean the fire was dropped — the
+    // assertion that actually rules that out, not just "no thrown error".
+    expect(at(rendered, 0.005, 1)).toBeCloseTo(1, 4);
+    // Sanity: the beds are still there too, undisturbed by the one-shot.
+    expect(at(rendered, 0.005, 0)).toBeCloseTo(2, 4);
+  });
 });

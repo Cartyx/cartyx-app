@@ -59,15 +59,22 @@ export type SoundboardEngineOptions = {
  * Sized against the documented worst case rather than picked round: at the
  * current caps (64 items, 30-minute assets, 48 kHz stereo float32) ONE fully
  * decoded asset already costs `48_000 × 1800 × 2 channels × 4 bytes` ≈
- * 691 MB — see `docs/specs/2026-07-31-audio-hardening-design.md`. 1 GiB
- * leaves room for that single worst-case asset plus a handful of shorter
- * loops and one-shots resident at once (a storm bed, a rain bed, and a few
- * one-shots layered over them is the realistic ceiling for one board), while
- * still bounding a board that plays through all 64 documented-max assets —
- * ~44 GB unbounded — down to about 1/44th of that. It is a per-engine cap:
- * a page holding several boards' engines multiplies it, which is a
- * lifecycle question for whoever owns how many engines exist at once, not
- * something one engine's cache can bound from the inside.
+ * 691 MB (≈ 659 MiB) — see `docs/specs/2026-07-31-audio-hardening-design.md`.
+ * 1 GiB leaves only ≈ 365 MiB of headroom past that one asset — enough for a
+ * realistic handful of SHORT residents alongside it (one-shots, stingers, a
+ * minute-or-two loop), NOT a second near-worst-case 30-minute bed: two long
+ * ambience beds playing together (a storm plus rain, both looping — an
+ * entirely normal soundboard pattern) already sum past the cap on their own.
+ * That is an accepted, not a hidden, consequence: when the cache is over cap
+ * and everything resident is playing, `evictAssets` leaves it over cap (see
+ * its doc comment) rather than cutting audio — the cap bounds the RUNAWAY
+ * case, it does not guarantee everything simultaneously playing always fits.
+ * Against that runaway case — a board that plays through all 64
+ * documented-max assets, ~44 GB unbounded — 1 GiB is still roughly a 41×
+ * reduction. It is a per-engine cap: a page holding several boards' engines
+ * multiplies it, which is a lifecycle question for whoever owns how many
+ * engines exist at once, not something one engine's cache can bound from the
+ * inside.
  */
 export const DEFAULT_ASSET_CACHE_CAP_BYTES = 1024 * 1024 * 1024;
 
@@ -201,6 +208,23 @@ export function createEngine(
   /** Assets whose load returned `null` or threw — never retried. */
   const unplayable = new Set<string>();
   /**
+   * `assetId`s with a `fireOneShot` cold load in flight that has not yet had
+   * its chance to `start()` the resulting source.
+   *
+   * `fireOneShot`'s cold path (see its implementation) chains its own
+   * `.then()` onto the SAME promise `ensureAsset` already attached its
+   * `.finally()` to — and that `.finally()` is what calls `evictAssets`.
+   * Promise semantics guarantee `fireOneShot`'s continuation always runs
+   * strictly AFTER that `.finally()` completes, so by the time it would call
+   * `start()` and mark the asset playing via `isAssetPlaying`, eviction has
+   * already run once. Without this set, a one-shot's own just-decoded buffer
+   * could be evicted before it ever plays, whenever nothing else resident is
+   * evictable — dropping the fire silently, no error. This bridges exactly
+   * that gap: added before `ensureAsset` is asked to load, removed once
+   * `start()` has had its attempt (successful or not).
+   */
+  const firingOneShots = new Set<string>();
+  /**
    * Every source that has been started and not yet ended — INCLUDING sources
    * that are stopping but still fading out, which is why `stopTrack` replaces
    * the auto-release handler with a bookkeeping one rather than nulling it.
@@ -294,6 +318,10 @@ export function createEngine(
    * the only rule that is not negotiable is that eviction never touches it.
    * An evicted asset is not lost — the next `ensureAsset` for it re-decodes
    * through the exact same path a cold engine uses for a first play.
+   *
+   * `firingOneShots` extends that same rule to an asset that ISN'T playing
+   * yet but is about to be, for the one caller where "about to be" cannot
+   * wait for a later reconcile to make it so — see that set's doc comment.
    */
   function evictAssets(): void {
     let total = 0;
@@ -301,7 +329,7 @@ export function createEngine(
     if (total <= assetCacheCapBytes) return;
     for (const [assetId, asset] of assets) {
       if (total <= assetCacheCapBytes) break;
-      if (isAssetPlaying(assetId)) continue;
+      if (isAssetPlaying(assetId) || firingOneShots.has(assetId)) continue;
       assets.delete(assetId);
       total -= assetBytes(asset);
     }
@@ -655,12 +683,24 @@ export function createEngine(
         return;
       }
       if (unplayable.has(item.assetId)) return;
+      // Reserved BEFORE `ensureAsset` so it is visible to `evictAssets` for
+      // the whole window this cold load is in flight — including the
+      // instant `ensureAsset`'s own `.finally()` runs eviction, which is
+      // always before the `.then()` below gets a turn. See `firingOneShots`.
+      firingOneShots.add(item.assetId);
       ensureAsset(item.assetId);
       // Fire as soon as the buffer lands. A random ambient crack that arrives
       // late is still a crack; the alternative is silence until the scheduler's
       // next tick, which for a 5-minute interval is a long wait.
       void pending.get(item.assetId)?.then(() => {
-        if (!disposed && assets.has(item.assetId)) start(item, true);
+        try {
+          if (!disposed && assets.has(item.assetId)) start(item, true);
+        } finally {
+          // Whether or not this ended up sounding — evicted while cold-loading
+          // fails closed (`assets.has` is false, `start` is skipped) rather
+          // than throwing — the reservation's job is done either way.
+          firingOneShots.delete(item.assetId);
+        }
       });
     },
 
