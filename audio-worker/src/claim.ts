@@ -173,9 +173,14 @@ export async function claimNext<T>(model: ClaimModel, workerId: string): Promise
  * into a real `DeleteObjects` call. The renditions survive untouched, which
  * is what makes it silent: the asset keeps playing right up until someone
  * needs to re-transcode it, at which point the source is already gone.
- * `updatedAt` is what a once-attach actually bumps (the `$set` in
- * `createOnceVariantUpload`), so it reads "how long has THIS attach been
- * stuck" instead of "how old is the row."
+ *
+ * That sibling gates on `onceUploadStartedAt`, a field whose sole writer is
+ * `createOnceVariantUpload`, so it reads "how long has THIS attach been
+ * stuck" instead of "how old is the row." It originally used `updatedAt`,
+ * which was better than `createdAt` but still wrong for the same underlying
+ * reason: `updatedAt` records modification, not progress, and the app's two
+ * unfenced facet editors reset it — see that function's own `$or` for the
+ * whole argument.
  */
 export async function reapStale(
   model: ClaimModel,
@@ -344,10 +349,11 @@ async function reapAbandonedUploads(
  * age check against `createdAt` fires immediately instead of after a real
  * timeout.
  *
- * Gated on `updatedAt` instead — the field `createOnceVariantUpload` (and
- * every subsequent write to this row) actually bumps, so this reads "how
- * long has the CURRENT once-attach been stuck," which is the question that
- * needs answering.
+ * Gated on `onceUploadStartedAt` instead — the app field
+ * `createOnceVariantUpload` stamps, and the only writer of it — so this
+ * reads "how long has the CURRENT once-attach been stuck," which is the
+ * question that needs answering. (It was `updatedAt` until the facet-edit
+ * hole below was found; the `$or` in the query documents both.)
  *
  * Reverts the row to a fully playable state rather than failing it: `status:
  * 'ready'` (the main content was never touched by this abandoned attach),
@@ -371,7 +377,45 @@ async function reapAbandonedOnceUploads(
 ): Promise<void> {
   const abandoned = await model
     .find(
-      { status: 'uploading', variant: 'once', updatedAt: { $lt: cutoff } },
+      {
+        status: 'uploading',
+        variant: 'once',
+        // Gated on `onceUploadStartedAt` — the web app's dedicated
+        // attach-liveness stamp — NOT on `updatedAt`, which is what this
+        // reaper originally used and which cannot answer the question.
+        //
+        // `updatedAt` means "when was this document last modified at all",
+        // and two unfenced facet editors bump it on any row their owner
+        // touches: `updateAudioAsset` and `bulkTagAudioAssets` in
+        // `app/server/functions/audio.ts`. So a GM who retitles or retags a
+        // track whose once-attach died mid-PUT reset this reaper's only
+        // clock and bought the dead attach another full timeout — and there
+        // is no way out from the other side either, because
+        // `createOnceVariantUpload` refuses anything that isn't
+        // `status: 'ready'` and the row is stuck in `uploading`. Edit it
+        // again and it is postponed again: the row can be held out of reach
+        // of the reaper forever by ordinary library housekeeping, with the
+        // asset unplayable the whole time (`status` is shared with the main
+        // pipeline — see `variant` on the app's AudioAsset model).
+        // `onceUploadStartedAt` has exactly one writer, the attach itself,
+        // so nothing unrelated can move it.
+        //
+        // The `$or` is the migration fallback, and its second branch is
+        // deliberately the OLD predicate. `onceUploadStartedAt: null`
+        // matches both an explicit null and a document where the field is
+        // absent (Mongo equality-to-null semantics), i.e. every row written
+        // before the app started stamping it — including any attach that
+        // was in flight across the deploy. Those rows keep exactly today's
+        // behaviour. The alternative, treating a missing stamp as
+        // infinitely stale, would have this reaper revert every in-flight
+        // once-attach in the collection on its first pass after the deploy
+        // and delete their once-source objects: the fix's own failure mode,
+        // inflicted on the users who happened to be mid-upload.
+        $or: [
+          { onceUploadStartedAt: { $lt: cutoff } },
+          { onceUploadStartedAt: null, updatedAt: { $lt: cutoff } },
+        ],
+      },
       { projection: { onceSourceKey: 1 }, limit: REAP_UPLOAD_BATCH }
     )
     .toArray();
@@ -382,7 +426,42 @@ async function reapAbandonedOnceUploads(
     if (shouldContinue && !shouldContinue()) break;
 
     const result = await model.updateOne(
-      { _id: row._id, status: 'uploading', variant: 'once' },
+      {
+        _id: row._id,
+        status: 'uploading',
+        variant: 'once',
+        // `onceSourceKey` identifies WHICH attach this write is reverting —
+        // without it the fence is satisfied by any once-attach on this row,
+        // including one that started after the candidate list was read.
+        //
+        // `{_id, status: 'uploading', variant: 'once'}` describes the state a
+        // SECOND attach puts the row in just as exactly as it describes the
+        // abandoned first one, and this loop runs for real time (bounded
+        // batch, a `beat()` and an Atlas round trip per row). So the
+        // interleave needs no unusual timing: the stale attach ages out, the
+        // GM gives up and re-attaches with a better file, and before this
+        // row's turn comes `createOnceVariantUpload` has minted a NEW
+        // `onceSourceKey` and restamped the row. The unfenced write then
+        // reverted that seconds-old attach to `ready`/`main`, told the user
+        // it "never completed", and — because `row.onceSourceKey` was
+        // projected BEFORE the re-attach — pushed the OLD key into
+        // `DeleteObjects` while the new object, now referenced by nothing,
+        // was stranded. The browser's PUT to the new presigned URL lands on
+        // an object no row points at, the worker never sees the job, and
+        // nothing reports any of it.
+        //
+        // Same class its sibling `reapAbandonedUploads` was hardened against
+        // one review earlier, and the same remedy: make the fence describe
+        // the unit of work, not just the state.
+        //
+        // `?? null` because a projected-but-absent field arrives as
+        // `undefined`, and `{ onceSourceKey: null }` is the filter that
+        // matches null-or-missing in Mongo. Such a row has nothing to delete
+        // anyway (`row.onceSourceKey` is falsy below), but it still has to be
+        // reverted out of `uploading` or it is stuck forever, which is this
+        // reaper's whole purpose.
+        onceSourceKey: row.onceSourceKey ?? null,
+      },
       {
         $set: {
           status: 'ready',

@@ -755,6 +755,16 @@ export async function createOnceVariantUpload({
           // now }` filter would silently delay this attach's first claim
           // by up to the backoff cap (5 minutes by default).
           nextAttemptAt: null,
+          // The once reaper's clock, and the ONLY write in either package
+          // that sets it — see `onceUploadStartedAt` on the model for the
+          // full argument. In short: this write is the only way a row can
+          // enter `status: 'uploading', variant: 'once'`, so it is the only
+          // write that starts an attach, so it is the only one entitled to
+          // say when the current attach began. `updatedAt` below cannot
+          // stand in for it, because `updateAudioAsset` and
+          // `bulkTagAudioAssets` bump `updatedAt` on any row their owner
+          // edits, which pushed the reap of a dead attach out indefinitely.
+          onceUploadStartedAt: new Date(),
           updatedAt: new Date(),
         },
       },

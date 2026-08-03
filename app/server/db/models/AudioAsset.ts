@@ -85,6 +85,42 @@ const audioAssetSchema = new mongoose.Schema({
   // `audio-worker/src/claim.ts` (both clear, -> null). If `onceSourceKey`
   // ever grows a new writer, that writer owns this field too.
   onceSourceBytes: { type: Number, default: null },
+  // When the CURRENT once-variant attach presigned its upload — the clock
+  // `reapAbandonedOnceUploads` (audio-worker/src/claim.ts) measures a stuck
+  // attach against. Cross-service contract field: written here, read only by
+  // the worker.
+  //
+  // It exists because that reaper used to gate on `updatedAt`, and
+  // `updatedAt` cannot answer the question it was being asked. "How long has
+  // this attach been stuck?" is a JOB-LIVENESS question; `updatedAt` answers
+  // "when was this document last modified at all", and unrelated writers
+  // legitimately bump it. `updateAudioAsset` and `bulkTagAudioAssets` are
+  // both unfenced facet edits — retitle the track, add a tag — so a GM who
+  // edits an asset whose once-attach died mid-PUT pushes the reap out by the
+  // full timeout, every time, and there is no self-service recovery:
+  // `createOnceVariantUpload` requires `status: 'ready'` and the row is
+  // stuck in `uploading`. Editing it again (or a bulk retag that happens to
+  // include it) postpones it again, indefinitely. A dedicated field is
+  // immune by construction. (The mirror-image case is `AudioPackage`'s
+  // optimistic-concurrency precondition, which is CORRECTLY `updatedAt`:
+  // there the question really is "has this document been modified since I
+  // read it", so any writer bumping it should be a conflict.)
+  //
+  // INVARIANT, and it is what keeps this field cheap: it has EXACTLY ONE
+  // writer, `createOnceVariantUpload` in `app/server/functions/audio.ts`,
+  // which is also the only write in either package that can put a row into
+  // `status: 'uploading', variant: 'once'` — the only state the reaper reads
+  // it in. Nothing else may stamp it, and nothing needs to clear it: a value
+  // left over from a finished attach is unreachable, because getting back
+  // into the state that reads it necessarily runs the one writer again. If a
+  // second path into `uploading`/`once` is ever added, that path owns this
+  // field too.
+  //
+  // Rows written before this field existed lack it, and the reaper falls
+  // back to `updatedAt` for exactly those (see its `$or`) — old rows keep
+  // today's behaviour rather than being treated as infinitely stale, which
+  // would reap every in-flight attach at deploy time.
+  onceUploadStartedAt: { type: Date, default: null },
   // Which pipeline pass the row's CURRENT status/attempts/claim state
   // describes: 'main' for the ordinary source -> renditions pipeline (every
   // asset, including every one that predates this field), 'once' while a

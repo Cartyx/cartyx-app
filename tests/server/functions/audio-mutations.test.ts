@@ -929,3 +929,119 @@ describe('deleteAudioAsset', () => {
     expect(AudioAsset.deleteOne).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * TASK 10, FIX 2 — the app's half of the once-attach liveness clock.
+ *
+ * `reapAbandonedOnceUploads` (audio-worker/src/claim.ts) is the only thing
+ * that can free a once-variant attach whose upload died mid-PUT: the row is
+ * parked in `status: 'uploading'`, and `createOnceVariantUpload` refuses
+ * anything that isn't `status: 'ready'`, so the owner has no self-service
+ * way out. Until this fix, that reaper's only clock was `updatedAt` — and
+ * `updatedAt` answers "was this document modified", not "did this job make
+ * progress". The two facet editors below are unfenced: they match on
+ * `{_id, ownerId}` alone and bump `updatedAt` on whatever row they touch,
+ * dead attach or not. Retitle the track and the reap is pushed out by a full
+ * timeout; retitle it again and it is pushed out again, forever, on an asset
+ * that reads as un-ready everywhere in the meantime (`status` is shared with
+ * the main pipeline — see `variant` on the model).
+ *
+ * This drives all three REAL server functions in the order a user would hit
+ * them and composes their writes onto one document, rather than asserting
+ * that some `$set` does or doesn't contain a key: the property under test is
+ * what the row LOOKS LIKE to the reaper after a day of ordinary library
+ * housekeeping, and that is a statement about the document, not the update.
+ */
+describe('the once-attach liveness clock (Task 10, fix 2)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /**
+   * All three writers use plain `$set` for every field that matters here
+   * (`bulkTagAudioAssets` only reaches for `$addToSet` in `add` mode, which
+   * this scenario deliberately avoids), so `Object.assign` is exactly what
+   * Mongo would do to the stored document.
+   */
+  function applySet(row: Record<string, unknown>, update: unknown): void {
+    Object.assign(row, (update as { $set: Record<string, unknown> }).$set);
+  }
+
+  it('is not reset by a retitle or a bulk retag, so a dead attach still ages out', async () => {
+    vi.useFakeTimers();
+    try {
+      const attachedAt = new Date('2026-07-01T00:00:00.000Z');
+      const editedAt = new Date('2026-07-02T00:00:00.000Z');
+      const retaggedAt = new Date('2026-07-02T00:05:00.000Z');
+
+      // The stored document, as Mongo would hold it. Starts as a
+      // fully-transcoded music asset with no once-variant.
+      const row: Record<string, unknown> = {
+        _id: 'a1',
+        ownerId: 'u1',
+        kind: 'music',
+        title: 'Tavern Theme',
+        status: 'ready',
+        variant: 'main',
+        tags: ['tavern'],
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      };
+
+      // 1. The GM attaches a once-variant. Their browser then dies mid-PUT,
+      //    so nothing ever confirms it — the row is stuck from here on.
+      vi.setSystemTime(attachedAt);
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({ ...row } as never);
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+        _id: 'a1',
+        status: 'uploading',
+      } as never);
+      const { createOnceVariantUpload, updateAudioAsset, bulkTagAudioAssets } =
+        await import('~/server/functions/audio');
+      await createOnceVariantUpload({
+        data: { assetId: 'a1', filename: 'ending.wav', contentType: 'audio/wav', bytes: 1024 },
+        userId: 'u1',
+      });
+      applySet(row, vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0][1]);
+
+      // The attach is in flight and the clock has started. If this were
+      // absent the rest of the test would be vacuous, so it is asserted
+      // rather than assumed.
+      expect(row).toMatchObject({ status: 'uploading', variant: 'once' });
+      expect(row.onceUploadStartedAt).toEqual(attachedAt);
+
+      // 2. A day later — long past any upload timeout — the GM tidies their
+      //    library and renames the track.
+      vi.setSystemTime(editedAt);
+      mockUpdateResult({ ...row, title: 'Tavern Theme (night)' });
+      await updateAudioAsset({
+        data: { id: 'a1', title: 'Tavern Theme (night)' },
+        userId: 'u1',
+      });
+      applySet(row, vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[1][1]);
+
+      // 3. And sweeps a new tag across a selection that happens to include it.
+      vi.setSystemTime(retaggedAt);
+      vi.mocked(AudioAsset.updateMany).mockResolvedValue({ modifiedCount: 1 } as never);
+      await bulkTagAudioAssets({
+        data: { ids: ['a1'], tags: ['night'], tagMode: 'replace' },
+        userId: 'u1',
+      });
+      applySet(row, vi.mocked(AudioAsset.updateMany).mock.calls[0][1]);
+
+      // Both edits landed — this row really was written twice, so a clock
+      // that any writer could move would have moved.
+      expect(row.title).toBe('Tavern Theme (night)');
+      expect(row.tags).toEqual(['night']);
+      expect(row.updatedAt).toEqual(retaggedAt);
+
+      // ...and the reaper's clock still reads when the attach began, a full
+      // day earlier. That difference is the entire fix: gated on
+      // `updatedAt` this row looks five minutes old and is skipped; gated on
+      // `onceUploadStartedAt` it is a day stale and is finally freed.
+      expect(row.onceUploadStartedAt).toEqual(attachedAt);
+      // Still stuck, which is why it has to be the reaper that frees it.
+      expect(row).toMatchObject({ status: 'uploading', variant: 'once' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
