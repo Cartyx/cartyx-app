@@ -751,6 +751,89 @@ describe('createEngine — volume and teardown', () => {
   });
 });
 
+describe('createEngine — teardown aborts in-flight loads (Task 9)', () => {
+  it('does not throw into the graph or file a capture when dispose() runs on a load still in flight', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    const errors: Array<{ assetId: string; error: unknown }> = [];
+    let calls = 0;
+    // Settles ONLY in response to the AbortSignal `dispose()` fires — never
+    // on its own. A loader that resolved by itself would let `dispose()` win
+    // a race against an already-settled load and prove nothing; this shape
+    // guarantees the load is genuinely still pending when dispose runs, which
+    // is the one condition the guard under test actually has to hold up
+    // under.
+    const loadAsset = (_assetId: string, signal: AbortSignal): Promise<EngineAsset | null> => {
+      calls += 1;
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        });
+      });
+    };
+    const engine = createEngine(ctx, {
+      loadAsset,
+      onLoadError: (assetId, error) => errors.push({ assetId, error }),
+    });
+
+    engine.apply(
+      board([boardItem({ itemId: 'storm', assetId: 'a1', playing: true, volume: 1, loop: true })])
+    );
+    // The load is genuinely in flight — `loadAsset` above never resolves on
+    // its own, so if this were 0 the rest of the test would be vacuous.
+    expect(calls).toBe(1);
+
+    expect(() => engine.dispose()).not.toThrow();
+    // Let the abort's rejection reach `ensureAsset`'s `.catch` — a microtask,
+    // not a real delay.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(errors).toEqual([]);
+    // Not just "no capture" — the graph itself must still be renderable, i.e.
+    // nothing threw into a callback Web Audio was driving.
+    await expect(ctx.startRendering()).resolves.toBeTruthy();
+  });
+
+  it('still reports a genuine load failure while the engine is live — the disposed guard does not swallow everything', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    const errors: Array<{ assetId: string; error: unknown }> = [];
+    const boom = new Error('decode failed');
+    const engine = createEngine(ctx, {
+      loadAsset: () => Promise.reject(boom),
+      onLoadError: (assetId, error) => errors.push({ assetId, error }),
+    });
+
+    engine.apply(
+      board([boardItem({ itemId: 'storm', assetId: 'a1', playing: true, volume: 1, loop: true })])
+    );
+    await engine.ready();
+
+    // The engine was never disposed, so this is the ordinary case: a real
+    // failure must still reach telemetry. Proves the `disposed` gate added
+    // for teardown does not accidentally silence everything.
+    expect(errors).toEqual([{ assetId: 'a1', error: boom }]);
+  });
+
+  it('dispose() drains `pending` — ready() resolves promptly even for a load that never settles on its own (Handoff 1)', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    // Ignores the abort signal entirely — standing in for a caller whose
+    // network layer cannot be cancelled (or simply did not wire the signal
+    // through). If `dispose()` left this entry in `pending`, `ready()`'s
+    // `while (pending.size > 0) await Promise.all(...)` would await a
+    // promise that never settles and this test would hang until vitest's
+    // timeout, not resolve.
+    const loadAsset = (): Promise<EngineAsset | null> => new Promise(() => {});
+    const engine = createEngine(ctx, { loadAsset });
+
+    engine.apply(
+      board([boardItem({ itemId: 'storm', assetId: 'a1', playing: true, volume: 1, loop: true })])
+    );
+
+    engine.dispose();
+
+    await expect(engine.ready()).resolves.toBeUndefined();
+  });
+});
+
 describe('createEngine — decoded-buffer cache cap', () => {
   // Real fixtures, real bytes: three 0.01 s mono buffers, 480 samples each.
   // `assetCacheCapBytes` is overridden per test so the cap is genuinely

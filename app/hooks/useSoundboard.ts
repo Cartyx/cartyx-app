@@ -502,50 +502,57 @@ export function useSoundboard(
   // Audio
   // ---------------------------------------------------------------------
 
-  const loadAsset = useCallback(async (assetId: string): Promise<EngineAsset | null> => {
-    const ctx = ctxRef.current;
-    if (!ctx) throw new Error('Soundboard: loadAsset ran with no AudioContext');
+  const loadAsset = useCallback(
+    async (assetId: string, signal: AbortSignal): Promise<EngineAsset | null> => {
+      const ctx = ctxRef.current;
+      if (!ctx) throw new Error('Soundboard: loadAsset ran with no AudioContext');
 
-    const assets = optionsRef.current.assets;
-    // `enableAudio` refuses to build an engine while this is undefined, so
-    // reaching here means the invariant broke. THROW rather than return null:
-    // both end up in the engine's permanent `unplayable` set, but only a throw
-    // reaches `onLoadError` -> `captureException` instead of vanishing.
-    if (!assets) throw new Error('Soundboard: loadAsset ran before the asset list settled');
+      const assets = optionsRef.current.assets;
+      // `enableAudio` refuses to build an engine while this is undefined, so
+      // reaching here means the invariant broke. THROW rather than return null:
+      // both end up in the engine's permanent `unplayable` set, but only a throw
+      // reaches `onLoadError` -> `captureException` instead of vanishing.
+      if (!assets) throw new Error('Soundboard: loadAsset ran before the asset list settled');
 
-    const asset = assets.find((candidate) => candidate.id === assetId);
-    // Absent from a SETTLED list is not "nothing to play" — it is the list
-    // being wrong. Today that happens two ways: `listAudioAssetsFn` is
-    // cursor-paginated (default 50) while a package holds up to 64 items, and
-    // it filters `{ ownerId: userId }` so no system package's assets are ever
-    // in it (Task 21 adds `listPackageAssetsFn` to fix the source). Either way
-    // the pad dies permanently, so it must not die quietly.
-    if (!asset) throw new Error(`Soundboard: asset ${assetId} is not in the board's asset list`);
-    // Still transcoding: temporary in the world, permanent for this engine.
-    // Loud, for the same reason.
-    if (
-      asset.status === 'pending' ||
-      asset.status === 'processing' ||
-      asset.status === 'uploading'
-    ) {
-      throw new Error(`Soundboard: asset ${assetId} is not ready (status: ${asset.status})`);
-    }
+      const asset = assets.find((candidate) => candidate.id === assetId);
+      // Absent from a SETTLED list is not "nothing to play" — it is the list
+      // being wrong. Today that happens two ways: `listAudioAssetsFn` is
+      // cursor-paginated (default 50) while a package holds up to 64 items, and
+      // it filters `{ ownerId: userId }` so no system package's assets are ever
+      // in it (Task 21 adds `listPackageAssetsFn` to fix the source). Either way
+      // the pad dies permanently, so it must not die quietly.
+      if (!asset) throw new Error(`Soundboard: asset ${assetId} is not in the board's asset list`);
+      // Still transcoding: temporary in the world, permanent for this engine.
+      // Loud, for the same reason.
+      if (
+        asset.status === 'pending' ||
+        asset.status === 'processing' ||
+        asset.status === 'uploading'
+      ) {
+        throw new Error(`Soundboard: asset ${assetId} is not ready (status: ${asset.status})`);
+      }
 
-    // `failed`/no rendition are the only genuine "there is nothing to play,
-    // ever" answers, and the only ones that may return null silently.
-    if (asset.status !== 'ready') return null;
-    const rendition = pickRendition(asset.renditions);
-    if (!rendition) return null;
+      // `failed`/no rendition are the only genuine "there is nothing to play,
+      // ever" answers, and the only ones that may return null silently.
+      if (asset.status !== 'ready') return null;
+      const rendition = pickRendition(asset.renditions);
+      if (!rendition) return null;
 
-    const response = await fetch(rendition.url);
-    if (!response.ok) throw new Error(`Audio rendition fetch failed (${response.status})`);
-    const bytes = await response.arrayBuffer();
-    const buffer = await ctx.decodeAudioData(bytes);
-    // `durationSamples` passes through UNMODIFIED: the engine divides it by
-    // `AUDIO_RENDITION_SAMPLE_RATE` to compute `loopEnd`, and rounding it
-    // anywhere on the way makes Safari loops tick on every repeat.
-    return { buffer, durationSamples: asset.durationSamples };
-  }, []);
+      // `signal` aborts the instant the engine's `dispose()` runs — teardown,
+      // a board clear, or the retry path rebuilding a desynced engine (see
+      // `teardownAudio`). Passing it through actually cancels the network
+      // request rather than merely leaving its result unread.
+      const response = await fetch(rendition.url, { signal });
+      if (!response.ok) throw new Error(`Audio rendition fetch failed (${response.status})`);
+      const bytes = await response.arrayBuffer();
+      const buffer = await ctx.decodeAudioData(bytes);
+      // `durationSamples` passes through UNMODIFIED: the engine divides it by
+      // `AUDIO_RENDITION_SAMPLE_RATE` to compute `loopEnd`, and rounding it
+      // anywhere on the way makes Safari loops tick on every repeat.
+      return { buffer, durationSamples: asset.durationSamples };
+    },
+    []
+  );
 
   const teardownAudio = useCallback((): void => {
     schedulerRef.current?.dispose();
@@ -641,11 +648,22 @@ export function useSoundboard(
       // Without this the pad stays lit forever.
       onItemEnded: (itemId) => dispatch({ type: 'stop', itemId }),
       onLoadError: (assetId, error) => {
+        // Guard FIRST. `dispose()` aborts every in-flight load and the
+        // engine itself already stops calling this once it is disposed (see
+        // `ensureAsset`'s `disposed` guard in `engine.ts`) — but the cleanup
+        // effect below flips `mountedRef` to `false` and THEN calls
+        // `teardownAudio()`, so a rejection that was already mid-flight when
+        // this callback starts running can still land here in the same tick
+        // dispose fires. Capturing it would be exactly the "one GlitchTip
+        // event per asset on every board clear" this task exists to stop —
+        // a teardown is not a genuine failure, so it must never reach
+        // `captureException`. A real failure while the board is still
+        // mounted falls through untouched.
+        if (!mountedRef.current) return;
         captureException(error, { area: 'soundboard', campaignId: campaignIdRef.current, assetId });
         // Surface it too. A GlitchTip event tells ME; `loadErrors` tells the
         // GM mid-session, which is the only audience that can react to a pad
         // that will now be silent for the rest of the engine's life.
-        if (!mountedRef.current) return;
         setLoadErrors((previous) => {
           if (previous.has(assetId)) return previous;
           const next = new Set(previous);

@@ -30,8 +30,17 @@ export type SoundboardEngineOptions = {
    * Fetch + `decodeAudioData` for one asset id. Returning `null` means "this
    * asset cannot be played" (not ready, no rendition, deleted) and the engine
    * will not ask again for the lifetime of the engine.
+   *
+   * `signal` aborts the instant `dispose()` runs (see there). A caller whose
+   * implementation makes a network request SHOULD pass it straight through
+   * (`fetch(url, { signal })`) so a torn-down board actually cancels its
+   * in-flight downloads rather than merely discarding a result nobody will
+   * use. The engine does not depend on this for correctness — any
+   * settlement that lands after `dispose()`, aborted or not, is dropped
+   * unconditionally (see `ensureAsset`) — so an implementation that ignores
+   * `signal` degrades to wasted bandwidth, not wrong behaviour.
    */
-  loadAsset: (assetId: string) => Promise<EngineAsset | null>;
+  loadAsset: (assetId: string, signal: AbortSignal) => Promise<EngineAsset | null>;
   /**
    * Fired when a pad releases itself — a one-shot reaching the end of its
    * buffer, or a loop that was flipped to `1×` finishing its current pass.
@@ -236,6 +245,16 @@ export function createEngine(
    * lifetime of engines that come and go.
    */
   const live = new Set<AudioBufferSourceNode>();
+  /**
+   * Aborted in `dispose()`. Threaded through to `options.loadAsset` on every
+   * call so a caller whose implementation is a `fetch` can actually cancel
+   * the request on teardown rather than just having its result ignored — see
+   * that option's doc comment. `ensureAsset`'s `disposed` guards are what
+   * make capture-suppression correct even for an implementation that ignores
+   * this signal entirely; aborting is resource hygiene on top of that, not a
+   * second source of truth.
+   */
+  const abortController = new AbortController();
 
   let latest: BoardState | null = null;
   let masterVolume = 1;
@@ -529,12 +548,28 @@ export function createEngine(
   function ensureAsset(assetId: string): void {
     if (assets.has(assetId) || pending.has(assetId) || unplayable.has(assetId)) return;
     const load = options
-      .loadAsset(assetId)
+      .loadAsset(assetId, abortController.signal)
       .then((asset) => {
+        // A disposed engine's `assets`/`unplayable` are deliberately cleared
+        // by `dispose()` (Handoff 1) and MUST stay empty afterward — a load
+        // that happened to be mid-flight at teardown and settles successfully
+        // later must not silently repopulate the cache of an engine nobody
+        // can ever play through again.
+        if (disposed) return;
         if (asset) assets.set(assetId, asset);
         else unplayable.add(assetId);
       })
       .catch((error: unknown) => {
+        // THE TEARDOWN-TELEMETRY FIX. Once `dispose()` has run, every load
+        // still in flight is expected to reject — that is the point of
+        // aborting them — and is not a genuine failure anyone needs to hear
+        // about. Gating on `disposed` here (rather than sniffing the error
+        // for an "AbortError" name) also silences a load that fails for an
+        // unrelated reason after teardown, which is correct: nobody is
+        // listening to this engine anymore either way. A failure that lands
+        // while the engine is still live — the ordinary case — is untouched
+        // and still reports exactly as before.
+        if (disposed) return;
         unplayable.add(assetId);
         options.onLoadError?.(assetId, error);
       })
@@ -715,6 +750,15 @@ export function createEngine(
     dispose(): void {
       if (disposed) return;
       disposed = true;
+      // Cancels every fetch/decode chain still in flight (up to 64 of them,
+      // one per asset a board can reference). This is network hygiene, not
+      // what makes teardown silent — `ensureAsset`'s `disposed` guards do
+      // that regardless of whether `options.loadAsset` honours the signal at
+      // all. Ordering matters only in that `disposed` is already `true`
+      // before this fires: `abort()`'s listeners run synchronously, but the
+      // promise rejection they cause is always a later microtask, so
+      // `ensureAsset`'s guards see the flag correctly either way.
+      abortController.abort();
       const now = ctx.currentTime;
       for (const source of live) {
         source.onended = null;
@@ -727,6 +771,30 @@ export function createEngine(
       live.clear();
       tracks.clear();
       oneShots.clear();
+      // Handoff from Task 8's review: without this, a disposed engine held
+      // onto its whole decoded-buffer cache — up to the full byte cap (1 GiB
+      // by default) — reachable until the entire engine object was garbage
+      // collected. Nothing SOUNDS different for clearing these: every source
+      // is already stopped above, and `master.disconnect()` below is what
+      // makes dispose silent. This is releasing memory a dead engine has no
+      // further use for, nothing more.
+      assets.clear();
+      pending.clear();
+      unplayable.clear();
+      // `firingOneShots` is deliberately left alone. Unlike the collections
+      // above it is not dead weight to reclaim: every entry is a reservation
+      // tied to a `pending` promise whose `.then()` continuation
+      // (`fireOneShot`'s cold path) is ALREADY attached and will still run
+      // when that promise settles — dispose cannot detach it, only make its
+      // body a no-op via the `!disposed` check it already has. That
+      // continuation's own `finally` removes the entry regardless of
+      // `disposed` (see the set's doc comment: "self-clears … including
+      // engine disposal"), so it is never permanently retained. And nothing
+      // reads this set once `disposed` is true — `evictAssets`, its only
+      // reader, is gated on `!disposed` at both call sites — so a stale
+      // entry in the window between now and that `finally` is inert. Clearing
+      // it here would just be a second writer racing the one that already
+      // owns cleanup correctly.
       // This, not the loop above, is what makes dispose silent.
       master.disconnect();
     },
