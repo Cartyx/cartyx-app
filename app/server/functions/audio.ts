@@ -50,11 +50,23 @@ async function ensureDb() {
  * uploads.$id.confirm.ts` classifies these by `e instanceof Error` plus a
  * message regex, and `AudioClientError` satisfies both.
  *
+ * `retryAudioAsset`'s "cannot be retried" throw is the sixth site of the same
+ * class, worded differently because its miss is a single compound
+ * `findOneAndUpdate({ _id, ownerId, status: 'failed', confirmedAt: { $ne:
+ * null }, permanentFailure: { $ne: true } })` rather than a bare `{ _id,
+ * ownerId }` lookup — but nothing gates it on ownership FIRST the way
+ * `confirmAudioUpload`'s precondition throw does, so a caller who does not
+ * own the guessed id gets this exact throw regardless of the row's state.
+ * It is reachable purely by guessing ids, same as the other five, just with
+ * extra clauses folded into the one query. `retryAudioAsset` has no phase-3
+ * bearer route, so there is no message-regex classifier to keep in sync.
+ *
  * NOT converted: the sibling precondition throws on the same functions
  * ('Audio asset is not awaiting confirmation', 'Only music assets can have a
  * once-variant attached', ...). Those require the caller to already OWN a real
- * asset in a specific state, so they are not reachable by guessing ids and
- * their volume is bounded by the caller's own library. Leaving them as plain
+ * asset in a specific state — reached only AFTER a separate ownership check
+ * has already passed — so they are not reachable by guessing ids and their
+ * volume is bounded by the caller's own library. Leaving them as plain
  * `Error`s keeps a genuine state-machine surprise visible in GlitchTip.
  */
 export class AudioClientError extends Error {
@@ -1344,13 +1356,10 @@ export async function retryAudioAsset({
     if (cap) {
       // AudioClientError: the caller's own doing, reachable at will by
       // clicking Retry repeatedly, must not file a GlitchTip event — same
-      // shape as every other cap/quota refusal in this file. Deliberately
-      // NOT the plain `Error` the "cannot be retried" throw below uses:
-      // that one requires the caller to already own a real `failed` row in
-      // a specific state (see the class doc comment at the top of this
-      // file), but this refusal fires purely from the caller's OWN queue
-      // depth and is reachable on any retry attempt regardless of which
-      // row it names.
+      // shape as every other cap/quota refusal in this file, and now the
+      // same class as the "cannot be retried" throw below: this refusal
+      // fires purely from the caller's OWN queue depth and is reachable on
+      // any retry attempt regardless of which row it names.
       throw new AudioClientError(
         `Too many pending transcode jobs (${cap.pendingCount} of ${cap.maxPendingJobs} already queued). Wait for one to finish before retrying.`
       );
@@ -1379,7 +1388,10 @@ export async function retryAudioAsset({
       // `.lean()` for the same reason as updateAudioAsset — see that comment.
     ).lean();
     if (!doc) {
-      throw new Error(
+      // AudioClientError, not a plain `Error`: this compound filter's miss
+      // is reachable by guessing ids the same way the five `'Audio asset
+      // not found'` sites are — see the class doc comment above for why.
+      throw new AudioClientError(
         'Audio asset cannot be retried (not found, not failed, its upload never completed, or the file itself was rejected)'
       );
     }

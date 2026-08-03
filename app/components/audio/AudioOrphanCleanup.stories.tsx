@@ -79,6 +79,36 @@ export const TruncatedScan: Story = {
   },
 };
 
+/**
+ * B2: the shared `~/utils/format-bytes` this component now uses adds a GB
+ * tier (previously it had its own copy that stopped at MB). A single asset
+ * can never reach it (`AUDIO_MAX_BYTES` caps one at 50 MB), but the delete
+ * button's total sums every orphan found, and that can cross 1 GiB on an
+ * account with enough of them — see `AudioOrphanCleanup.test.tsx` for the
+ * assertion this renders `1.50 GB`, not `1536.0 MB`.
+ */
+export const LargeOrphanTotal: Story = {
+  args: {
+    result: {
+      orphans: [
+        {
+          key: 'uploads/audio/renditions/507f1f77bcf86cd799439011.opus',
+          sizeBytes: 0.75 * 1024 * 1024 * 1024,
+          lastModified: '2026-07-01T10:00:00.000Z',
+        },
+        {
+          key: 'uploads/audio/renditions/507f1f77bcf86cd799439012.opus',
+          sizeBytes: 0.75 * 1024 * 1024 * 1024,
+          lastModified: '2026-07-01T10:00:01.000Z',
+        },
+      ],
+      scannedObjectCount: 12,
+      truncated: false,
+      r2Disabled: false,
+    },
+  },
+};
+
 export const StorageDisabled: Story = {
   args: {
     result: { orphans: [], scannedObjectCount: 0, truncated: false, r2Disabled: true },

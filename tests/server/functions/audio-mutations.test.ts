@@ -369,12 +369,24 @@ describe('retryAudioAsset', () => {
     expect(res.status).toBe('pending');
   });
 
-  it('refuses an asset that is not failed (or belongs to another owner)', async () => {
+  /**
+   * B1 (phase-B deferred finding on Task 2's review): this miss is a single
+   * compound `findOneAndUpdate`, reachable by guessing ids exactly like the
+   * five `'Audio asset not found'` sites — see the `AudioClientError` class
+   * doc comment. Asserting only that it rejects would pass with the type
+   * reverted to a plain `Error`, which is the bug this closes: the class IS
+   * the no-telemetry contract, so the effect (`serverCaptureException` not
+   * called) is what has to be pinned, not just the rejection.
+   */
+  it('refuses an asset that is not failed (or belongs to another owner): AudioClientError, no GlitchTip event', async () => {
     mockUpdateResult(null);
-    const { retryAudioAsset } = await import('~/server/functions/audio');
-    await expect(retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' })).rejects.toThrow(
-      /cannot be retried/i
+    const { retryAudioAsset, AudioClientError } = await import('~/server/functions/audio');
+    const err = await retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' }).catch(
+      (e: unknown) => e
     );
+    expect(err).toBeInstanceOf(AudioClientError);
+    expect((err as Error).message).toMatch(/cannot be retried/i);
+    expect(serverCaptureException).not.toHaveBeenCalled();
   });
 
   describe('pending job cap', () => {

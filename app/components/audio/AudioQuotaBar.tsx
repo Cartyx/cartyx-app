@@ -1,4 +1,5 @@
 import { AlertTriangle, XCircle } from 'lucide-react';
+import { formatBytes } from '~/utils/format-bytes';
 
 /** Props for the AudioQuotaBar component. */
 export interface AudioQuotaBarProps {
@@ -44,13 +45,6 @@ function quotaStatus(usageBytes: number, limitBytes: number): QuotaStatus {
   if (usageBytes >= limitBytes) return 'over';
   if (limitBytes > 0 && usageBytes / limitBytes >= NEAR_LIMIT_RATIO) return 'near';
   return 'healthy';
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
 /**
