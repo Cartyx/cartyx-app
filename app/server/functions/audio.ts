@@ -133,7 +133,10 @@ function telemetryId(actor: Actor): string {
 /** Report to GlitchTip unless the failure was the caller's own doing. */
 function reportAudioError(e: unknown, actor: Actor, context: Record<string, unknown>) {
   if (e instanceof AudioClientError) return;
-  serverCaptureException(e, telemetryId(actor), context);
+  // `void`: deliberately not awaited (CLAUDE.md — capture calls must never
+  // block a request-critical path), and explicit now that this file lints
+  // `no-floating-promises` (see the config's B3 comment for why).
+  void serverCaptureException(e, telemetryId(actor), context);
 }
 
 /**
@@ -360,7 +363,7 @@ async function assertUnderStorageQuota(actor: Actor, action: string): Promise<vo
     // the caller stays an `AudioClientError` — whether the fault deserves a
     // report and whether the outward rejection may amplify are separate
     // questions, and this answers them differently on purpose.
-    serverCaptureException(e, telemetryId(actor), { action: `${action}.quotaCheck` });
+    void serverCaptureException(e, telemetryId(actor), { action: `${action}.quotaCheck` });
     throw new AudioClientError(
       'Unable to verify your storage usage right now. Please try again shortly.'
     );
@@ -622,7 +625,7 @@ export async function confirmAudioUpload({
     );
     if (!updated) throw new Error('Audio asset is not awaiting confirmation');
 
-    serverCaptureEvent(telemetryId({ userId, sessionUserId }), 'audio_upload_confirmed', {
+    void serverCaptureEvent(telemetryId({ userId, sessionUserId }), 'audio_upload_confirmed', {
       assetId: data.assetId,
     });
     return { assetId: data.assetId, status: updated.status ?? 'pending' };
@@ -962,9 +965,13 @@ export async function confirmOnceVariantUpload({
     );
     if (!updated) throw new Error('Once-variant asset is not awaiting confirmation');
 
-    serverCaptureEvent(telemetryId({ userId, sessionUserId }), 'audio_once_variant_confirmed', {
-      assetId: data.assetId,
-    });
+    void serverCaptureEvent(
+      telemetryId({ userId, sessionUserId }),
+      'audio_once_variant_confirmed',
+      {
+        assetId: data.assetId,
+      }
+    );
     return { assetId: data.assetId, status: updated.status ?? 'pending' };
   } catch (e) {
     reportAudioError(e, { userId, sessionUserId }, { action: 'confirmOnceVariantUpload' });
@@ -1395,7 +1402,7 @@ export async function retryAudioAsset({
         'Audio asset cannot be retried (not found, not failed, its upload never completed, or the file itself was rejected)'
       );
     }
-    serverCaptureEvent(telemetryId({ userId, sessionUserId }), 'audio_asset_retried', {
+    void serverCaptureEvent(telemetryId({ userId, sessionUserId }), 'audio_asset_retried', {
       assetId: data.id,
     });
     return serializeAudioAsset(doc as unknown as AudioDoc);
