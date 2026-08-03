@@ -12,6 +12,9 @@
  *    fixtures.ts`) owned by that GM user, so `audio-library.spec.ts` has real
  *    rows — including `ready` ones — without depending on the transcode
  *    worker, which does not run in E2E.
+ * 5b. Idempotently upserts the storage-quota fillers (`seedStorageQuotaFixtures`)
+ *    that put that same GM OVER `AUDIO_USER_QUOTA_BYTES`, which is what
+ *    `audio-hardening.spec.ts` drives. Removed again by `globalTeardown.ts`.
  * 6. Idempotently seeds the soundboard fixtures (`seedSoundboardFixtures`): a
  *    system package to clone, a foreign-owned package that must stay
  *    invisible, and a foreign-owned asset the system package references —
@@ -24,7 +27,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { SignJWT } from 'jose';
 import mongoose from 'mongoose';
-import { AUDIO_FIXTURE_TITLES } from './fixtures/audio-fixtures';
+import { AUDIO_FIXTURE_TITLES, AUDIO_QUOTA_FIXTURE } from './fixtures/audio-fixtures';
 import {
   FOREIGN_ASSET_SOURCE_KEY,
   FOREIGN_OWNER_ID,
@@ -176,6 +179,81 @@ async function seedAudioFixtures(
         { $set: set, $setOnInsert: { createdAt: new Date() } },
         { upsert: true }
       );
+  }
+}
+
+/**
+ * Idempotently upserts the storage-quota fillers `audio-hardening.spec.ts`
+ * depends on — see `AUDIO_QUOTA_FIXTURE` in `e2e/fixtures/audio-fixtures.ts`
+ * for why the over-quota state is produced with seeded BYTES rather than a
+ * lowered `AUDIO_USER_QUOTA_BYTES`, and why the bytes are spread across all
+ * six fields `getUserStorageUsage` sums.
+ *
+ * These rows put the seeded GM OVER the quota for the whole run, which is the
+ * point: every server-side path that presigns an upload must refuse them.
+ * `globalTeardown.ts` deletes them again afterwards, so a local dev database
+ * (the E2E suite runs against the developer's own dev Atlas DB) isn't left
+ * with an account that silently refuses every audio upload with no visible
+ * cause. Nothing else in this file is torn down, because nothing else in this
+ * file DISABLES a feature for the seeded user.
+ *
+ * Shaped like a finished asset — `status: 'ready'`, `confirmedAt` set, both
+ * rendition pairs present, `kind: 'music'` (the only kind a once-variant may
+ * attach to) — so they are rows the real pipeline could have produced, apart
+ * from their deliberately outsized byte counts. Tagged, so they can never
+ * satisfy `audio-library.spec.ts`'s "needs tagging" filter assertions.
+ */
+async function seedStorageQuotaFixtures(
+  db: NonNullable<typeof mongoose.connection.db>,
+  ownerId: unknown
+): Promise<void> {
+  const { bytes } = AUDIO_QUOTA_FIXTURE;
+
+  for (let i = 1; i <= AUDIO_QUOTA_FIXTURE.count; i += 1) {
+    const sourceKey = `${AUDIO_QUOTA_FIXTURE.sourceKeyPrefix}${i}`;
+    const onceSourceKey = `${sourceKey}.once`;
+
+    await db.collection('audioassets').findOneAndUpdate(
+      { ownerId, sourceKey },
+      {
+        $set: {
+          ownerId,
+          title: `${AUDIO_QUOTA_FIXTURE.titlePrefix} ${i}`,
+          kind: 'music',
+          environment: [],
+          mood: [],
+          intensity: null,
+          tags: ['e2e-quota-filler'],
+          sourceKey,
+          sourceBytes: bytes.source,
+          onceSourceKey,
+          onceSourceBytes: bytes.onceSource,
+          confirmedAt: new Date(),
+          status: 'ready',
+          variant: 'main',
+          attempts: 1,
+          lastError: null,
+          claimedAt: null,
+          claimedBy: null,
+          durationMs: 42_000,
+          loudnessTargetLufs: -20,
+          sampleRate: 48_000,
+          channels: 2,
+          peaks: fakePeaks(),
+          renditions: {
+            opus: { ...fakeRendition(sourceKey, 'opus'), bytes: bytes.opus },
+            aac: { ...fakeRendition(sourceKey, 'aac'), bytes: bytes.aac },
+          },
+          onceRenditions: {
+            opus: { ...fakeRendition(onceSourceKey, 'opus'), bytes: bytes.onceOpus },
+            aac: { ...fakeRendition(onceSourceKey, 'aac'), bytes: bytes.onceAac },
+          },
+          updatedAt: new Date(),
+        },
+        $setOnInsert: { createdAt: new Date() },
+      },
+      { upsert: true }
+    );
   }
 }
 
@@ -472,6 +550,7 @@ export default async function globalSetup(): Promise<void> {
   }
 
   await seedAudioFixtures(db, user._id);
+  await seedStorageQuotaFixtures(db, user._id);
   const soundboard = await seedSoundboardFixtures(
     db,
     user._id as mongoose.Types.ObjectId,
