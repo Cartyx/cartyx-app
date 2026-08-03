@@ -3,6 +3,7 @@ import {
   audioIngestLimiter,
   libraryMutationLimiter,
   orphanCleanupLimiter,
+  storageUsageReadLimiter,
   rateLimitMessage,
 } from '~/lib/audio-rate-limits';
 import {
@@ -80,7 +81,19 @@ import {
 //
 //  1. It runs AFTER `requireActor()`, so the key is the caller's Mongo `_id`
 //     rather than an IP. An abuser cannot rotate out of their own bucket, and
-//     a shared NAT is not one bucket.
+//     a shared NAT is not one bucket. Note what this does NOT establish, and
+//     what an earlier version of this note wrongly claimed: that a function
+//     added later "cannot silently skip the gate". A gate in this layer only
+//     covers callers that come through this layer, and the phase-3 REST
+//     adapter (`~/routes/api/audio/uploads.ts` and `uploads.$id.confirm.ts`)
+//     already calls `createAudioUpload`/`confirmAudioUpload` directly and so
+//     is not rate-limited at all. The storage quota and the pending-job cap
+//     DO cover it — they live inside `~/server/functions/audio.ts` — so only
+//     these buckets are bypassed, and it is unreachable today because
+//     `resolveApiUser` 401s every request. Phase 3 is the phase that turns
+//     that adapter on: it will need to key these buckets off the bearer
+//     token's resolved user id. Anything that must be bounded for BOTH
+//     adapters belongs next to the quota/cap checks in `audio.ts`.
 //  2. It runs BEFORE the `~/server/functions/audio` call, so a refused
 //     request never reaches Mongo or R2. That is what the
 //     `not.toHaveBeenCalled()` assertions in
@@ -98,7 +111,18 @@ import {
 // bottom. See the note above each, and `~/lib/audio-rate-limits.ts` for the
 // sizing.
 //
-// EXACTLY THREE ENDPOINTS HERE ARE UNGATED, and the reason is specific to each
+// A FOURTH bucket, `storageUsageReadLimiter`, covers `getAudioStorageUsageFn`
+// — the one READ on this surface with a bucket. The final whole-branch review
+// took its exemption away: the old justification said its "cost scales with
+// the caller's own asset count, not with how often they call it", which names
+// the wrong axis (total Atlas CPU is count TIMES frequency, and frequency is
+// the caller's own parameter), and it is the only read here that is a `$group`
+// aggregation rather than a projected `find`. It is also the read that can
+// safely carry a bucket: it feeds ONE indicator (`AudioQuotaBar`, which takes
+// an explicit `error` prop), so a refusal degrades a badge rather than
+// half-loading a page. See `~/lib/audio-rate-limits.ts` for the sizing.
+//
+// EXACTLY TWO ENDPOINTS HERE ARE UNGATED, and the reason is specific to each
 // rather than a blanket claim. An earlier version of this comment asserted
 // that every non-ingest endpoint "enqueues no work, spends no R2, and grows no
 // footprint"; review found that false for `deleteAudioAsset` on both counts,
@@ -106,16 +130,14 @@ import {
 //
 //  - `listAudioAssetsFn` — a read. Bounded by its projection and its `limit`;
 //    a cursor it cannot decode raises `AudioClientError`, which files nothing.
+//    Left open because it is the library's own paging query: `/audio` and the
+//    package editor's asset picker both fire it on mount and on every filter
+//    change and scroll page, so a refusal here is the half-loaded-page failure
+//    the design's no-bucket-on-reads rule exists to avoid.
 //  - `bulkTagAudioAssetsFn` — an `updateMany` that returns `{ modified: 0 }`
 //    when nothing matches. It has NO not-found throw, so unlike its two
 //    single-asset siblings it has no caller-triggerable capture path at all,
 //    and its `ids` array is bounded by `.max(200)` in the schema.
-//  - `getAudioStorageUsageFn` (Task 5) — a read with no caller input at all,
-//    so there is no shape for a caller to vary and nothing to raise
-//    `AudioClientError` over. It runs the one `$group` aggregation the design
-//    doc already costs at "tens of milliseconds" (see
-//    `~/server/functions/audio-quota.ts`), touches no R2, and its cost scales
-//    with the caller's own asset count, not with how often they call it.
 //
 // If a new endpoint is added here, it needs a bucket unless one of those
 // sentences can be written truthfully about it.
@@ -281,13 +303,23 @@ export const deleteAudioAssetFn = createServerFn({ method: 'POST' })
 //    the new value up with no client change at all.
 //
 // No `.inputValidator()` — this takes nothing from the caller, same shape as
-// `listPackagesFn` in `~/utils/soundboard-server-fns.ts`.
+// `listPackagesFn` in `~/utils/soundboard-server-fns.ts`. Gated by
+// `storageUsageReadLimiter` (final-review addition): taking no input bounds
+// the SHAPE of a call, not the NUMBER of them, and this is the only
+// aggregation on the surface. The gate runs before the aggregation, so a
+// refused call costs no Atlas work.
 export const getAudioStorageUsageFn = createServerFn({ method: 'GET' }).handler(async () => {
   const { getUserStorageUsage } = await import('~/server/functions/audio-quota');
-  const { getAudioUserQuotaBytes } = await import('~/server/functions/audio');
+  const { getAudioUserQuotaBytes, AudioClientError } = await import('~/server/functions/audio');
   const { requireActor } = await import('~/utils/require-actor');
-  const { userId } = await requireActor();
-  const usage = await getUserStorageUsage(userId);
+  const actor = await requireActor();
+  const gate = storageUsageReadLimiter.check(actor.userId);
+  if (!gate.allowed) {
+    throw new AudioClientError(rateLimitMessage('storage usage', gate.retryAfterMs), {
+      retryAfterMs: gate.retryAfterMs,
+    });
+  }
+  const usage = await getUserStorageUsage(actor.userId);
   return { ...usage, limitBytes: getAudioUserQuotaBytes() };
 });
 

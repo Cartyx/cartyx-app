@@ -55,6 +55,8 @@ export const packageWriteLimiter = limiter('packageWriteLimiter');
 export const boardStateLimiter = limiter('boardStateLimiter');
 export const libraryMutationLimiter = limiter('libraryMutationLimiter');
 export const orphanCleanupLimiter = limiter('orphanCleanupLimiter');
+export const packageEditLimiter = limiter('packageEditLimiter');
+export const storageUsageReadLimiter = limiter('storageUsageReadLimiter');
 
 /**
  * Pure string formatting with no environment dependency — reproduced verbatim

@@ -721,3 +721,74 @@ describe('getAudioStorageUsageFn', () => {
     expect(getUserStorageUsage).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * FINAL WHOLE-BRANCH REVIEW, minor #5. `getAudioStorageUsageFn` was left
+ * ungated on the reasoning that "its cost scales with the caller's own asset
+ * count, not with how often they call it" — the wrong axis: total Atlas CPU
+ * is count TIMES frequency, and frequency is the caller's own parameter. It
+ * is also the only read on this surface that is a `$group` aggregation
+ * rather than a projected `find`.
+ *
+ * `90` is the capacity, a literal in both directions like every other bucket
+ * test here, and one `DB_USER_ID` per test because the limiter is a
+ * module-scope singleton `vi.clearAllMocks()` cannot reset.
+ */
+describe('storage usage read rate limit', () => {
+  /** Spends the whole storage-usage bucket for `userId`. */
+  async function drainUsageBucket(userId: string) {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(userId);
+    vi.mocked(getUserStorageUsage).mockResolvedValue({ bytes: 512, assetCount: 3 });
+    vi.mocked(getAudioUserQuotaBytes).mockReturnValue(2 * 1024 * 1024 * 1024);
+    for (let i = 0; i < 90; i++) {
+      await getAudioStorageUsageFn();
+    }
+    expect(getUserStorageUsage).toHaveBeenCalledTimes(90);
+    vi.mocked(getUserStorageUsage).mockClear();
+  }
+
+  it('lets a full 90-call burst through, then refuses the 91st without running the aggregation', async () => {
+    await drainUsageBucket('mongo-usage-read');
+
+    await expect(getAudioStorageUsageFn()).rejects.toThrow(/Too many storage usage requests/);
+    // The load-bearing negative: the whole point of gating this endpoint is
+    // that a refused call costs no Atlas aggregation.
+    expect(getUserStorageUsage).not.toHaveBeenCalled();
+  });
+
+  it('refuses with AudioClientError carrying retryAfterMs, and files no GlitchTip event', async () => {
+    await drainUsageBucket('mongo-usage-shape');
+
+    const err = await getAudioStorageUsageFn().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(AudioClientError);
+    expect((err as AudioClientError).retryAfterMs).toBeGreaterThan(0);
+    expect(serverCaptureException).not.toHaveBeenCalled();
+    expect(getUserStorageUsage).not.toHaveBeenCalled();
+  });
+
+  it('is keyed per account: draining one reader does not refuse another', async () => {
+    await drainUsageBucket('mongo-usage-victim');
+
+    mockDbUser('mongo-usage-bystander');
+    vi.mocked(getUserStorageUsage).mockResolvedValue({ bytes: 512, assetCount: 3 });
+    await expect(getAudioStorageUsageFn()).resolves.toMatchObject({ bytes: 512 });
+  });
+
+  it('leaves the library reads ungated: a drained usage bucket still allows listAudioAssetsFn', async () => {
+    await drainUsageBucket('mongo-usage-vs-list');
+
+    vi.mocked(listAudioAssets).mockResolvedValue({ items: [], nextCursor: null });
+    await expect(listAudioAssetsFn({ data: {} })).resolves.toEqual({
+      items: [],
+      nextCursor: null,
+    });
+  });
+
+  it('is a separate bucket from the library mutations that trigger its refetch', async () => {
+    await drainUsageBucket('mongo-usage-vs-library');
+
+    vi.mocked(deleteAudioAsset).mockResolvedValue({ deleted: true });
+    await expect(deleteAudioAssetFn({ data: { id: 'a1' } })).resolves.toEqual({ deleted: true });
+  });
+});

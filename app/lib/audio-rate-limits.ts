@@ -17,18 +17,43 @@ import { createRateLimiter } from '~/lib/rate-limit';
  * for the exact mechanism.
  *
  * WHERE THEY ARE APPLIED: in the wrapper layer, immediately after
- * `requireActor()`, keyed on the caller's Mongo `_id`. That placement is
- * deliberate — the key is an ACCOUNT rather than an IP (so rotating IPs buys
- * an abuser nothing, and a household behind one NAT is not one bucket), and
- * it sits one layer above every server function, so a function added later
- * cannot silently skip the gate.
+ * `requireActor()`, keyed on the caller's Mongo `_id`. The key is an ACCOUNT
+ * rather than an IP, which is the deliberate part — rotating IPs buys an
+ * abuser nothing, and a household behind one NAT is not one bucket.
+ *
+ * WHAT THAT PLACEMENT DOES NOT BUY, corrected in the final whole-branch
+ * review: it does NOT mean "a function added later cannot silently skip the
+ * gate", which is what this comment (and `~/utils/audio-server-fns.ts`'s)
+ * used to claim. A gate in the wrapper layer only covers callers that come
+ * through the wrapper layer, and a SECOND ingest adapter already does not:
+ * the phase-3 REST routes (`app/routes/api/audio/uploads.ts` and
+ * `uploads.$id.confirm.ts`) call `createAudioUpload`/`confirmAudioUpload` in
+ * `~/server/functions/audio.ts` directly. The storage quota and the
+ * pending-job cap DO cover them, because those checks live inside `audio.ts`
+ * itself; only these buckets are bypassed. That is unreachable today —
+ * `resolveApiUser` 401s every request — but phase 3 is precisely the phase
+ * that turns that adapter on, and it will need its own key for these buckets
+ * (the bearer token's resolved user id) rather than inheriting one. The rule
+ * that follows: anything that must be bounded for BOTH adapters belongs
+ * beside the quota/cap checks inside `audio.ts`, not here.
  *
  * SCOPE: these buckets are in-process (see `~/lib/rate-limit`'s own scope
  * note). The web pod runs `replicaCount: 1`, so per-process is the whole
  * picture today; at N>1 replicas every number below becomes per-replica.
  *
+ * NO BUCKET ON READS — `listPackages`, `getPackage`, `listPackageAssets`,
+ * `listAudioAssets`, `loadBoardState`. Per the design: they are bounded by
+ * their projections and by the `$in` over a package's <=64 items, and a read
+ * bound risks breaking a legitimate board reload (opening a campaign fires
+ * several of these at once, and a refused one leaves a half-loaded board).
+ * `getAudioStorageUsage` is the one deliberate exception — see
+ * `storageUsageReadLimiter` below for why the argument above does not cover
+ * it. (This paragraph used to sit on `rateLimitMessage`'s JSDoc at the
+ * bottom of the file, where it rendered as the hover tooltip for a string
+ * formatter; it is module policy, so it lives with the module.)
+ *
  * `audioIngestLimiter`'s two numbers are env-overridable (below); the other
- * four buckets stay hardcoded — see that limiter's own comment for why it
+ * six buckets stay hardcoded — see that limiter's own comment for why it
  * alone gets this treatment.
  *
  * WHY A PLAIN `process.env` READ BELOW DOES NOT CONTRADICT "THIS MODULE IS
@@ -123,11 +148,11 @@ function envPositiveNumber(name: string, fallback: number): number {
  * because it is the one this module's own comments already single out as
  * "the queue-starvation lever" and the design doc's open-questions table
  * flags default rate-limit values generally as something to "tune after real
- * usage." The other four buckets stay hardcoded: nothing has called out
+ * usage." The other six buckets stay hardcoded: nothing has called out
  * `packageWriteLimiter`/`boardStateLimiter`/`libraryMutationLimiter`/
- * `orphanCleanupLimiter` as needing operational tuning, and wiring five
- * buckets' worth of env plumbing on spec would be scope beyond what Task 11
- * asked for. The mechanism below (a plain `process.env` read, module-scope)
+ * `orphanCleanupLimiter`/`packageEditLimiter`/`storageUsageReadLimiter` as
+ * needing operational tuning, and wiring seven buckets' worth of env
+ * plumbing on spec would be scope beyond what Task 11 asked for. The mechanism below (a plain `process.env` read, module-scope)
  * extends to any of them identically if that need ever arises — see the
  * module comment above (`envPositiveNumber`'s guard, and the invariant that
  * keeps this safe) before doing so.
@@ -241,12 +266,91 @@ export const libraryMutationLimiter = createRateLimiter({ capacity: 60, refillPe
 export const orphanCleanupLimiter = createRateLimiter({ capacity: 10, refillPerSec: 1 / 30 });
 
 /**
- * NO BUCKET ON READS — `listPackages`, `getPackage`, `listPackageAssets`,
- * `listAudioAssets`, `loadBoardState`. Per the design: they are bounded by
- * their projections and by the `$in` over a package's <=64 items, and a read
- * bound risks breaking a legitimate board reload (opening a campaign fires
- * several of these at once, and a refused one leaves a half-loaded board).
+ * Package edits: `updatePackageFn` only. Added in the final whole-branch
+ * review, which superseded Task 2's ruling to leave it ungated. That ruling
+ * was made on footprint alone — true as far as it goes (an update cannot
+ * grow the user's footprint; the schema's `.max()`ed arrays bound the
+ * document) — but footprint is not the only cost this surface bounds:
  *
+ *  - EVERY call is a whole-document `$set` of `items` AND `moods`, up to
+ *    ~410 KiB. That is the largest single write anywhere on this surface,
+ *    several hundred times a `saveBoardState` — and `saveBoardState` IS
+ *    gated (`boardStateLimiter`, 40/2), specifically because the design
+ *    names "amplify Atlas writes" as a threat. The bigger write cannot be
+ *    the one left open.
+ *  - Every success fires an un-awaited `serverCaptureEvent('package_updated')`
+ *    — one Umami event per call, at caller-controlled volume. That is the
+ *    exact telemetry-amplification class that got `scanOrphanAudio`/
+ *    `deleteOrphanAudio` gated mid-phase.
+ *
+ * And Task 7's optimistic-concurrency fence does NOT bound either of those:
+ * `PackageStaleWriteError` carries `currentUpdatedAt`, so a script simply
+ * replays with the value the refusal handed it and every iteration succeeds.
+ *
+ * Capacity 30 — this is a human-click endpoint: one explicit "Save changes"
+ * press per call, each preceded by an edit and followed by a round trip.
+ * Thirty back-to-back saves is far past any real editing session. It must
+ * also clear the two-saves-in-a-row case comfortably (the editor re-seeds
+ * its draft from the save's own response, so a second Save immediately
+ * after the first is a legitimate, and now token-costing, action), and 30
+ * does that with 28 to spare.
+ *
+ * Refill 0.5/s — one every two seconds, deliberately the same rate as
+ * `libraryMutationLimiter` and for the same reason: a human editing and
+ * saving cannot sustain more, while a scripted replay loop drops from
+ * thousands per second to one per two seconds.
+ *
+ * NOT shared with `libraryMutationLimiter` despite the matching refill: that
+ * bucket bounds asset deletes/edits, and sharing would let a library-cleanup
+ * session consume a package-editing session's budget for no gain — they are
+ * different resources reached from different pages.
+ *
+ * `deletePackageFn` stays UNGATED, and unlike the old blanket sentence about
+ * "update and delete" this reason is actually true of delete: it is a single
+ * `deleteOne` by `{_id, ownerId}` (no document body at all, so nothing to
+ * amplify by size), and its `package_deleted` event fires only when a row
+ * really was removed — a replay against the same id hits `deletedCount: 0`
+ * and throws `PackageClientError`, which files nothing. Its event volume is
+ * therefore bounded by how many packages the caller owns, and the only ways
+ * to get more are `createPackage`/`clonePackage`, both on
+ * `packageWriteLimiter` behind a 100-package cap.
+ */
+export const packageEditLimiter = createRateLimiter({ capacity: 30, refillPerSec: 0.5 });
+
+/**
+ * Storage-usage read: `getAudioStorageUsageFn`. The one exception to the
+ * NO-BUCKET-ON-READS policy in the module comment above, added in the final
+ * whole-branch review.
+ *
+ * The justification it replaces said this read was safe because "its cost
+ * scales with the caller's own asset count, not with how often they call
+ * it." That is the wrong axis: total Atlas CPU is count TIMES frequency, and
+ * frequency is exactly the parameter a caller controls. It also happens to
+ * be the only read on this surface that is an `$group` AGGREGATION rather
+ * than a projected `find` over an indexed filter, so it is the one where
+ * frequency buys the most work per call.
+ *
+ * Why a bucket here does not run into the reason the other reads have none:
+ * that reason is "a refused read leaves a half-loaded board." This read
+ * feeds ONE indicator — `AudioQuotaBar` on `/audio`, which takes an explicit
+ * `error` prop and renders a message in place of the bar. Nothing else on
+ * the page depends on it, and no board reload involves it at all.
+ *
+ * Capacity 90 — `/audio` fetches this once on mount and refetches on every
+ * `invalidateAudio()`, which fires once per upload BATCH (the dropzone calls
+ * `onUploaded` after the whole drop, not per file) and once per library
+ * mutation. Those mutations are themselves capped at 60 by
+ * `libraryMutationLimiter`, so 90 covers a full library-cleanup session's
+ * worth of refetches with 30 left over for page loads and react-query's
+ * refetch-on-window-focus.
+ *
+ * Refill 1/s — far above any human-driven refetch cadence (the number only
+ * moves on ingest or delete), and it caps a scripted aggregation loop at
+ * ~3,600/hour instead of thousands per second.
+ */
+export const storageUsageReadLimiter = createRateLimiter({ capacity: 90, refillPerSec: 1 });
+
+/**
  * Formats the refusal message a rejected caller sees. Rounds UP to whole
  * seconds and never says "0s" — a message that tells the user to retry
  * immediately is worse than no message, because retrying immediately fails.

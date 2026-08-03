@@ -438,7 +438,16 @@ describe('package-write rate limit', () => {
     await expect(createPackageFn({ data: createData })).resolves.toEqual(FAKE_PACKAGE);
   });
 
-  it('does not gate updatePackageFn or deletePackageFn — neither can grow the footprint', async () => {
+  /**
+   * Retitled in the final whole-branch review, which gave `updatePackageFn`
+   * its own bucket. What this still proves is bucket SEPARATION: a user who
+   * has exhausted their minting budget can still edit and delete the packages
+   * they already have. `deletePackageFn` is genuinely ungated (a `deleteOne`
+   * with no body to amplify, whose telemetry event only fires on a row that
+   * really existed); `updatePackageFn` is gated by `packageEditLimiter`
+   * instead, which the describe block below drains on its own.
+   */
+  it('is separate from the edit/delete path: a drained mint bucket still allows updatePackageFn and deletePackageFn', async () => {
     await drainPackageBucket('mongo-pkg-update-delete');
 
     vi.mocked(updatePackage).mockResolvedValue(FAKE_PACKAGE);
@@ -465,6 +474,97 @@ describe('package-write rate limit', () => {
     expect(listPackages).toHaveBeenCalledTimes(40);
     expect(getPackage).toHaveBeenCalledTimes(40);
     expect(listPackageAssets).toHaveBeenCalledTimes(40);
+  });
+});
+
+/**
+ * FINAL WHOLE-BRANCH REVIEW, Important #3. `updatePackageFn` was ungated on a
+ * justification that only covered footprint. The costs it did not cover: each
+ * call is a whole-document `$set` of `items` and `moods` (~410 KiB, the
+ * largest write on this surface, several hundred times a `saveBoardState` —
+ * which IS gated), and each success fires an un-awaited `package_updated`
+ * Umami event at caller-controlled volume. Task 7's fence bounds neither,
+ * because `PackageStaleWriteError` hands the caller the fresh
+ * `currentUpdatedAt` a replay needs.
+ *
+ * `30` is written as a literal for the same reason the other capacities are:
+ * raising it makes the refusal assertion fail, lowering it makes the drain
+ * loop throw early.
+ */
+describe('package-edit rate limit', () => {
+  const updateData = { id: 'p1', expectedUpdatedAt: '2026-01-01T00:00:00.000Z', name: 'Renamed' };
+
+  /** Spends the whole package-edit bucket for `userId`. */
+  async function drainEditBucket(userId: string) {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(userId);
+    vi.mocked(updatePackage).mockResolvedValue(FAKE_PACKAGE);
+    for (let i = 0; i < 30; i++) {
+      await updatePackageFn({ data: updateData });
+    }
+    expect(updatePackage).toHaveBeenCalledTimes(30);
+    vi.mocked(updatePackage).mockClear();
+  }
+
+  it('lets a full 30-call burst through, then refuses the 31st without calling updatePackage', async () => {
+    await drainEditBucket('mongo-pkg-edit');
+
+    await expect(updatePackageFn({ data: updateData })).rejects.toThrow(
+      /Too many package edit requests/
+    );
+    // The load-bearing negative: without it this passes with the gate
+    // deleted, because nothing else here would throw.
+    expect(updatePackage).not.toHaveBeenCalled();
+  });
+
+  it('refuses with PackageClientError carrying retryAfterMs, and files no GlitchTip event', async () => {
+    await drainEditBucket('mongo-pkg-edit-shape');
+
+    const err = await updatePackageFn({ data: updateData }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PackageClientError);
+    expect((err as PackageClientError).retryAfterMs).toBeGreaterThan(0);
+    // NOT the stale-write refusal: `PackageStaleWriteError` is a subclass, so
+    // an implementation that threw one here would still satisfy the
+    // `instanceof` above — but the editor keys its conflict UI off the NAME,
+    // and offering "keep my edits and overwrite" for a rate limit would just
+    // burn the caller's next token.
+    expect((err as Error).name).toBe('PackageClientError');
+    expect(serverCaptureException).not.toHaveBeenCalled();
+    expect(updatePackage).not.toHaveBeenCalled();
+  });
+
+  it('leaves room for a second consecutive save — the editor re-seeds its draft and a follow-up Save is legitimate', async () => {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser('mongo-pkg-edit-twice');
+    vi.mocked(updatePackage).mockResolvedValue(FAKE_PACKAGE);
+
+    await expect(updatePackageFn({ data: updateData })).resolves.toEqual(FAKE_PACKAGE);
+    await expect(updatePackageFn({ data: updateData })).resolves.toEqual(FAKE_PACKAGE);
+    expect(updatePackage).toHaveBeenCalledTimes(2);
+  });
+
+  it('is keyed per account: draining one editor does not refuse another', async () => {
+    await drainEditBucket('mongo-pkg-edit-victim');
+
+    mockDbUser('mongo-pkg-edit-bystander');
+    vi.mocked(updatePackage).mockResolvedValue(FAKE_PACKAGE);
+    await expect(updatePackageFn({ data: updateData })).resolves.toEqual(FAKE_PACKAGE);
+  });
+
+  it('does not gate deletePackageFn: a drained edit bucket still allows a delete', async () => {
+    await drainEditBucket('mongo-pkg-edit-vs-delete');
+
+    vi.mocked(deletePackage).mockResolvedValue({ deleted: true });
+    await expect(deletePackageFn({ data: { id: 'p1' } })).resolves.toEqual({ deleted: true });
+  });
+
+  it('is a separate bucket from the package writes: a drained edit bucket still allows createPackage', async () => {
+    await drainEditBucket('mongo-pkg-edit-vs-create');
+
+    vi.mocked(createPackage).mockResolvedValue(FAKE_PACKAGE);
+    await expect(
+      createPackageFn({ data: { name: 'Storm Set', items: [], moods: [] } })
+    ).resolves.toEqual(FAKE_PACKAGE);
   });
 });
 
