@@ -141,6 +141,15 @@ jobs:
           NODE_ENV: production
           BASE_URL: https://cartyx.io
 
+      # Reads what the build actually emitted: no server env names, no
+      # `process.env`, no mongoose under `.output/public`. Nothing else in CI
+      # can catch a server-only module reaching the browser — it is a runtime
+      # ReferenceError, so typecheck, lint, the unit suite and `npm run build`
+      # itself all stay green. Must run in THIS job: it is the only one that
+      # produces `.output/`. See scripts/check-client-bundle.mjs.
+      - name: Client-bundle guard
+        run: npm run check:client-bundle
+
   storybook:
     name: Storybook & browser tests
     runs-on: ubuntu-latest

@@ -139,6 +139,15 @@ test.describe('Audio storage quota', () => {
     // each of three rows, so a dropped term or a missing row would land the
     // reported usage BELOW this figure while still (with 2.4 GB seeded against
     // a 2 GiB limit) leaving the refusal itself intact.
+    //
+    // NOTE this is only a TIGHT bound while the GM's other rows are tiny —
+    // today the five `audio-library.spec.ts` fixtures contribute ~4.5 MB
+    // against 2.4 GB of fillers. Against a database carrying substantial
+    // pre-existing audio for the seeded GM, that slack grows and this
+    // assertion loosens silently: a dropped aggregation term could hide inside
+    // the real rows' bytes. If that ever becomes the situation, compare
+    // against a usage figure computed in `globalSetup` rather than this
+    // constant.
     expect(usageBytes).toBeGreaterThanOrEqual(SEEDED_FILLER_BYTES);
 
     // Task 5's claim is that the number shown and the number enforced cannot

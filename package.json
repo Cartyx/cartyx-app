@@ -30,6 +30,7 @@
     "build-storybook:full": "node scripts/build-storybook-with-iframe.mjs",
     "realtime:dev": "npm --prefix realtime run dev",
     "check:deps-age": "node scripts/check-package-age.mjs",
+    "check:client-bundle": "node scripts/check-client-bundle.mjs",
     "db:verify": "tsx scripts/mongo-admin.ts verify",
     "db:sync": "tsx scripts/mongo-admin.ts sync",
     "dev:clear": "node scripts/run-python.cjs dev_clear.py",

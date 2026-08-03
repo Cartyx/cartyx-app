@@ -46,6 +46,16 @@ export const AUDIO_FIXTURE_TITLES = {
  * the six fields were dropped from the aggregation. Each filler below carries
  * a value in every one of the six fields, and there are three of them.
  *
+ * READ THIS BEFORE WRITING A SPEC THAT UPLOADS AUDIO. These rows put the
+ * seeded GM over the storage quota for the WHOLE run, in every spec, not just
+ * `audio-hardening.spec.ts` — that user shares one library across the suite.
+ * Any new spec that uploads a file, or attaches a once-variant, will be
+ * refused by `assertUnderStorageQuota` with a message about storage, which is
+ * a confusing thing to meet when your spec is about something else entirely.
+ * No spec is affected today (verified: nothing else in `e2e/` uploads). If
+ * yours needs to, delete these rows for the duration of your test rather than
+ * removing the seed — `audio-hardening.spec.ts` depends on them existing.
+ *
  * The per-row totals are deliberately larger than a real upload could produce
  * (`AUDIO_MAX_BYTES` caps one source at 50 MiB): reaching 2 GiB with realistic
  * per-asset figures takes ~17 rows, which would bury `audio-library.spec.ts`'s
