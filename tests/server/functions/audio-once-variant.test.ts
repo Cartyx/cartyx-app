@@ -387,6 +387,12 @@ describe('confirmOnceVariantUpload', () => {
     // under any real cap. Tests that care about the cap itself override
     // this explicitly.
     vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0);
+    // Same, for the confirm-side storage-quota check added in the final
+    // whole-branch review. Required rather than tidy: `vi.clearAllMocks`
+    // clears CALLS but not IMPLEMENTATIONS, so without this every test here
+    // inherits the last `createOnceVariantUpload` quota test's rejected
+    // aggregation mock and fails closed.
+    getUserStorageUsage.mockResolvedValue({ bytes: 0, assetCount: 1 });
   });
 
   /**
@@ -667,6 +673,137 @@ describe('confirmOnceVariantUpload', () => {
 
       // The caller's own doing — must not file a GlitchTip event.
       expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * FINAL WHOLE-BRANCH REVIEW, Important #1 — the once half. Same defect as
+   * `confirmAudioUpload`'s: `onceSourceBytes` is written by the success write
+   * below and nowhere else, so a presign-only quota check cannot see a
+   * once-source that has already been PUT.
+   *
+   * The cleanup is NOT `confirmAudioUpload`'s. This row is the main asset's
+   * own document — a fully-transcoded, previously-`ready` `music` asset — so
+   * a refusal reverts it to `ready`/`main` exactly as the cap refusal and the
+   * tooLarge branch do, rather than writing `status: 'failed'`, which would
+   * brick it.
+   */
+  describe('storage quota at confirm', () => {
+    it('refuses an over-quota once-confirm before HeadObject, deletes the once-source, and reverts to ready/main on a fenced filter', async () => {
+      const { getAudioUserQuotaBytes, confirmOnceVariantUpload, AudioClientError } =
+        await import('~/server/functions/audio');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+      const limit = getAudioUserQuotaBytes();
+
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      } as never);
+      getUserStorageUsage.mockResolvedValue({ bytes: limit + 1, assetCount: 9 });
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({ _id: 'a1' } as never);
+      // A VALID object on purpose: an implementation that measured first
+      // would succeed here, so this fixture cannot pass for the wrong reason.
+      send.mockResolvedValue({ ContentLength: 2048, ContentType: 'audio/wav' });
+
+      const err = await confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' }).catch(
+        (e: unknown) => e
+      );
+
+      expect(err).toBeInstanceOf(AudioClientError);
+      expect((err as Error).message).toMatch(/storage quota exceeded/i);
+      const clientErr = err as InstanceType<typeof AudioClientError>;
+      expect(clientErr.usageBytes).toBe(limit + 1);
+      expect(clientErr.limitBytes).toBe(limit);
+
+      // NO HeadObject — pinned on the command class, not on a bare count.
+      expect(send.mock.calls.filter(([cmd]) => cmd instanceof HeadObjectCommand)).toHaveLength(0);
+      const deletes = send.mock.calls.filter(([cmd]) => cmd instanceof DeleteObjectCommand);
+      expect(deletes).toHaveLength(1);
+      expect((deletes[0][0] as DeleteObjectCommand).input).toEqual({
+        Bucket: 'b',
+        Key: 'uploads/audio/prefix/once-src.wav',
+      });
+
+      // The ACTUAL filter — `variant: 'once'` EXACT, not `$ne`, matching the
+      // two writes around it: only a row still mid-attach may be reverted.
+      const [filter, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
+      expect(filter).toEqual({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+      });
+      const set = (update as { $set: Record<string, unknown> }).$set;
+      // The load-bearing difference from confirmAudioUpload's refusal.
+      expect(set.status).toBe('ready');
+      expect(set.variant).toBe('main');
+      expect(set.onceSourceKey).toBeNull();
+      expect(set.onceSourceBytes).toBeNull();
+      expect(set.onceLastError).toMatch(/storage quota exceeded/i);
+      expect('permanentFailure' in set).toBe(false);
+      expect('lastError' in set).toBe(false);
+      // The main asset's own playable content is untouched.
+      expect('renditions' in set).toBe(false);
+      expect('onceRenditions' in set).toBe(false);
+      expect('sourceKey' in set).toBe(false);
+
+      expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+    });
+
+    it('refuses exactly at the limit and admits one byte under it', async () => {
+      const { getAudioUserQuotaBytes, confirmOnceVariantUpload } =
+        await import('~/server/functions/audio');
+      const limit = getAudioUserQuotaBytes();
+
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      } as never);
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+        _id: 'a1',
+        status: 'pending',
+      } as never);
+      send.mockResolvedValue({ ContentLength: 2048, ContentType: 'audio/wav' });
+
+      getUserStorageUsage.mockResolvedValue({ bytes: limit, assetCount: 9 });
+      await expect(
+        confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' })
+      ).rejects.toThrow(/storage quota exceeded/i);
+
+      getUserStorageUsage.mockResolvedValue({ bytes: limit - 1, assetCount: 9 });
+      await expect(
+        confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' })
+      ).resolves.toMatchObject({ status: 'pending' });
+    });
+
+    it('fails closed when the aggregation rejects, leaving the once-source object in place', async () => {
+      const { confirmOnceVariantUpload } = await import('~/server/functions/audio');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      } as never);
+      getUserStorageUsage.mockRejectedValue(new Error('mongo unreachable'));
+
+      await expect(
+        confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' })
+      ).rejects.toThrow(/unable to verify your storage usage/i);
+      // Nothing deleted and nothing reverted: a transient fault must leave a
+      // retryable attach intact rather than destroying the uploaded object.
+      expect(send).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.findOneAndUpdate)).not.toHaveBeenCalled();
+      expect(vi.mocked(serverCaptureException).mock.calls[0][2]).toMatchObject({
+        action: 'confirmOnceVariantUpload.quotaCheck',
+      });
     });
   });
 });

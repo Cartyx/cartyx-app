@@ -54,6 +54,13 @@ web:
     #
     # Per-user storage quota in bytes. Default (when unset): 2 GiB — see
     # DEFAULT_AUDIO_USER_QUOTA_BYTES in app/server/functions/audio.ts.
+    # It is enforced at BOTH the upload presign and the upload confirm, so a
+    # single accepted request can overshoot it by that one asset's eventual
+    # footprint (~126 MB: a 50 MiB source plus its opus/aac renditions).
+    # It does NOT count bytes that have been uploaded but not yet confirmed —
+    # those are invisible to it for up to UPLOAD_TIMEOUT_MS (15 min default)
+    # before the audio-worker's reaper deletes them. Budget the real ceiling
+    # as this value plus whatever one account can hold in flight.
     AUDIO_USER_QUOTA_BYTES: ''
     # Per-user cap on pending/processing transcode jobs at once. Default
     # (when unset): 20 — see DEFAULT_MAX_PENDING_JOBS_PER_USER in

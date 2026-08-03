@@ -113,7 +113,7 @@ deploy/cartyx-realtime deploy/cartyx-audio-worker` — the checksum auto-restart
 
   | Env var                                  | Default when unset | What it bounds                                                             |
   | ----------------------------------------- | ------------------- | --------------------------------------------------------------------------- |
-  | `AUDIO_USER_QUOTA_BYTES`                  | 2 GiB                | Per-user total audio storage (`app/server/functions/audio.ts`).             |
+  | `AUDIO_USER_QUOTA_BYTES`                  | 2 GiB                | Per-user total audio storage (`app/server/functions/audio.ts`). Enforced at both presign and confirm; does **not** count uploaded-but-unconfirmed bytes, which stay invisible for up to `UPLOAD_TIMEOUT_MS` (15 min) before the worker's reaper deletes them — budget the real ceiling as this value plus one account's in-flight uploads. |
   | `MAX_PENDING_JOBS_PER_USER`               | 20                   | Per-user `pending`/`processing` transcode jobs at once (same file).         |
   | `AUDIO_INGEST_RATE_LIMIT_CAPACITY`        | 60                   | Token-bucket burst size for upload/confirm/retry calls (`app/lib/audio-rate-limits.ts`). |
   | `AUDIO_INGEST_RATE_LIMIT_REFILL_PER_SEC`  | 1                    | Sustained refill rate for the same bucket.                                  |

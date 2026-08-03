@@ -79,12 +79,14 @@ export class AudioClientError extends Error {
   readonly retryAfterMs?: number;
 
   /**
-   * Set only by the storage-quota refusal in `createAudioUpload`: the
-   * caller's measured usage and the limit it was checked against, at the
-   * moment of refusal. The message already embeds both as text, but a
-   * structured pair is what lets the UI (Task 5) render "X of Y used"
-   * without re-parsing prose or making a second round trip. Absent on every
-   * other client error, which is not quota-based.
+   * Set only by a storage-quota refusal — all four of them
+   * (`createAudioUpload`, `createOnceVariantUpload`, `confirmAudioUpload`,
+   * `confirmOnceVariantUpload`; see `checkStorageQuota`): the caller's
+   * measured usage and the limit it was checked against, at the moment of
+   * refusal. The message already embeds both as text, but a structured pair
+   * is what lets the UI (Task 5) render "X of Y used" without re-parsing
+   * prose or making a second round trip. Absent on every other client error,
+   * which is not quota-based.
    */
   readonly usageBytes?: number;
   readonly limitBytes?: number;
@@ -180,6 +182,18 @@ function titleFromFilename(filename: string): string {
  * whole point — not a measured figure; the design doc's own open-questions
  * table defers tuning to real usage, and Task 11 wires this env var name
  * into the Helm chart so raising it needs no image rebuild.
+ *
+ * WHAT THIS NUMBER DOES NOT BOUND, for whoever tunes it: bytes that have
+ * been presigned and PUT but not yet CONFIRMED are invisible to it.
+ * `sourceBytes`/`onceSourceBytes` are written by the confirm success writes
+ * and nowhere else, so an in-flight upload is real R2 storage the
+ * aggregation cannot count until it lands — for at most the worker's
+ * `UPLOAD_TIMEOUT_MS` (15 min by default), after which the reaper deletes
+ * the abandoned object. Transient rather than accumulating, but it means the
+ * real per-user ceiling is this quota PLUS whatever one account can hold in
+ * flight, which the ingest rate limiter and the pending-job cap are what
+ * actually bound. Same note lives in `deploy/charts/cartyx/values.yaml`,
+ * where an operator meets the knob.
  */
 const DEFAULT_AUDIO_USER_QUOTA_BYTES = 2 * 1024 * 1024 * 1024;
 
@@ -301,44 +315,90 @@ async function checkPendingJobCap(
   return pendingCount >= maxPendingJobs ? { pendingCount, maxPendingJobs } : null;
 }
 
+/** The one wording every quota refusal on this surface uses, presign or confirm. */
+function storageQuotaMessage(usageBytes: number, limitBytes: number): string {
+  return `Storage quota exceeded: ${usageBytes} of ${limitBytes} bytes used. Delete an asset to make room.`;
+}
+
 /**
- * The storage-quota gate, shared by every entry point that presigns an
- * upload via `getAudioUploadUrl`: `createAudioUpload` (a new asset's
- * source) and `createOnceVariantUpload` (Task 18's once-variant source,
- * attached to an existing `music` asset). Both must run this BEFORE that
- * presign — the only R2-touching step either function takes — for two
- * reasons: refusing first means no R2 object exists yet for anything to
- * reclaim, and the E2E suite (deliberately fake R2 credentials) can only
- * tell a quota refusal apart from a credentials failure if the refusal
- * never reaches the presign step at all.
+ * The storage-quota measurement, shared by all FOUR entry points that can
+ * add bytes to a user's footprint: the two that presign an upload via
+ * `getAudioUploadUrl` (`createAudioUpload`, `createOnceVariantUpload`) and
+ * the two that make those bytes countable (`confirmAudioUpload`,
+ * `confirmOnceVariantUpload`).
  *
- * BOTH callers, not just `createAudioUpload`, because Task 3b deliberately
- * made `onceSourceBytes` the sixth term in `getUserStorageUsage`'s
- * aggregation specifically so once-variant bytes COUNT toward this quota
- * (`app/server/functions/audio-quota.ts`). Gating only the path that
- * creates the FIRST five terms' bytes while leaving the once-variant path
- * ungated would mean the quota counts bytes it never enforced against —
- * the exact hole Task 3b closed on the read side, reopened on the write
- * side: a user sitting exactly at the limit could still attach a
- * once-variant (its own source plus opus/aac renditions, ~126 MB at the
- * design doc's figure) to every `music` asset they own, roughly doubling
- * the effective ceiling for a music-heavy library.
+ * Returns `null` when the caller is under quota. Otherwise returns the two
+ * numbers each call site needs to build ITS OWN refusal — deliberately just
+ * numbers, exactly like `checkPendingJobCap` above and for the identical
+ * reason: what a refusal has to clean up differs per caller (nothing at all
+ * at presign time, since no object exists yet; an R2 object plus a fenced
+ * row write at confirm time — and the two confirms revert to DIFFERENT
+ * states). So this function measures, and each call site owns its cleanup.
  *
- * Throws `AudioClientError` on refusal (both the fail-closed and the
- * over-quota shape); returns normally when the caller is under quota.
+ * WHY THE CONFIRMS TOO, when a presign-time check reads as sufficient.
+ * Bytes only become COUNTABLE at confirm: `sourceBytes` and
+ * `onceSourceBytes` are written by the success writes below and nowhere
+ * else, so a presign-time check reads a number that cannot include anything
+ * the caller has already presigned and PUT. The check and the byte-landing
+ * are in DIFFERENT requests separated by a client-controlled delay, so with
+ * a presign-only gate the overshoot is bounded by how many presigns a caller
+ * can hold open, not by concurrency. Concretely, with the shipped defaults
+ * and no concurrency at all: spend 30 `audioIngestLimiter` tokens on
+ * `createAudioUpload`, PUT 50 MiB to each (every check sees usage unchanged,
+ * because nothing has confirmed), then spend the other 30 on
+ * `confirmAudioUpload` — usage goes from 0 to ~30 x 126 MB, roughly 3.8 GB
+ * against a 2 GiB quota, before the next presign is refused. Checking again
+ * at confirm reduces that to one accepted request's footprint (see the
+ * boundary comment below).
+ *
+ * The presign check still earns its place: it is the only one that can
+ * refuse BEFORE an object exists in R2, so a user already over quota never
+ * spends bandwidth on an upload that is going to be deleted anyway, and the
+ * E2E suite (deliberately fake R2 credentials) can only tell a quota refusal
+ * apart from a credentials failure because that refusal never reaches the
+ * presign step.
+ *
+ * WHERE EACH CALLER MUST PUT IT. The presign pair: before
+ * `getAudioUploadUrl`, the only R2-touching step either takes, so a refusal
+ * leaves nothing to reclaim. The confirm pair: before `HeadObject`, for the
+ * mirror-image reason `checkPendingJobCap` is checked there — a refusal then
+ * costs no outbound R2 call beyond the delete it has to perform anyway.
+ *
+ * BOTH once-variant halves are on this check, not just the main pair,
+ * because Task 3b deliberately made `onceSourceBytes` the sixth term in
+ * `getUserStorageUsage`'s aggregation specifically so once-variant bytes
+ * COUNT toward this quota (`app/server/functions/audio-quota.ts`). Gating
+ * only the paths that create the FIRST five terms' bytes would mean the
+ * quota counts bytes it never enforced against — the exact hole Task 3b
+ * closed on the read side, reopened on the write side: a user sitting
+ * exactly at the limit could still attach a once-variant (its own source
+ * plus opus/aac renditions, ~126 MB at the design doc's figure) to every
+ * `music` asset they own, roughly doubling the effective ceiling for a
+ * music-heavy library.
+ *
+ * THROWS on exactly one path — when the aggregation itself fails (fail
+ * closed, see below). Every other outcome is a return value. At the two
+ * confirms that throw deliberately performs NO cleanup: the row stays
+ * `uploading` and the object stays in R2, because a Mongo/index fault is
+ * transient and a retried confirm succeeds once it clears, whereas deleting
+ * a good object over a blip would destroy an upload the user could still
+ * have completed. If they never retry, the worker's reaper reclaims both,
+ * which is the same path an abandoned upload already takes.
+ *
  * `action` distinguishes which caller is asking, purely for the telemetry
- * tag on a fail-closed capture (see below) — `createAudioUpload` passes
- * `'createAudioUpload'`, `createOnceVariantUpload` passes
- * `'createOnceVariantUpload'`, each producing the same
- * `'<name>.quotaCheck'` action string this check has always used.
+ * tag on a fail-closed capture — each caller passes its own name, producing
+ * the `'<name>.quotaCheck'` action string this check has always used.
  *
- * Not exported: this module's two upload-presigning functions are its only
- * callers, and this module is reached only via `await import(...)` from
- * server-fn handlers and two server-only API routes (see the module
- * comment in `~/utils/audio-server-fns.ts`), so there is no reason to widen
- * this file's public surface for it.
+ * Not exported: this module's four ingest functions are its only callers,
+ * and this module is reached only via `await import(...)` from server-fn
+ * handlers and two server-only API routes (see the module comment in
+ * `~/utils/audio-server-fns.ts`), so there is no reason to widen this
+ * file's public surface for it.
  */
-async function assertUnderStorageQuota(actor: Actor, action: string): Promise<void> {
+async function checkStorageQuota(
+  actor: Actor,
+  action: string
+): Promise<{ usageBytes: number; limitBytes: number } | null> {
   const limitBytes = getAudioUserQuotaBytes();
   let usage: AudioStorageUsage;
   try {
@@ -371,23 +431,59 @@ async function assertUnderStorageQuota(actor: Actor, action: string): Promise<vo
 
   // `>=`, matching `assertPackageBudget`'s deliberate choice for
   // `MAX_PACKAGES_PER_USER` (`~/server/functions/packages.ts`): usage is
-  // measured BEFORE this upload lands, so a caller already AT the limit is
-  // refused rather than allowed to land exactly on it. Same "resource
-  // bound, not exact invariant" reasoning too — this cannot be made
-  // airtight with a transaction because the incoming file's declared
-  // `data.bytes` is client-controlled and unverified until confirm's own
-  // `HeadObject` measures it (see the comment on `sourceBytes` in
-  // `createAudioUpload` below), so it is not part of this boundary check.
-  // The worst-case overshoot this admits is bounded by ONE accepted
-  // request's eventual total footprint — not just `AUDIO_MAX_BYTES`'s 50
-  // MiB source cap, but the source PLUS the opus/aac renditions the worker
-  // produces from it, ~126 MB per the design doc's own measurement — the
-  // same shape of slack two concurrent package creates can produce there.
+  // measured BEFORE this request's bytes land, so a caller already AT the
+  // limit is refused rather than allowed to land exactly on it.
+  //
+  // THE RESIDUAL, stated honestly. With the confirm-side check in place the
+  // worst-case overshoot is ONE accepted request's eventual total footprint:
+  // the confirm that passes this check is measuring a source that is ALREADY
+  // in R2 (up to `AUDIO_MAX_BYTES`, 50 MiB), and the worker will then produce
+  // the opus/aac renditions from it — ~126 MB per the design doc's own
+  // measurement. It cannot be made airtight with a transaction either: at
+  // presign time the incoming file's declared `data.bytes` is
+  // client-controlled and unverified until confirm's own `HeadObject`
+  // measures it (see the comment on `sourceBytes` in `createAudioUpload`
+  // below), so it is not part of this boundary check.
+  //
+  // The earlier version of this comment likened that slack to "the same shape
+  // two concurrent package creates can produce" in `assertPackageBudget`.
+  // That analogy was wrong and is gone: `assertPackageBudget` counts and
+  // inserts inside ONE request, so concurrency there buys `+1`, whereas here
+  // the check and the byte-landing sat in DIFFERENT requests separated by a
+  // client-controlled delay — a residual bounded by open presigns rather than
+  // by concurrency, and orders of magnitude larger. Gating the confirms is
+  // what makes the "one request's footprint" claim true; see this function's
+  // doc comment for the arithmetic it used to admit.
+  //
+  // What remains INVISIBLE to this number, deliberately: bytes a caller has
+  // presigned and PUT but not yet confirmed. Nothing writes `sourceBytes`/
+  // `onceSourceBytes` until confirm, so those objects are real R2 storage the
+  // quota cannot see for up to the worker's `UPLOAD_TIMEOUT_MS` (15 min by
+  // default), after which `reapAbandonedUploads`/`reapAbandonedOnceUploads`
+  // delete them. Transient, not accumulating — but it means the true storage
+  // ceiling per user is the quota PLUS whatever they can hold in flight, and
+  // an operator tuning `AUDIO_USER_QUOTA_BYTES` should read it that way (the
+  // Helm values file says so where the knob actually lives).
   if (usage.bytes >= limitBytes) {
-    throw new AudioClientError(
-      `Storage quota exceeded: ${usage.bytes} of ${limitBytes} bytes used. Delete an asset to make room.`,
-      { usageBytes: usage.bytes, limitBytes }
-    );
+    return { usageBytes: usage.bytes, limitBytes };
+  }
+  return null;
+}
+
+/**
+ * The presign-side wrapper: `checkStorageQuota` plus the throw, because
+ * neither presigning caller has anything to clean up before refusing — no
+ * R2 object exists yet, and no row has been created or claimed. The two
+ * CONFIRM callers deliberately do not use this: each has an object to delete
+ * and a fenced row write to perform first, and those differ per path.
+ */
+async function assertUnderStorageQuota(actor: Actor, action: string): Promise<void> {
+  const over = await checkStorageQuota(actor, action);
+  if (over) {
+    throw new AudioClientError(storageQuotaMessage(over.usageBytes, over.limitBytes), {
+      usageBytes: over.usageBytes,
+      limitBytes: over.limitBytes,
+    });
   }
 }
 
@@ -541,6 +637,55 @@ export async function confirmAudioUpload({
       // in the message so the caller knows to wait rather than retry
       // immediately.
       throw new AudioClientError(reason);
+    }
+
+    // The storage quota, checked HERE as well as at presign — see
+    // `checkStorageQuota`'s doc comment for why a presign-only gate reads a
+    // number that cannot include anything the caller has already presigned
+    // and PUT, and for the overshoot that admits. Placed before
+    // `HeadObject` for the same reason the cap check above is: a refusal
+    // then costs no outbound R2 call beyond the delete it must perform
+    // anyway.
+    const quota = await checkStorageQuota({ userId, sessionUserId }, 'confirmAudioUpload');
+    if (quota) {
+      // The cleanup is the cap refusal's, because the situation directly
+      // above is the same one: the object already exists in R2 (the
+      // browser's PUT landed), nothing will ever reference it again, so it
+      // has to be deleted explicitly or it is stranded until the orphan
+      // scanner's next manual sweep.
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.sourceKey }));
+      const reason = storageQuotaMessage(quota.usageBytes, quota.limitBytes);
+      // FENCED exactly as the cap refusal above is, and for the identical
+      // ordering trap documented there: this request can be suspended inside
+      // the `DeleteObjectCommand` await while a concurrent confirm for the
+      // SAME asset legitimately queues the row (or the worker finishes it),
+      // and an identity-only write would then stamp `failed` over it after
+      // this request's delete already destroyed the object it points at.
+      //
+      // `status: 'failed'` and NOT `permanentFailure`: this row is a fresh
+      // upload with nothing else at stake (unlike `confirmOnceVariantUpload`,
+      // whose row is an existing playable asset — see its own refusal), so
+      // failing it is right; but unlike the tooLarge/badType branch below,
+      // re-uploading the same file AFTER deleting something else succeeds,
+      // which is the opposite of what `permanentFailure` means.
+      await AudioAsset.findOneAndUpdate(
+        { _id: data.assetId, ownerId: userId, status: 'uploading', variant: { $ne: 'once' } },
+        {
+          $set: {
+            status: 'failed',
+            lastError: reason,
+            updatedAt: new Date(),
+          },
+        }
+      );
+      // AudioClientError carrying both figures, exactly like the presign
+      // refusal: the caller's own doing, reachable at will, so it must file
+      // no GlitchTip event, and the UI can render "X of Y used" from the
+      // structured pair rather than re-parsing the message.
+      throw new AudioClientError(reason, {
+        usageBytes: quota.usageBytes,
+        limitBytes: quota.limitBytes,
+      });
     }
 
     const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: asset.sourceKey }));
@@ -880,6 +1025,55 @@ export async function confirmOnceVariantUpload({
       // not file a GlitchTip event — same shape as every other cap/quota
       // refusal in this file.
       throw new AudioClientError(reason);
+    }
+
+    // The storage quota, checked here for the same reason `confirmAudioUpload`
+    // checks it — see `checkStorageQuota`'s doc comment — and before
+    // `HeadObject` for the same reason the cap check above is.
+    //
+    // This path matters as much as the main one rather than less: Task 3b put
+    // `onceSourceBytes` into the usage aggregation precisely so a once-source
+    // counts, and this is the write that first makes it countable.
+    const quota = await checkStorageQuota({ userId, sessionUserId }, 'confirmOnceVariantUpload');
+    if (quota) {
+      // The once-source object already exists in R2 (the browser's PUT
+      // landed) — deleted explicitly or it is stranded, same as every other
+      // reject branch in this function.
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.onceSourceKey }));
+      const reason = storageQuotaMessage(quota.usageBytes, quota.limitBytes);
+      // REVERTS, it does not fail — the difference from `confirmAudioUpload`'s
+      // quota refusal, and the same difference the cap refusal above and the
+      // tooLarge/badType branch below both carry. This row is the MAIN
+      // asset's own document, a fully-transcoded `music` asset that was
+      // `ready` before the attach started; writing `status: 'failed'` here
+      // would brick it (`retryAudioAsset` refuses `permanentFailure`,
+      // `createOnceVariantUpload` refuses a non-`ready` row). So: back to
+      // `ready`/`main`, once-source key and bytes cleared together, reason on
+      // `onceLastError` rather than `lastError`.
+      //
+      // Fenced on `variant: 'once'` EXACT (not `$ne`), matching the two
+      // writes around it: only a row still mid-attach may be reverted, so a
+      // stale refusal that resumes after the user started a second attach is
+      // a no-op instead of silently cancelling that fresh attach.
+      await AudioAsset.findOneAndUpdate(
+        { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
+        {
+          $set: {
+            status: 'ready',
+            variant: 'main',
+            onceSourceKey: null,
+            onceSourceBytes: null,
+            onceLastError: reason,
+            updatedAt: new Date(),
+          },
+        }
+      );
+      // AudioClientError carrying both figures — same reasoning as the main
+      // confirm's quota refusal.
+      throw new AudioClientError(reason, {
+        usageBytes: quota.usageBytes,
+        limitBytes: quota.limitBytes,
+      });
     }
 
     const head = await client.send(

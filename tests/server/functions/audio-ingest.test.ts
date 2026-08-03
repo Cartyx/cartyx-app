@@ -276,6 +276,13 @@ describe('confirmAudioUpload', () => {
     // tests make are unaffected. Tests that care about the cap itself
     // override this explicitly.
     vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0);
+    // Same, for the confirm-side storage-quota check added in the final
+    // whole-branch review. Required rather than merely tidy: `vi.clearAllMocks`
+    // clears CALLS but not IMPLEMENTATIONS, so without this every test in this
+    // describe would inherit whatever the last `createAudioUpload` quota test
+    // left on the shared mock — which is `mockRejectedValue(new Error('mongo
+    // unreachable'))`, i.e. every confirm below would fail closed.
+    getUserStorageUsage.mockResolvedValue({ bytes: 0, assetCount: 1 });
   });
 
   it('flips to pending when the real object matches the declared size', async () => {
@@ -637,6 +644,176 @@ describe('confirmAudioUpload', () => {
       } as never);
       const r = await confirmAudioUpload({ data: { assetId: 'a2' }, userId: 'u2' });
       expect(r.status).toBe('pending');
+    });
+  });
+
+  /**
+   * FINAL WHOLE-BRANCH REVIEW, Important #1. The quota used to be enforced
+   * in both presign functions and NEITHER confirm — but bytes only become
+   * countable at confirm (`sourceBytes` is written by the success write and
+   * nowhere else), so the presign check reads a number that cannot include
+   * anything the caller has already presigned and PUT. With the shipped
+   * defaults and no concurrency: 30 presigns, 30 PUTs of 50 MiB (every check
+   * still sees the old usage), 30 confirms — ~3.8 GB against a 2 GiB quota.
+   *
+   * These tests pin the fix and the two things that make it correct: the
+   * refusal costs no `HeadObject`, and the object does not survive it.
+   */
+  describe('storage quota at confirm', () => {
+    it('refuses an over-quota confirm before HeadObject, deletes the object, and fails the row on a fenced filter', async () => {
+      const { getAudioUserQuotaBytes, confirmAudioUpload, AudioClientError } =
+        await import('~/server/functions/audio');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+      const limit = getAudioUserQuotaBytes();
+
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        sourceKey: 'k1',
+        status: 'uploading',
+      } as never);
+      getUserStorageUsage.mockResolvedValue({ bytes: limit + 1, assetCount: 9 });
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({ _id: 'a1' } as never);
+      // Deliberately a VALID object: if the implementation reached HeadObject
+      // first, the confirm would SUCCEED and this test would fail on the
+      // rejection rather than passing for the wrong reason.
+      send.mockResolvedValue({ ContentLength: 1024, ContentType: 'audio/wav' });
+
+      const err = await confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' }).catch(
+        (e: unknown) => e
+      );
+
+      expect(err).toBeInstanceOf(AudioClientError);
+      expect((err as Error).message).toMatch(/storage quota exceeded/i);
+      // The structured pair, same as the presign refusal carries, so the UI
+      // can render "X of Y used" without re-parsing prose.
+      const clientErr = err as InstanceType<typeof AudioClientError>;
+      expect(clientErr.usageBytes).toBe(limit + 1);
+      expect(clientErr.limitBytes).toBe(limit);
+
+      // NO HeadObject — asserted on the command CLASS specifically, not just
+      // on a call count, because "one R2 call" would also hold for an
+      // implementation that issued the Head and skipped the delete.
+      expect(send.mock.calls.filter(([cmd]) => cmd instanceof HeadObjectCommand)).toHaveLength(0);
+      // The already-PUT object is gone — it is referenced by nothing after
+      // this refusal, so leaving it would strand paid-for storage.
+      const deletes = send.mock.calls.filter(([cmd]) => cmd instanceof DeleteObjectCommand);
+      expect(deletes).toHaveLength(1);
+      expect((deletes[0][0] as DeleteObjectCommand).input).toEqual({ Bucket: 'b', Key: 'k1' });
+
+      // The ACTUAL filter of the revert write, `toEqual` not a subset check:
+      // an identity-only filter is exactly the regression this fence exists
+      // to prevent (a concurrent confirm can legitimately queue the row while
+      // this request sits inside the delete's await).
+      const [filter, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
+      expect(filter).toEqual({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: { $ne: 'once' },
+      });
+      const set = (update as { $set: Record<string, unknown> }).$set;
+      expect(set.status).toBe('failed');
+      expect(set.lastError).toMatch(/storage quota exceeded/i);
+      // NOT permanent: deleting another asset and re-uploading works, which
+      // is the opposite of what `permanentFailure` claims.
+      expect('permanentFailure' in set).toBe(false);
+
+      // The caller's own doing, reachable at will — no GlitchTip event.
+      expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The boundary and its complement in one run, so neither can be satisfied
+     * by an implementation that simply always refuses (or always admits).
+     */
+    it('refuses exactly at the limit and admits one byte under it', async () => {
+      const { getAudioUserQuotaBytes, confirmAudioUpload } =
+        await import('~/server/functions/audio');
+      const limit = getAudioUserQuotaBytes();
+
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        sourceKey: 'k1',
+        status: 'uploading',
+      } as never);
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+        _id: 'a1',
+        status: 'pending',
+      } as never);
+      send.mockResolvedValue({ ContentLength: 1024, ContentType: 'audio/wav' });
+
+      getUserStorageUsage.mockResolvedValue({ bytes: limit, assetCount: 9 });
+      await expect(confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' })).rejects.toThrow(
+        /storage quota exceeded/i
+      );
+
+      getUserStorageUsage.mockResolvedValue({ bytes: limit - 1, assetCount: 9 });
+      await expect(
+        confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' })
+      ).resolves.toMatchObject({ status: 'pending' });
+    });
+
+    /**
+     * The scope of the aggregation the confirm runs. A count that dropped
+     * `ownerId` — or read someone else's usage — would refuse or admit the
+     * wrong caller, and a single-user fixture cannot tell those apart.
+     */
+    it("measures the confirming user's own usage", async () => {
+      const { confirmAudioUpload } = await import('~/server/functions/audio');
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'mongo-id-1',
+        sourceKey: 'k1',
+        status: 'uploading',
+      } as never);
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+        _id: 'a1',
+        status: 'pending',
+      } as never);
+      send.mockResolvedValue({ ContentLength: 1024, ContentType: 'audio/wav' });
+
+      await confirmAudioUpload({
+        data: { assetId: 'a1' },
+        userId: 'mongo-id-1',
+        sessionUserId: 'session-provider-id',
+      });
+
+      // The MONGO id — `ownerId` references it; the provider id would
+      // aggregate nobody's rows and report zero usage for everyone.
+      expect(getUserStorageUsage).toHaveBeenCalledWith('mongo-id-1');
+    });
+
+    /**
+     * Fail closed, and deliberately WITHOUT the cleanup an over-quota refusal
+     * performs: a Mongo fault is transient, a retried confirm succeeds once
+     * it clears, and deleting a good object over a blip would destroy an
+     * upload the user could still complete. The reaper reclaims it if they
+     * never do.
+     */
+    it('refuses the confirm when the usage aggregation itself rejects, without deleting the object', async () => {
+      const { confirmAudioUpload } = await import('~/server/functions/audio');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        sourceKey: 'k1',
+        status: 'uploading',
+      } as never);
+      getUserStorageUsage.mockRejectedValue(new Error('mongo unreachable'));
+
+      await expect(confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' })).rejects.toThrow(
+        /unable to verify your storage usage/i
+      );
+      expect(send).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.findOneAndUpdate)).not.toHaveBeenCalled();
+      // The underlying fault IS captured — nobody can trigger it on demand,
+      // and swallowing it would make the quota's own failure mode invisible.
+      expect(vi.mocked(serverCaptureException)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(serverCaptureException).mock.calls[0][2]).toMatchObject({
+        action: 'confirmAudioUpload.quotaCheck',
+      });
     });
   });
 });
