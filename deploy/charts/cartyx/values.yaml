@@ -43,6 +43,29 @@ web:
     GLITCHTIP_DSN: ''
     UMAMI_WEBSITE_ID: ''
     UMAMI_HOST: ''
+    # Audio hardening (phase 1.5) operator-tunable limits — all three are
+    # guarded against an absent/empty value (Helm renders '' for an unset key
+    # here; the readers in app/server/functions/audio.ts and
+    # app/lib/audio-rate-limits.ts treat that the same as "not set" and fall
+    # back to the documented default) and take effect on the next pod
+    # restart, no image rebuild. See deploy/charts/cartyx/README.md's
+    # Operations section for the operator-facing writeup of each default and
+    # where to change it.
+    #
+    # Per-user storage quota in bytes. Default (when unset): 2 GiB — see
+    # DEFAULT_AUDIO_USER_QUOTA_BYTES in app/server/functions/audio.ts.
+    AUDIO_USER_QUOTA_BYTES: ''
+    # Per-user cap on pending/processing transcode jobs at once. Default
+    # (when unset): 20 — see DEFAULT_MAX_PENDING_JOBS_PER_USER in
+    # app/server/functions/audio.ts.
+    MAX_PENDING_JOBS_PER_USER: ''
+    # Token-bucket size/refill for the audio ingest rate limiter (upload
+    # presign, confirm, once-variant, retry). Defaults (when unset): capacity
+    # 60, refill 1/s — see audioIngestLimiter in app/lib/audio-rate-limits.ts.
+    # The other four rate-limit buckets in that file are deliberately NOT
+    # env-wired (see that file's module comment for why).
+    AUDIO_INGEST_RATE_LIMIT_CAPACITY: ''
+    AUDIO_INGEST_RATE_LIMIT_REFILL_PER_SEC: ''
 
 realtime:
   image:

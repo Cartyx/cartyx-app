@@ -295,6 +295,40 @@ if [ "$backoff_max_ms" -ge "$backoff_ms" ] && [ "$backoff_max_ms" -le "$claim_ms
   bad "RETRY_BACKOFF_MAX_MS ($backoff_max_ms) must sit between the base ($backoff_ms) and the claim budget ($claim_ms)"
 fi
 
+# --- Task 11: audio hardening limits (quota, job cap, ingest rate limit) ---
+# All four are optional web.env values, same idiom as CDN_URL/GLITCHTIP_DSN
+# above: Helm renders '' for an unset key and the deployment's `range` drops
+# empty values, so assert BOTH the omission and the render — a name-only
+# check would still pass with the values.yaml entry deleted outright.
+assert_not_contains "empty AUDIO_USER_QUOTA_BYTES is omitted" "name: AUDIO_USER_QUOTA_BYTES"
+assert_not_contains "empty MAX_PENDING_JOBS_PER_USER is omitted" "name: MAX_PENDING_JOBS_PER_USER"
+assert_not_contains "empty AUDIO_INGEST_RATE_LIMIT_CAPACITY is omitted" \
+  "name: AUDIO_INGEST_RATE_LIMIT_CAPACITY"
+assert_not_contains "empty AUDIO_INGEST_RATE_LIMIT_REFILL_PER_SEC is omitted" \
+  "name: AUDIO_INGEST_RATE_LIMIT_REFILL_PER_SEC"
+
+assert_contains "non-empty AUDIO_USER_QUOTA_BYTES renders" 'value: "1073741824"' \
+  --set web.env.AUDIO_USER_QUOTA_BYTES=1073741824
+assert_contains "non-empty MAX_PENDING_JOBS_PER_USER renders" 'value: "5"' \
+  --set web.env.MAX_PENDING_JOBS_PER_USER=5
+assert_contains "non-empty AUDIO_INGEST_RATE_LIMIT_CAPACITY renders" 'value: "120"' \
+  --set web.env.AUDIO_INGEST_RATE_LIMIT_CAPACITY=120
+assert_contains "non-empty AUDIO_INGEST_RATE_LIMIT_REFILL_PER_SEC renders" 'value: "2.5"' \
+  --set web.env.AUDIO_INGEST_RATE_LIMIT_REFILL_PER_SEC=2.5
+
+# Scoped to each manifest specifically: these must reach the web pod (the
+# only reader — app/server/functions/audio.ts and
+# app/lib/audio-rate-limits.ts both run in the web image) and must NOT leak
+# onto the audio-worker pod, which shares the same top-level `.Values` but
+# has its own, separate `env` block.
+web_out=$(render -s templates/web-deployment.yaml --set web.env.AUDIO_USER_QUOTA_BYTES=1073741824)
+echo "$web_out" | grep -q "name: AUDIO_USER_QUOTA_BYTES" && ok ||
+  bad "AUDIO_USER_QUOTA_BYTES reaches the web deployment"
+worker_isolation_out=$(render -s templates/audio-worker-deployment.yaml \
+  --set web.env.AUDIO_USER_QUOTA_BYTES=1073741824)
+echo "$worker_isolation_out" | grep -q "name: AUDIO_USER_QUOTA_BYTES" &&
+  bad "AUDIO_USER_QUOTA_BYTES must not leak onto the audio-worker pod" || ok
+
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

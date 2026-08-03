@@ -123,11 +123,11 @@ bypasses checksum auto-restart). Platform-namespace secrets: see
 
 `.env.example` is the authoritative reference. The split that matters:
 
-| Kind                      | Examples                                                                                 | Changed by                                                |
-| ------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| Client-baked (build-time) | `VITE_PUBLIC_GLITCHTIP_DSN`, `VITE_PUBLIC_UMAMI_WEBSITE_ID`, `VITE_PUBLIC_PARTYKIT_HOST` | `deploy/build/web-<env>.args` + merge (CI rebuilds image) |
-| Server runtime (plain)    | `APP_ENV`, `GLITCHTIP_DSN`, `UMAMI_WEBSITE_ID`, `CDN_URL`, `REALTIME_INTERNAL_HOST`      | chart `values-<env>.yaml` + merge (Flux rolls)            |
-| Server runtime (secret)   | `MONGODB_URI`, `SESSION_SECRET`, OAuth/R2 secrets                                        | `kubectl patch` Secret + rollout restart                  |
+| Kind                      | Examples                                                                                                                                                                       | Changed by                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------- |
+| Client-baked (build-time) | `VITE_PUBLIC_GLITCHTIP_DSN`, `VITE_PUBLIC_UMAMI_WEBSITE_ID`, `VITE_PUBLIC_PARTYKIT_HOST`                                                                                       | `deploy/build/web-<env>.args` + merge (CI rebuilds image) |
+| Server runtime (plain)    | `APP_ENV`, `GLITCHTIP_DSN`, `UMAMI_WEBSITE_ID`, `CDN_URL`, `REALTIME_INTERNAL_HOST`, `AUDIO_USER_QUOTA_BYTES`, `MAX_PENDING_JOBS_PER_USER`, `AUDIO_INGEST_RATE_LIMIT_CAPACITY` | chart `values-<env>.yaml` + merge (Flux rolls)            |
+| Server runtime (secret)   | `MONGODB_URI`, `SESSION_SECRET`, OAuth/R2 secrets                                                                                                                              | `kubectl patch` Secret + rollout restart                  |
 
 ## Troubleshooting
 

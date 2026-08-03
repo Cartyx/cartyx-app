@@ -27,13 +27,39 @@ import { createRateLimiter } from '~/lib/rate-limit';
  * note). The web pod runs `replicaCount: 1`, so per-process is the whole
  * picture today; at N>1 replicas every number below becomes per-replica.
  *
- * THE NUMBERS ARE HARDCODED ON PURPOSE. Task 11 of this phase wires the
- * limits that need operational tuning (quota, job cap) into the Helm chart as
- * server env. If a rate-limit value ever needs the same treatment it must be
- * a plain `process.env` read with the default below retained, and never a
+ * `audioIngestLimiter`'s two numbers are env-overridable (below); the other
+ * three buckets stay hardcoded — see that limiter's own comment for why it
+ * alone gets this treatment, and Task 11's report
+ * (`.superpowers/sdd/2026-07-31-audio-hardening-plan/task-11-report.md`) for
+ * the build-bundle evidence that a plain `process.env` read here is safe.
+ * Follow the identical pattern if another bucket ever needs it: never a
  * `VITE_PUBLIC_*` name — this module is client-bundled, so a `VITE_PUBLIC_*`
  * read here would bake the limit into the browser image.
  */
+
+/**
+ * Guards a `process.env` read the same way
+ * `~/server/functions/audio.ts`'s `getAudioUserQuotaBytes` /
+ * `getMaxPendingJobsPerUser` do: `Number(undefined)` and `Number('')` (what
+ * Helm renders for a `values.yaml` key nobody set) are both non-positive
+ * under this check, so an absent or empty env var falls through to
+ * `fallback` rather than producing `NaN` or `0` — a configured `0` would
+ * make the bucket refuse every request instantly, which is a
+ * misconfiguration, not a deliberate zero-capacity limiter.
+ *
+ * Read once, at module load (this module's constants are built at import
+ * time, same as the hardcoded buckets below) — not re-read per request like
+ * the two functions above, because a token bucket's state must persist
+ * across requests and there is nothing to re-read INTO once constructed.
+ * Changing the env value therefore takes effect on the next pod restart, the
+ * same restart-required idiom `audioWorker.env.LOG_LEVEL` already uses (a
+ * `helm upgrade` that changes a plain Deployment env value triggers that
+ * restart on its own — no checksum annotation needed, unlike a Secret).
+ */
+function envPositiveNumber(name: string, fallback: number): number {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
 
 /**
  * Ingest: `createAudioUpload`, `confirmAudioUpload`, both once-variant
@@ -58,8 +84,26 @@ import { createRateLimiter } from '~/lib/rate-limit';
  * tight loop would otherwise manage — and the storage quota (task 4) and
  * per-user pending-job cap (task 5) bound what those calls can actually
  * consume.
+ *
+ * `AUDIO_INGEST_RATE_LIMIT_CAPACITY` / `AUDIO_INGEST_RATE_LIMIT_REFILL_PER_SEC`,
+ * both env-overridable with the 60 / 1 above retained as defaults — this is
+ * the ONE bucket of the five in this file wired to the Helm chart (Task 11),
+ * because it is the one this module's own comments already single out as
+ * "the queue-starvation lever" and the design doc's open-questions table
+ * flags default rate-limit values generally as something to "tune after real
+ * usage." The other four buckets stay hardcoded: nothing has called out
+ * `packageWriteLimiter`/`boardStateLimiter`/`libraryMutationLimiter`/
+ * `orphanCleanupLimiter` as needing operational tuning, and wiring five
+ * buckets' worth of env plumbing on spec would be scope beyond what Task 11
+ * asked for. The mechanism below (a plain `process.env` read, module-scope,
+ * verified absent from the client bundle — see `envPositiveNumber`'s comment
+ * and the Task 11 report) extends to any of them identically if that need
+ * ever arises.
  */
-export const audioIngestLimiter = createRateLimiter({ capacity: 60, refillPerSec: 1 });
+export const audioIngestLimiter = createRateLimiter({
+  capacity: envPositiveNumber('AUDIO_INGEST_RATE_LIMIT_CAPACITY', 60),
+  refillPerSec: envPositiveNumber('AUDIO_INGEST_RATE_LIMIT_REFILL_PER_SEC', 1),
+});
 
 /**
  * Package writes: `createPackage` and `clonePackage`. The design's other
