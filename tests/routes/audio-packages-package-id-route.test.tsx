@@ -294,6 +294,97 @@ describe('PackageEditorPage save path', () => {
     expect(call.data.expectedUpdatedAt).toBe('2026-03-04T05:06:07.000Z');
   });
 
+  /**
+   * FINAL WHOLE-BRANCH REVIEW, Important #2, regression-locked here because
+   * none of the other twelve tests in this file saves TWICE — and one save is
+   * exactly the number that cannot see this defect.
+   *
+   * The failure it pins: if `onSuccess` only invalidated the package branch
+   * and never seeded the mutation's own return value into the detail cache,
+   * then until the refetch landed `pkg` would still be the PRE-save object.
+   * `dirty` (a reference comparison against `pkg.items`/`.moods`/`.name`)
+   * would stay true, the button would still read "Save changes", and a second
+   * Save would send the `updatedAt` the first save had already superseded —
+   * so Task 7's fence would refuse it and the editor would show the user a
+   * conflict notice about THEIR OWN save. A conflict dialog that fires on the
+   * happy path is the fastest way to teach users to click through conflict
+   * dialogs, which defeats the point of the fence.
+   *
+   * THE FIXTURE DETAIL THAT MAKES THIS MEAN ANYTHING: the refetch triggered
+   * by `invalidateQueries` is never allowed to land (`getPackageFn` returns a
+   * forever-pending promise after its first call). In a browser that refetch
+   * is a network round trip the user can easily click through; in a test it
+   * would resolve instantly and hand an unseeded implementation the fresh
+   * document anyway, so the test would pass against the very bug it exists to
+   * catch. With the refetch pinned open, the second save's precondition can
+   * only be the fresh `updatedAt` if `onSuccess` seeded it from the first
+   * save's own response.
+   */
+  it('seeds the save response into the detail cache, so a second consecutive save carries the fresh revision', async () => {
+    const user = userEvent.setup();
+    const pkg = mkPackage({
+      items: [mkItem({ id: 'i1', label: 'Rain' })],
+      updatedAt: '2026-03-04T05:06:07.000Z',
+    });
+    const afterFirstSave = {
+      ...pkg,
+      name: 'Storm Set!',
+      // A NEW revision, the way `updatePackage`'s `{ new: true }` document
+      // does — this is the value the second save must carry.
+      updatedAt: '2026-03-04T05:06:09.000Z',
+    };
+
+    getPackageFn
+      .mockResolvedValueOnce(pkg)
+      // Every subsequent read — i.e. the post-save invalidation's refetch —
+      // hangs. See this test's doc comment for why that is the point.
+      .mockReturnValue(new Promise(() => {}));
+    listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+    updatePackageFn.mockResolvedValue(afterFirstSave);
+
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <PackageEditorPage />
+      </QueryClientProvider>
+    );
+
+    const nameInput = await screen.findByRole('textbox', { name: /package name/i });
+    await user.type(nameInput, '!');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(updatePackageFn).toHaveBeenCalledTimes(1));
+    expect(
+      (updatePackageFn.mock.calls[0][0] as { data: { expectedUpdatedAt: string } }).data
+        .expectedUpdatedAt
+    ).toBe('2026-03-04T05:06:07.000Z');
+
+    // The button settles back to "Saved": the draft is no longer dirty,
+    // because the seeded `pkg` and the local drafts are the same objects.
+    // This is the user-visible half of the defect — an unseeded cache leaves
+    // "Save changes" enabled on a package that is already saved.
+    await screen.findByRole('button', { name: 'Saved' });
+
+    // A second, genuinely new edit, saved again.
+    updatePackageFn.mockResolvedValue({
+      ...afterFirstSave,
+      name: 'Storm Set!?',
+      updatedAt: '2026-03-04T05:06:11.000Z',
+    });
+    await user.type(screen.getByRole('textbox', { name: /package name/i }), '?');
+    await user.click(await screen.findByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(updatePackageFn).toHaveBeenCalledTimes(2));
+    const second = updatePackageFn.mock.calls[1][0] as {
+      data: { expectedUpdatedAt: string; name: string };
+    };
+    expect(second.data.expectedUpdatedAt).toBe('2026-03-04T05:06:09.000Z');
+    expect(second.data.name).toBe('Storm Set!?');
+
+    // And no conflict notice was ever rendered for the user's own save.
+    expect(screen.queryByText(/changed somewhere else/i)).toBeNull();
+  });
+
   it('does not render an editable name field for a system package', async () => {
     const pkg = mkPackage({ ownerId: null, name: 'Storm Basics' });
     getPackageFn.mockResolvedValue(pkg);

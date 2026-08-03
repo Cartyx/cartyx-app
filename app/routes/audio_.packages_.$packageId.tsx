@@ -277,6 +277,18 @@ export function PackageEditorPage() {
         },
       }),
     onSuccess: (updated) => {
+      // SEEDED, not merely invalidated, and that is load-bearing rather than
+      // an optimisation. `updatePackage` returns the fresh document
+      // (`{ new: true }`), and `dirty` below is a REFERENCE comparison against
+      // `pkg`. Invalidating alone would leave `pkg` as the pre-save object
+      // until the refetch's round trip landed — so the button would still
+      // read "Save changes" on an already-saved package, and a second Save in
+      // that window would send the `updatedAt` this save just superseded,
+      // which Task 7's fence refuses. The user would then be shown a conflict
+      // notice about their OWN save; a conflict dialog that fires on the
+      // happy path is how users learn to click through conflict dialogs.
+      // `tests/routes/audio-packages-package-id-route.test.tsx` pins this by
+      // saving twice with the refetch held open.
       qc.setQueryData(queryKeys.packages.detail(packageId), updated);
       setItems(updated.items);
       setMoods(updated.moods);
