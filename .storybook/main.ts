@@ -53,6 +53,16 @@ const config: StorybookConfig = {
         find: /^~\/server\/.*$/,
         replacement: path.resolve(__dirname, './mocks/serverFunctions.ts'),
       },
+      // Server-only despite living under `app/lib/`, so the `~/server/**`
+      // pattern above misses it: it reads `process.env` at module scope and is
+      // statically reachable from AudioUploadDropzone's story through
+      // ~/utils/uploadAudio -> ~/utils/audio-server-fns. The real client build
+      // strips the handler bodies that reference it and drops the module; the
+      // Storybook build does not. See ./mocks/audioRateLimits.ts.
+      {
+        find: /^~\/lib\/audio-rate-limits$/,
+        replacement: path.resolve(__dirname, './mocks/audioRateLimits.ts'),
+      },
       // Reaches node:async_hooks via @tanstack/start-storage-context, which a
       // browser bundle cannot resolve. See ./mocks/react-start.ts.
       {
