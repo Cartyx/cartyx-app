@@ -28,13 +28,45 @@ import { createRateLimiter } from '~/lib/rate-limit';
  * picture today; at N>1 replicas every number below becomes per-replica.
  *
  * `audioIngestLimiter`'s two numbers are env-overridable (below); the other
- * three buckets stay hardcoded — see that limiter's own comment for why it
- * alone gets this treatment, and Task 11's report
- * (`.superpowers/sdd/2026-07-31-audio-hardening-plan/task-11-report.md`) for
- * the build-bundle evidence that a plain `process.env` read here is safe.
- * Follow the identical pattern if another bucket ever needs it: never a
- * `VITE_PUBLIC_*` name — this module is client-bundled, so a `VITE_PUBLIC_*`
- * read here would bake the limit into the browser image.
+ * four buckets stay hardcoded — see that limiter's own comment for why it
+ * alone gets this treatment.
+ *
+ * WHY A PLAIN `process.env` READ BELOW DOES NOT CONTRADICT "THIS MODULE IS
+ * CLIENT-BUNDLED" ABOVE: this module IS in the client's static import graph
+ * — both wrapper files import it at the top level — but every reference to
+ * its exports, in both wrappers, lives inside a `.handler()` body, which
+ * TanStack Start strips before the client build runs. Once every reference
+ * is gone, Rollup drops the now-unused import, and with no other consumer
+ * anywhere in `app/` (checked: `grep -rl "audio-rate-limits" app` returns
+ * only these two files), the whole module — including any `process.env`
+ * read inside it — never reaches the browser. Verified empirically for
+ * `AUDIO_INGEST_RATE_LIMIT_CAPACITY`: after `npm run build`, zero
+ * occurrences anywhere under `.output/public`, with `mongoose` (163 hits
+ * under `.output/server`, 0 under `.output/public`) and `rateLimitMessage`'s
+ * unmangled `requests. Try again in ` template-literal fragment as controls
+ * proving the search was meaningful rather than searching an empty place.
+ *
+ * THE INVARIANT THIS DEPENDS ON, STATED PLAINLY, because nothing mechanical
+ * enforces it: every reference to anything exported from this file — in
+ * EVERY consumer, not just the two that exist today — must stay inside a
+ * `.handler()` body. Break that once (a route or component statically
+ * imports `audioIngestLimiter`, say, to show a caller their remaining
+ * budget) and this module ships to the browser. It would not fail loudly:
+ * `process.env[name]` is a COMPUTED member access, which Vite's `define`
+ * text-replacement cannot match (it only rewrites literal
+ * `process.env.SOME_NAME` property reads), so the failure mode is not a
+ * baked-in value — it's `process` being undefined at module-evaluation time,
+ * i.e. a `ReferenceError` thrown the instant that chunk loads in every
+ * browser. `typecheck`/`lint`/`test` all stay green, and `npm run build`
+ * would SUCCEED too, because this is a runtime crash, not a build error —
+ * the same "nothing mechanically enforces that" gap
+ * `~/utils/require-actor.ts`'s doc comment already names for the identical
+ * hazard on the dynamic-import side of this codebase. Keep every future
+ * usage of this module's exports inside a handler.
+ *
+ * And never a `VITE_PUBLIC_*` name regardless of where it's referenced from
+ * — that bakes the limit into the browser image on purpose, which defeats
+ * the entire point of making it operator-tunable.
  */
 
 /**
@@ -95,10 +127,10 @@ function envPositiveNumber(name: string, fallback: number): number {
  * `packageWriteLimiter`/`boardStateLimiter`/`libraryMutationLimiter`/
  * `orphanCleanupLimiter` as needing operational tuning, and wiring five
  * buckets' worth of env plumbing on spec would be scope beyond what Task 11
- * asked for. The mechanism below (a plain `process.env` read, module-scope,
- * verified absent from the client bundle — see `envPositiveNumber`'s comment
- * and the Task 11 report) extends to any of them identically if that need
- * ever arises.
+ * asked for. The mechanism below (a plain `process.env` read, module-scope)
+ * extends to any of them identically if that need ever arises — see the
+ * module comment above (`envPositiveNumber`'s guard, and the invariant that
+ * keeps this safe) before doing so.
  */
 export const audioIngestLimiter = createRateLimiter({
   capacity: envPositiveNumber('AUDIO_INGEST_RATE_LIMIT_CAPACITY', 60),
