@@ -108,6 +108,24 @@ function loaderFor(assets: Record<string, EngineAsset>) {
   return (assetId: string) => Promise.resolve(assets[assetId] ?? null);
 }
 
+/**
+ * Same as `loaderFor`, plus a call count per `assetId`. The asset cache is
+ * private engine state — the number of times `loadAsset` gets asked for a
+ * given id is the only black-box signal of whether that id's buffer is still
+ * cached (1 call) or was evicted and had to be re-decoded (2+ calls).
+ */
+function countingLoader(assets: Record<string, EngineAsset>): {
+  loadAsset: (assetId: string) => Promise<EngineAsset | null>;
+  calls: Record<string, number>;
+} {
+  const calls: Record<string, number> = {};
+  const loadAsset = (assetId: string) => {
+    calls[assetId] = (calls[assetId] ?? 0) + 1;
+    return Promise.resolve(assets[assetId] ?? null);
+  };
+  return { loadAsset, calls };
+}
+
 describe('createEngine — fades', () => {
   it('fades in on a clean linear ramp that reaches the target at exactly t = fade', async () => {
     const ctx = new OfflineAudioContext(1, 3 * SR, SR);
@@ -730,5 +748,115 @@ describe('createEngine — volume and teardown', () => {
 
     expect(at(rendered, 0.9)).toBeCloseTo(1, 5);
     expect(peakBetween(rendered, 1.01, 2)).toBeCloseTo(0, 5);
+  });
+});
+
+describe('createEngine — decoded-buffer cache cap', () => {
+  // Real fixtures, real bytes: three 0.01 s mono buffers, 480 samples each.
+  // `assetCacheCapBytes` is overridden per test so the cap is genuinely
+  // crossed by a few KB of fixture instead of requiring gigabytes of real
+  // decoded audio to prove the same thing.
+  const BYTES_PER_ASSET = 480 * 1 * 4; // mono, float32 — 1920 bytes.
+
+  function tinyAsset(ctx: BaseAudioContext): EngineAsset {
+    return { buffer: dcBuffer(ctx, 0.01), durationSamples: 480 };
+  }
+
+  it('evicts an idle asset past the cap, and never the one still playing', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    const fixtures: Record<string, EngineAsset> = {
+      a: tinyAsset(ctx),
+      b: tinyAsset(ctx),
+      c: tinyAsset(ctx),
+    };
+    const { loadAsset, calls } = countingLoader(fixtures);
+    // Room for two assets, not three — the fixture only has teeth if loading
+    // the third genuinely crosses the cap rather than approaching it.
+    const assetCacheCapBytes = BYTES_PER_ASSET * 2 + 1;
+    const engine = createEngine(ctx, { loadAsset, assetCacheCapBytes });
+
+    const itemA = boardItem({ itemId: 'a', assetId: 'a', playing: true, volume: 1, loop: true });
+    const itemB = boardItem({ itemId: 'b', assetId: 'b', playing: true, volume: 1, loop: true });
+    const itemC = boardItem({ itemId: 'c', assetId: 'c', playing: true, volume: 1, loop: true });
+
+    // a loads and is left playing for the rest of the test — the
+    // "currently playing" asset. It is also the OLDEST cache entry once b
+    // and c have loaded, which matters below: a plain LRU-by-age policy
+    // would reach for it first and get this exactly backwards.
+    engine.apply(board([itemA]));
+    await engine.ready();
+
+    // b loads, plays briefly, then stops — idle, but still resident.
+    engine.apply(board([itemA, itemB]));
+    await engine.ready();
+    engine.apply(board([itemA, { ...itemB, playing: false }]));
+    await engine.ready();
+    expect(calls.a).toBe(1);
+    expect(calls.b).toBe(1);
+
+    // c loads. a + b + c is three assets' worth of bytes — over cap. a is
+    // playing and idle-b is not; eviction must take b.
+    engine.apply(board([itemA, { ...itemB, playing: false }, itemC]));
+    await engine.ready();
+
+    // Retrigger a: stop it, then immediately restart it. If a survived
+    // eviction this is a synchronous restart — its buffer is still in the
+    // cache, so no new decode is needed. If a was wrongly evicted instead of
+    // b, `start` finds no buffer and reconcile has to re-request it.
+    engine.apply(board([{ ...itemA, playing: false }, { ...itemB, playing: false }, itemC]));
+    engine.apply(board([itemA, { ...itemB, playing: false }, itemC]));
+    await engine.ready();
+    expect(calls.a).toBe(1);
+
+    // b, in contrast, must have been evicted — playing it again needs a
+    // fresh decode.
+    engine.apply(board([itemA, itemB, itemC]));
+    await engine.ready();
+    expect(calls.b).toBe(2);
+
+    // Nothing here should have thrown or left the graph in a bad state.
+    await expect(ctx.startRendering()).resolves.toBeTruthy();
+  });
+
+  it('re-decodes an evicted asset on next play, and it actually plays — not a silent no-op', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    const fixtures: Record<string, EngineAsset> = { x: tinyAsset(ctx), y: tinyAsset(ctx) };
+    const { loadAsset, calls } = countingLoader(fixtures);
+    const errors: Array<{ assetId: string; error: unknown }> = [];
+    // Room for exactly one of these assets at a time.
+    const assetCacheCapBytes = BYTES_PER_ASSET + 1;
+    const engine = createEngine(ctx, {
+      loadAsset,
+      assetCacheCapBytes,
+      onLoadError: (assetId, error) => errors.push({ assetId, error }),
+    });
+
+    const itemX = boardItem({ itemId: 'x', assetId: 'x', playing: true, volume: 1, loop: true });
+    const itemY = boardItem({ itemId: 'y', assetId: 'y', playing: true, volume: 1, loop: true });
+
+    // x loads and plays, then stops — idle, but still cached.
+    engine.apply(board([itemX]));
+    await engine.ready();
+    engine.apply(board([{ ...itemX, playing: false }]));
+    await engine.ready();
+
+    // y loads and plays. x + y is two assets' worth of bytes against a
+    // one-asset cap — over cap. x is idle and y is playing, so eviction must
+    // take x, not y.
+    engine.apply(board([{ ...itemX, playing: false }, itemY]));
+    await engine.ready();
+    expect(calls.x).toBe(1);
+
+    // Stop y, then play x again. x's buffer is gone — this must re-decode
+    // rather than leaving the pad silently unlit.
+    engine.apply(board([itemX, { ...itemY, playing: false }]));
+    await engine.ready();
+
+    expect(calls.x).toBe(2);
+    expect(errors).toEqual([]);
+
+    const rendered = await ctx.startRendering();
+    // Not just "no error" — actually sounding, at the volume x was given.
+    expect(at(rendered, 0.005)).toBeCloseTo(1, 4);
   });
 });

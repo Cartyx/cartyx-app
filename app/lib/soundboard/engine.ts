@@ -43,7 +43,33 @@ export type SoundboardEngineOptions = {
   onItemEnded?: (itemId: string) => void;
   /** Fired when `loadAsset` rejects. The engine keeps running, silent for that asset. */
   onLoadError?: (assetId: string, error: unknown) => void;
+  /**
+   * Overrides `DEFAULT_ASSET_CACHE_CAP_BYTES`. Not needed in production — the
+   * default is sized against the documented worst case. Exists so tests can
+   * cross the cap with small fixture buffers instead of allocating gigabytes
+   * of real decoded audio.
+   */
+  assetCacheCapBytes?: number;
 };
+
+/**
+ * Default cap, in bytes, on the sum of decoded `AudioBuffer` sizes held in
+ * the engine's asset cache (`assets`).
+ *
+ * Sized against the documented worst case rather than picked round: at the
+ * current caps (64 items, 30-minute assets, 48 kHz stereo float32) ONE fully
+ * decoded asset already costs `48_000 × 1800 × 2 channels × 4 bytes` ≈
+ * 691 MB — see `docs/specs/2026-07-31-audio-hardening-design.md`. 1 GiB
+ * leaves room for that single worst-case asset plus a handful of shorter
+ * loops and one-shots resident at once (a storm bed, a rain bed, and a few
+ * one-shots layered over them is the realistic ceiling for one board), while
+ * still bounding a board that plays through all 64 documented-max assets —
+ * ~44 GB unbounded — down to about 1/44th of that. It is a per-engine cap:
+ * a page holding several boards' engines multiplies it, which is a
+ * lifecycle question for whoever owns how many engines exist at once, not
+ * something one engine's cache can bound from the inside.
+ */
+export const DEFAULT_ASSET_CACHE_CAP_BYTES = 1024 * 1024 * 1024;
 
 export type SoundboardEngine = {
   /**
@@ -85,6 +111,13 @@ export type SoundboardEngine = {
 type Track = {
   gain: GainNode | null;
   source: AudioBufferSourceNode | null;
+  /**
+   * The asset this track's current (or most recent) source plays from. Set by
+   * `start`; read by `isAssetPlaying` to decide what the cache cap may evict.
+   * Stale while `source` is `null` — harmless, since every read of this field
+   * is gated on `source` being non-null first.
+   */
+  assetId: string | null;
   /** `ctx.currentTime` at which `source` started — needed to find the playhead
    * when loop is flipped off mid-play. */
   startedAt: number;
@@ -151,7 +184,19 @@ export function createEngine(
    * that one-shot, because it is the same key within this map.
    */
   const oneShots = new Map<string, Track>();
+  /**
+   * The decoded-buffer cache, keyed by `assetId`. Bounded by
+   * `assetCacheCapBytes` (see `evictAssets`) rather than left to grow for the
+   * engine's whole life — see `DEFAULT_ASSET_CACHE_CAP_BYTES`.
+   *
+   * Iteration order doubles as recency order: `touchAsset` moves an entry to
+   * the end on every access, so `evictAssets` walking front-to-back visits
+   * least-recently-used entries first. `Map` preserves insertion order and
+   * does NOT reorder on a plain `set` of an existing key, which is why
+   * `touchAsset` has to delete-then-set rather than just `set`.
+   */
   const assets = new Map<string, EngineAsset>();
+  const assetCacheCapBytes = options.assetCacheCapBytes ?? DEFAULT_ASSET_CACHE_CAP_BYTES;
   const pending = new Map<string, Promise<void>>();
   /** Assets whose load returned `null` or threw — never retried. */
   const unplayable = new Set<string>();
@@ -196,6 +241,72 @@ export function createEngine(
     return Math.min(asset.durationSamples / AUDIO_RENDITION_SAMPLE_RATE, asset.buffer.duration);
   }
 
+  /** Decoded size of one asset's buffer: float32 PCM, 4 bytes per sample per channel. */
+  function assetBytes(asset: EngineAsset): number {
+    return asset.buffer.length * asset.buffer.numberOfChannels * 4;
+  }
+
+  /**
+   * True if `assetId`'s buffer is behind a source that is actually sounding
+   * right now — a pad in `tracks` or a transient fire in `oneShots`.
+   *
+   * This is the one rule `evictAssets` may never break: a `Track`'s `source`
+   * doubles as "is this pad sounding" throughout the engine (see the `Track`
+   * doc comment), so checking it here is the same test every other read of
+   * play state uses, not a separate notion of "playing" invented for the
+   * cache.
+   */
+  function isAssetPlaying(assetId: string): boolean {
+    for (const track of tracks.values()) {
+      if (track.source && track.assetId === assetId) return true;
+    }
+    for (const track of oneShots.values()) {
+      if (track.source && track.assetId === assetId) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Moves `assetId` to the most-recently-used end of `assets`'s iteration
+   * order. See the `assets` doc comment for why a delete + re-set is needed.
+   * A no-op if the asset is not cached (nothing to touch).
+   */
+  function touchAsset(assetId: string): void {
+    const asset = assets.get(assetId);
+    if (!asset) return;
+    assets.delete(assetId);
+    assets.set(assetId, asset);
+  }
+
+  /**
+   * Evict least-recently-used, not-currently-playing assets until the cache
+   * is back at or under `assetCacheCapBytes` — or until nothing left is
+   * evictable.
+   *
+   * Called only after `reconcile` has had a chance to start whatever should
+   * be playing (see the call site in `ensureAsset`): a `finally` ordered the
+   * other way round would let a just-decoded asset that is about to be
+   * played get evicted before `start` ever marks it playing, since at the
+   * moment its bytes land in `assets` its track has no source yet.
+   *
+   * Leaving the cache over cap when everything resident is playing is
+   * correct, not a bug: that memory is sound the GM is actually hearing, and
+   * the only rule that is not negotiable is that eviction never touches it.
+   * An evicted asset is not lost — the next `ensureAsset` for it re-decodes
+   * through the exact same path a cold engine uses for a first play.
+   */
+  function evictAssets(): void {
+    let total = 0;
+    for (const asset of assets.values()) total += assetBytes(asset);
+    if (total <= assetCacheCapBytes) return;
+    for (const [assetId, asset] of assets) {
+      if (total <= assetCacheCapBytes) break;
+      if (isAssetPlaying(assetId)) continue;
+      assets.delete(assetId);
+      total -= assetBytes(asset);
+    }
+  }
+
   function trackFor(itemId: string, transient: boolean): Track {
     const map = transient ? oneShots : tracks;
     const existing = map.get(itemId);
@@ -203,6 +314,7 @@ export function createEngine(
     const created: Track = {
       gain: null,
       source: null,
+      assetId: null,
       startedAt: 0,
       volume: 1,
       fadeSeconds: 0,
@@ -268,6 +380,9 @@ export function createEngine(
   function start(item: BoardItemState, transient: boolean): void {
     const asset = assets.get(item.assetId);
     if (!asset) return;
+    // Mark this asset as freshly used before anything below can be evicted
+    // out from under it.
+    touchAsset(item.assetId);
     const track = trackFor(item.itemId, transient);
     if (track.source) stopTrack(item.itemId, track, true);
 
@@ -316,6 +431,7 @@ export function createEngine(
 
     track.gain = gain;
     track.source = source;
+    track.assetId = item.assetId;
     track.startedAt = now;
     track.volume = item.volume;
     track.fadeSeconds = fade;
@@ -400,6 +516,10 @@ export function createEngine(
         // the state that triggered the load — the GM may have changed mood
         // three times while a 6 MB ambience downloaded.
         if (!disposed && latest) reconcile(latest);
+        // AFTER reconcile, not before: reconcile is what starts this asset
+        // playing if it should be, and `evictAssets` must see that before it
+        // decides what is safe to evict. See `evictAssets`'s doc comment.
+        if (!disposed) evictAssets();
       });
     pending.set(assetId, load);
   }
