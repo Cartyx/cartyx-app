@@ -848,29 +848,51 @@ describe('reapStale against a real filter-evaluating collection (Task 18 re-revi
    * state, so the fence matched it too.
    *
    * No unusual timing needed: the reap loop is bounded but runs for real
-   * time (a `beat()` and an Atlas round trip per row), and the GM's own
-   * behaviour supplies the interleave — the first attach dies mid-PUT, they
-   * give up and attach again with a better file. If the re-attach lands
-   * after `find` and before this row's turn, the old fence reverted the
-   * seconds-old attach to `ready`/`main`, wrote `onceLastError: 'Once-
-   * variant upload never completed'` about it, and deleted the key it had
-   * projected before the re-attach existed — leaving the browser PUTting to
-   * a presigned URL for an object no row references.
+   * time (a `beat()` and an Atlas round trip per row), so a second attach
+   * can appear between the `find` and this row's turn.
+   *
+   * THE ROUTE MATTERS, and the obvious one does not exist. A GM cannot just
+   * give up on a stuck attach and start another — `createOnceVariantUpload`
+   * is fenced on `status: 'ready'` and the stuck row is `uploading`. Some
+   * write must return it to `ready` first. This fixture therefore stages
+   * the real two-step sequence: the browser's PUT finally lands,
+   * `confirmOnceVariantUpload` REJECTS the file (over `AUDIO_MAX_BYTES`
+   * here) and reverts the row to `ready`/`main`, and only THEN does the
+   * re-attach become permissible. (The other real route is two workers
+   * running at once, which `strategy: Recreate` in the chart exists to
+   * limit but does not forbid — see the fence's own comment in claim.ts.)
+   *
+   * Against the old fence, the reaper's write then matched that
+   * seconds-old attach, reverted it, wrote `onceLastError: 'Once-variant
+   * upload never completed'` over the real reason, and deleted the key it
+   * had projected before any of this happened — leaving the browser PUTting
+   * to a presigned URL for an object no row references.
    *
    * Driven through the real reaper against the filter-evaluating collection
    * and asserted on OUTCOMES — the row's final state and the keys actually
    * handed to `deleteSource` — not on the shape of the filter.
    *
-   * Wrong-reason check: this would prove nothing if row B were not a
-   * genuine reap candidate, so B is listed with a day-old
-   * `onceUploadStartedAt` and only becomes fresh mid-pass; and it would
-   * prove nothing if the fence were satisfiable by timing alone, so the
-   * re-attach leaves `status`/`variant` exactly as they were — the ONLY
-   * thing that differs is `onceSourceKey`.
+   * Wrong-reason checks:
+   * - It would prove nothing if row B were not a genuine reap candidate, so
+   *   B is listed with a day-old `onceUploadStartedAt` and only becomes
+   *   fresh mid-pass.
+   * - It would prove nothing if the fence were satisfiable by timing alone,
+   *   so the staged sequence ENDS with `status`/`variant` back at exactly
+   *   the values the fence tests — the only thing that differs is
+   *   `onceSourceKey`.
+   * - It would prove less than it implies if the staged transition were one
+   *   the real functions would refuse, so the re-attach step asserts its own
+   *   precondition (`status === 'ready'`) rather than assuming the step
+   *   before it left the row there.
    */
   it('does not revert a once-attach that was replaced by a NEWER attach mid-pass', async () => {
     const now = Date.now();
     const yesterday = new Date(now - 24 * 60 * 60 * 1000);
+    // The message `confirmOnceVariantUpload`'s reject path writes. Kept in a
+    // const because the final assertion turns on it SURVIVING: the reaper
+    // overwriting it with its own "never completed" is one of the two
+    // user-visible harms this fence prevents.
+    const REJECT_REASON = 'File too large: 99999999 bytes exceeds 52428800';
 
     const collection = makeRealFilterCollection([
       // Reaped normally. Its write is what the interleave hangs off — it
@@ -903,13 +925,39 @@ describe('reapStale against a real filter-evaluating collection (Task 18 re-revi
     let writes = 0;
     collection.updateOne.mockImplementation(async (filter, update) => {
       if (writes++ === 0) {
-        // Between row A's write and row B's, the GM re-attaches. This is
-        // exactly `createOnceVariantUpload`'s `$set`, minus the fields that
-        // don't matter here: a NEW key, the clock restarted, `status` and
-        // `variant` unchanged because the row was already in that state.
-        Object.assign(collection.docs.get('b-reattached')!, {
+        // Between row A's write and row B's, both app writes land. Each is
+        // the `$set` of the real function named, minus fields irrelevant
+        // here — and they are applied in order because the SECOND is only
+        // reachable through the FIRST.
+        const b = collection.docs.get('b-reattached')!;
+
+        // (1) `confirmOnceVariantUpload`'s tooLarge/badType reject path
+        //     (app/server/functions/audio.ts). The browser's PUT finally
+        //     landed, HeadObject measured it over the cap, the object was
+        //     deleted, and the row went back to a fully playable asset.
+        Object.assign(b, {
+          status: 'ready',
+          variant: 'main',
+          onceSourceKey: null,
+          onceSourceBytes: null,
+          onceLastError: REJECT_REASON,
+          updatedAt: new Date(now),
+        });
+
+        // (2) ...and only NOW can the GM attach a better file:
+        //     `createOnceVariantUpload` is fenced on `status: 'ready'`, so
+        //     without step (1) this write could not happen at all. Asserted
+        //     rather than assumed, so this fixture can never quietly drift
+        //     into staging a transition the real function would refuse.
+        expect(b.status).toBe('ready');
+        Object.assign(b, {
           onceSourceKey: 'uploads/audio/p/b-once-v2.wav',
           onceSourceBytes: null,
+          onceRenditions: {},
+          variant: 'once',
+          status: 'uploading',
+          attempts: 0,
+          nextAttemptAt: null,
           onceUploadStartedAt: new Date(now),
           updatedAt: new Date(now),
         });
@@ -921,13 +969,17 @@ describe('reapStale against a real filter-evaluating collection (Task 18 re-revi
     await reapStale(collection as never, 600_000, UPLOAD_STALE_MS, deleteSource);
 
     // The fresh attach is untouched: still in flight, still pointing at the
-    // object the browser is uploading to, never told it "never completed".
+    // object the browser is uploading to.
     expect(collection.docs.get('b-reattached')).toMatchObject({
       status: 'uploading',
       variant: 'once',
       onceSourceKey: 'uploads/audio/p/b-once-v2.wav',
     });
-    expect(collection.docs.get('b-reattached')).not.toHaveProperty('onceLastError');
+    // And it was never told this attach "never completed" — the error the GM
+    // sees is still the REAL one, from the confirm that actually rejected.
+    // The reaper overwriting it is the second half of the harm: the user is
+    // handed a false explanation for a failure they did not have.
+    expect(collection.docs.get('b-reattached')!.onceLastError).toBe(REJECT_REASON);
 
     // Exactly one key was reclaimed — row A's. Not the superseded
     // `b-once-v1.wav` (the fenced write no-opped, so this pass never earned

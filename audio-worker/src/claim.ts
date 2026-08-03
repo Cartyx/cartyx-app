@@ -437,18 +437,48 @@ async function reapAbandonedOnceUploads(
         // `{_id, status: 'uploading', variant: 'once'}` describes the state a
         // SECOND attach puts the row in just as exactly as it describes the
         // abandoned first one, and this loop runs for real time (bounded
-        // batch, a `beat()` and an Atlas round trip per row). So the
-        // interleave needs no unusual timing: the stale attach ages out, the
-        // GM gives up and re-attaches with a better file, and before this
-        // row's turn comes `createOnceVariantUpload` has minted a NEW
-        // `onceSourceKey` and restamped the row. The unfenced write then
-        // reverted that seconds-old attach to `ready`/`main`, told the user
-        // it "never completed", and — because `row.onceSourceKey` was
-        // projected BEFORE the re-attach — pushed the OLD key into
-        // `DeleteObjects` while the new object, now referenced by nothing,
-        // was stranded. The browser's PUT to the new presigned URL lands on
-        // an object no row points at, the worker never sees the job, and
-        // nothing reports any of it.
+        // batch, a `beat()` and an Atlas round trip per row) — so a second
+        // attach can appear between the `find` above and this row's turn.
+        //
+        // What does NOT get there is the obvious story, and it is worth
+        // saying so because it is the one a reader will assume: the GM
+        // CANNOT simply give up on a stuck attach and start another one.
+        // `createOnceVariantUpload` is fenced on `status: 'ready'`
+        // (app/server/functions/audio.ts), and the stuck row is `uploading`.
+        // Something must return it to `ready` first. Two things do:
+        //
+        //   (a) The browser's PUT finally lands and
+        //       `confirmOnceVariantUpload` REJECTS the file — over
+        //       `AUDIO_MAX_BYTES`, unsupported type, or the pending-job cap.
+        //       Every one of those paths reverts the row to `ready`/`main`
+        //       and records `onceLastError`. The GM sees the failure, picks a
+        //       better file, and attaches again — now permitted, because the
+        //       row is `ready`. All of it can happen while this pass is
+        //       working through earlier rows.
+        //   (b) More than one worker running at once. Replica 1 reverts this
+        //       row (or any of the app paths above does) while replica 2 still
+        //       has it listed from its own `find`, and a re-attach lands in
+        //       the gap. `audioWorker.replicaCount` is 1 today, but that is
+        //       NOT a single-writer guarantee: the chart sets `strategy:
+        //       Recreate` precisely because the default RollingUpdate starts
+        //       the new pod before the old one terminates, so every deploy
+        //       would otherwise run two workers even at `replicas: 1` (see
+        //       deploy/charts/cartyx/values.yaml). A data fence that leans on
+        //       a Deployment strategy is a fence that stops holding the day
+        //       someone changes that strategy, or scales the replica count for
+        //       a bulk import — which values.yaml explicitly contemplates.
+        //       `claimNext` refuses to assume a single writer anywhere else;
+        //       this write must not assume it either.
+        //
+        // Either way, by the time this row's turn comes
+        // `createOnceVariantUpload` has minted a NEW `onceSourceKey` and
+        // restamped the row. The unfenced write then reverted that
+        // seconds-old attach to `ready`/`main`, told the user it "never
+        // completed", and — because `row.onceSourceKey` was projected BEFORE
+        // the re-attach — pushed the OLD key into `DeleteObjects` while the
+        // new object, now referenced by nothing, was stranded. The browser's
+        // PUT to the new presigned URL lands on an object no row points at,
+        // the worker never sees the job, and nothing reports any of it.
         //
         // Same class its sibling `reapAbandonedUploads` was hardened against
         // one review earlier, and the same remedy: make the fence describe
