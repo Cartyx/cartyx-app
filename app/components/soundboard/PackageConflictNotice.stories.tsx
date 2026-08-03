@@ -1,3 +1,4 @@
+import React, { useState } from 'react';
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import { PackageConflictNotice } from './PackageConflictNotice';
 
@@ -20,10 +21,50 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
+ * Same `Controlled` shape `MasterBar.stories.tsx` and `MoodEditor.stories.tsx`
+ * use, and here it is doing real work rather than ceremony: `onOverwrite` and
+ * `onDiscard` are REQUIRED props with no defaults, so a story that supplied
+ * only `savedAt` would render two enabled buttons wired to
+ * `onClick={undefined}` — a canvas that looks interactive and silently does
+ * nothing. That would still typecheck (`const meta: Meta<typeof …>` is an
+ * explicit annotation rather than `satisfies`, which erases the required-args
+ * narrowing) and `test:storybook` would still pass, because no story here has
+ * a `play` that clicks. Wiring both handlers to state also makes the canvas
+ * behave the way the editor does: overwriting goes busy, discarding dismisses.
+ */
+function Controlled(args: React.ComponentProps<typeof PackageConflictNotice>) {
+  const [busy, setBusy] = useState(args.busy ?? false);
+  const [chose, setChose] = useState<'overwrite' | 'discard' | null>(null);
+
+  if (chose === 'discard') {
+    return <p className="text-sm text-slate-400">Discarded — reloading the saved version…</p>;
+  }
+
+  return (
+    <>
+      <PackageConflictNotice
+        {...args}
+        busy={busy}
+        onOverwrite={() => {
+          setChose('overwrite');
+          setBusy(true);
+        }}
+        onDiscard={() => setChose('discard')}
+      />
+      {chose === 'overwrite' && (
+        <p className="mt-2 text-sm text-slate-400">Keeping your edits and overwriting…</p>
+      )}
+    </>
+  );
+}
+
+/**
  * The normal case: `updatePackage` refused the save because the stored
  * package moved on. Both ways out are offered, both say what they cost.
  */
-export const Conflict: Story = {};
+export const Conflict: Story = {
+  render: (args) => <Controlled {...args} />,
+};
 
 /**
  * The overwrite is in flight. Both buttons are disabled — a second click
@@ -31,6 +72,7 @@ export const Conflict: Story = {};
  * path would race the save it is sitting next to.
  */
 export const Overwriting: Story = {
+  render: (args) => <Controlled {...args} />,
   args: { busy: true },
 };
 
@@ -43,5 +85,6 @@ export const Overwriting: Story = {
  * value.
  */
 export const WithoutATimestamp: Story = {
+  render: (args) => <Controlled {...args} />,
   args: { savedAt: '' },
 };

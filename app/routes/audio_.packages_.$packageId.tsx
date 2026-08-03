@@ -295,6 +295,16 @@ export function PackageEditorPage() {
         setConflict({ savedAt: e.currentUpdatedAt ?? '' });
         return;
       }
+      // Any OTHER failure clears the conflict, and clearing it is load-bearing
+      // rather than tidiness. The notice suppresses the generic error line
+      // (`!conflict &&`, below), so a "Keep my edits and overwrite" click that
+      // fails with anything that is not a stale write — a 500, a dropped
+      // connection, a validator rejection — would otherwise render NOTHING:
+      // the button flips back from "Saving…" and the user's only signal that
+      // their click did nothing is the absence of change. Dropping the
+      // conflict state hands the failure back to the error line, which is the
+      // one surface that can describe it.
+      setConflict(null);
       captureException(e, { action: 'PackageEditorPage.save' });
     },
   });

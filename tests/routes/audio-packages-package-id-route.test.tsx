@@ -497,4 +497,64 @@ describe('PackageEditorPage stale-write conflict', () => {
     expect(screen.queryByTestId('package-conflict-notice')).not.toBeInTheDocument();
     await waitFor(() => expect(captureException).toHaveBeenCalledTimes(1));
   });
+
+  /**
+   * The review's Important finding, pinned. The conflict notice SUPPRESSES the
+   * generic error line (`!conflict && saveMutation.error`, in the route), so
+   * if a failed overwrite left the conflict state standing, a retry that fails
+   * with anything other than a stale write would render NOTHING AT ALL: the
+   * button flips back from "Saving…" and the user's only signal that their
+   * click did nothing is the absence of change.
+   *
+   * That is precisely why this test is written against what is ON SCREEN
+   * rather than against state or call counts — the bug's whole signature is
+   * that every other observable stays green (the mutation ran, the error was
+   * captured, the notice is still correct) while the user is told nothing.
+   *
+   * The rejection here is deliberately the reachable one rather than a generic
+   * 500: an empty `currentUpdatedAt` makes the overwrite send
+   * `expectedUpdatedAt: ''`, which `updatePackageSchema`'s `.datetime()`
+   * rejects at the server-fn validator.
+   */
+  it('renders a visible failure when the overwrite retry fails with a non-conflict error', async () => {
+    const user = userEvent.setup();
+    const pkg = mkPackage({ items: [mkItem({ id: 'i1', label: 'Rain' })] });
+
+    getPackageFn.mockResolvedValue(pkg);
+    listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+    updatePackageFn.mockRejectedValueOnce(wireStaleWriteError(''));
+
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <PackageEditorPage />
+      </QueryClientProvider>
+    );
+
+    const nameInput = await screen.findByRole('textbox', { name: /package name/i });
+    await user.clear(nameInput);
+    await user.type(nameInput, 'My Renamed Set');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByTestId('package-conflict-notice');
+
+    // The retry is refused by the input validator, not by the fence.
+    updatePackageFn.mockRejectedValue(
+      new Error('Invalid input: expected ISO datetime, received ""')
+    );
+    await user.click(screen.getByRole('button', { name: /keep my edits and overwrite/i }));
+
+    // SOMETHING the user can see. Without the fix this assertion is the only
+    // one in the file that fails — the notice below is still rendered, the
+    // capture below still happens, and nothing else notices.
+    await screen.findByText(/expected ISO datetime/i);
+    expect(screen.queryByTestId('package-conflict-notice')).not.toBeInTheDocument();
+
+    // Still a real fault, so it is still reported — only the stale-write
+    // refusal is exempt.
+    await waitFor(() => expect(captureException).toHaveBeenCalledTimes(1));
+    // And the draft is STILL intact: a failed overwrite must not cost the user
+    // their edits any more than the original refusal did.
+    expect(screen.getByRole('textbox', { name: /package name/i })).toHaveValue('My Renamed Set');
+    expect(screen.getByRole('button', { name: /remove rain/i })).toBeInTheDocument();
+  });
 });
