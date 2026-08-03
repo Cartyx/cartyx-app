@@ -108,4 +108,26 @@ describe('createRateLimiter', () => {
     const limiter = createRateLimiter({ capacity: 1, refillPerSec: 1 });
     expect(limiter.check('user-1').allowed).toBe(true);
   });
+
+  /**
+   * Final-review minor #7: the invariant belongs here rather than in every
+   * call site's own env guard. Each of these values would produce a limiter
+   * that refuses EVERY call for EVERY key — silently, at request time, long
+   * after construction — rather than failing where the mistake was made:
+   * `refillPerSec: 0` makes `retryAfterMs` `Infinity` and a bucket that never
+   * refills, and `capacity: 0` starts every bucket empty.
+   *
+   * Enumerated rather than tested with one value, because a guard written as
+   * `!refillPerSec` would pass a `0` test and admit `NaN` and negatives.
+   */
+  it.each([
+    ['refillPerSec zero', { capacity: 5, refillPerSec: 0 }],
+    ['refillPerSec negative', { capacity: 5, refillPerSec: -1 }],
+    ['refillPerSec NaN', { capacity: 5, refillPerSec: Number.NaN }],
+    ['capacity zero', { capacity: 0, refillPerSec: 1 }],
+    ['capacity negative', { capacity: -5, refillPerSec: 1 }],
+    ['capacity NaN', { capacity: Number.NaN, refillPerSec: 1 }],
+  ])('refuses to construct a limiter that could never allow anything: %s', (_label, options) => {
+    expect(() => createRateLimiter(options)).toThrow(/must be > 0/);
+  });
 });

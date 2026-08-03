@@ -25,7 +25,11 @@ export interface RateLimiterOptions {
   refillPerSec: number;
   /** Injected clock in milliseconds. Defaults to `Date.now` so callers need not pass one. */
   now?: () => number;
-  /** Bound on tracked keys; the oldest key (by first-seen order) is evicted past this. */
+  /**
+   * Bound on tracked keys; the oldest key (by first-seen order) is evicted
+   * past this. That is a MEMORY BOUND, not a fairness guarantee — see the
+   * eviction site in `check` for what "oldest" does and does not mean here.
+   */
   maxKeys?: number;
 }
 
@@ -48,6 +52,21 @@ export interface RateLimiter {
 export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
   const { capacity, refillPerSec, now = Date.now, maxKeys = 500 } = options;
 
+  // The invariant lives here rather than at each call site. Both values are
+  // divisors or ceilings of the whole mechanism: `refillPerSec <= 0` makes
+  // `retryAfterMs` `Infinity` or negative and a bucket that never refills,
+  // and `capacity <= 0` makes every bucket start empty, so either one turns
+  // a limiter into a permanent refusal for every key — silently, at runtime,
+  // long after construction. `~/lib/audio-rate-limits.ts`'s
+  // `envPositiveNumber` already guards the two env-configured numbers; this
+  // guards the other buckets and any future caller that forgets to.
+  if (!Number.isFinite(refillPerSec) || refillPerSec <= 0) {
+    throw new Error(`createRateLimiter: refillPerSec must be > 0, got ${refillPerSec}`);
+  }
+  if (!Number.isFinite(capacity) || capacity <= 0) {
+    throw new Error(`createRateLimiter: capacity must be > 0, got ${capacity}`);
+  }
+
   const buckets = new Map<string, Bucket>();
 
   return {
@@ -59,6 +78,15 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
         if (buckets.size >= maxKeys) {
           // Map iteration order is insertion order, so the first key is the
           // oldest — same eviction strategy as exception-throttle.ts.
+          //
+          // "Oldest" means FIRST SEEN, not least recently used: a key found
+          // via `get` below never re-enters insertion order, so an actively
+          // throttled key can be evicted and its bucket then re-created at
+          // full capacity by its next call. This is a memory bound, not a
+          // fairness guarantee, and it is deliberately left that way (it
+          // matches `exception-throttle.ts`, and defeating it costs an
+          // attacker `maxKeys` distinct authenticated accounts, since the key
+          // is a Mongo `_id`). Do not read LRU into the word "oldest".
           const oldest = buckets.keys().next().value;
           if (oldest !== undefined) buckets.delete(oldest);
         }
