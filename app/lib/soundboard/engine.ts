@@ -129,9 +129,16 @@ type Track = {
   source: AudioBufferSourceNode | null;
   /**
    * The asset this track's current (or most recent) source plays from. Set by
-   * `start`; read by `isAssetPlaying` to decide what the cache cap may evict.
-   * Stale while `source` is `null` — harmless, since every read of this field
-   * is gated on `source` being non-null first.
+   * `start`.
+   *
+   * Read by `stopTrack`, which captures it into the `onended` closure BEFORE
+   * scheduling the stop — that value has to name the source being stopped,
+   * and `start` reassigns this field for the replacement source on the very
+   * next line of a retrigger. It is otherwise stale while `source` is `null`,
+   * which is why no other reader may take it without first establishing which
+   * source it is being asked about. (`isAssetPlaying` used to read it and no
+   * longer does; see `liveAssetCounts` for why that was the wrong source of
+   * truth for eviction.)
    */
   assetId: string | null;
   /** `ctx.currentTime` at which `source` started — needed to find the playhead
@@ -246,6 +253,50 @@ export function createEngine(
    */
   const live = new Set<AudioBufferSourceNode>();
   /**
+   * Sources that have been asked to stop but are still fading out: which
+   * asset each is playing, and the `ctx.currentTime` its `stop()` is
+   * scheduled for.
+   *
+   * WHY THIS EXISTS. `evictAssets` asks `isAssetPlaying`, and that used to
+   * mean "does any track hold this as its `source`" — the engine's own test
+   * for "is this pad sounding" everywhere else, which made it the natural
+   * thing to reuse. It is the wrong question for eviction. `stopTrack` sets
+   * `track.source = null` at the moment it SCHEDULES the stop, while the
+   * source goes on sounding for the whole fade (up to 30 s, the schema's
+   * `fadeSeconds` cap). For that entire window no track named the asset, so
+   * eviction treated it as free and subtracted its bytes from the running
+   * total — while the browser still held the buffer, because the source node
+   * keeps its own reference to it.
+   *
+   * Nothing went silent (that reference is exactly why), so this was never
+   * an audio bug and no assertion on rendered output could catch it. It was
+   * an accounting one, and it defeated the cap in the direction that
+   * matters: the cache re-admitted up to the full budget ON TOP OF buffers it
+   * had already written off, and the next `ensureAsset` for a written-off
+   * asset re-decoded it, so two copies of one buffer could be resident while
+   * the total showed one. A cap whose number does not describe the heap is
+   * not a cap.
+   *
+   * WHY A SCHEDULED TIME AND NOT AN `onended` COUNTER, which is the obvious
+   * alternative and was the first attempt. `onended` is an EVENT: it fires
+   * when the context's clock actually reaches the stop, which means it never
+   * fires at all on a context whose clock is not running. That is not a
+   * hypothetical — an `OfflineAudioContext` that is never rendered is exactly
+   * that, and under a counter every asset it ever played stayed pinned
+   * forever, disabling the cap outright. The scheduled time is data the
+   * engine already computes and can evaluate against `ctx.currentTime`
+   * whenever it is asked, with no dependence on event delivery. A fade of 0
+   * (the ordinary stop) therefore releases immediately, as it should — the
+   * source really is done.
+   *
+   * An ARRAY, not a map keyed by asset: one asset can be behind several
+   * fading sources at once (a pad retriggering while the old source fades, a
+   * one-shot firing over its own loop). Entries are removed by `onended`
+   * when it does fire, and swept by elapsed time in `evictAssets` when it
+   * does not, so the list cannot grow without bound either way.
+   */
+  const fadingOut: { assetId: string; endsAt: number }[] = [];
+  /**
    * Aborted in `dispose()`. Threaded through to `options.loadAsset` on every
    * call so a caller whose implementation is a `fetch` can actually cancel
    * the request on teardown rather than just having its result ignored — see
@@ -290,14 +341,30 @@ export function createEngine(
   }
 
   /**
-   * True if `assetId`'s buffer is behind a source that is actually sounding
-   * right now — a pad in `tracks` or a transient fire in `oneShots`.
+   * Drops `fadingOut` entries whose scheduled stop has already passed.
    *
-   * This is the one rule `evictAssets` may never break: a `Track`'s `source`
-   * doubles as "is this pad sounding" throughout the engine (see the `Track`
-   * doc comment), so checking it here is the same test every other read of
-   * play state uses, not a separate notion of "playing" invented for the
-   * cache.
+   * Belt and braces with the `onended` handler that also removes them: that
+   * handler is the prompt path, this is the one that cannot fail to run. See
+   * `fadingOut` for why depending on the event alone is not safe.
+   */
+  function sweepFadingOut(): void {
+    const now = ctx.currentTime;
+    for (let i = fadingOut.length - 1; i >= 0; i--) {
+      if (fadingOut[i].endsAt <= now) fadingOut.splice(i, 1);
+    }
+  }
+
+  /**
+   * True if `assetId`'s buffer is behind a source that is still sounding —
+   * a pad in `tracks`, a transient fire in `oneShots`, OR one that has been
+   * asked to stop and has not finished fading.
+   *
+   * This is the one rule `evictAssets` may never break, and the third clause
+   * is the one it used to be missing. A `Track`'s `source` answers "is this
+   * pad sounding", which is the right question everywhere else in the engine
+   * and the wrong one here: the pad is released the instant `stopTrack`
+   * schedules the stop, but the buffer is not free until the source actually
+   * ends. See `fadingOut`.
    */
   function isAssetPlaying(assetId: string): boolean {
     for (const track of tracks.values()) {
@@ -306,7 +373,8 @@ export function createEngine(
     for (const track of oneShots.values()) {
       if (track.source && track.assetId === assetId) return true;
     }
-    return false;
+    const now = ctx.currentTime;
+    return fadingOut.some((entry) => entry.assetId === assetId && entry.endsAt > now);
   }
 
   /**
@@ -343,6 +411,7 @@ export function createEngine(
    * wait for a later reconcile to make it so — see that set's doc comment.
    */
   function evictAssets(): void {
+    sweepFadingOut();
     let total = 0;
     for (const asset of assets.values()) total += assetBytes(asset);
     if (total <= assetCacheCapBytes) return;
@@ -534,8 +603,21 @@ export function createEngine(
     // `dispose` can stop it; and the detached gain node — reachable from
     // nothing but this dying source — gets an explicit `disconnect()` rather
     // than waiting on graph GC.
+    // This source keeps sounding for `fade` seconds after the pad is
+    // released, and it holds its own reference to the buffer the whole time —
+    // so the cache cap must not count those bytes as reclaimable yet. See
+    // `fadingOut`. `track.assetId` is read HERE rather than inside the
+    // handler because `start` reassigns it for the replacement source on the
+    // very next line of a retrigger.
+    const entry = track.assetId ? { assetId: track.assetId, endsAt: now + fade } : null;
+    if (entry) fadingOut.push(entry);
+
     source.onended = () => {
       live.delete(source);
+      if (entry) {
+        const i = fadingOut.indexOf(entry);
+        if (i >= 0) fadingOut.splice(i, 1);
+      }
       gain.disconnect();
     };
     source.stop(now + fade);
@@ -724,10 +806,23 @@ export function createEngine(
       // always before the `.then()` below gets a turn. See `firingOneShots`.
       firingOneShots.add(item.assetId);
       ensureAsset(item.assetId);
+      const load = pending.get(item.assetId);
+      if (!load) {
+        // `ensureAsset` returns without registering a pending load only when
+        // the asset is already cached, already loading, or already known
+        // unplayable — and all three were ruled out above, so this is
+        // unreachable today. It is handled anyway because the cost of being
+        // wrong is not a missed fire but a PERMANENT one: a reservation left
+        // in `firingOneShots` makes that asset un-evictable for the engine's
+        // whole life, which is a silent leak in the mechanism that exists to
+        // bound memory. Release it and give up on this fire.
+        firingOneShots.delete(item.assetId);
+        return;
+      }
       // Fire as soon as the buffer lands. A random ambient crack that arrives
       // late is still a crack; the alternative is silence until the scheduler's
       // next tick, which for a 5-minute interval is a long wait.
-      void pending.get(item.assetId)?.then(() => {
+      void load.then(() => {
         try {
           if (!disposed && assets.has(item.assetId)) start(item, true);
         } finally {
@@ -769,6 +864,13 @@ export function createEngine(
         }
       }
       live.clear();
+      // Paired with `live.clear()`: the loop above nulls every `onended`, so
+      // no handler will ever remove these entries. Nothing reads this list
+      // after `disposed` (`evictAssets`, its only reader, is gated on
+      // `!disposed` at both call sites), but leaving it populated on a
+      // disposed engine is the same retention `assets.clear()` below exists
+      // to avoid.
+      fadingOut.length = 0;
       tracks.clear();
       oneShots.clear();
       // Handoff from Task 8's review: without this, a disposed engine held

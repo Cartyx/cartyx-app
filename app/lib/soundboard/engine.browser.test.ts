@@ -901,6 +901,128 @@ describe('createEngine — decoded-buffer cache cap', () => {
     await expect(ctx.startRendering()).resolves.toBeTruthy();
   });
 
+  /**
+   * THE FADE-OUT WINDOW.
+   *
+   * `stopTrack` clears `track.source` at the moment it SCHEDULES the stop,
+   * while the source goes on sounding for the whole fade — up to 30 s, the
+   * schema's `fadeSeconds` cap — and stays in `live` until its `onended`
+   * fires. Eviction used to ask `track.source` whether an asset was playing,
+   * so for that entire window it treated a still-sounding buffer as
+   * evictable: it dropped the cache entry and subtracted the bytes from its
+   * running total while the browser still held the buffer, because the source
+   * node keeps its own reference to it.
+   *
+   * Nothing goes silent — that reference is exactly why — so this was never
+   * an audio bug, and a test asserting on rendered output could not catch it.
+   * It was an accounting bug, and it defeated the cap in the direction that
+   * matters: the cache re-admitted up to the full budget ON TOP OF buffers it
+   * had already written off, and the next play of a written-off asset
+   * re-decoded it, so two copies of one buffer could be resident while the
+   * total showed one.
+   *
+   * The observable consequence is the re-decode, which is what this asserts.
+   */
+  it('does not evict a buffer that is still audibly fading out', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    const fixtures: Record<string, EngineAsset> = {
+      a: tinyAsset(ctx),
+      b: tinyAsset(ctx),
+    };
+    const { loadAsset, calls } = countingLoader(fixtures);
+    // Room for one asset only, so loading the second must evict something —
+    // and `a`, mid-fade, is the only candidate.
+    const engine = createEngine(ctx, {
+      loadAsset,
+      assetCacheCapBytes: BYTES_PER_ASSET + 1,
+    });
+
+    // A long fade, so the stop is unambiguously still in flight when b loads.
+    const itemA = boardItem({
+      itemId: 'a',
+      assetId: 'a',
+      playing: true,
+      volume: 1,
+      loop: true,
+      fadeSeconds: 20,
+    });
+    const itemB = boardItem({ itemId: 'b', assetId: 'b', playing: true, volume: 1, loop: true });
+
+    engine.apply(board([itemA]));
+    await engine.ready();
+    expect(calls.a).toBe(1);
+
+    // Stop a. `track.source` is now null, but the source is still sounding.
+    engine.apply(board([{ ...itemA, playing: false }]));
+    await engine.ready();
+
+    // b loads and crosses the cap. a is the only thing that could be evicted.
+    engine.apply(board([{ ...itemA, playing: false }, itemB]));
+    await engine.ready();
+
+    // Play a again. If its buffer survived — as it must, because the bytes
+    // were never actually free — this needs no fresh decode. Against the
+    // `track.source` test this is 2.
+    engine.apply(board([itemA, itemB]));
+    await engine.ready();
+    expect(calls.a).toBe(1);
+
+    await expect(ctx.startRendering()).resolves.toBeTruthy();
+  });
+
+  /**
+   * THE CONTROL for the test above, and it is not optional: a retention rule
+   * with no matching release is a leak that pins every asset ever played and
+   * disables the cap outright — which would pass the fade test perfectly.
+   *
+   * A fade of ZERO is the discriminator. `stopTrack` schedules `stop(now +
+   * fade)`, so with no fade the source's end time is the current time and the
+   * buffer is free the instant the pad stops. The two tests together pin the
+   * boundary rather than either side of it.
+   *
+   * This is also why release is derived from the SCHEDULED stop time rather
+   * than from `onended`. An `OfflineAudioContext` that is never rendered has
+   * a clock that never advances, so `onended` never fires on it at all — an
+   * event-driven version of this rule pins everything here forever, and the
+   * bug it lets through is invisible until a real board runs out of memory.
+   */
+  it('releases a buffer immediately when the pad stops with no fade', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    const fixtures: Record<string, EngineAsset> = {
+      a: tinyAsset(ctx),
+      b: tinyAsset(ctx),
+    };
+    const { loadAsset, calls } = countingLoader(fixtures);
+    const engine = createEngine(ctx, {
+      loadAsset,
+      assetCacheCapBytes: BYTES_PER_ASSET + 1,
+    });
+
+    const itemA = boardItem({
+      itemId: 'a',
+      assetId: 'a',
+      playing: true,
+      volume: 1,
+      loop: true,
+      fadeSeconds: 0,
+    });
+    const itemB = boardItem({ itemId: 'b', assetId: 'b', playing: true, volume: 1, loop: true });
+
+    engine.apply(board([itemA]));
+    await engine.ready();
+    engine.apply(board([{ ...itemA, playing: false }]));
+    await engine.ready();
+
+    // b crosses the cap. a stopped with no fade, so its bytes really are
+    // reclaimable and the cap is entitled to take them.
+    engine.apply(board([{ ...itemA, playing: false }, itemB]));
+    await engine.ready();
+
+    engine.apply(board([itemA, itemB]));
+    await engine.ready();
+    expect(calls.a).toBe(2);
+  });
+
   it('re-decodes an evicted asset on next play, and it actually plays — not a silent no-op', async () => {
     const ctx = new OfflineAudioContext(1, SR, SR);
     const fixtures: Record<string, EngineAsset> = { x: tinyAsset(ctx), y: tinyAsset(ctx) };
