@@ -52,6 +52,11 @@ describe('createAudioUpload', () => {
     // the happy-path assertions those tests make are unaffected. Tests that
     // care about the quota itself override this explicitly.
     getUserStorageUsage.mockResolvedValue({ bytes: 0, assetCount: 1 });
+    // Same, for the pending-job cap now checked at presign. Explicit rather
+    // than left to the unconfigured mock's `undefined` (which happens to
+    // compare false against the cap): a default that works by accident stops
+    // working the day the comparison changes.
+    vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0 as never);
   });
 
   it('creates an asset in uploading status and returns the signed url', async () => {
@@ -134,6 +139,83 @@ describe('createAudioUpload', () => {
     );
     expect(vi.mocked(getAudioUploadUrl)).not.toHaveBeenCalled();
     expect(vi.mocked(AudioAsset.create)).not.toHaveBeenCalled();
+  });
+
+  /**
+   * THE CAP AT PRESIGN, which is a placement fix rather than a new control.
+   *
+   * `confirmAudioUpload` has always checked the pending-job cap, and has to:
+   * it is the last gate before a row becomes claimable. But by the time it
+   * runs the caller has already uploaded the whole file, so its refusal
+   * destroys bytes that are already in R2 — one destroyed file per refusal.
+   *
+   * That is the exact argument `checkStorageQuota` already makes for keeping
+   * the quota's presign check ("a user already over quota never spends
+   * bandwidth on an upload that is going to be deleted anyway"), and it was
+   * being made for one of the two limits and not the other. The gap showed up
+   * as a composition failure between the two independent limits: the ingest
+   * rate limiter is sized, in its own comment, for a 30-file drop, while the
+   * job cap refuses at 20 — so a legitimate folder drop uploaded ten files in
+   * full and then had them deleted at confirm.
+   */
+  describe('pending job cap at presign', () => {
+    it('refuses at the cap, issues no presign, resolves no prefix, and creates no row', async () => {
+      const { getMaxPendingJobsPerUser } = await import('~/server/functions/audio');
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(getMaxPendingJobsPerUser() as never);
+      const { createAudioUpload } = await import('~/server/functions/audio');
+      const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+      const { resolveAudioStoragePrefix } = await import('~/server/functions/audio-storage');
+
+      await expect(createAudioUpload({ data: VALID, userId: 'u1' })).rejects.toThrow(
+        /too many pending transcode jobs/i
+      );
+
+      // The negative assertions are the point, and this set in particular:
+      // refusing before the presign is the entire value of moving the check
+      // here. A version that refused AFTER `getAudioUploadUrl` would still
+      // reject and still pass a rejection-only test, while leaving the caller
+      // free to upload a file that was always going to be thrown away.
+      expect(vi.mocked(getAudioUploadUrl)).not.toHaveBeenCalled();
+      expect(vi.mocked(resolveAudioStoragePrefix)).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.create)).not.toHaveBeenCalled();
+    });
+
+    it("files no GlitchTip event — the refusal is the caller's own doing", async () => {
+      const { getMaxPendingJobsPerUser } = await import('~/server/functions/audio');
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(getMaxPendingJobsPerUser() as never);
+      const { createAudioUpload, AudioClientError } = await import('~/server/functions/audio');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+
+      const err = await createAudioUpload({ data: VALID, userId: 'u1' }).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AudioClientError);
+      expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+    });
+
+    it("counts only THIS owner's queued rows", async () => {
+      vi.mocked(AudioAsset.create).mockResolvedValue({ _id: 'a1' } as never);
+      const { createAudioUpload } = await import('~/server/functions/audio');
+      await createAudioUpload({ data: VALID, userId: 'u1' });
+
+      // An unscoped count would refuse EVERY user once the GLOBAL queue hit
+      // the limit — a different, and wrong, control.
+      expect(vi.mocked(AudioAsset.countDocuments)).toHaveBeenCalledWith({
+        ownerId: 'u1',
+        status: { $in: ['pending', 'processing'] },
+      });
+    });
+
+    it('is checked BEFORE the storage quota, so neither refusal depends on the other', async () => {
+      const { getMaxPendingJobsPerUser } = await import('~/server/functions/audio');
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(getMaxPendingJobsPerUser() as never);
+      const { createAudioUpload } = await import('~/server/functions/audio');
+
+      await expect(createAudioUpload({ data: VALID, userId: 'u1' })).rejects.toThrow(
+        /too many pending transcode jobs/i
+      );
+      // The aggregation is the expensive one of the two, so a caller already
+      // refused by the cheap count must not pay for it.
+      expect(getUserStorageUsage).not.toHaveBeenCalled();
+    });
   });
 
   describe('storage quota', () => {

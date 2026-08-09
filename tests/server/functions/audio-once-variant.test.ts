@@ -44,6 +44,9 @@ describe('createOnceVariantUpload', () => {
     // quota check and never mocks it: comfortably under any real limit.
     // Tests that care about the quota itself override this explicitly.
     getUserStorageUsage.mockResolvedValue({ bytes: 0, assetCount: 1 });
+    // Same, for the pending-job cap now checked at presign — explicit rather
+    // than relying on an unconfigured mock's `undefined` comparing false.
+    vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0 as never);
   });
 
   it('presigns and flips the row to uploading with variant: once, for a ready music asset', async () => {
@@ -316,6 +319,40 @@ describe('createOnceVariantUpload', () => {
    * `createAudioUpload`'s own quota tests in `audio-ingest.test.ts`, via
    * the shared `assertUnderStorageQuota` helper both now call.
    */
+  /**
+   * The cap at presign, same placement fix as `createAudioUpload`'s — and
+   * with one extra reason that is specific to this path. The attach write
+   * flips an EXISTING, previously-`ready` music asset into `uploading`, and
+   * `status` is shared with the main pipeline, so an attach that confirm was
+   * always going to refuse takes a playable asset out of service (the board's
+   * play gate, the library row) for the whole round trip. Refusing before the
+   * presign means the row is never touched at all.
+   */
+  describe('pending job cap at presign', () => {
+    it('refuses at the cap, issues no presign, and never touches the row', async () => {
+      const { getMaxPendingJobsPerUser, createOnceVariantUpload } =
+        await import('~/server/functions/audio');
+      const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(getMaxPendingJobsPerUser() as never);
+
+      await expect(
+        createOnceVariantUpload({
+          data: { assetId: 'a1', filename: 'ending.wav', contentType: 'audio/wav', bytes: 1024 },
+          userId: 'u1',
+        })
+      ).rejects.toThrow(/too many pending transcode jobs/i);
+
+      // `findOneAndUpdate` in particular: that is the write that would have
+      // pulled a `ready` music asset out of service. Asserting it never ran
+      // is what distinguishes "refused early" from "refused eventually".
+      expect(vi.mocked(getAudioUploadUrl)).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.findOne)).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.findOneAndUpdate)).not.toHaveBeenCalled();
+      // The cheap count precedes the expensive aggregation.
+      expect(getUserStorageUsage).not.toHaveBeenCalled();
+    });
+  });
+
   describe('storage quota', () => {
     it('refuses over quota, issues no presign, and never looks up the asset', async () => {
       const { getAudioUserQuotaBytes, createOnceVariantUpload } =

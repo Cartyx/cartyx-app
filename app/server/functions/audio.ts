@@ -338,6 +338,60 @@ async function checkPendingJobCap(
   return pendingCount >= maxPendingJobs ? { pendingCount, maxPendingJobs } : null;
 }
 
+/**
+ * The one wording every pending-job-cap refusal uses. `nextStep` differs
+ * because the caller's remedy does: an ingest path tells them to stop
+ * uploading, `retryAudioAsset` tells them to stop retrying.
+ */
+function pendingJobCapMessage(
+  pendingCount: number,
+  maxPendingJobs: number,
+  nextStep: string
+): string {
+  return `Too many pending transcode jobs (${pendingCount} of ${maxPendingJobs} already queued). Wait for one to finish before ${nextStep}.`;
+}
+
+/**
+ * The PRESIGN-side wrapper for the queue-depth cap — `checkPendingJobCap`
+ * plus the throw, mirroring `assertUnderStorageQuota` below in both shape and
+ * placement, because the cap has exactly the same reason to be checked twice
+ * that the quota does.
+ *
+ * WHY THE PRESIGNS TOO, when the confirms already check it. The confirm-side
+ * check is the one that is load-bearing for correctness — it is the last
+ * gate before a row becomes claimable, and it sees a count that cannot have
+ * gone stale. But by the time it runs the caller has ALREADY uploaded the
+ * whole file, so its refusal has to destroy bytes that are already in R2.
+ * That is the same argument `checkStorageQuota`'s doc comment makes for
+ * keeping the quota's presign check ("a user already over quota never spends
+ * bandwidth on an upload that is going to be deleted anyway"), and it applies
+ * to this control unchanged. It was previously made for one of the two
+ * limits and not the other.
+ *
+ * Concretely, with the shipped defaults: a GM dropping a folder of 30 files
+ * gets past `audioIngestLimiter` (capacity 60 — sized, in that module's own
+ * comment, for exactly a 30-file drop), and the single-replica worker drains
+ * only a handful in that window. Without this check, files 21 onward each
+ * uploaded in full and were then deleted at confirm, one destroyed file per
+ * refusal. With it, file 21's PRESIGN is refused before a byte moves, and
+ * the message tells the GM to wait rather than handing them nine failed rows
+ * and a folder to re-drop.
+ *
+ * The two limits still measure different things (calls per second vs. jobs in
+ * flight) and cannot be made to agree by tuning either number — which is why
+ * this is a placement fix rather than a new default.
+ */
+async function assertUnderPendingJobCap(userId: string, nextStep: string): Promise<void> {
+  const cap = await checkPendingJobCap(userId);
+  if (cap) {
+    // AudioClientError: the caller's own doing, reachable at will, so it must
+    // file no GlitchTip event — same shape as every other cap/quota refusal.
+    throw new AudioClientError(
+      pendingJobCapMessage(cap.pendingCount, cap.maxPendingJobs, nextStep)
+    );
+  }
+}
+
 /** The one wording every quota refusal on this surface uses, presign or confirm. */
 function storageQuotaMessage(usageBytes: number, limitBytes: number): string {
   return `Storage quota exceeded: ${usageBytes} of ${limitBytes} bytes used. Delete an asset to make room.`;
@@ -521,9 +575,14 @@ export async function createAudioUpload({
   try {
     await ensureDb();
 
-    // Enforced FIRST, before `resolveAudioStoragePrefix` and before the
-    // presign — see `assertUnderStorageQuota`'s own doc comment for the
-    // full reasoning, shared verbatim with `createOnceVariantUpload` below.
+    // Both limits enforced FIRST, before `resolveAudioStoragePrefix` and
+    // before the presign — see `assertUnderStorageQuota` and
+    // `assertUnderPendingJobCap` for the full reasoning, shared verbatim
+    // with `createOnceVariantUpload` below. The cap is checked here as well
+    // as at confirm for the same reason the quota is: this is the only point
+    // at which either can refuse before the caller spends bandwidth on an
+    // upload that is going to be thrown away.
+    await assertUnderPendingJobCap(userId, 'uploading more');
     await assertUnderStorageQuota({ userId, sessionUserId }, 'createAudioUpload');
 
     // Mints the user's R2 namespace if this is their first upload, and returns
@@ -852,11 +911,19 @@ export async function createOnceVariantUpload({
   try {
     await ensureDb();
 
-    // Enforced FIRST, same as `createAudioUpload` and for the same reason —
-    // see `assertUnderStorageQuota`'s doc comment. This is the path Task 3b's
-    // `onceSourceBytes` aggregation term exists to gate: without this call, a
-    // caller already at the quota could still attach a once-variant (its own
-    // source plus renditions) to every `music` asset they own.
+    // Both enforced FIRST, same as `createAudioUpload` and for the same
+    // reasons — see `assertUnderPendingJobCap` and `assertUnderStorageQuota`.
+    // The quota is the path Task 3b's `onceSourceBytes` aggregation term
+    // exists to gate: without it, a caller already at the quota could still
+    // attach a once-variant (its own source plus renditions) to every `music`
+    // asset they own. The cap is here because a once-attach enqueues transcode
+    // work exactly like a source upload does, so refusing at presign spares
+    // the caller an upload that confirm was going to refuse anyway — and, for
+    // this path specifically, spares the ROW: the attach write below flips an
+    // existing, previously-`ready` asset into `uploading`, so an attach that
+    // is doomed at confirm takes a playable asset out of service for the
+    // round trip.
+    await assertUnderPendingJobCap(userId, 'attaching another once-variant');
     await assertUnderStorageQuota({ userId, sessionUserId }, 'createOnceVariantUpload');
 
     const asset = await AudioAsset.findOne({ _id: data.assetId, ownerId: userId });
@@ -1616,7 +1683,7 @@ export async function retryAudioAsset({
       // fires purely from the caller's OWN queue depth and is reachable on
       // any retry attempt regardless of which row it names.
       throw new AudioClientError(
-        `Too many pending transcode jobs (${cap.pendingCount} of ${cap.maxPendingJobs} already queued). Wait for one to finish before retrying.`
+        pendingJobCapMessage(cap.pendingCount, cap.maxPendingJobs, 'retrying')
       );
     }
 
