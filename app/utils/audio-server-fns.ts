@@ -106,10 +106,10 @@ import {
 //     to close — the rejection volume is the attacker's parameter.
 //
 // TWO MORE buckets cover the rest of this file's writes:
-// `libraryMutationLimiter` on `updateAudioAssetFn`/`deleteAudioAssetFn`, and
-// the tighter `orphanCleanupLimiter` on the two orphan-cleanup wrappers at the
-// bottom. See the note above each, and `~/lib/audio-rate-limits.ts` for the
-// sizing.
+// `libraryMutationLimiter` on `updateAudioAssetFn`/`deleteAudioAssetFn`/
+// `bulkTagAudioAssetsFn`, and the tighter `orphanCleanupLimiter` on the two
+// orphan-cleanup wrappers at the bottom. See the note above each, and
+// `~/lib/audio-rate-limits.ts` for the sizing.
 //
 // A FOURTH bucket, `storageUsageReadLimiter`, covers `getAudioStorageUsageFn`
 // — the one READ on this surface with a bucket. The final whole-branch review
@@ -122,11 +122,14 @@ import {
 // an explicit `error` prop), so a refusal degrades a badge rather than
 // half-loading a page. See `~/lib/audio-rate-limits.ts` for the sizing.
 //
-// EXACTLY TWO ENDPOINTS HERE ARE UNGATED, and the reason is specific to each
-// rather than a blanket claim. An earlier version of this comment asserted
-// that every non-ingest endpoint "enqueues no work, spends no R2, and grows no
-// footprint"; review found that false for `deleteAudioAsset` on both counts,
-// so the list below states only what is true of the endpoint it names:
+// EXACTLY ONE ENDPOINT HERE IS UNGATED, and the reason is specific to it
+// rather than a blanket claim. Earlier versions of this comment listed two
+// more and were wrong about both: it asserted that every non-ingest endpoint
+// "enqueues no work, spends no R2, and grows no footprint" (false for
+// `deleteAudioAsset` on both counts), and then that `bulkTagAudioAssetsFn`
+// was safe because it has no not-found throw and a `.max(200)` `ids` array
+// (both true, and both about telemetry and request shape rather than the
+// write volume that actually distinguishes it — see its own note below).
 //
 //  - `listAudioAssetsFn` — a read. Bounded by its projection and its `limit`;
 //    a cursor it cannot decode raises `AudioClientError`, which files nothing.
@@ -134,13 +137,11 @@ import {
 //    package editor's asset picker both fire it on mount and on every filter
 //    change and scroll page, so a refusal here is the half-loaded-page failure
 //    the design's no-bucket-on-reads rule exists to avoid.
-//  - `bulkTagAudioAssetsFn` — an `updateMany` that returns `{ modified: 0 }`
-//    when nothing matches. It has NO not-found throw, so unlike its two
-//    single-asset siblings it has no caller-triggerable capture path at all,
-//    and its `ids` array is bounded by `.max(200)` in the schema.
 //
-// If a new endpoint is added here, it needs a bucket unless one of those
-// sentences can be written truthfully about it.
+// If a new endpoint is added here, it needs a bucket unless that sentence can
+// be written truthfully about it — and "truthfully" means on every axis this
+// surface bounds (R2 spend, Atlas write volume, queue depth, telemetry
+// volume), not just the one that happens to come to mind.
 //
 // `~/lib/audio-rate-limits` is imported STATICALLY, unlike everything else
 // reached from these handlers, and that is safe precisely because it is
@@ -237,12 +238,26 @@ export const updateAudioAssetFn = createServerFn({ method: 'POST' })
     return updateAudioAsset({ data, ...actor });
   });
 
+// On `libraryMutationLimiter` with its two single-asset siblings. The earlier
+// ruling left this open on the grounds that it has no not-found throw and its
+// `ids` array is `.max(200)`-bounded — both true, both about telemetry and
+// request shape rather than write volume, which is what actually distinguishes
+// it: one call is an `updateMany` over 200 ids against a multikey tag index,
+// i.e. ~200x the Atlas write of `updateAudioAssetFn`, which was gated from the
+// start. See `~/lib/audio-rate-limits.ts`.
 export const bulkTagAudioAssetsFn = createServerFn({ method: 'POST' })
   .inputValidator(bulkTagAudioAssetsSchema)
   .handler(async ({ data }) => {
-    const { bulkTagAudioAssets } = await import('~/server/functions/audio');
+    const { bulkTagAudioAssets, AudioClientError } = await import('~/server/functions/audio');
     const { requireActor } = await import('~/utils/require-actor');
-    return bulkTagAudioAssets({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = libraryMutationLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      throw new AudioClientError(rateLimitMessage('library edit', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return bulkTagAudioAssets({ data, ...actor });
   });
 
 // On the SAME ingest bucket as the four upload halves above, which the

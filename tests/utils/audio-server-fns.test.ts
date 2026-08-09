@@ -523,8 +523,37 @@ describe('library mutation rate limit', () => {
     expect(serverCaptureException).not.toHaveBeenCalled();
   });
 
-  it('does not gate bulkTagAudioAssetsFn — an updateMany with no not-found throw', async () => {
+  /**
+   * REVERSES an earlier ruling, and the reversal is the thing worth pinning.
+   *
+   * `bulkTagAudioAssetsFn` was left ungated on the grounds that it is an
+   * `updateMany` with no not-found throw and a `.max(200)` `ids` array. Both
+   * are true; both are about telemetry volume and the shape of ONE call.
+   * Neither is about write volume, which is what this bucket's other two
+   * members are gated for — and on that axis this is the biggest write on the
+   * surface: 200 rows against a multikey tag index per call, versus one row
+   * for `updateAudioAssetFn`, which has been gated all along.
+   *
+   * Asserting `bulkTagAudioAssets` was NOT called is the load-bearing half. A
+   * test that only checked the rejection would still pass with the gate
+   * deleted, because the drained-bucket state makes nothing else throw.
+   */
+  it('gates bulkTagAudioAssetsFn on the shared library bucket', async () => {
     await drainLibraryBucket('mongo-library-bulktag');
+
+    vi.mocked(bulkTagAudioAssets).mockResolvedValue({ modified: 2 });
+    await expect(
+      bulkTagAudioAssetsFn({
+        data: { ids: ['a1', 'a2'], tags: ['storm'], tagMode: 'add' as const },
+      })
+    ).rejects.toThrow(/Too many library edit requests/);
+    expect(bulkTagAudioAssets).not.toHaveBeenCalled();
+    expect(serverCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('lets bulkTagAudioAssetsFn through on an undrained bucket', async () => {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser('mongo-library-bulktag-ok');
 
     vi.mocked(bulkTagAudioAssets).mockResolvedValue({ modified: 2 });
     await expect(

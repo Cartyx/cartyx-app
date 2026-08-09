@@ -202,9 +202,10 @@ export const packageWriteLimiter = createRateLimiter({ capacity: 15, refillPerSe
 export const boardStateLimiter = createRateLimiter({ capacity: 40, refillPerSec: 2 });
 
 /**
- * Library mutations: `deleteAudioAsset` and `updateAudioAsset`. Not in the
- * design's table; added after review found the original in-code justification
- * for leaving them ungated was factually wrong on both counts.
+ * Library mutations: `deleteAudioAsset`, `updateAudioAsset`, and
+ * `bulkTagAudioAssets`. Not in the design's table; added after review found
+ * the original in-code justification for leaving them ungated was factually
+ * wrong on both counts.
  *
  * `deleteAudioAsset` **does** spend R2 — up to six `DeleteObjectCommand`
  * calls per request (source, both renditions, and the three once-variant
@@ -227,10 +228,28 @@ export const boardStateLimiter = createRateLimiter({ capacity: 40, refillPerSec:
  * sustain much more than that, while a scripted loop drops from thousands per
  * second to one per two seconds.
  *
- * `bulkTagAudioAssets` is NOT on this bucket, and that reason is real rather
- * than assumed: it is an `updateMany` that returns `{ modified: 0 }` when
- * nothing matches, so it has no not-found throw and no capture path at all,
- * and its `ids` array is already bounded by `.max(200)` in the schema.
+ * `bulkTagAudioAssets` IS on this bucket, reversing an earlier ruling that
+ * left it open. That ruling was not wrong about what it said — the function
+ * really does have no not-found throw and no capture path, and its `ids`
+ * array really is bounded by `.max(200)` in the schema — it was wrong about
+ * what it left out. Both sentences are about TELEMETRY volume and request
+ * SHAPE; neither is about write volume, which is the axis this bucket's two
+ * other members are here for.
+ *
+ * On that axis it is the largest write on the surface: one call is an
+ * `updateMany` over 200 `_id`s with a `$set` of four fields plus `$addToSet`
+ * of up to 30 tags, against the multikey `{ownerId, tags}` index — on the
+ * order of 6,000 index entries per request, versus ONE row for
+ * `updateAudioAsset`, which has been gated all along. That is the same
+ * argument `packageEditLimiter` was added on ("the bigger write cannot be the
+ * one left open"), applied one endpoint over. `.max(200)` bounds the size of
+ * a single call and says nothing about how many calls there may be, which is
+ * the parameter the caller controls.
+ *
+ * Sharing the bucket rather than minting an eighth: all three are library
+ * housekeeping reached from the same page in the same sitting, so one budget
+ * across them is the honest model — and a bulk retag is meant to REPLACE a
+ * run of single edits, not to be spent alongside a full allowance of them.
  */
 export const libraryMutationLimiter = createRateLimiter({ capacity: 60, refillPerSec: 0.5 });
 
