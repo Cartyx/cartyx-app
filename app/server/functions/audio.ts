@@ -189,11 +189,34 @@ function titleFromFilename(filename: string): string {
  * and nowhere else, so an in-flight upload is real R2 storage the
  * aggregation cannot count until it lands — for at most the worker's
  * `UPLOAD_TIMEOUT_MS` (15 min by default), after which the reaper deletes
- * the abandoned object. Transient rather than accumulating, but it means the
- * real per-user ceiling is this quota PLUS whatever one account can hold in
- * flight, which the ingest rate limiter and the pending-job cap are what
- * actually bound. Same note lives in `deploy/charts/cartyx/values.yaml`,
- * where an operator meets the knob.
+ * the abandoned object.
+ *
+ * THE SIZE OF THAT RESIDUAL, stated honestly, because an earlier version of
+ * this note named a control that does not bound it at all. It said the
+ * in-flight bytes were bounded by "the ingest rate limiter and the
+ * pending-job cap". The PENDING-JOB CAP CONTRIBUTES NOTHING here:
+ * `checkPendingJobCap` counts `status: {$in: ['pending','processing']}`, and
+ * a presigned-but-unconfirmed row is `status: 'uploading'` — a state that
+ * count never sees. (`createAudioUpload` does now check the cap, but as an
+ * ingest-fairness gate; a caller who simply never calls confirm is still
+ * invisible to it, because nothing they own ever enters the queue.)
+ *
+ * So the only real bound is `audioIngestLimiter` — 60 burst, 1/s sustained —
+ * crossed with `UPLOAD_TIMEOUT_MS`: roughly 900 unconfirmed rows alive at
+ * once, each holding up to `AUDIO_MAX_BYTES` (50 MiB). That is on the order
+ * of 45 GB of real, billed R2 storage per account that this quota cannot
+ * see, sustained indefinitely, and with open registration it multiplies per
+ * account. In practice a caller is limited by their own upload bandwidth
+ * long before the rate limiter binds, so the working figure is
+ * `upload_bandwidth x UPLOAD_TIMEOUT_MS` — still multiples of this quota on
+ * any ordinary connection.
+ *
+ * Transient per object and steady-state in aggregate. Closing it needs a
+ * control this phase does not have (counting the client-declared `bytes`
+ * against a separate in-flight budget at presign, or a much shorter upload
+ * timeout); what an operator tuning `AUDIO_USER_QUOTA_BYTES` needs to know
+ * is that this number is not the ceiling. Same note lives in
+ * `deploy/charts/cartyx/values.yaml`, where an operator meets the knob.
  */
 const DEFAULT_AUDIO_USER_QUOTA_BYTES = 2 * 1024 * 1024 * 1024;
 
@@ -460,10 +483,11 @@ async function checkStorageQuota(
   // `onceSourceBytes` until confirm, so those objects are real R2 storage the
   // quota cannot see for up to the worker's `UPLOAD_TIMEOUT_MS` (15 min by
   // default), after which `reapAbandonedUploads`/`reapAbandonedOnceUploads`
-  // delete them. Transient, not accumulating — but it means the true storage
-  // ceiling per user is the quota PLUS whatever they can hold in flight, and
-  // an operator tuning `AUDIO_USER_QUOTA_BYTES` should read it that way (the
-  // Helm values file says so where the knob actually lives).
+  // delete them. Transient per object, steady-state in aggregate — and the
+  // ONLY thing bounding it is `audioIngestLimiter`. The pending-job cap does
+  // not: it counts `pending`/`processing`, and an unconfirmed row is
+  // `uploading`. See `DEFAULT_AUDIO_USER_QUOTA_BYTES` above for the
+  // arithmetic and for what an operator tuning the knob has to know.
   if (usage.bytes >= limitBytes) {
     return { usageBytes: usage.bytes, limitBytes };
   }
@@ -1513,7 +1537,7 @@ export async function bulkTagAudioAssets({
  *   `confirmAudioUpload`'s `HeadObject` is the only real enforcement of
  *   `AUDIO_MAX_BYTES` in the system (a presigned PUT cannot constrain
  *   Content-Length; the dropzone's check is a courtesy), and `confirmedAt` is
- *   written by that success path and by nothing else — so a null `confirmedAt`
+ *   written only by a confirm SUCCESS path — so a null `confirmedAt`
  *   means nobody has ever measured this object. Two kinds of row are in that
  *   state: one the worker's `reapStale` aged out of `uploading`, and one
  *   confirm rejected (whose R2 object confirm already deleted, making a requeue
@@ -1527,8 +1551,28 @@ export async function bulkTagAudioAssets({
  *   this commit, seeded at row creation from the client's self-declared
  *   `data.bytes`, so `{sourceBytes: {$ne: null}}` was true for every row that
  *   had ever existed and excluded exactly nothing. A guard whose premise is
- *   false is worse than no guard, because it reads as one. `confirmedAt` is
- *   true by construction — one writer, and its name states the invariant.
+ *   false is worse than no guard, because it reads as one.
+ *
+ *   TWO writers, not one, and the earlier claim of exclusivity here was
+ *   wrong: `confirmOnceVariantUpload`'s success write stamps `confirmedAt`
+ *   too, so after a once-attach the field describes the ONCE-source's
+ *   HeadObject rather than the main source's. That does not weaken this
+ *   clause — a once-attach requires `status: 'ready'`, which requires the
+ *   main confirm to have already run and stamped it once, so the field is
+ *   still non-null exactly when some object of this row's has been measured.
+ *   It is recorded because the next guard built on "one writer" would not be
+ *   safe, and a false premise reads as a true one.
+ *
+ * NOT gated on the storage quota, unlike the other paths that lead to
+ * transcode work, and that omission is deliberate rather than an oversight
+ * of the same class this file's other checks close. A retry adds no source
+ * bytes — `sourceKey` already exists and was already measured — only the
+ * renditions the worker produces from it, bounded by how many `failed` rows
+ * the caller owns, each of which already passed the quota at its own
+ * confirm. Gating it would take the only recovery path away from exactly the
+ * user who most needs it: someone at their quota whose asset failed
+ * transiently would be told to delete something in order to un-break a file
+ * they have already paid for.
  */
 export async function retryAudioAsset({
   data,

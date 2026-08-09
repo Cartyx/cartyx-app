@@ -241,9 +241,9 @@ export const libraryMutationLimiter = createRateLimiter({ capacity: 60, refillPe
  * rationale it states ("no server function added later can silently skip it")
  * argues for covering the surface rather than the list.
  *
- * This is the tightest bucket of the four, because these two are the only
- * endpoints on the surface where a single call has an unbounded EXTERNAL
- * cost. Both run `findOrphans`, which pages an R2 `ListObjectsV2` over the
+ * This is the tightest of the seven buckets in this file, because these two
+ * are the only endpoints on the surface where a single call has an unbounded
+ * EXTERNAL cost. Both run `findOrphans`, which pages an R2 `ListObjectsV2` over the
  * caller's prefix up to `AUDIO_ORPHAN_SCAN_MAX_KEYS` (10,000) — up to ten
  * Class-A operations per call — and both fire an un-awaited
  * `serverCaptureEvent` (`audio_orphan_scan` / `audio_orphan_delete`) on every

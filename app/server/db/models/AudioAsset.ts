@@ -23,13 +23,25 @@ const audioAssetSchema = new mongoose.Schema({
   // client's self-declared `bytes`, which meant anything reading it before
   // confirm got an unverified number the uploader chose.
   sourceBytes: { type: Number, default: null },
-  // Set by confirmAudioUpload's success path and by nothing else, ever. That
-  // exclusivity is the point: it is the one field that proves an object passed
-  // the HeadObject size/type check, which is the only real enforcement of
-  // AUDIO_MAX_BYTES in the system (a presigned PUT cannot constrain
-  // Content-Length). `retryAudioAsset` gates on it so an abandoned upload the
-  // worker's reaper aged into `failed` can never be pushed into the transcode
-  // queue. Cross-service contract field: declared here because the web app owns
+  // Written ONLY by a confirm SUCCESS path — `confirmAudioUpload`'s, and
+  // `confirmOnceVariantUpload`'s. (This comment used to claim a single writer;
+  // that was never true once Task 18 landed, and a false premise reads exactly
+  // like a true one to whoever builds the next guard on it. After a
+  // once-attach this field describes the ONCE-source's HeadObject, not the
+  // main source's.)
+  //
+  // What is true of BOTH writers is the property everything downstream
+  // actually depends on: it is set only after an object passed the HeadObject
+  // size/type check, which is the only real enforcement of AUDIO_MAX_BYTES in
+  // the system (a presigned PUT cannot constrain Content-Length). So a null
+  // value still means "nothing on this row has ever been measured", and a
+  // non-null one still means something was. `retryAudioAsset` gates on it so
+  // an abandoned upload the worker's reaper aged into `failed` can never be
+  // pushed into the transcode queue — and a once-attach cannot forge that,
+  // because it requires `status: 'ready'`, which requires the main confirm to
+  // have already run and stamped this once.
+  //
+  // Cross-service contract field: declared here because the web app owns
   // the schema, even though the worker doesn't read it.
   confirmedAt: { type: Date, default: null },
   renditions: {
@@ -130,9 +142,16 @@ const audioAssetSchema = new mongoose.Schema({
   // (`renditions`/`onceRenditions`) — "same pipeline, different
   // destination field," per the design doc's own framing.
   //
-  // On BOTH a successful AND a failed once-variant run the worker resets
-  // this to 'main' and flips `status` back to 'ready' — never `'failed'`.
-  // This is a Task 18 review fix, not the original design: `status:
+  // On EVERY terminal outcome of a once-variant run the worker resets this to
+  // 'main' and flips `status` back to 'ready' — never `'failed'`. That is
+  // three paths, not the two Task 18 closed: `markOnceFailed` covers the
+  // permanent-error and budget-exhausted branches inside `processAsset`, and
+  // `reapStale`'s own attempts-exhausted `updateMany` (audio-worker/src/
+  // claim.ts) covers the case where the worker DIED rather than threw, so
+  // `processAsset`'s catch never ran at all. That third path used to fall
+  // through to the main pipeline's `failed`/`lastError` write and brick the
+  // music asset exactly as described below.
+  // This is a Task 18 review fix, not the original design: `status`:
   // 'failed'` describes the WHOLE row under this shared-state scheme, so a
   // failed once-variant used to be indistinguishable from a failed MAIN
   // asset, and a `PermanentError` (over-cap, silent, ...) on the once file
