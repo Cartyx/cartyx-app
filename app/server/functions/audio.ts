@@ -1871,16 +1871,44 @@ export async function deleteAudioAsset({
     // scoped `asset` to `ownerId: userId`), so system packages must never
     // be reachable here.
     try {
-      const affected = (await AudioPackage.find({
-        ownerId: userId,
-        'items.assetId': data.id,
-      }).lean()) as unknown as {
-        _id: unknown;
-        items: PackageItemData[];
-        moods: MoodData[];
-      }[];
+      // TWO QUERIES, not one, and the split is a memory bound rather than a
+      // style choice. This used to be a single `.find({...}).lean()` with no
+      // projection, materialising every matched package IN FULL and at once:
+      // `items`/`moods` are ~99% of a package document, a maxed one is about
+      // 410 KiB, and `MAX_PACKAGES_PER_USER` is 100 — so one delete request
+      // could hold ~41 MiB of package documents on a `replicaCount: 1` pod
+      // capped at 512Mi, and `libraryMutationLimiter` admits a 60-request
+      // burst.
+      //
+      // That is the same hazard `PACKAGE_SUMMARY_PROJECTION`
+      // (`~/server/functions/packages.ts`) exists to close, which its own doc
+      // comment records as having produced an OOMKill for `listPackages` —
+      // the control was applied to the read that task named and left open on
+      // this one, which reads the same documents the same way.
+      //
+      // The prune genuinely NEEDS `items` and `moods` (it rewrites both), so
+      // a projection cannot fix it. Fetching ids first and then one document
+      // at a time can: peak resident is one package instead of all of them.
+      // The extra round trips are bounded by the same 100 and land on a path
+      // that is already rate-limited and already spends up to six R2 deletes.
+      const affectedIds = (await AudioPackage.find(
+        { ownerId: userId, 'items.assetId': data.id },
+        { _id: 1 }
+      ).lean()) as unknown as { _id: unknown }[];
 
-      for (const pkg of affected) {
+      for (const { _id } of affectedIds) {
+        // Re-read under the same owner scope. A package deleted between the
+        // two queries simply yields null and is skipped — there is nothing
+        // left to prune, which is the outcome this loop wanted anyway.
+        const pkg = (await AudioPackage.findOne(
+          { _id, ownerId: userId },
+          { items: 1, moods: 1 }
+        ).lean()) as unknown as {
+          _id: unknown;
+          items: PackageItemData[];
+          moods: MoodData[];
+        } | null;
+        if (!pkg) continue;
         // Two steps, not one `$pull`: moods reference `item.id`, never
         // `assetId` (see `~/lib/soundboard/prune`'s doc comment), so the
         // surviving item ids must be computed FIRST and used to prune
