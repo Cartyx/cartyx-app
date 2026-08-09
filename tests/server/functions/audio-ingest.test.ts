@@ -517,23 +517,39 @@ describe('confirmAudioUpload', () => {
    * leave open because it stamps `permanentFailure: true` — a flag
    * `retryAudioAsset` refuses, so there is no path back.
    *
-   * One client, no privileged timing, window = one `DeleteObject` round trip:
+   * One client, no privileged timing, window = one `HeadObject` round trip:
    *
    *   1. Confirm a refused blob (over-cap here). Request #1 measures it and
-   *      enters the `DeleteObjectCommand` await.
+   *      is inside the `HeadObjectCommand` await.
    *   2. While it is in there, re-PUT good audio to the same presigned URL
    *      (valid 300s, reusable) and confirm again. Request #2's fenced write
    *      matches the still-`uploading` row and flips it to `pending` — a
    *      legitimately queued asset the worker will pick up.
-   *   3. Request #1 resumes. Its delete has already destroyed the GOOD object,
-   *      and an unfenced write then stamps `failed`/`permanentFailure` over a
+   *   3. Request #1 resumes, decides `tooLarge` from the measurement it took
+   *      BEFORE the race, and tries to stamp `failed`/`permanentFailure` on a
    *      row that is now queued (or, if the worker was quick, `ready`).
+   *
+   * THE RACE POINT MOVED, and that is the point of the current version. It
+   * used to be staged inside the `DeleteObjectCommand` await, because the
+   * reject path deleted the object FIRST and fenced its row write afterwards
+   * — which meant the fence protected the row's status while the delete had
+   * already destroyed the bytes the winning request's row pointed at. Row
+   * consistent, object gone, nobody told. The reject paths now fence first
+   * and treat a MATCHED write as the authorization to delete (the rule
+   * `reapAbandonedUploads` has always worked by), so there is no delete-shaped
+   * window left to race in — hence `HeadObject`, the last await request #1
+   * still takes before its write.
+   *
+   * The assertion set grew with it: the row must still end up `pending`, AND
+   * no `DeleteObjectCommand` may have been issued at all. The second one is
+   * the load-bearing addition — it is the assertion the old order could never
+   * have satisfied, and the one that fails if anyone reinstates it.
    *
    * So the model here is STATEFUL: `findOneAndUpdate` evaluates the filter it
    * is actually given against a mutable row, exactly as Mongo would. A test
    * that asserted the filter's SHAPE would pass against an implementation that
    * built the right object and passed it to the wrong call; this one fails on
-   * the outcome that matters — the row's final state.
+   * the outcome that matters — the row's final state, and what was deleted.
    */
   it('a slow reject cannot brick a row that a concurrent confirm has already re-claimed', async () => {
     const row: Record<string, unknown> = {
@@ -571,16 +587,17 @@ describe('confirmAudioUpload', () => {
     let raced = false;
     send.mockImplementation(async (cmd: unknown) => {
       if (cmd instanceof HeadObjectCommand) {
-        // Request #1 measures the refused blob; request #2 measures the good
-        // audio the attacker PUT over it at the same presigned URL.
-        return raced
-          ? { ContentLength: 1024, ContentType: 'audio/wav' }
-          : { ContentLength: 50 * 1024 * 1024 + 1, ContentType: 'audio/wav' };
-      }
-      // Request #1 is now inside its delete. This is the window.
-      if (!raced) {
-        raced = true;
-        await confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' });
+        if (!raced) {
+          // Request #1 is inside its HeadObject — the last await it takes
+          // before its fenced write. This is the window. Request #2 runs to
+          // completion in here and wins the row.
+          raced = true;
+          await confirmAudioUpload({ data: { assetId: 'a1' }, userId: 'u1' });
+          // ...and request #1 still measures the blob it was refused for.
+          return { ContentLength: 50 * 1024 * 1024 + 1, ContentType: 'audio/wav' };
+        }
+        // Request #2 measures the good audio PUT over it at the same URL.
+        return { ContentLength: 1024, ContentType: 'audio/wav' };
       }
       return {};
     });
@@ -591,12 +608,19 @@ describe('confirmAudioUpload', () => {
 
     // Request #2 won the row and it STAYED won. Unfenced, the reject write
     // that resumed afterwards would have left `status: 'failed'` and
-    // `permanentFailure: true` on a queued asset whose bytes are already
-    // deleted — unretryable by construction.
+    // `permanentFailure: true` on a queued asset — unretryable by
+    // construction.
     expect(row.status).toBe('pending');
     expect(row.permanentFailure).toBeUndefined();
     expect(row.lastError).toBeUndefined();
     expect(row.confirmedAt).toBeInstanceOf(Date);
+
+    // AND THE OBJECT SURVIVED. This is the assertion the old delete-first
+    // order could not have passed: the losing request must not reclaim bytes
+    // that now belong to the winner's queued row. Without it, everything
+    // above still passes while the worker is handed a `pending` asset whose
+    // `sourceKey` points at nothing.
+    expect(send.mock.calls.some(([cmd]) => cmd instanceof DeleteObjectCommand)).toBe(false);
   });
 
   it("refuses another user's asset", async () => {

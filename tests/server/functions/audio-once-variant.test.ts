@@ -711,6 +711,53 @@ describe('confirmOnceVariantUpload', () => {
       // The caller's own doing — must not file a GlitchTip event.
       expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
     });
+
+    /**
+     * THE OTHER HALF OF THE FENCE, and the half it did not used to have.
+     *
+     * The fence on the revert write was added so a stale refusal could not
+     * cancel a once-attach that a later request had legitimately started.
+     * It did that — but the `DeleteObjectCommand` ran BEFORE it and
+     * unconditionally, so the stale refusal destroyed the fresh attach's
+     * once-source object anyway. The row was protected; the bytes were not,
+     * and the browser's PUT to the new presigned URL landed on an object no
+     * row pointed at, with nothing reporting any of it.
+     *
+     * A matched write is now the authorization to delete — the rule
+     * `reapAbandonedUploads` has always used ("only a matched write
+     * authorizes deleting the object"). This test drives the no-match case
+     * directly: `findOneAndUpdate` resolves null, exactly as Mongo would when
+     * the row has moved on, and NOTHING may be deleted.
+     */
+    it('deletes nothing when the fenced revert matches no row', async () => {
+      const { getMaxPendingJobsPerUser, confirmOnceVariantUpload, AudioClientError } =
+        await import('~/server/functions/audio');
+      const cap = getMaxPendingJobsPerUser();
+
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      } as never);
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(cap);
+      // The row moved on between this request's read and its write — a
+      // second attach, or a confirm that beat it.
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue(null as never);
+
+      const err = await confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' }).catch(
+        (e: unknown) => e
+      );
+      // The caller is still told why THEIR request failed. Losing the race
+      // does not change the answer they get.
+      expect(err).toBeInstanceOf(AudioClientError);
+      expect((err as Error).message).toContain(String(cap));
+
+      // The assertion that fails against a delete-first implementation, and
+      // the only one that does: everything above passes either way.
+      expect(send).not.toHaveBeenCalled();
+    });
   });
 
   /**

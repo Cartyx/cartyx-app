@@ -565,6 +565,80 @@ async function assertUnderStorageQuota(actor: Actor, action: string): Promise<vo
   }
 }
 
+/**
+ * Every reject path in BOTH confirms: take the row with a fenced write, and
+ * delete the uploaded object ONLY if that write actually matched.
+ *
+ * ORDER IS THE WHOLE POINT, and it used to be the other way round. Each of
+ * these six branches deleted the R2 object first and then issued a fenced
+ * `findOneAndUpdate` whose result was discarded. The fence stopped a stale
+ * refusal from STAMPING a row a concurrent request had legitimately moved
+ * on — but the delete had already run unconditionally, so the losing racer
+ * destroyed the winner's live source object anyway. The row's status was
+ * protected; the bytes it pointed at were not.
+ *
+ * That is reachable without unusual timing, because the state these branches
+ * key on is one a concurrent request CREATES. Two confirms for the same asset
+ * (a double-click, or a client retry after a slow response) both read the row
+ * as `uploading`. Request A passes the cap check, passes quota, and its
+ * success write lands — which is exactly what takes the caller to the cap, or
+ * what writes the `sourceBytes` that takes them over quota. Request B's check
+ * then runs against A's own effect, refuses, and deletes the object A just
+ * confirmed. The row stays a perfectly healthy-looking `pending` pointing at a
+ * key that no longer exists in R2; the worker claims it, the download 404s,
+ * three attempts burn, and it lands in `failed` with `retryable: true` — so
+ * every Retry click buys three more worker passes against an object that can
+ * never exist. The user is never told, at the moment it happens, that their
+ * upload was destroyed.
+ *
+ * A matched write is the authorization to delete. This is not a new idea
+ * here: `reapAbandonedUploads` (audio-worker/src/claim.ts) has always worked
+ * this way, and says so — "only a matched write authorizes deleting the
+ * object", which is why it writes row-at-a-time instead of one `updateMany`.
+ * The same rule now holds on this side of the wire.
+ *
+ * The delete is BEST EFFORT and never changes what the caller sees. The row
+ * transition is the part that must not be lost; a stranded object is
+ * reclaimable by `~/server/functions/audio-cleanup.ts` on a later sweep,
+ * whereas a thrown R2 error here would replace the refusal message the caller
+ * needs ("you are over quota") with an S3 fault they can do nothing about.
+ * Each failure is still reported, so a systematically failing delete shows up
+ * in GlitchTip rather than quietly accruing storage cost — same treatment,
+ * and the same reasoning, as `deleteAudioAsset`'s own R2 loop.
+ *
+ * Returns nothing: every caller throws its own `AudioClientError` (or plain
+ * `Error`) immediately afterwards, and what that error says differs per
+ * branch.
+ */
+async function fenceThenReclaim({
+  filter,
+  set,
+  key,
+  r2,
+  actor,
+  action,
+}: {
+  filter: Record<string, unknown>;
+  set: Record<string, unknown>;
+  key: string;
+  // Only the two fields the delete needs, so callers can pass the pair they
+  // already destructured for `HeadObject` rather than re-invoking `createR2`.
+  r2: Pick<ReturnType<typeof createR2>, 'client' | 'bucket'>;
+  actor: Actor;
+  action: string;
+}): Promise<void> {
+  const claimed = await AudioAsset.findOneAndUpdate(filter, { $set: set });
+  // The fence did not match: a concurrent request already moved this row on,
+  // and the object now belongs to whatever it moved on to. Touch neither.
+  if (!claimed) return;
+
+  try {
+    await r2.client.send(new DeleteObjectCommand({ Bucket: r2.bucket, Key: key }));
+  } catch (e) {
+    void reportAudioError(e, actor, { action: `${action}.reclaim`, key });
+  }
+}
+
 export async function createAudioUpload({
   data,
   userId,
@@ -679,40 +753,32 @@ export async function confirmAudioUpload({
     // turns out to be.
     const cap = await checkPendingJobCap(userId);
     if (cap) {
-      // The object already exists in R2 by the time confirm runs (the
-      // browser's PUT to the presigned URL already landed) — refusing here
-      // does not avoid creating an object the way the storage-quota check
-      // in `createAudioUpload` does by refusing before the presign. It has
-      // to be deleted explicitly or it is stranded: nothing else will ever
-      // reference it, and the orphan scanner is the only other path back,
-      // on a later manual sweep instead of immediately.
-      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.sourceKey }));
-      const reason = `Too many pending transcode jobs (${cap.pendingCount} of ${cap.maxPendingJobs} already queued). Wait for one to finish before uploading more.`;
-      // FENCED on `status: 'uploading', variant: { $ne: 'once' }` — the
-      // identical ordering trap the tooLarge/badType write below closes,
-      // and the identical fix: this request can be suspended inside the
-      // `DeleteObjectCommand` await above for the length of one R2 round
-      // trip, and a concurrent confirm for the SAME asset (a client retry
-      // racing this request) could complete in that window and move the
-      // row to `pending` — or the worker could claim and finish it, moving
-      // it to `ready` — before this write runs. An identity-only write
-      // would then stamp `status: 'failed'` over a row that is now
-      // legitimately queued or already done, after this request's own
-      // delete has already destroyed the (still-referenced, still-good)
-      // object that row pointed at. The fence makes the stale write a
-      // no-op instead: the row this path means to fail is by definition
-      // still `uploading` and still not the once pipeline's, so a narrower
-      // filter cannot cost this path anything it should have done.
-      await AudioAsset.findOneAndUpdate(
-        { _id: data.assetId, ownerId: userId, status: 'uploading', variant: { $ne: 'once' } },
-        {
-          $set: {
-            status: 'failed',
-            lastError: reason,
-            updatedAt: new Date(),
-          },
-        }
-      );
+      const reason = pendingJobCapMessage(cap.pendingCount, cap.maxPendingJobs, 'uploading more');
+      // FENCE FIRST, THEN RECLAIM — see `fenceThenReclaim`'s doc comment for
+      // why this order is the load-bearing part and what the previous order
+      // (delete unconditionally, then fence a write nobody read the result
+      // of) destroyed. In short: the row this path means to fail is by
+      // definition still `uploading` and still not the once pipeline's, so a
+      // concurrent confirm that legitimately queued it makes this write a
+      // no-op — and the object then belongs to THAT request, not this one.
+      //
+      // The object does still have to be reclaimed when the fence DOES
+      // match: it already exists in R2 (the browser's PUT to the presigned
+      // URL landed), nothing will ever reference it again, and the orphan
+      // scanner is otherwise the only path back, on a later manual sweep.
+      await fenceThenReclaim({
+        filter: {
+          _id: data.assetId,
+          ownerId: userId,
+          status: 'uploading',
+          variant: { $ne: 'once' },
+        },
+        set: { status: 'failed', lastError: reason, updatedAt: new Date() },
+        key: asset.sourceKey,
+        r2: { client, bucket },
+        actor: { userId, sessionUserId },
+        action: 'confirmAudioUpload.pendingJobCap',
+      });
       // AudioClientError: this is the caller's own doing (they queued more
       // than their share) and is reachable at will by uploading and
       // confirming repeatedly, so it must not file a GlitchTip event — same
@@ -731,19 +797,13 @@ export async function confirmAudioUpload({
     // anyway.
     const quota = await checkStorageQuota({ userId, sessionUserId }, 'confirmAudioUpload');
     if (quota) {
-      // The cleanup is the cap refusal's, because the situation directly
-      // above is the same one: the object already exists in R2 (the
-      // browser's PUT landed), nothing will ever reference it again, so it
-      // has to be deleted explicitly or it is stranded until the orphan
-      // scanner's next manual sweep.
-      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.sourceKey }));
       const reason = storageQuotaMessage(quota.usageBytes, quota.limitBytes);
-      // FENCED exactly as the cap refusal above is, and for the identical
-      // ordering trap documented there: this request can be suspended inside
-      // the `DeleteObjectCommand` await while a concurrent confirm for the
-      // SAME asset legitimately queues the row (or the worker finishes it),
-      // and an identity-only write would then stamp `failed` over it after
-      // this request's delete already destroyed the object it points at.
+      // Fence-then-reclaim, exactly as the cap refusal above — and this is
+      // the branch where the old delete-first order was easiest to reach,
+      // because a concurrent confirm's own success write is what sets the
+      // `sourceBytes` that takes this caller over the limit. Request A lands,
+      // request B measures A's effect, refuses, and used to delete A's
+      // freshly-confirmed object. See `fenceThenReclaim`.
       //
       // `status: 'failed'` and NOT `permanentFailure`: this row is a fresh
       // upload with nothing else at stake (unlike `confirmOnceVariantUpload`,
@@ -751,16 +811,19 @@ export async function confirmAudioUpload({
       // failing it is right; but unlike the tooLarge/badType branch below,
       // re-uploading the same file AFTER deleting something else succeeds,
       // which is the opposite of what `permanentFailure` means.
-      await AudioAsset.findOneAndUpdate(
-        { _id: data.assetId, ownerId: userId, status: 'uploading', variant: { $ne: 'once' } },
-        {
-          $set: {
-            status: 'failed',
-            lastError: reason,
-            updatedAt: new Date(),
-          },
-        }
-      );
+      await fenceThenReclaim({
+        filter: {
+          _id: data.assetId,
+          ownerId: userId,
+          status: 'uploading',
+          variant: { $ne: 'once' },
+        },
+        set: { status: 'failed', lastError: reason, updatedAt: new Date() },
+        key: asset.sourceKey,
+        r2: { client, bucket },
+        actor: { userId, sessionUserId },
+        action: 'confirmAudioUpload.storageQuota',
+      });
       // AudioClientError carrying both figures, exactly like the presign
       // refusal: the caller's own doing, reachable at will, so it must file
       // no GlitchTip event, and the UI can render "X of Y used" from the
@@ -779,54 +842,57 @@ export async function confirmAudioUpload({
     const badType = !AUDIO_SOURCE_TYPES.has(type);
 
     if (tooLarge || badType) {
-      // The object must go, or we pay storage for a file we refused.
-      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.sourceKey }));
       const reason = tooLarge
         ? `File too large: ${bytes} bytes exceeds ${AUDIO_MAX_BYTES}`
         : `Unsupported audio type: ${type}`;
-      await AudioAsset.findOneAndUpdate(
-        // FENCED, with exactly the clauses the success write below carries,
-        // and for exactly the same reason its comment gives: "only the filter
-        // on the write makes exactly one of them win." This one is the more
-        // dangerous of the two to leave open, because it writes
-        // `permanentFailure: true` and `retryAudioAsset` refuses those rows —
-        // an unfenced version has no path back.
-        //
-        // The interleave, one client, no special timing beyond a single
-        // `DeleteObject` round trip: confirm a refused blob; while THIS
-        // request is inside the `DeleteObjectCommand` await above, re-PUT
-        // good audio to the same presigned URL (valid 300s, reusable) and
-        // confirm again. Request #2's fenced success write wins — the row is
-        // now a legitimately queued `pending` asset, or, if the worker got
-        // there first, a `ready` one — and then this request resumes and
-        // stamps `failed`/`permanentFailure` over it, having already deleted
-        // the GOOD object. That is precisely the shape `markOnceFailed` exists
-        // to prevent, reached from a path `markOnceFailed` does not cover. The
-        // fence makes the stale write a no-op: the row this path means to fail
-        // is by definition still `uploading` and still not the once pipeline's.
-        { _id: data.assetId, ownerId: userId, status: 'uploading', variant: { $ne: 'once' } },
-        {
-          $set: {
-            status: 'failed',
-            lastError: reason,
-            // PERMANENT, and it has to be stamped rather than inferred. Both
-            // rejections above are decisions about the OBJECT — it was
-            // HeadObject'd and measured, and it was refused for what it is.
-            // Re-uploading the same file produces the same two numbers and the
-            // same refusal, so this is exactly what `permanentFailure` means
-            // (see errors.ts in the worker).
-            //
-            // Without it the row reads as "never confirmed" — `retryable` is
-            // false either way because `confirmedAt` is null, but the UI's
-            // advice comes from `permanentFailure`, and the un-stamped row got
-            // "this upload never completed; upload the file again". That is
-            // wrong twice: the upload DID complete, and uploading it again
-            // fails identically.
-            permanentFailure: true,
-            updatedAt: new Date(),
-          },
-        }
-      );
+      // FENCED, with exactly the clauses the success write below carries, and
+      // for exactly the same reason its comment gives: "only the filter on
+      // the write makes exactly one of them win." This one is the more
+      // dangerous of the three reject branches to leave open, because it
+      // writes `permanentFailure: true` and `retryAudioAsset` refuses those
+      // rows — an unfenced version has no path back.
+      //
+      // The interleave, one client: confirm a refused blob; while THIS
+      // request is between its own HeadObject and its write, re-PUT good
+      // audio to the same presigned URL (valid 300s, reusable) and confirm
+      // again. Request #2's fenced success write wins — the row is now a
+      // legitimately queued `pending` asset, or a `ready` one if the worker
+      // got there first — and this request's write correctly matches
+      // nothing. Under the OLD order it had also already deleted the GOOD
+      // object by that point; `fenceThenReclaim` is what stops that, by
+      // making the matched write the authorization to delete rather than
+      // deleting first and fencing afterwards.
+      await fenceThenReclaim({
+        filter: {
+          _id: data.assetId,
+          ownerId: userId,
+          status: 'uploading',
+          variant: { $ne: 'once' },
+        },
+        set: {
+          status: 'failed',
+          lastError: reason,
+          // PERMANENT, and it has to be stamped rather than inferred. Both
+          // rejections above are decisions about the OBJECT — it was
+          // HeadObject'd and measured, and it was refused for what it is.
+          // Re-uploading the same file produces the same two numbers and the
+          // same refusal, so this is exactly what `permanentFailure` means
+          // (see errors.ts in the worker).
+          //
+          // Without it the row reads as "never confirmed" — `retryable` is
+          // false either way because `confirmedAt` is null, but the UI's
+          // advice comes from `permanentFailure`, and the un-stamped row got
+          // "this upload never completed; upload the file again". That is
+          // wrong twice: the upload DID complete, and uploading it again
+          // fails identically.
+          permanentFailure: true,
+          updatedAt: new Date(),
+        },
+        key: asset.sourceKey,
+        r2: { client, bucket },
+        actor: { userId, sessionUserId },
+        action: 'confirmAudioUpload.rejected',
+      });
       throw new Error(reason);
     }
 
@@ -1083,35 +1149,31 @@ export async function confirmOnceVariantUpload({
     // the reason recorded on `onceLastError`, not `lastError`.
     const cap = await checkPendingJobCap(userId);
     if (cap) {
-      // The once-source object already exists in R2 (the browser's PUT
-      // already landed) — must be deleted explicitly or it is stranded,
-      // same reasoning as every other reject branch in this function.
-      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.onceSourceKey }));
-      const reason = `Too many pending transcode jobs (${cap.pendingCount} of ${cap.maxPendingJobs} already queued). Wait for one to finish before uploading more.`;
-      // FENCED identically to the tooLarge/badType write below, and for the
-      // identical ordering-trap reason documented there: this request can
-      // be suspended inside the `DeleteObjectCommand` await above, and a
-      // concurrent confirm for the SAME once-attach could complete in that
-      // window. An identity-only write would then revert a row a different,
-      // later request had already legitimately queued, after this
-      // request's own delete had destroyed the object that later request's
-      // success depended on.
-      await AudioAsset.findOneAndUpdate(
-        { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
-        {
-          $set: {
-            status: 'ready',
-            variant: 'main',
-            onceSourceKey: null,
-            // Paired with `onceSourceKey` above — see `createOnceVariantUpload`'s
-            // identical reset for why a cleared key must never leave a stale
-            // byte count standing.
-            onceSourceBytes: null,
-            onceLastError: reason,
-            updatedAt: new Date(),
-          },
-        }
-      );
+      const reason = pendingJobCapMessage(cap.pendingCount, cap.maxPendingJobs, 'uploading more');
+      // Fence-then-reclaim — see `fenceThenReclaim`. A concurrent confirm for
+      // the SAME once-attach could complete before this write; the fence
+      // makes this a no-op then, and the once-source object belongs to that
+      // request rather than being destroyed by this one. When the fence DOES
+      // match, the object must be reclaimed: it already exists in R2 (the
+      // browser's PUT landed) and nothing will reference it again.
+      await fenceThenReclaim({
+        filter: { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
+        set: {
+          status: 'ready',
+          variant: 'main',
+          onceSourceKey: null,
+          // Paired with `onceSourceKey` above — see `createOnceVariantUpload`'s
+          // identical reset for why a cleared key must never leave a stale
+          // byte count standing.
+          onceSourceBytes: null,
+          onceLastError: reason,
+          updatedAt: new Date(),
+        },
+        key: asset.onceSourceKey,
+        r2: { client, bucket },
+        actor: { userId, sessionUserId },
+        action: 'confirmOnceVariantUpload.pendingJobCap',
+      });
       // AudioClientError: the caller's own doing, reachable at will, must
       // not file a GlitchTip event — same shape as every other cap/quota
       // refusal in this file.
@@ -1127,10 +1189,6 @@ export async function confirmOnceVariantUpload({
     // counts, and this is the write that first makes it countable.
     const quota = await checkStorageQuota({ userId, sessionUserId }, 'confirmOnceVariantUpload');
     if (quota) {
-      // The once-source object already exists in R2 (the browser's PUT
-      // landed) — deleted explicitly or it is stranded, same as every other
-      // reject branch in this function.
-      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.onceSourceKey }));
       const reason = storageQuotaMessage(quota.usageBytes, quota.limitBytes);
       // REVERTS, it does not fail — the difference from `confirmAudioUpload`'s
       // quota refusal, and the same difference the cap refusal above and the
@@ -1145,20 +1203,23 @@ export async function confirmOnceVariantUpload({
       // Fenced on `variant: 'once'` EXACT (not `$ne`), matching the two
       // writes around it: only a row still mid-attach may be reverted, so a
       // stale refusal that resumes after the user started a second attach is
-      // a no-op instead of silently cancelling that fresh attach.
-      await AudioAsset.findOneAndUpdate(
-        { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
-        {
-          $set: {
-            status: 'ready',
-            variant: 'main',
-            onceSourceKey: null,
-            onceSourceBytes: null,
-            onceLastError: reason,
-            updatedAt: new Date(),
-          },
-        }
-      );
+      // a no-op instead of silently cancelling that fresh attach — and, via
+      // `fenceThenReclaim`, is a no-op for that fresh attach's OBJECT too.
+      await fenceThenReclaim({
+        filter: { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
+        set: {
+          status: 'ready',
+          variant: 'main',
+          onceSourceKey: null,
+          onceSourceBytes: null,
+          onceLastError: reason,
+          updatedAt: new Date(),
+        },
+        key: asset.onceSourceKey,
+        r2: { client, bucket },
+        actor: { userId, sessionUserId },
+        action: 'confirmOnceVariantUpload.storageQuota',
+      });
       // AudioClientError carrying both figures — same reasoning as the main
       // confirm's quota refusal.
       throw new AudioClientError(reason, {
@@ -1202,7 +1263,6 @@ export async function confirmOnceVariantUpload({
       // presign signs `ContentType`), but "clients are honest" is not a
       // safety property this codebase relies on anywhere else, so it isn't
       // relied on here either.
-      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: asset.onceSourceKey }));
       const reason = tooLarge
         ? `File too large: ${bytes} bytes exceeds ${AUDIO_MAX_BYTES}`
         : `Unsupported audio type: ${type}`;
@@ -1218,27 +1278,33 @@ export async function confirmOnceVariantUpload({
       // instead: the row it means to revert is by definition still
       // `uploading`/`once`, so a narrower filter cannot cost this path
       // anything it should have done.
-      await AudioAsset.findOneAndUpdate(
-        { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
-        {
-          $set: {
-            status: 'ready',
-            variant: 'main',
-            onceSourceKey: null,
-            // Paired with `onceSourceKey` above, same as `createOnceVariantUpload`'s
-            // reset: the rejected object is deleted (above) and the row no
-            // longer has a once-source at all, so nothing may describe its
-            // size. In the normal case this attach's own `onceSourceBytes`
-            // was already `null` (set by `createOnceVariantUpload` when THIS
-            // attach started) — explicit here anyway so this write's own
-            // invariant does not depend on a different function having run
-            // first.
-            onceSourceBytes: null,
-            onceLastError: reason,
-            updatedAt: new Date(),
-          },
-        }
-      );
+      //
+      // And via `fenceThenReclaim`, the same stale reject no longer deletes
+      // the fresh attach's object either — which the fence alone never
+      // stopped, because the delete used to run before it.
+      await fenceThenReclaim({
+        filter: { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
+        set: {
+          status: 'ready',
+          variant: 'main',
+          onceSourceKey: null,
+          // Paired with `onceSourceKey` above, same as `createOnceVariantUpload`'s
+          // reset: the rejected object is reclaimed with this write and the
+          // row no longer has a once-source at all, so nothing may describe
+          // its size. In the normal case this attach's own `onceSourceBytes`
+          // was already `null` (set by `createOnceVariantUpload` when THIS
+          // attach started) — explicit here anyway so this write's own
+          // invariant does not depend on a different function having run
+          // first.
+          onceSourceBytes: null,
+          onceLastError: reason,
+          updatedAt: new Date(),
+        },
+        key: asset.onceSourceKey,
+        r2: { client, bucket },
+        actor: { userId, sessionUserId },
+        action: 'confirmOnceVariantUpload.rejected',
+      });
       throw new Error(reason);
     }
 
