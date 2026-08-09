@@ -167,12 +167,62 @@ describe('reapStale', () => {
     expect(update.$set.nextAttemptAt).toBeNull();
   });
 
-  it('fails rows that have exhausted their attempts', async () => {
+  it('fails MAIN rows that have exhausted their attempts', async () => {
     const model = reaperModel();
     await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
     const secondCall = model.updateMany.mock.calls[1];
     expect(secondCall[0].attempts.$gte).toBe(3);
     expect(secondCall[1].$set.status).toBe('failed');
+    // The clause that makes this the MAIN pipeline's write and not both
+    // pipelines'. `$ne` rather than `!=` so rows predating the field — every
+    // ordinary main asset — still match.
+    expect(secondCall[0].variant).toEqual({ $ne: 'once' });
+  });
+
+  /**
+   * The third terminal path for a once-variant run, and the one Task 18's
+   * review did not cover.
+   *
+   * `markOnceFailed` (process.ts) exists so a failed once-attach never lands
+   * on `status: 'failed'`: the row it would land on is the MAIN music asset's
+   * own document, already fully transcoded and `ready` before the attach
+   * began, and `failed` + a main-pipeline `lastError` reports a perfectly
+   * good asset as broken and drops it out of the board's play gate. Task 18
+   * routed `processAsset`'s two terminal branches (permanent error, budget
+   * exhausted) through it.
+   *
+   * This path is reached when the worker DIES rather than throws — an evicted
+   * pod, an OOM, a SIGKILL — so `processAsset`'s catch never runs at all and
+   * `reapStale` is what finally resolves the row. It used to fall through to
+   * the main pipeline's `failed` write, bricking the music asset exactly as
+   * `markOnceFailed` was built to prevent, three attempts after the fact.
+   */
+  it('reverts ONCE rows that have exhausted their attempts instead of failing them', async () => {
+    const model = reaperModel();
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
+
+    const [filter, update] = model.updateMany.mock.calls[2];
+    expect(filter.status).toBe('processing');
+    expect(filter.attempts.$gte).toBe(3);
+    expect(filter.variant).toBe('once');
+
+    // Field for field, `markOnceFailed`'s terminal write: the main content was
+    // never touched by this job, so the row goes back to being a playable
+    // music asset.
+    expect(update.$set.status).toBe('ready');
+    expect(update.$set.variant).toBe('main');
+    expect(update.$set.onceLastError).toMatch(/once-variant/i);
+    // NOT `lastError` — that field describes the MAIN pipeline and a once
+    // failure must never overwrite it.
+    expect(update.$set.lastError).toBeUndefined();
+    expect(update.$set.permanentFailure).toBeUndefined();
+    // The `onceSourceBytes` invariant: reset wherever `onceSourceKey` is
+    // cleared, or the storage quota keeps charging for an object the row no
+    // longer references.
+    expect(update.$set.onceSourceKey).toBeNull();
+    expect(update.$set.onceSourceBytes).toBeNull();
+    expect(update.$set.claimedAt).toBeNull();
+    expect(update.$set.claimedBy).toBeNull();
   });
 
   it('bumps updatedAt on every clause — these are real status transitions', async () => {
@@ -186,7 +236,11 @@ describe('reapStale', () => {
     // them claim to have last changed when they were created — most misleading
     // for exactly the rows this function produces. markFailed and
     // requeueForRetry (process.ts) already do this.
-    expect(model.updateMany).toHaveBeenCalledTimes(2);
+    // THREE clauses, not two: the attempts-exhausted write is split on
+    // `variant`, because a once-attach that ran out of attempts must revert to
+    // `ready`/`main` like `markOnceFailed` does rather than stamp the MAIN
+    // asset `failed`. See the once-timeout tests further down.
+    expect(model.updateMany).toHaveBeenCalledTimes(3);
     for (const [, update] of model.updateMany.mock.calls) {
       expect(update.$set.updatedAt).toBeInstanceOf(Date);
     }

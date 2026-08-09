@@ -211,12 +211,65 @@ export async function reapStale(
     }
   );
 
+  // TWO writes, split on `variant`, because "out of attempts" means different
+  // things to the two pipelines and this used to answer for both with the
+  // main one's terminal state.
+  //
+  // A MAIN row that exhausts its budget is a failed asset, and `failed` is
+  // what it is. A ONCE row is the same document as a fully-transcoded,
+  // previously-`ready` music asset that merely borrowed `status` for the
+  // duration of an attach — stamping `failed`/`lastError` on it reports the
+  // MAIN asset as broken with a main-pipeline error it never suffered, takes
+  // it out of the board's play gate, and leaves `variant: 'once'` standing.
+  // That is exactly the failure `markOnceFailed` (process.ts) exists to
+  // prevent, and Task 18 review Critical 2 closed it for the two terminal
+  // paths inside `processAsset` — but not for this one, which is reached
+  // when the worker DIES rather than throws (evicted pod, OOM, SIGKILL) and
+  // so never runs `processAsset`'s catch at all.
+  //
+  // The once branch mirrors `markOnceFailed`'s terminal write field for
+  // field: back to `ready`/`main`, once-source key and bytes cleared
+  // together (the `onceSourceBytes` invariant on the app's `AudioAsset`
+  // model), reason on `onceLastError` rather than `lastError`. It does not
+  // delete the once-source object: an `updateMany` cannot report WHICH rows
+  // it moved, and "only a matched write authorizes deleting the object" is
+  // the rule this file is built on (see `reapAbandonedUploads`). The
+  // orphaned object is reclaimable by the owner-scoped orphan scan, which is
+  // the same path `markOnceFailed` leaves it to.
   await model.updateMany(
-    { status: 'processing', claimedAt: { $lt: cutoff }, attempts: { $gte: MAX_ATTEMPTS } },
+    {
+      status: 'processing',
+      claimedAt: { $lt: cutoff },
+      attempts: { $gte: MAX_ATTEMPTS },
+      // `$ne` (not `!=`) so rows predating the field — every ordinary main
+      // asset — still match, same as `reapAbandonedUploads`.
+      variant: { $ne: 'once' },
+    },
     {
       $set: {
         status: 'failed',
         lastError: 'Processing timed out',
+        claimedAt: null,
+        claimedBy: null,
+        updatedAt: new Date(),
+      },
+    }
+  );
+
+  await model.updateMany(
+    {
+      status: 'processing',
+      claimedAt: { $lt: cutoff },
+      attempts: { $gte: MAX_ATTEMPTS },
+      variant: 'once',
+    },
+    {
+      $set: {
+        status: 'ready',
+        variant: 'main',
+        onceSourceKey: null,
+        onceSourceBytes: null,
+        onceLastError: 'Once-variant processing timed out',
         claimedAt: null,
         claimedBy: null,
         updatedAt: new Date(),
