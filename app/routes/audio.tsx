@@ -29,6 +29,7 @@ import {
 import { uploadOnceVariantFile } from '~/utils/uploadAudio';
 import { queryKeys } from '~/utils/queryKeys';
 import { captureException } from '~/utils/telemetry-client';
+import { isClientRefusal } from '~/lib/client-refusal';
 import type { AudioAssetData, AudioEnvironment, AudioMood } from '~/types/audio';
 import type { ScanOrphanAudioResult } from '~/types/schemas/audio';
 
@@ -197,7 +198,10 @@ export function AudioLibraryPage() {
       setSelectedIds([]);
       invalidateAudio();
     },
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.bulkTag' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'AudioLibraryPage.bulkTag' });
+    },
   });
 
   const update = useMutation({
@@ -207,13 +211,19 @@ export function AudioLibraryPage() {
       setEditingAssetId(null);
       invalidateAudio();
     },
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.updateAsset' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'AudioLibraryPage.updateAsset' });
+    },
   });
 
   const retry = useMutation({
     mutationFn: (asset: AudioAssetData) => retryAudioAssetFn({ data: { id: asset.id } }),
     onSuccess: invalidateAudio,
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.retryAsset' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'AudioLibraryPage.retryAsset' });
+    },
   });
 
   // Task 18: attach a once-variant. Kept as its own mutation (not folded
@@ -225,7 +235,11 @@ export function AudioLibraryPage() {
     mutationFn: ({ assetId, file }: { assetId: string; file: File }) =>
       uploadOnceVariantFile(assetId, file),
     onSuccess: invalidateAudio,
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.attachOnceVariant' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e))
+        captureException(e, { action: 'AudioLibraryPage.attachOnceVariant' });
+    },
   });
 
   const deleteMutation = useMutation({
@@ -247,7 +261,10 @@ export function AudioLibraryPage() {
       // cleaned up by deleting the asset again.
       invalidatePackages();
     },
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.deleteAsset' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'AudioLibraryPage.deleteAsset' });
+    },
   });
 
   // Orphan cleanup is a deliberate, explicit action, not part of the 4s poll:
@@ -259,7 +276,10 @@ export function AudioLibraryPage() {
       setLastOrphanDelete(null);
       setOrphanScan(data);
     },
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.scanOrphanAudio' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'AudioLibraryPage.scanOrphanAudio' });
+    },
   });
 
   const deleteOrphans = useMutation({
@@ -270,7 +290,11 @@ export function AudioLibraryPage() {
       // user re-scans to see what is left.
       setOrphanScan((prev) => (prev ? { ...prev, orphans: [] } : prev));
     },
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.deleteOrphanAudio' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e))
+        captureException(e, { action: 'AudioLibraryPage.deleteOrphanAudio' });
+    },
   });
 
   const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =

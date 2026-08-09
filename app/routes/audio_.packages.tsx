@@ -16,6 +16,7 @@ import {
 import type { createPackageSchema } from '~/types/schemas/soundboard';
 import { queryKeys } from '~/utils/queryKeys';
 import { captureException } from '~/utils/telemetry-client';
+import { isClientRefusal } from '~/lib/client-refusal';
 import type { AudioPackageSummaryData } from '~/types/soundboard';
 
 /**
@@ -142,7 +143,10 @@ export function PackagesListPage() {
       invalidatePackages();
       navigate({ to: '/audio/packages/$packageId', params: { packageId: created.id } });
     },
-    onError: (e) => captureException(e, { action: 'PackagesListPage.createPackage' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'PackagesListPage.createPackage' });
+    },
   });
 
   const cloneMutation = useMutation({
@@ -162,13 +166,19 @@ export function PackagesListPage() {
     mutationFn: (pkg: AudioPackageSummaryData) =>
       clonePackageFn({ data: { id: pkg.id, name: cloneDisplayName(pkg.name) } }),
     onSuccess: invalidatePackages,
-    onError: (e) => captureException(e, { action: 'PackagesListPage.clonePackage' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'PackagesListPage.clonePackage' });
+    },
   });
 
   const deleteMutation = useMutation({
     mutationFn: (pkg: AudioPackageSummaryData) => deletePackageFn({ data: { id: pkg.id } }),
     onSuccess: invalidatePackages,
-    onError: (e) => captureException(e, { action: 'PackagesListPage.deletePackage' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'PackagesListPage.deletePackage' });
+    },
   });
 
   const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =

@@ -16,6 +16,7 @@ import type { AudioAssetData, AudioEnvironment, AudioMood } from '~/types/audio'
 import type { MoodData, PackageItemData } from '~/types/soundboard';
 import { pruneOrphanedMoodStates } from '~/lib/soundboard/prune';
 import { isStalePackageWriteError } from '~/lib/soundboard/stale-write';
+import { isClientRefusal } from '~/lib/client-refusal';
 
 /** Server-side page size for the asset picker — same value `/audio` uses. */
 const PAGE_SIZE = 50;
@@ -317,7 +318,14 @@ export function PackageEditorPage() {
       // conflict state hands the failure back to the error line, which is the
       // one surface that can describe it.
       setConflict(null);
-      captureException(e, { action: 'PackageEditorPage.save' });
+      // ...but a stale write is not the only refusal this endpoint issues.
+      // `updatePackageFn` is gated by `packageEditLimiter`, and a save against
+      // a package that is gone (or was never yours) throws a plain
+      // `PackageClientError` — both are the caller's own doing, both are
+      // silent on the server, and both used to file a client error here. The
+      // error line above still renders them; only the fault report is
+      // suppressed. See `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'PackageEditorPage.save' });
     },
   });
 

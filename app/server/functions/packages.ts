@@ -6,6 +6,7 @@ import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { serializeAudioAsset } from './audio';
 import type { AudioAssetData } from '~/types/audio';
 import { PACKAGE_STALE_WRITE_ERROR_NAME } from '~/lib/soundboard/stale-write';
+import { PACKAGE_CLIENT_ERROR_NAME } from '~/lib/client-refusal';
 import {
   DEFAULT_VOLUME,
   DEFAULT_FADE_SECONDS,
@@ -52,7 +53,10 @@ export class PackageClientError extends Error {
 
   constructor(message: string, options?: { retryAfterMs?: number }) {
     super(message);
-    this.name = 'PackageClientError';
+    // From the shared constant — the browser recognises this refusal by
+    // `.name` in order to keep its own telemetry as quiet as
+    // `reportPackageError` keeps the server's. See `~/lib/client-refusal.ts`.
+    this.name = PACKAGE_CLIENT_ERROR_NAME;
     this.retryAfterMs = options?.retryAfterMs;
   }
 }

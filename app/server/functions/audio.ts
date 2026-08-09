@@ -9,6 +9,7 @@ import { resolveAudioStoragePrefix } from './audio-storage';
 import { getUserStorageUsage, type AudioStorageUsage } from './audio-quota';
 import { createR2, getAudioUploadUrl } from './uploads';
 import { pruneOrphanedMoodStates } from '~/lib/soundboard/prune';
+import { AUDIO_CLIENT_ERROR_NAME } from '~/lib/client-refusal';
 import { AUDIO_MAX_BYTES, AUDIO_SOURCE_TYPES } from '~/types/audio';
 import type { AudioAssetData } from '~/types/audio';
 import type { MoodData, PackageItemData } from '~/types/soundboard';
@@ -96,7 +97,11 @@ export class AudioClientError extends Error {
     options?: { retryAfterMs?: number; usageBytes?: number; limitBytes?: number }
   ) {
     super(message);
-    this.name = 'AudioClientError';
+    // From the shared constant, not a literal: the browser recognises this
+    // refusal by `.name` (see `~/lib/client-refusal.ts`) in order to keep
+    // its own telemetry as quiet as `reportAudioError` keeps the server's, and
+    // a literal on each side is a contract only a grep can check.
+    this.name = AUDIO_CLIENT_ERROR_NAME;
     this.retryAfterMs = options?.retryAfterMs;
     this.usageBytes = options?.usageBytes;
     this.limitBytes = options?.limitBytes;

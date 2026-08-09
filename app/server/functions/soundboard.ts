@@ -4,6 +4,7 @@ import { requireCampaignMember, CampaignAccessError } from '../utils/requireCamp
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { DEFAULT_VOLUME, type BoardStateData, type BoardItemStateData } from '~/types/soundboard';
 import type { saveBoardStateSchema, loadBoardStateSchema } from '~/types/schemas/soundboard';
+import { SOUNDBOARD_CLIENT_ERROR_NAME } from '~/lib/client-refusal';
 
 /**
  * Same reasoning as `PackageClientError` in `app/server/functions/packages.ts`:
@@ -23,7 +24,10 @@ export class SoundboardClientError extends Error {
 
   constructor(message: string, options?: { retryAfterMs?: number }) {
     super(message);
-    this.name = 'SoundboardClientError';
+    // From the shared constant, for the same reason `AudioClientError` and
+    // `PackageClientError` take theirs from one: the browser suppresses its
+    // own telemetry for these by `.name`. See `~/lib/client-refusal.ts`.
+    this.name = SOUNDBOARD_CLIENT_ERROR_NAME;
     this.retryAfterMs = options?.retryAfterMs;
   }
 }

@@ -6,6 +6,7 @@ import { boardReducer, initialBoardState, type BoardState } from '~/lib/soundboa
 import type { SoundboardCommand } from '~/lib/soundboard/commands';
 import { saveBoardStateFn } from '~/utils/soundboard-server-fns';
 import { captureException } from '~/utils/telemetry-client';
+import { isClientRefusal } from '~/lib/client-refusal';
 import type { AudioPackageData, BoardStateData } from '~/types/soundboard';
 import type { AudioAssetData, AudioRendition } from '~/types/audio';
 
@@ -421,7 +422,20 @@ export function useSoundboard(
       } catch (error: unknown) {
         // The engine keeps playing. This is a mirror falling behind, not an
         // audio failure, and treating it as one would silence a live table.
-        captureException(error, { area: 'soundboard', campaignId: id });
+        //
+        // A REFUSAL IS NOT A FAULT. `saveBoardState` is gated by
+        // `boardStateLimiter` and by its own GM check, and both refuse with
+        // `SoundboardClientError` precisely so the server files no GlitchTip
+        // event — a control the caller can trip at will must not make report
+        // volume the caller's parameter. This capture undid that from the
+        // browser: a GM driving the board hard enough to meet the bucket, or
+        // any campaign member whose client called save without being GM,
+        // filed one client error per attempt. See `~/lib/client-refusal.ts`.
+        //
+        // `setSaveError` below still runs either way, so the GM is still told
+        // the mirror is behind. Only the fault report is suppressed.
+        if (!isClientRefusal(error))
+          captureException(error, { area: 'soundboard', campaignId: id });
         if (mountedRef.current) {
           setSaveError(error instanceof Error ? error.message : String(error));
         }
@@ -568,11 +582,18 @@ export function useSoundboard(
 
   const runEnableAudio = useCallback(async (): Promise<void> => {
     const fail = (message: string, error?: unknown) => {
-      captureException(error ?? new Error(message), {
-        area: 'soundboard',
-        campaignId: campaignIdRef.current,
-        stage: 'enableAudio',
-      });
+      // Guarded for UNIFORMITY, not because a refusal can reach here today:
+      // this path fails on AudioContext construction and engine setup, none of
+      // which crosses a server fn. The rule that every `captureException` on
+      // this surface is gated is worth more exceptionless than it is worth
+      // minimal — eleven sites were left open the last time it was applied
+      // site by site. `tests/lib/client-refusal.test.ts` enforces it.
+      if (!isClientRefusal(error))
+        captureException(error ?? new Error(message), {
+          area: 'soundboard',
+          campaignId: campaignIdRef.current,
+          stage: 'enableAudio',
+        });
       if (mountedRef.current) {
         setAudioReady(false);
         setAudioError(message);
@@ -660,7 +681,17 @@ export function useSoundboard(
         // `captureException`. A real failure while the board is still
         // mounted falls through untouched.
         if (!mountedRef.current) return;
-        captureException(error, { area: 'soundboard', campaignId: campaignIdRef.current, assetId });
+        // `loadAsset` fetches a rendition straight from the CDN, so a refusal
+        // cannot reach here as the code stands. Guarded anyway, and this one
+        // is the least theoretical of the three: the moment asset loading
+        // moves behind a server fn — a signed-URL endpoint, say — every
+        // rate-limit refusal on it would land in exactly this handler.
+        if (!isClientRefusal(error))
+          captureException(error, {
+            area: 'soundboard',
+            campaignId: campaignIdRef.current,
+            assetId,
+          });
         // Surface it too. A GlitchTip event tells ME; `loadErrors` tells the
         // GM mid-session, which is the only audience that can react to a pad
         // that will now be silent for the rest of the engine's life.
@@ -746,12 +777,17 @@ export function useSoundboard(
       // and let `hydrateBoardState`'s package-mismatch branch keep
       // `masterVolume` and nothing else — the board resolves to "no package
       // loaded", which is both true and something Task 17 already renders.
-      captureException(
-        new Error(
-          `Soundboard: persisted board names package ${initialState.packageId}, which did not resolve`
-        ),
-        { area: 'soundboard', campaignId: campaignIdRef.current, stage: 'hydrate' }
+      // Uniformity again — this one constructs its own `Error`, so the guard
+      // is provably never true. See the `fail` helper above.
+      const unresolved = new Error(
+        `Soundboard: persisted board names package ${initialState.packageId}, which did not resolve`
       );
+      if (!isClientRefusal(unresolved))
+        captureException(unresolved, {
+          area: 'soundboard',
+          campaignId: campaignIdRef.current,
+          stage: 'hydrate',
+        });
     }
 
     hydratedRef.current = true;
