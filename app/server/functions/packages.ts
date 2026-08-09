@@ -7,6 +7,7 @@ import { serializeAudioAsset } from './audio';
 import type { AudioAssetData } from '~/types/audio';
 import { PACKAGE_STALE_WRITE_ERROR_NAME } from '~/lib/soundboard/stale-write';
 import { PACKAGE_CLIENT_ERROR_NAME } from '~/lib/client-refusal';
+import { pruneOrphanedMoodStates } from '~/lib/soundboard/prune';
 import {
   DEFAULT_VOLUME,
   DEFAULT_FADE_SECONDS,
@@ -499,6 +500,96 @@ async function staleWriteOrNotFound(id: string, userId: string): Promise<Package
 }
 
 /**
+ * Drops items whose `assetId` no longer resolves to an asset this caller can
+ * see, and prunes the mood states that referenced them.
+ *
+ * WHY THIS EXISTS, and it is the other half of the optimistic-concurrency
+ * fence below rather than a separate idea. That fence's whole justification
+ * is that an unfenced whole-array replace "RESURRECTS whatever the newer
+ * write removed, including the items `deleteAudioAsset`'s prune took out
+ * because their asset no longer exists." The fence REFUSES such a write —
+ * but the editor's conflict notice then offers "Keep my edits and overwrite",
+ * which replays the same draft against the newer revision. That is the right
+ * affordance (the user's edits are real and they get to keep them), and
+ * without this it was also a supported, two-click path back into precisely
+ * the state the fence was built to prevent: the deleted asset's pad returns,
+ * permanently dangling, and the GM has no way to know it happened, because
+ * "my edits" is not a phrase that tells anyone a pad's audio was deleted
+ * underneath them.
+ *
+ * FILTERING, NOT REJECTING. Refusing the save outright would strand the user:
+ * the editor gives them no way to find or remove the offending pads, so their
+ * only exit would be discarding every edit they made. Dropping the dead items
+ * converges on what `deleteAudioAsset`'s prune already did unilaterally to
+ * this same document, which makes the two paths agree instead of fighting.
+ * The saved document comes back in the response and re-seeds the editor, so
+ * the pad visibly disappears rather than silently persisting as a tombstone.
+ * (Telling the user how many went, and why, needs a response field and a
+ * surface for it — worth doing, deliberately not smuggled into this fix.)
+ *
+ * EXISTENCE, NOT VISIBILITY, and the distinction is the whole correctness of
+ * this function. "The asset row is gone" and "you cannot read that asset" are
+ * different facts with opposite right answers, and an ownership-scoped query
+ * here answers the second while claiming to answer the first.
+ *
+ * A package may legitimately reference an asset its owner cannot see —
+ * `listPackageAssets` says so explicitly ("a package can reference another
+ * user's private asset (nothing prevents that today) and this must not leak
+ * it") and handles it by refusing to RETURN the asset, so the board renders
+ * the pad in its own unresolved group with an honest reason. That reference
+ * is intact and the asset is alive. Scoping this query by ownership deletes
+ * it on the owner's next save — silent data loss, of exactly the kind this
+ * function exists to prevent, inflicted on a case that was working. (Caught
+ * by the E2E that seeds a foreign-owned item precisely to pin that
+ * behaviour; the unit suite's mongoose mocks cannot see the difference,
+ * which is the failure mode CLAUDE.md warns about.)
+ *
+ * So: `{_id: {$in: ids}}` and nothing else. That is not a leak. It reads no
+ * field of any document — the projection is `_id` — and every id in the
+ * answer is an id the CALLER supplied. The only thing derivable is whether a
+ * 24-hex id the caller already possesses exists, which is not information
+ * any 96-bit identifier is protecting.
+ *
+ * One `$in` over at most `MAX_PACKAGE_ITEMS` (64) ids, projected to `_id`.
+ */
+async function dropUnresolvableItems(
+  items: PackageItemData[],
+  moods: MoodData[] | undefined
+): Promise<{ items: PackageItemData[]; moods: MoodData[] | undefined; dropped: boolean }> {
+  // No ids to resolve — but the moods still have to be reconciled against the
+  // (empty) item list, because a payload of `items: []` with mood states in it
+  // is every state orphaned. An early return that skipped that would make this
+  // function's guarantee true for 1..64 items and false for 0, which is the
+  // shape of edge case that survives review by looking like an optimisation.
+  const survivingItems = items.length === 0 ? items : await resolveExistingItems(items);
+  const dropped = survivingItems.length !== items.length;
+
+  // Moods reference `item.id`, never `assetId` (see `~/lib/soundboard/prune`),
+  // so removing items without this leaves mood states pointing at ids that no
+  // longer exist — the same orphan `deleteAudioAsset`'s prune handles with the
+  // same helper. `moods` may be absent: this is a partial update, and an
+  // omitted field must stay omitted rather than being materialised here — see
+  // `updatePackage`, which reconciles the STORED moods in that case.
+  return {
+    items: survivingItems,
+    moods: moods === undefined ? undefined : pruneOrphanedMoodStates(moods, survivingItems),
+    dropped,
+  };
+}
+
+/** The existence query itself — see `dropUnresolvableItems` for why it is unscoped. */
+async function resolveExistingItems(items: PackageItemData[]): Promise<PackageItemData[]> {
+  const referencedIds = [...new Set(items.map((item) => item.assetId))];
+  const rows = (await AudioAsset.find(
+    { _id: { $in: referencedIds } },
+    { _id: 1 }
+  ).lean()) as unknown as { _id: unknown }[];
+
+  const live = new Set(rows.map((row) => String(row._id).toLowerCase()));
+  return items.filter((item) => live.has(item.assetId.toLowerCase()));
+}
+
+/**
  * OPTIMISTIC CONCURRENCY. Every field this function writes is a whole-value
  * replace — `items` and `moods` most of all — so without a precondition the
  * write is last-write-wins over entire arrays. That is data loss, not
@@ -558,8 +649,42 @@ export async function updatePackage({
     const set: Record<string, unknown> = { updatedAt: new Date() };
     if (data.name !== undefined) set.name = data.name;
     if (data.description !== undefined) set.description = data.description;
-    if (data.items !== undefined) set.items = data.items;
-    if (data.moods !== undefined) set.moods = data.moods;
+    if (data.items !== undefined) {
+      // Before the write, not after: see `dropUnresolvableItems`. A draft
+      // built before `deleteAudioAsset` pruned this package would otherwise
+      // put the dead pads back — which the fence below refuses on the first
+      // attempt, and the editor's "keep my edits" retry then carries through
+      // on the second.
+      const pruned = await dropUnresolvableItems(data.items, data.moods);
+      set.items = pruned.items;
+      if (pruned.moods !== undefined) {
+        set.moods = pruned.moods;
+      } else if (pruned.dropped) {
+        // ITEMS WERE DROPPED AND THE CALLER SENT NO MOODS. The editor always
+        // sends both, but `updatePackageSchema` allows `items` alone, and in
+        // that case the moods this write leaves standing are the STORED ones —
+        // which may now reference item ids that no longer exist. Pruning only
+        // what we were handed would make this check's own invariant ("the
+        // items and moods written are mutually consistent") hold for the
+        // caller who needs it least.
+        //
+        // Reading here is safe against the very race this function sits
+        // inside: the write below is fenced on the caller's
+        // `expectedUpdatedAt`, so if anything lands between this read and that
+        // write, the write is refused rather than shipping moods built on a
+        // stale read.
+        const stored = (await AudioPackage.findOne(
+          { _id: data.id, ownerId: userId },
+          { moods: 1 }
+        ).lean()) as unknown as { moods?: MoodData[] } | null;
+        const storedMoods = stored?.moods;
+        if (storedMoods?.length) {
+          set.moods = pruneOrphanedMoodStates(storedMoods, pruned.items);
+        }
+      }
+    } else if (data.moods !== undefined) {
+      set.moods = data.moods;
+    }
 
     // Owner-scoped, NEVER the visibility filter — see `packageVisibilityFilter`'s
     // doc comment. This is the query that keeps a system package immutable.

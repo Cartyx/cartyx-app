@@ -25,6 +25,15 @@ vi.mock('~/server/db/models/AudioPackage', () => ({
   AudioPackage: { find, findOne, findOneAndUpdate, create, deleteOne, countDocuments },
 }));
 
+// `updatePackage` resolves every `items[].assetId` it is asked to write, so a
+// draft cannot put back a pad whose audio was deleted underneath it (see
+// `dropUnresolvableItems`). Default: every referenced id still exists, so the
+// pre-existing tests below — none of which are about that check — are
+// unaffected. Tests that care override `assetFindLean` explicitly.
+const assetFindLean = vi.fn(async () => [] as { _id: unknown }[]);
+const assetFind = vi.fn((_query?: unknown, _projection?: unknown) => ({ lean: assetFindLean }));
+vi.mock('~/server/db/models/AudioAsset', () => ({ AudioAsset: { find: assetFind } }));
+
 const baseDoc = () => ({
   _id: 'p1',
   ownerId: 'u1',
@@ -622,5 +631,247 @@ describe('serializePackage normalises Mongoose null defaults to undefined', () =
     expect(state.fadeSeconds).toBeUndefined();
     expect(state.randomIntervalMin).toBeUndefined();
     expect(state.randomIntervalMax).toBeUndefined();
+  });
+});
+
+/**
+ * THE OTHER HALF OF THE OPTIMISTIC-CONCURRENCY FENCE.
+ *
+ * The fence's stated justification is that an unfenced whole-array replace
+ * "RESURRECTS whatever the newer write removed, including the items
+ * `deleteAudioAsset`'s prune took out because their asset no longer exists."
+ * The fence REFUSES such a save — and the editor's conflict notice then offers
+ * "Keep my edits and overwrite", which replays the same draft against the
+ * newer revision. That is the right affordance, and without a check on the
+ * server it was also a supported two-click path back into precisely the state
+ * the fence exists to prevent: the deleted asset's pad returns, permanently
+ * dangling, and nothing tells the GM it happened.
+ *
+ * These tests drive the SECOND write — the overwrite — because that is the
+ * one the fence lets through.
+ */
+describe('updatePackage drops items whose asset no longer resolves', () => {
+  const deadItem = {
+    id: 'i-dead',
+    assetId: 'a'.repeat(24),
+    volume: 1,
+    fadeSeconds: 2,
+    loop: false,
+    sortIndex: 0,
+  };
+  const liveItem = {
+    id: 'i-live',
+    assetId: 'b'.repeat(24),
+    volume: 1,
+    fadeSeconds: 2,
+    loop: true,
+    sortIndex: 1,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fenceTheModel();
+    // Only the live asset comes back — the other was deleted between the
+    // editor's load and this save.
+    assetFindLean.mockResolvedValue([{ _id: liveItem.assetId }]);
+  });
+
+  async function overwrite(items: unknown[], moods?: unknown[]) {
+    const { updatePackage } = await import('~/server/functions/packages');
+    await updatePackage({
+      data: {
+        id: 'p1',
+        expectedUpdatedAt: STORED_UPDATED_AT.toISOString(),
+        items,
+        ...(moods ? { moods } : {}),
+      },
+      userId: 'u1',
+    } as never);
+    const [, update] = vi.mocked(findOneAndUpdate).mock.calls[0] as [
+      unknown,
+      { $set: Record<string, unknown> },
+    ];
+    return update.$set;
+  }
+
+  it('writes only the items whose asset still exists', async () => {
+    const set = await overwrite([deadItem, liveItem]);
+    expect(set.items).toEqual([liveItem]);
+  });
+
+  it('prunes the mood states that referenced the dropped item', async () => {
+    // Moods reference `item.id`, never `assetId`, so dropping an item without
+    // this leaves states pointing at an id that no longer exists — the same
+    // orphan `deleteAudioAsset`'s prune handles with the same helper.
+    const survivor = { itemId: 'i-live', playing: true, volume: 0.35 };
+    const orphan = { itemId: 'i-dead', playing: true, volume: 0.7 };
+    const set = await overwrite(
+      [deadItem, liveItem],
+      [{ id: 'm1', name: 'Overhead', states: [orphan, survivor] }]
+    );
+    const moods = set.moods as { states: unknown[] }[];
+    expect(moods).toHaveLength(1);
+    expect(moods[0].states).toEqual([survivor]);
+  });
+
+  /**
+   * EXISTENCE, NOT VISIBILITY — the distinction this function turns on.
+   *
+   * A package may legitimately reference an asset its owner cannot read: a
+   * foreign-owned one, which `listPackageAssets` deliberately refuses to
+   * return so the board renders the pad in its unresolved group. That asset
+   * is ALIVE and that reference is intact. An ownership-scoped query here
+   * cannot tell it apart from a deleted one and deletes it on the owner's
+   * next save — the exact data loss this check exists to prevent, aimed at a
+   * case that was working.
+   *
+   * The first version of this check was ownership-scoped and did precisely
+   * that; `e2e/soundboard.spec.ts` caught it, because it seeds a
+   * foreign-owned item for this reason. The unit mocks could not: a mongoose
+   * mock returns what it was told regardless of the filter, so only an
+   * assertion on the filter ITSELF pins this.
+   */
+  it('asks only whether the asset EXISTS, with no ownership clause', async () => {
+    await overwrite([liveItem]);
+    const [filter] = vi.mocked(assetFind).mock.calls[0] as [Record<string, unknown>, unknown];
+    expect(filter).toEqual({ _id: { $in: [liveItem.assetId] } });
+    expect(filter).not.toHaveProperty('$or');
+    expect(filter).not.toHaveProperty('ownerId');
+  });
+
+  it('keeps an item whose asset exists but belongs to someone else', async () => {
+    // The `find` resolves it — it exists — even though `listPackageAssets`
+    // would refuse to return it to this caller. The board's unresolved group
+    // is where that pad belongs; the package must not lose it.
+    const foreignItem = { ...deadItem, id: 'i-foreign' };
+    assetFindLean.mockResolvedValue([{ _id: liveItem.assetId }, { _id: foreignItem.assetId }]);
+
+    const set = await overwrite([foreignItem, liveItem]);
+    expect(set.items).toEqual([foreignItem, liveItem]);
+  });
+
+  it('leaves an all-live draft byte-identical, and does not touch moods it was not given', async () => {
+    // The no-op case has to stay a genuine no-op: this check must not become
+    // a silent rewrite of every save, and an omitted `moods` must stay
+    // omitted rather than being materialised by the prune.
+    const set = await overwrite([liveItem]);
+    expect(set.items).toEqual([liveItem]);
+    expect('moods' in set).toBe(false);
+  });
+
+  it('issues no asset query at all for a save that carries no items', async () => {
+    const { updatePackage } = await import('~/server/functions/packages');
+    await updatePackage({
+      data: { id: 'p1', expectedUpdatedAt: STORED_UPDATED_AT.toISOString(), name: 'Renamed' },
+      userId: 'u1',
+    });
+    expect(vi.mocked(assetFind)).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The mood half of the same invariant: whatever this write leaves standing as
+ * `items` and `moods` must be mutually consistent. Two cases the first cut of
+ * the check got wrong, both found by re-reviewing its own diff.
+ */
+describe('updatePackage keeps moods consistent with the items it writes', () => {
+  const deadItem = {
+    id: 'i-dead',
+    assetId: 'a'.repeat(24),
+    volume: 1,
+    fadeSeconds: 2,
+    loop: false,
+    sortIndex: 0,
+  };
+  const liveItem = {
+    id: 'i-live',
+    assetId: 'b'.repeat(24),
+    volume: 1,
+    fadeSeconds: 2,
+    loop: true,
+    sortIndex: 1,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    fenceTheModel();
+    assetFindLean.mockResolvedValue([{ _id: liveItem.assetId }]);
+  });
+
+  function setFromCall() {
+    const [, update] = vi.mocked(findOneAndUpdate).mock.calls[0] as [
+      unknown,
+      { $set: Record<string, unknown> },
+    ];
+    return update.$set;
+  }
+
+  /**
+   * `updatePackageSchema` allows `items` without `moods`. The editor always
+   * sends both, so this is the caller the first version silently got wrong:
+   * it dropped the dead item and left the STORED moods untouched, still naming
+   * that item's id. Exactly the orphan the whole prune exists to avoid,
+   * reintroduced by the fix for a different bug.
+   */
+  it('prunes the STORED moods when items are dropped and none were supplied', async () => {
+    const survivor = { itemId: 'i-live', playing: true, volume: 0.35 };
+    const orphan = { itemId: 'i-dead', playing: true, volume: 0.7 };
+    findOneLean.mockResolvedValue({
+      moods: [{ id: 'm1', name: 'Overhead', states: [orphan, survivor] }],
+    });
+
+    const { updatePackage } = await import('~/server/functions/packages');
+    await updatePackage({
+      data: {
+        id: 'p1',
+        expectedUpdatedAt: STORED_UPDATED_AT.toISOString(),
+        items: [deadItem, liveItem],
+      },
+      userId: 'u1',
+    } as never);
+
+    const set = setFromCall();
+    expect(set.items).toEqual([liveItem]);
+    const moods = set.moods as { states: unknown[] }[];
+    expect(moods[0].states).toEqual([survivor]);
+    // Owner-scoped, like every other read in this file.
+    expect(vi.mocked(findOne).mock.calls[0][0]).toEqual({ _id: 'p1', ownerId: 'u1' });
+  });
+
+  it('does not read or write moods when nothing was dropped', async () => {
+    const { updatePackage } = await import('~/server/functions/packages');
+    await updatePackage({
+      data: { id: 'p1', expectedUpdatedAt: STORED_UPDATED_AT.toISOString(), items: [liveItem] },
+      userId: 'u1',
+    } as never);
+
+    // The extra read is on the failure path only — an ordinary save must not
+    // pay for it, and an untouched `moods` must stay untouched.
+    expect(vi.mocked(findOne)).not.toHaveBeenCalled();
+    expect('moods' in setFromCall()).toBe(false);
+  });
+
+  /**
+   * `items: []` with mood states in the payload is every state orphaned. The
+   * first version returned early on the empty array and skipped mood pruning
+   * entirely, so the guarantee held for 1..64 items and failed at 0 — the
+   * shape of edge case that reads like an optimisation.
+   */
+  it('strips every mood state when the caller clears all items', async () => {
+    const { updatePackage } = await import('~/server/functions/packages');
+    await updatePackage({
+      data: {
+        id: 'p1',
+        expectedUpdatedAt: STORED_UPDATED_AT.toISOString(),
+        items: [],
+        moods: [{ id: 'm1', name: 'Overhead', states: [{ itemId: 'i-live', playing: true }] }],
+      },
+      userId: 'u1',
+    } as never);
+
+    const moods = setFromCall().moods as { states: unknown[] }[];
+    expect(moods[0].states).toEqual([]);
+    // No ids to resolve, so no query either.
+    expect(vi.mocked(assetFind)).not.toHaveBeenCalled();
   });
 });
