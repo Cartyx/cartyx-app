@@ -29,6 +29,7 @@
     "build-storybook": "storybook build",
     "build-storybook:full": "node scripts/build-storybook-with-iframe.mjs",
     "realtime:dev": "npm --prefix realtime run dev",
+    "audio-worker:dev": "node scripts/dev-audio-worker.mjs",
     "check:deps-age": "node scripts/check-package-age.mjs",
     "check:client-bundle": "node scripts/check-client-bundle.mjs",
     "db:verify": "tsx scripts/mongo-admin.ts verify",
