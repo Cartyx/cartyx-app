@@ -17,19 +17,36 @@ const audioAssetSchema = new mongoose.Schema({
   intensity: { type: Number, min: 1, max: 5, default: null },
   tags: { type: [String], default: [] },
 
-  sourceKey: { type: String, required: true },
+  sourceKey: {
+    type: String,
+    required: function (this: { status?: string }) {
+      return this.status !== 'failed';
+    },
+  },
   // The object's REAL size, measured by confirmAudioUpload's HeadObject. Null
   // until then — deliberately: this used to be seeded at row creation from the
   // client's self-declared `bytes`, which meant anything reading it before
   // confirm got an unverified number the uploader chose.
   sourceBytes: { type: Number, default: null },
-  // Set by confirmAudioUpload's success path and by nothing else, ever. That
-  // exclusivity is the point: it is the one field that proves an object passed
-  // the HeadObject size/type check, which is the only real enforcement of
-  // AUDIO_MAX_BYTES in the system (a presigned PUT cannot constrain
-  // Content-Length). `retryAudioAsset` gates on it so an abandoned upload the
-  // worker's reaper aged into `failed` can never be pushed into the transcode
-  // queue. Cross-service contract field: declared here because the web app owns
+  // Written ONLY by a confirm SUCCESS path — `confirmAudioUpload`'s, and
+  // `confirmOnceVariantUpload`'s. (This comment used to claim a single writer;
+  // that was never true once Task 18 landed, and a false premise reads exactly
+  // like a true one to whoever builds the next guard on it. After a
+  // once-attach this field describes the ONCE-source's HeadObject, not the
+  // main source's.)
+  //
+  // What is true of BOTH writers is the property everything downstream
+  // actually depends on: it is set only after an object passed the HeadObject
+  // size/type check, which is the only real enforcement of AUDIO_MAX_BYTES in
+  // the system (a presigned PUT cannot constrain Content-Length). So a null
+  // value still means "nothing on this row has ever been measured", and a
+  // non-null one still means something was. `retryAudioAsset` gates on it so
+  // an abandoned upload the worker's reaper aged into `failed` can never be
+  // pushed into the transcode queue — and a once-attach cannot forge that,
+  // because it requires `status: 'ready'`, which requires the main confirm to
+  // have already run and stamped this once.
+  //
+  // Cross-service contract field: declared here because the web app owns
   // the schema, even though the worker doesn't read it.
   confirmedAt: { type: Date, default: null },
   renditions: {
@@ -54,6 +71,73 @@ const audioAssetSchema = new mongoose.Schema({
   // (see `variant` below and `renditionKeyBase`'s callers in
   // audio-worker/src/process.ts).
   onceSourceKey: { type: String, default: null },
+  // The once-source object's REAL size, measured by
+  // `confirmOnceVariantUpload`'s HeadObject — mirrors `sourceBytes` above,
+  // same shape and same nullability, for the same reason: null until
+  // confirm, never seeded from anything client-declared. Set by
+  // `confirmOnceVariantUpload`'s success path and by nothing else. Rows
+  // written before this field existed simply lack it; `getUserStorageUsage`
+  // treats absent the same as null (see `audio-quota.ts`'s `$ifNull`
+  // guard). The worker's terminal write for a successful once-attach
+  // (`audio-worker/src/process.ts`) does not clear this alongside
+  // `onceSourceKey` — the once-source object stays live and billed after a
+  // successful attach, which is why this field exists: without it those
+  // bytes were measured once for the `AUDIO_MAX_BYTES` gate and then never
+  // recorded anywhere the storage quota could see.
+  //
+  // INVARIANT, load-bearing: this field must be reset to `null` at EVERY
+  // site that clears or replaces `onceSourceKey` above, not only where it
+  // is set. It describes the object the key points at, so once the key
+  // stops pointing at that object, a standing byte count is a lie the
+  // storage quota can't detect — it just silently over-counts, forever,
+  // until (if ever) a future successful attach happens to overwrite it.
+  // Task 3b's review caught exactly this: the field was added and wired
+  // into the quota and the one write that SETS it, but not into the
+  // sites that clear/replace the key. Every current site that writes
+  // `onceSourceKey` also writes this field in the same `$set`:
+  // `createOnceVariantUpload` (replace, -> null) and
+  // `confirmOnceVariantUpload`'s reject path (clear, -> null) in
+  // `app/server/functions/audio.ts`; `markOnceFailed` in
+  // `audio-worker/src/process.ts` and `reapAbandonedOnceUploads` in
+  // `audio-worker/src/claim.ts` (both clear, -> null). If `onceSourceKey`
+  // ever grows a new writer, that writer owns this field too.
+  onceSourceBytes: { type: Number, default: null },
+  // When the CURRENT once-variant attach presigned its upload — the clock
+  // `reapAbandonedOnceUploads` (audio-worker/src/claim.ts) measures a stuck
+  // attach against. Cross-service contract field: written here, read only by
+  // the worker.
+  //
+  // It exists because that reaper used to gate on `updatedAt`, and
+  // `updatedAt` cannot answer the question it was being asked. "How long has
+  // this attach been stuck?" is a JOB-LIVENESS question; `updatedAt` answers
+  // "when was this document last modified at all", and unrelated writers
+  // legitimately bump it. `updateAudioAsset` and `bulkTagAudioAssets` are
+  // both unfenced facet edits — retitle the track, add a tag — so a GM who
+  // edits an asset whose once-attach died mid-PUT pushes the reap out by the
+  // full timeout, every time, and there is no self-service recovery:
+  // `createOnceVariantUpload` requires `status: 'ready'` and the row is
+  // stuck in `uploading`. Editing it again (or a bulk retag that happens to
+  // include it) postpones it again, indefinitely. A dedicated field is
+  // immune by construction. (The mirror-image case is `AudioPackage`'s
+  // optimistic-concurrency precondition, which is CORRECTLY `updatedAt`:
+  // there the question really is "has this document been modified since I
+  // read it", so any writer bumping it should be a conflict.)
+  //
+  // INVARIANT, and it is what keeps this field cheap: it has EXACTLY ONE
+  // writer, `createOnceVariantUpload` in `app/server/functions/audio.ts`,
+  // which is also the only write in either package that can put a row into
+  // `status: 'uploading', variant: 'once'` — the only state the reaper reads
+  // it in. Nothing else may stamp it, and nothing needs to clear it: a value
+  // left over from a finished attach is unreachable, because getting back
+  // into the state that reads it necessarily runs the one writer again. If a
+  // second path into `uploading`/`once` is ever added, that path owns this
+  // field too.
+  //
+  // Rows written before this field existed lack it, and the reaper falls
+  // back to `updatedAt` for exactly those (see its `$or`) — old rows keep
+  // today's behaviour rather than being treated as infinitely stale, which
+  // would reap every in-flight attach at deploy time.
+  onceUploadStartedAt: { type: Date, default: null },
   // Which pipeline pass the row's CURRENT status/attempts/claim state
   // describes: 'main' for the ordinary source -> renditions pipeline (every
   // asset, including every one that predates this field), 'once' while a
@@ -63,9 +147,16 @@ const audioAssetSchema = new mongoose.Schema({
   // (`renditions`/`onceRenditions`) — "same pipeline, different
   // destination field," per the design doc's own framing.
   //
-  // On BOTH a successful AND a failed once-variant run the worker resets
-  // this to 'main' and flips `status` back to 'ready' — never `'failed'`.
-  // This is a Task 18 review fix, not the original design: `status:
+  // On EVERY terminal outcome of a once-variant run the worker resets this to
+  // 'main' and flips `status` back to 'ready' — never `'failed'`. That is
+  // three paths, not the two Task 18 closed: `markOnceFailed` covers the
+  // permanent-error and budget-exhausted branches inside `processAsset`, and
+  // `reapStale`'s own attempts-exhausted `updateMany` (audio-worker/src/
+  // claim.ts) covers the case where the worker DIED rather than threw, so
+  // `processAsset`'s catch never ran at all. That third path used to fall
+  // through to the main pipeline's `failed`/`lastError` write and brick the
+  // music asset exactly as described below.
+  // This is a Task 18 review fix, not the original design: `status`:
   // 'failed'` describes the WHOLE row under this shared-state scheme, so a
   // failed once-variant used to be indistinguishable from a failed MAIN
   // asset, and a `PermanentError` (over-cap, silent, ...) on the once file

@@ -6,6 +6,7 @@ import { getMe } from '~/server/functions/rpc';
 import { Topbar } from '~/components/Topbar';
 import { PackageEditor } from '~/components/soundboard/PackageEditor';
 import { MoodEditor } from '~/components/soundboard/MoodEditor';
+import { PackageConflictNotice } from '~/components/soundboard/PackageConflictNotice';
 import { getPackageFn, updatePackageFn } from '~/utils/soundboard-server-fns';
 import { listAudioAssetsFn } from '~/utils/audio-server-fns';
 import { queryKeys } from '~/utils/queryKeys';
@@ -14,6 +15,8 @@ import type { AudioFilters } from '~/components/audio/AudioFilterBar';
 import type { AudioAssetData, AudioEnvironment, AudioMood } from '~/types/audio';
 import type { MoodData, PackageItemData } from '~/types/soundboard';
 import { pruneOrphanedMoodStates } from '~/lib/soundboard/prune';
+import { isStalePackageWriteError } from '~/lib/soundboard/stale-write';
+import { isClientRefusal } from '~/lib/client-refusal';
 
 /** Server-side page size for the asset picker — same value `/audio` uses. */
 const PAGE_SIZE = 50;
@@ -159,6 +162,22 @@ export function PackageEditorPage() {
     }
   }, [pkg]);
 
+  /**
+   * Set when the server REFUSED a save because the package moved on under us
+   * (`PackageStaleWriteError` — see `updatePackage`'s doc comment for why the
+   * write is fenced at all). Holds the `updatedAt` the server actually has,
+   * which is both what the notice displays and the precondition an
+   * "overwrite" retry must carry.
+   *
+   * Note what this state deliberately does NOT do: it does not touch
+   * `items`/`moods`/`name`. The refusal costs the user nothing — their draft
+   * is still in those three pieces of state and still on screen behind the
+   * notice — and it costs the other write nothing either, because it never
+   * landed. Which side wins is then a decision the user makes explicitly, via
+   * one of `PackageConflictNotice`'s two buttons.
+   */
+  const [conflict, setConflict] = useState<{ savedAt: string } | null>(null);
+
   const isSystemPackage = pkg?.ownerId === null;
   // `updatePackageSchema.name` is `min(1)` — an empty/whitespace-only draft
   // must not reach the server as a doomed round trip.
@@ -225,14 +244,27 @@ export function PackageEditorPage() {
       items: nextItems,
       moods: nextMoods,
       name: nextName,
+      expectedUpdatedAt,
     }: {
       items: PackageItemData[];
       moods: MoodData[];
       name: string;
+      /**
+       * The revision this save is built on. A mutation VARIABLE rather than
+       * something the mutationFn reads out of `pkg` itself, because the two
+       * entry points supply different ones: an ordinary Save sends the
+       * `updatedAt` of the package as loaded, while the conflict notice's
+       * "keep my edits" sends the newer one the refusal reported. Both are
+       * still compare-and-swap — the retry is not a force flag, it is the
+       * same fence against a fresher expectation, so a third write landing in
+       * between is refused again rather than clobbered.
+       */
+      expectedUpdatedAt: string;
     }) =>
       updatePackageFn({
         data: {
           id: packageId,
+          expectedUpdatedAt,
           name: nextName,
           items: nextItems,
           // Always sent alongside `items`, not only when an item was
@@ -246,13 +278,55 @@ export function PackageEditorPage() {
         },
       }),
     onSuccess: (updated) => {
+      // SEEDED, not merely invalidated, and that is load-bearing rather than
+      // an optimisation. `updatePackage` returns the fresh document
+      // (`{ new: true }`), and `dirty` below is a REFERENCE comparison against
+      // `pkg`. Invalidating alone would leave `pkg` as the pre-save object
+      // until the refetch's round trip landed — so the button would still
+      // read "Save changes" on an already-saved package, and a second Save in
+      // that window would send the `updatedAt` this save just superseded,
+      // which Task 7's fence refuses. The user would then be shown a conflict
+      // notice about their OWN save; a conflict dialog that fires on the
+      // happy path is how users learn to click through conflict dialogs.
+      // `tests/routes/audio-packages-package-id-route.test.tsx` pins this by
+      // saving twice with the refetch held open.
       qc.setQueryData(queryKeys.packages.detail(packageId), updated);
       setItems(updated.items);
       setMoods(updated.moods);
       setName(updated.name);
+      setConflict(null);
       void qc.invalidateQueries({ queryKey: queryKeys.packages.all });
     },
-    onError: (e) => captureException(e, { action: 'PackageEditorPage.save' }),
+    onError: (e) => {
+      // A stale-write refusal is NOT reported. It is the caller's own doing
+      // in the same sense the server treats it (`PackageStaleWriteError`
+      // extends `PackageClientError`, so `reportPackageError` files no
+      // GlitchTip event for it either) — two tabs open on one package is
+      // expected, not a fault, and capturing here would file one client error
+      // per Save click for a condition the UI already handles completely.
+      if (isStalePackageWriteError(e)) {
+        setConflict({ savedAt: e.currentUpdatedAt ?? '' });
+        return;
+      }
+      // Any OTHER failure clears the conflict, and clearing it is load-bearing
+      // rather than tidiness. The notice suppresses the generic error line
+      // (`!conflict &&`, below), so a "Keep my edits and overwrite" click that
+      // fails with anything that is not a stale write — a 500, a dropped
+      // connection, a validator rejection — would otherwise render NOTHING:
+      // the button flips back from "Saving…" and the user's only signal that
+      // their click did nothing is the absence of change. Dropping the
+      // conflict state hands the failure back to the error line, which is the
+      // one surface that can describe it.
+      setConflict(null);
+      // ...but a stale write is not the only refusal this endpoint issues.
+      // `updatePackageFn` is gated by `packageEditLimiter`, and a save against
+      // a package that is gone (or was never yours) throws a plain
+      // `PackageClientError` — both are the caller's own doing, both are
+      // silent on the server, and both used to file a client error here. The
+      // error line above still renders them; only the fault report is
+      // suppressed. See `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'PackageEditorPage.save' });
+    },
   });
 
   const handleItemsChange = useCallback((next: PackageItemData[]) => {
@@ -264,7 +338,33 @@ export function PackageEditorPage() {
   }, []);
 
   const handleSave = () => {
-    if (items && moods && name !== null && nameValid) saveMutation.mutate({ items, moods, name });
+    if (items && moods && name !== null && nameValid && pkg)
+      saveMutation.mutate({ items, moods, name, expectedUpdatedAt: pkg.updatedAt });
+  };
+
+  /**
+   * "Keep my edits and overwrite": the SAME draft, replayed against the
+   * revision the refusal reported. Nothing about the draft is rebuilt or
+   * re-derived here — that would be a second chance to lose an edit — and
+   * nothing bypasses the fence.
+   */
+  const handleOverwrite = () => {
+    if (items && moods && name !== null && nameValid && conflict)
+      saveMutation.mutate({ items, moods, name, expectedUpdatedAt: conflict.savedAt });
+  };
+
+  /**
+   * "Discard my edits and load the saved version". Invalidating the detail
+   * query refetches the package, which re-seeds `items`/`moods`/`name` through
+   * the effect above — that is the discard, and it happens only here, on this
+   * explicitly-labelled button. `saveMutation.reset()` clears the refusal
+   * itself so the generic error paragraph does not survive the notice it
+   * replaced.
+   */
+  const handleDiscard = () => {
+    setConflict(null);
+    saveMutation.reset();
+    void qc.invalidateQueries({ queryKey: queryKeys.packages.detail(packageId) });
   };
 
   return (
@@ -330,6 +430,26 @@ export function PackageEditorPage() {
               )}
             </div>
 
+            {/*
+              Directly under the Save button that produced it, not at the foot
+              of the page with the generic error line: this is a decision the
+              user has to make before anything else they do here means
+              anything, and the editor below is long enough that a notice
+              under the mood section would be off-screen from where they
+              clicked. It also REPLACES the generic error line (see the
+              `!conflict` guard on it below) — the same refusal rendered twice,
+              once as a red "failed" and once as the notice explaining what to
+              do about it, reads as two problems.
+            */}
+            {conflict && (
+              <PackageConflictNotice
+                savedAt={conflict.savedAt}
+                onOverwrite={handleOverwrite}
+                onDiscard={handleDiscard}
+                busy={saveMutation.isPending}
+              />
+            )}
+
             <PackageEditor
               items={items}
               onItemsChange={handleItemsChange}
@@ -352,7 +472,7 @@ export function PackageEditorPage() {
               />
             </div>
 
-            {saveMutation.error && (
+            {!conflict && saveMutation.error && (
               <p role="alert" className="mt-4 text-sm text-red-400">
                 {errorMessage(saveMutation.error, 'Failed to save changes. Please try again.')}
               </p>

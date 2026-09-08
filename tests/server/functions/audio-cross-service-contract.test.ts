@@ -132,3 +132,50 @@ describe('audio storage key layout, app vs worker', () => {
     expect(`uploads/audio/${prefix}/renditions/abc`.startsWith(audioUserRoot(prefix))).toBe(true);
   });
 });
+
+describe('the once-attach liveness clock, app vs worker (Task 10, fix 2)', () => {
+  /**
+   * `reapAbandonedOnceUploads` is the ONLY way out of a once-variant attach
+   * that died mid-PUT: the row is parked in `status: 'uploading'` and
+   * `createOnceVariantUpload` refuses anything that isn't `status: 'ready'`,
+   * so the owner cannot clear it themselves. The reaper decides staleness
+   * from `onceUploadStartedAt`, a field this package writes and only that
+   * package reads — the exact shape of cross-package coupling this file
+   * exists for, and neither package's own suite can see the other's literal.
+   *
+   * Drift here is silent AND self-concealing. The reaper's fallback branch
+   * (`onceUploadStartedAt: null`, which in Mongo matches a MISSING field
+   * too) is there so rows predating the field keep being reaped on
+   * `updatedAt`. So renaming the field on either side alone does not make
+   * the reaper stop — it makes EVERY row look like a legacy row and quietly
+   * reinstates the `updatedAt` gate this fix removed, restoring the bug
+   * where an ordinary retitle postpones a dead attach indefinitely. Nothing
+   * throws and nothing logs.
+   */
+  it('writes the field name the worker actually queries', () => {
+    const src = workerSource('claim.ts');
+    // The stamp the app writes on every attach...
+    expect(
+      readFileSync(join(process.cwd(), 'app', 'server', 'functions', 'audio.ts'), 'utf8')
+    ).toContain('onceUploadStartedAt: new Date()');
+    // ...is the field the worker's once-reaper gates on, in both branches of
+    // its `$or` — the primary predicate and the legacy fallback's
+    // "unstamped" guard.
+    expect(src).toContain('{ onceUploadStartedAt: { $lt: cutoff } }');
+    expect(src).toContain('{ onceUploadStartedAt: null, updatedAt: { $lt: cutoff } }');
+  });
+
+  /**
+   * The other half of the same contract: the field must exist on the schema
+   * the app owns, or Mongoose strips it from the `$set` and the worker's
+   * query matches nothing but legacy rows — the same silent reinstatement of
+   * the bug, reached from the schema side.
+   */
+  it('declares the field on the model the app owns', () => {
+    const model = readFileSync(
+      join(process.cwd(), 'app', 'server', 'db', 'models', 'AudioAsset.ts'),
+      'utf8'
+    );
+    expect(model).toMatch(/onceUploadStartedAt:\s*\{\s*type:\s*Date/);
+  });
+});

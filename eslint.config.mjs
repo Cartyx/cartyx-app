@@ -116,6 +116,57 @@ export default [
       '.claude/worktrees/**',
     ],
   },
+  {
+    // B3 (phase-B deferred finding on Task 4's re-review). `assertUnderStorageQuota`
+    // is called as a bare statement at both its call sites (`await
+    // assertUnderStorageQuota(...)`, no assignment). It throws to refuse, and a
+    // dropped `await` there does not surface as a thrown error at the call site
+    // at all — the rejection becomes an unhandled promise rejection elsewhere
+    // while the caller's code keeps running as if the check passed. That is a
+    // silent fail-OPEN with no compiler or lint error, and nothing in this
+    // file's structure stops a future edit from introducing one. THIS rule
+    // structurally closes that gap: `no-floating-promises` flags an unhandled
+    // expression-statement promise, which a dropped `await` on a bare-statement
+    // call produces exactly.
+    //
+    // `checkPendingJobCap` is NOT protected by this rule, and does not need to
+    // be. Every call site assigns its result first (`const cap = await
+    // checkPendingJobCap(userId); if (cap) { throw ...; }`) — `no-floating-
+    // promises` only flags unhandled expression-statement promises, not a
+    // promise bound to a variable, so a dropped `await` there passes lint
+    // clean. But the failure mode is the opposite of `assertUnderStorageQuota`'s:
+    // `cap` would be bound to the Promise object itself, which is truthy, so
+    // `if (cap)` is ALWAYS true and the call ALWAYS throws the refusal — every
+    // request refused, loudly and immediately, not a silent bypass. That
+    // failure is self-announcing (any manual test or the E2E suite catches it
+    // instantly), so a structural guard for it was considered and rejected as
+    // unwarranted machinery for a fail-closed, self-detecting bug class.
+    //
+    // Repo-wide `no-floating-promises` was measured, not assumed (see the
+    // phase-B report): enabling it across the repo surfaces 502 violations
+    // spread across ~100 files (mostly the fire-and-forget
+    // `serverCaptureEvent`/`serverCaptureException` calls this codebase's
+    // telemetry convention requires — see CLAUDE.md, "Never `await` capture
+    // calls on request-critical paths"), which is neither small nor
+    // mechanical and is far outside this item's scope to triage. Scoping
+    // type-aware parsing to just this file keeps the blast radius to the
+    // five pre-existing `serverCaptureException`/`serverCaptureEvent` calls
+    // here (each now an explicit `void`, unchanged behaviour) while closing
+    // the one gap that was genuinely silent: any future `await` dropped from
+    // a bare-statement async call in this file — `assertUnderStorageQuota`
+    // today, or any other async helper later added and called the same way —
+    // fails `npm run lint` instead of shipping silently.
+    files: ['app/server/functions/audio.ts'],
+    languageOptions: {
+      parserOptions: {
+        project: './tsconfig.json',
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      '@typescript-eslint/no-floating-promises': 'error',
+    },
+  },
   ...pluginQuery.configs['flat/recommended'],
   jsxA11y.flatConfigs.recommended,
   {

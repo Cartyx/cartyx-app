@@ -22,6 +22,7 @@ import type { BoardState } from '~/lib/soundboard/reducer';
 const engine = vi.hoisted(() => ({
   apply: vi.fn(),
   fireOneShot: vi.fn(),
+  stopAll: vi.fn(),
   ready: vi.fn(async () => {}),
   dispose: vi.fn(),
 }));
@@ -159,6 +160,15 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+/**
+ * Stands in for the signal the real engine would pass — these tests call
+ * `loadAsset` directly rather than through `createEngine` (which is mocked),
+ * so most of them have no engine-owned `AbortController` to reach for and
+ * don't care whether it ever fires. A dedicated test below constructs its
+ * own controller to exercise the forwarding itself.
+ */
+const noSignal = new AbortController().signal;
+
 /** The options `useSoundboard` handed `createEngine` on its single call. */
 function engineOptions(): SoundboardEngineOptions {
   expect(createEngine).toHaveBeenCalledTimes(1);
@@ -249,6 +259,22 @@ afterEach(() => {
 });
 
 describe('useSoundboard', () => {
+  it('forwards Stop All immediately to the engine and scheduler', async () => {
+    const { result } = renderBoard();
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    act(() => {
+      result.current.dispatch({ type: 'stopAll' });
+    });
+    expect(engine.stopAll).toHaveBeenCalledTimes(1);
+    expect(scheduler.sync).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        items: expect.arrayContaining([expect.objectContaining({ playing: false })]),
+      })
+    );
+  });
+
   it('does not dispatch audio commands before the context is resumed', () => {
     const { result } = renderBoard();
 
@@ -731,7 +757,7 @@ describe('useSoundboard', () => {
 
     let asset: EngineAsset | null = null;
     await act(async () => {
-      asset = await engineOptions().loadAsset(ASSET_A);
+      asset = await engineOptions().loadAsset(ASSET_A, noSignal);
     });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -749,8 +775,8 @@ describe('useSoundboard', () => {
       await result.current.enableAudio();
     });
 
-    await expect(engineOptions().loadAsset(ASSET_A)).resolves.toBeNull();
-    await expect(engineOptions().loadAsset(ASSET_B)).resolves.toBeNull();
+    await expect(engineOptions().loadAsset(ASSET_A, noSignal)).resolves.toBeNull();
+    await expect(engineOptions().loadAsset(ASSET_B, noSignal)).resolves.toBeNull();
   });
 
   it('throws — rather than vanishing — for an asset missing from a settled list', async () => {
@@ -763,7 +789,7 @@ describe('useSoundboard', () => {
     // `unplayable` set, but only a throw reaches `onLoadError`. A list that is
     // simply wrong (paginated past 50, or `{ ownerId }`-filtered so no system
     // package's assets are ever in it) must not kill a pad in silence.
-    await expect(engineOptions().loadAsset('507f1f77bcf86cd799439099')).rejects.toThrow(
+    await expect(engineOptions().loadAsset('507f1f77bcf86cd799439099', noSignal)).rejects.toThrow(
       'not in the board'
     );
   });
@@ -774,7 +800,9 @@ describe('useSoundboard', () => {
       await result.current.enableAudio();
     });
 
-    await expect(engineOptions().loadAsset(ASSET_A)).rejects.toThrow('status: processing');
+    await expect(engineOptions().loadAsset(ASSET_A, noSignal)).rejects.toThrow(
+      'status: processing'
+    );
   });
 
   it('throws when the rendition URL 404s', async () => {
@@ -787,8 +815,40 @@ describe('useSoundboard', () => {
       await result.current.enableAudio();
     });
 
-    await expect(engineOptions().loadAsset(ASSET_A)).rejects.toThrow(
+    await expect(engineOptions().loadAsset(ASSET_A, noSignal)).rejects.toThrow(
       'Audio rendition fetch failed (404)'
+    );
+  });
+
+  it('forwards the AbortSignal to fetch so aborting it cancels the in-flight request', async () => {
+    // Stands in for a real `fetch` honouring `signal` — it settles ONLY when
+    // the signal aborts, never on its own. If `loadAsset` dropped the signal
+    // on the floor instead of forwarding it, this promise would just hang
+    // and the test would time out rather than resolve with the wrong thing —
+    // there is no way for this fixture shape to pass without the forwarding
+    // actually happening.
+    const fetchMock = vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new DOMException('The operation was aborted.', 'AbortError'));
+          });
+        })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    const { result } = renderBoard();
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+
+    const controller = new AbortController();
+    const pending = engineOptions().loadAsset(ASSET_A, controller.signal);
+    controller.abort();
+
+    await expect(pending).rejects.toThrow('aborted');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][1]).toEqual(
+      expect.objectContaining({ signal: controller.signal })
     );
   });
 
@@ -810,6 +870,37 @@ describe('useSoundboard', () => {
       campaignId: CAMPAIGN,
       assetId: ASSET_A,
     });
+  });
+
+  // Task 9: teardown leaves up to 64 fetch/decode chains running against a
+  // closed engine. Each used to reject straight into `captureException`
+  // BEFORE the `mountedRef` check, so a single board clear filed one
+  // GlitchTip event per asset. `engine.dispose()` is mocked here, so it
+  // cannot itself stop the callback from firing (that half is the real
+  // engine's `disposed` guard, covered in `engine.browser.test.ts`) — this
+  // proves the hook's OWN half: even if a stale callback does fire after the
+  // component is gone, it must not reach telemetry.
+  it('does not report to telemetry when the engine calls onLoadError after unmount', async () => {
+    const { result, unmount } = renderBoard();
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    // Captured BEFORE unmount — standing in for a fetch/decode chain that
+    // was already mid-flight when the board cleared and settles afterward,
+    // asynchronously invoking the very callback the disposed engine was
+    // built with. `unmount()` below does not — cannot — retract this
+    // reference; that is exactly why the guard has to live inside it.
+    const onLoadError = engineOptions().onLoadError;
+    captureException.mockClear();
+
+    unmount();
+    expect(engine.dispose).toHaveBeenCalledTimes(1);
+
+    act(() => {
+      onLoadError?.(ASSET_A, new Error('decode failed'));
+    });
+
+    expect(captureException).not.toHaveBeenCalled();
   });
 
   // Telemetry tells ME. `loadErrors` is what tells the GM, and it is the only

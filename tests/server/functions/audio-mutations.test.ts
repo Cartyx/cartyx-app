@@ -18,6 +18,13 @@ vi.mock('~/server/functions/uploads', () => ({
 vi.mock('~/server/functions/audio-storage', () => ({
   resolveAudioStoragePrefix: vi.fn(async () => 'a1b2c3d4e5f60718293a4b5c6d7e8f90'),
 }));
+// Comfortably under any real quota — this file's `createAudioUpload` calls
+// are exercising unrelated behaviour (retry eligibility, the unverified-size
+// guard), not the quota check itself; that check has its own coverage in
+// `audio-ingest.test.ts`.
+vi.mock('~/server/functions/audio-quota', () => ({
+  getUserStorageUsage: vi.fn(async () => ({ bytes: 0, assetCount: 0 })),
+}));
 vi.mock('~/server/db/models/AudioAsset', () => ({
   AudioAsset: {
     create: vi.fn(),
@@ -25,6 +32,7 @@ vi.mock('~/server/db/models/AudioAsset', () => ({
     updateMany: vi.fn(),
     findOne: vi.fn(),
     deleteOne: vi.fn(),
+    countDocuments: vi.fn(),
   },
 }));
 
@@ -43,6 +51,48 @@ function mockUpdateResult(doc: Record<string, unknown> | null) {
     lean: () => Promise.resolve(doc),
   } as never);
 }
+
+describe("the 'Audio asset not found' throws", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /**
+   * These fire when `findOne`/`findOneAndUpdate` misses on
+   * `{ _id: <caller-supplied id>, ownerId }`. The schemas are
+   * `z.object({ id: objectId })`, so any authenticated user can trigger one at
+   * will by generating well-formed ObjectIds — which as a plain `Error` filed
+   * one GlitchTip event per request, making the report volume the caller's
+   * parameter. `AudioClientError` is the class `reportAudioError` excludes, so
+   * the type IS the no-telemetry contract; asserting only that it rejects
+   * would pass with the type reverted.
+   */
+  it('updateAudioAsset: throws AudioClientError and files no GlitchTip event', async () => {
+    mockUpdateResult(null);
+    const { updateAudioAsset, AudioClientError } = await import('~/server/functions/audio');
+    const err = await updateAudioAsset({ data: { id: 'a1', title: 'New' }, userId: 'u1' }).catch(
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(AudioClientError);
+    // The message is unchanged by the type change — `~/routes/api/audio/
+    // uploads.$id.confirm.ts` classifies these by message regex, and the UI
+    // renders `.message` verbatim.
+    expect((err as Error).message).toBe('Audio asset not found');
+    expect(serverCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('deleteAudioAsset: throws AudioClientError, files no GlitchTip event, and issues no R2 delete', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue(null as never);
+    const { deleteAudioAsset, AudioClientError } = await import('~/server/functions/audio');
+    const err = await deleteAudioAsset({ data: { id: 'a1' }, userId: 'u1' }).catch(
+      (e: unknown) => e
+    );
+    expect(err).toBeInstanceOf(AudioClientError);
+    expect((err as Error).message).toBe('Audio asset not found');
+    expect(serverCaptureException).not.toHaveBeenCalled();
+    // A miss must not reach the R2 client at all.
+    expect(send).not.toHaveBeenCalled();
+    expect(AudioAsset.deleteOne).not.toHaveBeenCalled();
+  });
+});
 
 describe('updateAudioAsset', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -190,7 +240,13 @@ describe('bulkTagAudioAssets', () => {
       Record<string, unknown>,
       Record<string, unknown>,
     ];
-    expect(filter).toEqual({ _id: { $in: ['a', 'b'] }, ownerId: 'u1' });
+    expect(filter).toEqual({
+      _id: { $in: ['a', 'b'] },
+      ownerId: 'u1',
+      $expr: {
+        $lte: [{ $size: { $setUnion: [{ $ifNull: ['$tags', []] }, { $literal: ['storm'] }] } }, 30],
+      },
+    });
     expect(update.$addToSet).toEqual({ tags: { $each: ['storm'] } });
     expect((update.$set as Record<string, unknown>).tags).toBeUndefined();
     expect(res).toEqual({ modified: 2 });
@@ -271,7 +327,14 @@ describe('bulkTagAudioAssets', () => {
 });
 
 describe('retryAudioAsset', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Safe default for the nested `confirmAudioUpload` calls below (this
+    // describe's property tests drive the real confirm path to build
+    // fixture rows): zero pending jobs is under any real cap, so it does
+    // not interfere with what those tests are actually checking.
+    vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0);
+  });
 
   it('requeues a failed asset and resets the entire queue state', async () => {
     mockUpdateResult({
@@ -312,12 +375,110 @@ describe('retryAudioAsset', () => {
     expect(res.status).toBe('pending');
   });
 
-  it('refuses an asset that is not failed (or belongs to another owner)', async () => {
+  /**
+   * B1 (phase-B deferred finding on Task 2's review): this miss is a single
+   * compound `findOneAndUpdate`, reachable by guessing ids exactly like the
+   * five `'Audio asset not found'` sites — see the `AudioClientError` class
+   * doc comment. Asserting only that it rejects would pass with the type
+   * reverted to a plain `Error`, which is the bug this closes: the class IS
+   * the no-telemetry contract, so the effect (`serverCaptureException` not
+   * called) is what has to be pinned, not just the rejection.
+   */
+  it('refuses an asset that is not failed (or belongs to another owner): AudioClientError, no GlitchTip event', async () => {
     mockUpdateResult(null);
-    const { retryAudioAsset } = await import('~/server/functions/audio');
-    await expect(retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' })).rejects.toThrow(
-      /cannot be retried/i
+    const { retryAudioAsset, AudioClientError } = await import('~/server/functions/audio');
+    const err = await retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' }).catch(
+      (e: unknown) => e
     );
+    expect(err).toBeInstanceOf(AudioClientError);
+    expect((err as Error).message).toMatch(/cannot be retried/i);
+    expect(serverCaptureException).not.toHaveBeenCalled();
+  });
+
+  describe('pending job cap', () => {
+    /**
+     * Controller-ordered fix (review of Task 6): the cap originally only
+     * gated `confirmAudioUpload`. `retryAudioAsset` is a second, unguarded
+     * door into the same `pending` queue — a caller can push N failed rows
+     * back in one at a time with no depth check, defeating the point of the
+     * cap regardless of how tightly `confirmAudioUpload` is bounded.
+     *
+     * Pins the ACTUAL count filter, same standard as every other cap test
+     * in this phase — a weaker "it was called" assertion would pass with
+     * `ownerId` dropped.
+     */
+    it('counts pending+processing jobs scoped to the caller before requeueing a failed row', async () => {
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0);
+      mockUpdateResult({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'pending',
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      });
+      const { retryAudioAsset } = await import('~/server/functions/audio');
+      await retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' });
+
+      expect(vi.mocked(AudioAsset.countDocuments)).toHaveBeenCalledWith({
+        ownerId: 'u1',
+        status: { $in: ['pending', 'processing'] },
+      });
+    });
+
+    /**
+     * The global-count catch, same technique as `confirmAudioUpload`'s
+     * equivalent test in `audio-ingest.test.ts` (see that test's comment for
+     * why a single-user fixture cannot distinguish "counts this caller" from
+     * "counts everyone"): a `countDocuments` fake that only answers a
+     * filter carrying the right `ownerId`, and throws otherwise, so an
+     * unscoped or wrongly-scoped count fails loudly instead of silently
+     * routing both users to the same outcome.
+     *
+     * Also proves: retry's refusal writes NOTHING and calls no R2 method —
+     * unlike `confirmAudioUpload`/`confirmOnceVariantUpload`, there is no
+     * fresh R2 object to strand and the row is already `failed`, so the
+     * correct action on refusal is exactly "throw, touch nothing" (see the
+     * production comment on this check for the reasoning). The refusal
+     * message carries the count, is an `AudioClientError`, and files no
+     * GlitchTip event.
+     */
+    it('refuses a user already at the cap while a different user at zero is admitted', async () => {
+      const { getMaxPendingJobsPerUser, retryAudioAsset, AudioClientError } =
+        await import('~/server/functions/audio');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+      const cap = getMaxPendingJobsPerUser();
+
+      vi.mocked(AudioAsset.countDocuments).mockImplementation((async (
+        filter: Record<string, unknown>
+      ) => {
+        if (filter.ownerId === 'u1') return cap; // already at the cap
+        if (filter.ownerId === 'u2') return 0; // fresh, nothing queued
+        throw new Error(`unscoped countDocuments filter: ${JSON.stringify(filter)}`);
+      }) as never);
+
+      // u1: at the cap, refused.
+      const err = await retryAudioAsset({ data: { id: 'a1' }, userId: 'u1' }).catch(
+        (e: unknown) => e
+      );
+      expect(err).toBeInstanceOf(AudioClientError);
+      expect((err as Error).message).toContain(String(cap));
+      // Refusal touches neither R2 nor the row.
+      expect(send).not.toHaveBeenCalled();
+      expect(AudioAsset.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+
+      // u2: a DIFFERENT user, zero pending jobs, admitted through the normal
+      // eligibility write.
+      mockUpdateResult({
+        _id: 'a2',
+        ownerId: 'u2',
+        status: 'pending',
+        createdAt: new Date(0),
+        updatedAt: new Date(0),
+      });
+      const res = await retryAudioAsset({ data: { id: 'a2' }, userId: 'u2' });
+      expect(res.status).toBe('pending');
+    });
   });
 
   /**
@@ -772,5 +933,121 @@ describe('deleteAudioAsset', () => {
     expect(vi.mocked(AudioAsset.findOne).mock.calls[0][0]).toEqual({ _id: 'a1', ownerId: 'u2' });
     expect(send).not.toHaveBeenCalled();
     expect(AudioAsset.deleteOne).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * TASK 10, FIX 2 — the app's half of the once-attach liveness clock.
+ *
+ * `reapAbandonedOnceUploads` (audio-worker/src/claim.ts) is the only thing
+ * that can free a once-variant attach whose upload died mid-PUT: the row is
+ * parked in `status: 'uploading'`, and `createOnceVariantUpload` refuses
+ * anything that isn't `status: 'ready'`, so the owner has no self-service
+ * way out. Until this fix, that reaper's only clock was `updatedAt` — and
+ * `updatedAt` answers "was this document modified", not "did this job make
+ * progress". The two facet editors below are unfenced: they match on
+ * `{_id, ownerId}` alone and bump `updatedAt` on whatever row they touch,
+ * dead attach or not. Retitle the track and the reap is pushed out by a full
+ * timeout; retitle it again and it is pushed out again, forever, on an asset
+ * that reads as un-ready everywhere in the meantime (`status` is shared with
+ * the main pipeline — see `variant` on the model).
+ *
+ * This drives all three REAL server functions in the order a user would hit
+ * them and composes their writes onto one document, rather than asserting
+ * that some `$set` does or doesn't contain a key: the property under test is
+ * what the row LOOKS LIKE to the reaper after a day of ordinary library
+ * housekeeping, and that is a statement about the document, not the update.
+ */
+describe('the once-attach liveness clock (Task 10, fix 2)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  /**
+   * All three writers use plain `$set` for every field that matters here
+   * (`bulkTagAudioAssets` only reaches for `$addToSet` in `add` mode, which
+   * this scenario deliberately avoids), so `Object.assign` is exactly what
+   * Mongo would do to the stored document.
+   */
+  function applySet(row: Record<string, unknown>, update: unknown): void {
+    Object.assign(row, (update as { $set: Record<string, unknown> }).$set);
+  }
+
+  it('is not reset by a retitle or a bulk retag, so a dead attach still ages out', async () => {
+    vi.useFakeTimers();
+    try {
+      const attachedAt = new Date('2026-07-01T00:00:00.000Z');
+      const editedAt = new Date('2026-07-02T00:00:00.000Z');
+      const retaggedAt = new Date('2026-07-02T00:05:00.000Z');
+
+      // The stored document, as Mongo would hold it. Starts as a
+      // fully-transcoded music asset with no once-variant.
+      const row: Record<string, unknown> = {
+        _id: 'a1',
+        ownerId: 'u1',
+        kind: 'music',
+        title: 'Tavern Theme',
+        status: 'ready',
+        variant: 'main',
+        tags: ['tavern'],
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+      };
+
+      // 1. The GM attaches a once-variant. Their browser then dies mid-PUT,
+      //    so nothing ever confirms it — the row is stuck from here on.
+      vi.setSystemTime(attachedAt);
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({ ...row } as never);
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+        _id: 'a1',
+        status: 'uploading',
+      } as never);
+      const { createOnceVariantUpload, updateAudioAsset, bulkTagAudioAssets } =
+        await import('~/server/functions/audio');
+      await createOnceVariantUpload({
+        data: { assetId: 'a1', filename: 'ending.wav', contentType: 'audio/wav', bytes: 1024 },
+        userId: 'u1',
+      });
+      applySet(row, vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0][1]);
+
+      // The attach is in flight and the clock has started. If this were
+      // absent the rest of the test would be vacuous, so it is asserted
+      // rather than assumed.
+      expect(row).toMatchObject({ status: 'uploading', variant: 'once' });
+      expect(row.onceUploadStartedAt).toEqual(attachedAt);
+
+      // 2. A day later — long past any upload timeout — the GM tidies their
+      //    library and renames the track.
+      vi.setSystemTime(editedAt);
+      mockUpdateResult({ ...row, title: 'Tavern Theme (night)' });
+      await updateAudioAsset({
+        data: { id: 'a1', title: 'Tavern Theme (night)' },
+        userId: 'u1',
+      });
+      applySet(row, vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[1][1]);
+
+      // 3. And sweeps a new tag across a selection that happens to include it.
+      vi.setSystemTime(retaggedAt);
+      vi.mocked(AudioAsset.updateMany).mockResolvedValue({ modifiedCount: 1 } as never);
+      await bulkTagAudioAssets({
+        data: { ids: ['a1'], tags: ['night'], tagMode: 'replace' },
+        userId: 'u1',
+      });
+      applySet(row, vi.mocked(AudioAsset.updateMany).mock.calls[0][1]);
+
+      // Both edits landed — this row really was written twice, so a clock
+      // that any writer could move would have moved.
+      expect(row.title).toBe('Tavern Theme (night)');
+      expect(row.tags).toEqual(['night']);
+      expect(row.updatedAt).toEqual(retaggedAt);
+
+      // ...and the reaper's clock still reads when the attach began, a full
+      // day earlier. That difference is the entire fix: gated on
+      // `updatedAt` this row looks five minutes old and is skipped; gated on
+      // `onceUploadStartedAt` it is a day stale and is finally freed.
+      expect(row.onceUploadStartedAt).toEqual(attachedAt);
+      // Still stuck, which is why it has to be the reaper that frees it.
+      expect(row).toMatchObject({ status: 'uploading', variant: 'once' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

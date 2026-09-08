@@ -5,6 +5,9 @@ import { AudioPackage } from '../db/models/AudioPackage';
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { serializeAudioAsset } from './audio';
 import type { AudioAssetData } from '~/types/audio';
+import { PACKAGE_STALE_WRITE_ERROR_NAME } from '~/lib/soundboard/stale-write';
+import { PACKAGE_CLIENT_ERROR_NAME } from '~/lib/client-refusal';
+import { pruneOrphanedMoodStates } from '~/lib/soundboard/prune';
 import {
   DEFAULT_VOLUME,
   DEFAULT_FADE_SECONDS,
@@ -42,9 +45,62 @@ async function ensureDb() {
  * GlitchTip volume path if left unguarded.
  */
 export class PackageClientError extends Error {
-  constructor(message: string) {
+  /**
+   * Set only when the refusal is a rate-limit rejection thrown by
+   * `~/utils/soundboard-server-fns.ts`'s wrapper gate — same field, same
+   * meaning, as `AudioClientError.retryAfterMs`.
+   */
+  readonly retryAfterMs?: number;
+
+  constructor(message: string, options?: { retryAfterMs?: number }) {
     super(message);
-    this.name = 'PackageClientError';
+    // From the shared constant — the browser recognises this refusal by
+    // `.name` in order to keep its own telemetry as quiet as
+    // `reportPackageError` keeps the server's. See `~/lib/client-refusal.ts`.
+    this.name = PACKAGE_CLIENT_ERROR_NAME;
+    this.retryAfterMs = options?.retryAfterMs;
+  }
+}
+
+/**
+ * The optimistic-concurrency refusal: the caller's `expectedUpdatedAt` did
+ * not match the stored document, so somebody else wrote to it between the
+ * caller's read and their save.
+ *
+ * A `PackageClientError` SUBCLASS, deliberately — it is the caller's own
+ * doing in exactly the same sense (a save built on a read that has since gone
+ * out of date), so `reportPackageError` keeps filing no GlitchTip event for
+ * it: a second tab left open on an editor would otherwise author one error
+ * report per Save click. But it is a DIFFERENT identity from the bare
+ * `PackageClientError('Package not found')` its sibling failure throws, and
+ * that separation is the point. "Not found" and "changed underneath you" mean
+ * opposite things — one says the package is gone or was never yours, the
+ * other says it is very much there and newer than you think — and the editor
+ * has to offer completely different affordances for each. Nothing downstream
+ * should have to regex a message to tell them apart; see
+ * `~/lib/soundboard/stale-write.ts` for how the browser recognises this one.
+ */
+export class PackageStaleWriteError extends PackageClientError {
+  /**
+   * The `updatedAt` the stored document actually carries, ISO-encoded the way
+   * `serializePackage` encodes it. This is the token a client needs to retry
+   * the SAME edit as a deliberate overwrite — the editor's "keep my edits"
+   * path replays the identical draft with this value as its
+   * `expectedUpdatedAt`, which is still a compare-and-swap: if a third write
+   * lands in the meantime it is refused again, rather than the retry
+   * degrading into an unfenced write.
+   *
+   * No leak: the update filter this follows is already `ownerId`-scoped, so
+   * this value only ever describes a document the caller owns.
+   */
+  readonly currentUpdatedAt: string;
+
+  constructor(currentUpdatedAt: string) {
+    super(
+      'This package changed somewhere else after you opened it. Nothing has been lost — your unsaved edits are still here, and the saved version is still stored. Choose which one to keep.'
+    );
+    this.name = PACKAGE_STALE_WRITE_ERROR_NAME;
+    this.currentUpdatedAt = currentUpdatedAt;
   }
 }
 
@@ -412,6 +468,166 @@ export async function createPackage({
   }
 }
 
+/**
+ * Server-only, NOT exported — same discipline as `assertPackageBudget` above.
+ * Decides WHICH refusal a failed `updatePackage` filter earned, and it is the
+ * only thing that can: `findOneAndUpdate` returning `null` is a single answer
+ * to three different questions ANDed together (does the id exist, does the
+ * caller own it, is it still at the revision they read), so on its own it
+ * cannot tell "gone or not yours" from "changed underneath you".
+ *
+ * One extra read, on the failure path only, with the precondition dropped and
+ * everything else — `_id` AND `ownerId` — held identical. Holding `ownerId`
+ * is load-bearing: re-reading by `_id` alone would answer "does this document
+ * exist" rather than "does it exist FOR YOU", which would turn a probe against
+ * another user's package id into a stale-write refusal and leak the existence
+ * of documents the caller cannot see. Another owner's package must stay
+ * indistinguishable from an absent one, exactly as it is for every other read
+ * in this file.
+ */
+async function staleWriteOrNotFound(id: string, userId: string): Promise<PackageClientError> {
+  const current = (await AudioPackage.findOne(
+    { _id: id, ownerId: userId },
+    { updatedAt: 1 }
+  ).lean()) as unknown as { updatedAt?: Date } | null;
+  if (!current) return new PackageClientError('Package not found');
+  // Same `instanceof Date` normalisation `serializePackage` applies to the
+  // same field, for the same reason — this value is going to a client that
+  // will hand it straight back as the next `expectedUpdatedAt`.
+  return new PackageStaleWriteError(
+    current.updatedAt instanceof Date ? current.updatedAt.toISOString() : ''
+  );
+}
+
+/**
+ * Drops items whose `assetId` no longer resolves to an asset this caller can
+ * see, and prunes the mood states that referenced them.
+ *
+ * WHY THIS EXISTS, and it is the other half of the optimistic-concurrency
+ * fence below rather than a separate idea. That fence's whole justification
+ * is that an unfenced whole-array replace "RESURRECTS whatever the newer
+ * write removed, including the items `deleteAudioAsset`'s prune took out
+ * because their asset no longer exists." The fence REFUSES such a write —
+ * but the editor's conflict notice then offers "Keep my edits and overwrite",
+ * which replays the same draft against the newer revision. That is the right
+ * affordance (the user's edits are real and they get to keep them), and
+ * without this it was also a supported, two-click path back into precisely
+ * the state the fence was built to prevent: the deleted asset's pad returns,
+ * permanently dangling, and the GM has no way to know it happened, because
+ * "my edits" is not a phrase that tells anyone a pad's audio was deleted
+ * underneath them.
+ *
+ * FILTERING, NOT REJECTING. Refusing the save outright would strand the user:
+ * the editor gives them no way to find or remove the offending pads, so their
+ * only exit would be discarding every edit they made. Dropping the dead items
+ * converges on what `deleteAudioAsset`'s prune already did unilaterally to
+ * this same document, which makes the two paths agree instead of fighting.
+ * The saved document comes back in the response and re-seeds the editor, so
+ * the pad visibly disappears rather than silently persisting as a tombstone.
+ * (Telling the user how many went, and why, needs a response field and a
+ * surface for it — worth doing, deliberately not smuggled into this fix.)
+ *
+ * EXISTENCE, NOT VISIBILITY, and the distinction is the whole correctness of
+ * this function. "The asset row is gone" and "you cannot read that asset" are
+ * different facts with opposite right answers, and an ownership-scoped query
+ * here answers the second while claiming to answer the first.
+ *
+ * A package may legitimately reference an asset its owner cannot see —
+ * `listPackageAssets` says so explicitly ("a package can reference another
+ * user's private asset (nothing prevents that today) and this must not leak
+ * it") and handles it by refusing to RETURN the asset, so the board renders
+ * the pad in its own unresolved group with an honest reason. That reference
+ * is intact and the asset is alive. Scoping this query by ownership deletes
+ * it on the owner's next save — silent data loss, of exactly the kind this
+ * function exists to prevent, inflicted on a case that was working. (Caught
+ * by the E2E that seeds a foreign-owned item precisely to pin that
+ * behaviour; the unit suite's mongoose mocks cannot see the difference,
+ * which is the failure mode CLAUDE.md warns about.)
+ *
+ * So: `{_id: {$in: ids}}` and nothing else. That is not a leak. It reads no
+ * field of any document — the projection is `_id` — and every id in the
+ * answer is an id the CALLER supplied. The only thing derivable is whether a
+ * 24-hex id the caller already possesses exists, which is not information
+ * any 96-bit identifier is protecting.
+ *
+ * One `$in` over at most `MAX_PACKAGE_ITEMS` (64) ids, projected to `_id`.
+ */
+async function dropUnresolvableItems(
+  items: PackageItemData[],
+  moods: MoodData[] | undefined
+): Promise<{ items: PackageItemData[]; moods: MoodData[] | undefined; dropped: boolean }> {
+  // No ids to resolve — but the moods still have to be reconciled against the
+  // (empty) item list, because a payload of `items: []` with mood states in it
+  // is every state orphaned. An early return that skipped that would make this
+  // function's guarantee true for 1..64 items and false for 0, which is the
+  // shape of edge case that survives review by looking like an optimisation.
+  const survivingItems = items.length === 0 ? items : await resolveExistingItems(items);
+  const dropped = survivingItems.length !== items.length;
+
+  // Moods reference `item.id`, never `assetId` (see `~/lib/soundboard/prune`),
+  // so removing items without this leaves mood states pointing at ids that no
+  // longer exist — the same orphan `deleteAudioAsset`'s prune handles with the
+  // same helper. `moods` may be absent: this is a partial update, and an
+  // omitted field must stay omitted rather than being materialised here — see
+  // `updatePackage`, which reconciles the STORED moods in that case.
+  return {
+    items: survivingItems,
+    moods: moods === undefined ? undefined : pruneOrphanedMoodStates(moods, survivingItems),
+    dropped,
+  };
+}
+
+/** The existence query itself — see `dropUnresolvableItems` for why it is unscoped. */
+async function resolveExistingItems(items: PackageItemData[]): Promise<PackageItemData[]> {
+  const referencedIds = [...new Set(items.map((item) => item.assetId))];
+  const rows = (await AudioAsset.find(
+    { _id: { $in: referencedIds } },
+    { _id: 1 }
+  ).lean()) as unknown as { _id: unknown }[];
+
+  const live = new Set(rows.map((row) => String(row._id).toLowerCase()));
+  return items.filter((item) => live.has(item.assetId.toLowerCase()));
+}
+
+/**
+ * OPTIMISTIC CONCURRENCY. Every field this function writes is a whole-value
+ * replace — `items` and `moods` most of all — so without a precondition the
+ * write is last-write-wins over entire arrays. That is data loss, not
+ * staleness: an editor tab left open for ten minutes and then saved does not
+ * merely lose the newer edit, it RESURRECTS whatever the newer write removed,
+ * including the items `deleteAudioAsset`'s prune took out because their asset
+ * no longer exists (`app/server/functions/audio.ts`) — putting the document
+ * back into a state the rest of the system has already moved past.
+ *
+ * The fence is `updatedAt`, ANDed into the update filter, and the choice
+ * between it and a dedicated version counter came down to two properties of
+ * THIS collection:
+ *
+ * 1. Every writer of an `AudioPackage` already advances it, and the one that
+ *    matters most already does. `deleteAudioAsset`'s prune (audio.ts) `$set`s
+ *    `updatedAt` on every package it rewrites; `createPackage`/`clonePackage`
+ *    insert with the schema's own default. So the fence closes the
+ *    resurrection case above against the writer that exists today, with no
+ *    change to another module. A `version` counter would have to be threaded
+ *    into that writer by hand, and into every future one.
+ * 2. Every stored document already HAS it. `version: { type: Number, default:
+ *    0 }` does not retro-apply to documents already in Mongo, and `{ version:
+ *    0 }` does not match a document where the field is absent — so a counter
+ *    would have made every package created before this change permanently
+ *    unsaveable, unless paired with a `$exists` special case that then lives
+ *    forever or a backfill this phase has no migration mechanism for.
+ *
+ * NOT the same mistake as Task 10's. That defect is `updateAudioAsset`
+ * bumping `updatedAt` and thereby resetting a clock the once-upload reaper
+ * reads as "how long since this JOB progressed" — a second, different
+ * question inferred from the field. This asks `updatedAt` exactly the
+ * question it answers: has this document been modified since I read it. A
+ * writer that modifies the document and stamps `updatedAt` is CORRECTLY
+ * invalidating the caller's read, not accidentally defeating a mechanism.
+ * The invariant this does rely on, and which nothing mechanically enforces:
+ * any future writer of an `AudioPackage` must stamp `updatedAt`, or it will
+ * be invisible to this fence.
+ */
 export async function updatePackage({
   data,
   userId,
@@ -423,20 +639,59 @@ export async function updatePackage({
     await ensureDb();
     // Only include fields the caller actually provided, same reasoning as
     // `updateAudioAsset` in audio.ts: an omitted field must not be clobbered.
-    const set: Record<string, unknown> = { updatedAt: new Date() };
+    const set: Record<string, unknown> = {
+      updatedAt: new Date(Math.max(Date.now(), new Date(data.expectedUpdatedAt).getTime() + 1)),
+    };
     if (data.name !== undefined) set.name = data.name;
     if (data.description !== undefined) set.description = data.description;
-    if (data.items !== undefined) set.items = data.items;
-    if (data.moods !== undefined) set.moods = data.moods;
+    if (data.items !== undefined) {
+      // Before the write, not after: see `dropUnresolvableItems`. A draft
+      // built before `deleteAudioAsset` pruned this package would otherwise
+      // put the dead pads back — which the fence below refuses on the first
+      // attempt, and the editor's "keep my edits" retry then carries through
+      // on the second.
+      const pruned = await dropUnresolvableItems(data.items, data.moods);
+      set.items = pruned.items;
+      if (pruned.moods !== undefined) {
+        set.moods = pruned.moods;
+      } else if (pruned.dropped) {
+        // ITEMS WERE DROPPED AND THE CALLER SENT NO MOODS. The editor always
+        // sends both, but `updatePackageSchema` allows `items` alone, and in
+        // that case the moods this write leaves standing are the STORED ones —
+        // which may now reference item ids that no longer exist. Pruning only
+        // what we were handed would make this check's own invariant ("the
+        // items and moods written are mutually consistent") hold for the
+        // caller who needs it least.
+        //
+        // Reading here is safe against the very race this function sits
+        // inside: the write below is fenced on the caller's
+        // `expectedUpdatedAt`, so if anything lands between this read and that
+        // write, the write is refused rather than shipping moods built on a
+        // stale read.
+        const stored = (await AudioPackage.findOne(
+          { _id: data.id, ownerId: userId },
+          { moods: 1 }
+        ).lean()) as unknown as { moods?: MoodData[] } | null;
+        const storedMoods = stored?.moods;
+        if (storedMoods?.length) {
+          set.moods = pruneOrphanedMoodStates(storedMoods, pruned.items);
+        }
+      }
+    } else if (data.moods !== undefined) {
+      set.moods = data.moods;
+    }
 
     // Owner-scoped, NEVER the visibility filter — see `packageVisibilityFilter`'s
     // doc comment. This is the query that keeps a system package immutable.
+    // `updatedAt` is the precondition; it must be a `Date`, because Mongo
+    // compares a BSON date against a string as a type mismatch that never
+    // matches — which would refuse every save rather than only the stale ones.
     const doc = await AudioPackage.findOneAndUpdate(
-      { _id: data.id, ownerId: userId },
+      { _id: data.id, ownerId: userId, updatedAt: new Date(data.expectedUpdatedAt) },
       { $set: set },
       { new: true }
     ).lean();
-    if (!doc) throw new PackageClientError('Package not found');
+    if (!doc) throw await staleWriteOrNotFound(data.id, userId);
     serverCaptureEvent(telemetryId({ userId, sessionUserId }), 'package_updated', {
       packageId: data.id,
     });

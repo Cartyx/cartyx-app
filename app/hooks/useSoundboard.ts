@@ -6,6 +6,7 @@ import { boardReducer, initialBoardState, type BoardState } from '~/lib/soundboa
 import type { SoundboardCommand } from '~/lib/soundboard/commands';
 import { saveBoardStateFn } from '~/utils/soundboard-server-fns';
 import { captureException } from '~/utils/telemetry-client';
+import { isClientRefusal } from '~/lib/client-refusal';
 import type { AudioPackageData, BoardStateData } from '~/types/soundboard';
 import type { AudioAssetData, AudioRendition } from '~/types/audio';
 
@@ -322,6 +323,30 @@ export type UseSoundboardResult = {
 /** Stable identity for the common "nothing has failed" case. */
 const NO_LOAD_ERRORS: ReadonlySet<string> = new Set<string>();
 
+const boardSaves = new Map<string, { next?: () => Promise<void> }>();
+
+function enqueueBoardSave(campaignId: string, save: () => Promise<void>): void {
+  const existing = boardSaves.get(campaignId);
+  if (existing) {
+    existing.next = save;
+    return;
+  }
+  const queue: { next?: () => Promise<void> } = {};
+  boardSaves.set(campaignId, queue);
+  void (async () => {
+    try {
+      let next: (() => Promise<void>) | undefined = save;
+      while (next) {
+        await next();
+        next = queue.next;
+        queue.next = undefined;
+      }
+    } finally {
+      boardSaves.delete(campaignId);
+    }
+  })();
+}
+
 /**
  * The GM board's one stateful seam: reducer + Web Audio engine + random
  * one-shot scheduler + debounced persistence.
@@ -371,10 +396,6 @@ export function useSoundboard(
   const deadlineRef = useRef<number | null>(null);
   /** True while a `prompt`-urgency flush is already queued. */
   const promptPendingRef = useRef(false);
-  /** True while a write is in flight — writes are serialized, never raced. */
-  const inFlightRef = useRef(false);
-  /** A flush that arrived while a write was in flight, to run after it lands. */
-  const resaveRef = useRef(false);
 
   useEffect(() => {
     optionsRef.current = options;
@@ -396,43 +417,34 @@ export function useSoundboard(
     // exists to prevent.
     if (optionsRef.current.persist === false) return;
 
-    // Writes are serialized. `saveBoardState` is a full-state REPLACE, so two
-    // concurrent writes are not merely wasteful: a slow 200 ms prompt write and
-    // a faster later settle write can land at Atlas in the wrong order and
-    // persist stale state. Queue instead, and re-read `stateRef` when the queued
-    // write actually runs so it carries the newest state rather than a snapshot.
-    if (inFlightRef.current) {
-      resaveRef.current = true;
-      return;
-    }
-    inFlightRef.current = true;
-
     const id = campaignIdRef.current;
-    // `try/catch/finally` rather than `.then().catch().finally()`: a
-    // SYNCHRONOUS throw from `saveBoardStateFn` never reaches a promise chain,
-    // so the chain's `finally` would not run, `inFlightRef` would stay stuck
-    // `true`, and every later save would queue behind a request that no longer
-    // exists — persistence silently dead for the session. Unlikely (server fns
-    // return promises) but total, and this shape costs nothing.
-    void (async () => {
+    const data = toBoardStatePayload(id, stateRef.current);
+    enqueueBoardSave(id, async () => {
       try {
-        await saveBoardStateFn({ data: toBoardStatePayload(id, stateRef.current) });
+        await saveBoardStateFn({ data });
         if (mountedRef.current) setSaveError(null);
       } catch (error: unknown) {
         // The engine keeps playing. This is a mirror falling behind, not an
         // audio failure, and treating it as one would silence a live table.
-        captureException(error, { area: 'soundboard', campaignId: id });
+        //
+        // A REFUSAL IS NOT A FAULT. `saveBoardState` is gated by
+        // `boardStateLimiter` and by its own GM check, and both refuse with
+        // `SoundboardClientError` precisely so the server files no GlitchTip
+        // event — a control the caller can trip at will must not make report
+        // volume the caller's parameter. This capture undid that from the
+        // browser: a GM driving the board hard enough to meet the bucket, or
+        // any campaign member whose client called save without being GM,
+        // filed one client error per attempt. See `~/lib/client-refusal.ts`.
+        //
+        // `setSaveError` below still runs either way, so the GM is still told
+        // the mirror is behind. Only the fault report is suppressed.
+        if (!isClientRefusal(error))
+          captureException(error, { area: 'soundboard', campaignId: id });
         if (mountedRef.current) {
           setSaveError(error instanceof Error ? error.message : String(error));
         }
-      } finally {
-        inFlightRef.current = false;
-        if (resaveRef.current) {
-          resaveRef.current = false;
-          save();
-        }
       }
-    })();
+    });
   }, []);
 
   const scheduleSave = useCallback(
@@ -489,6 +501,10 @@ export function useSoundboard(
       // path), which means an effect that diffs board state sees nothing and
       // drops every random fire with the whole suite green.
       if (command.type === 'fireOneShot') engineRef.current?.fireOneShot(command.itemId);
+      if (command.type === 'stopAll') {
+        engineRef.current?.stopAll();
+        schedulerRef.current?.sync(boardReducer(stateRef.current, command));
+      }
 
       rawDispatch(command);
 
@@ -502,50 +518,57 @@ export function useSoundboard(
   // Audio
   // ---------------------------------------------------------------------
 
-  const loadAsset = useCallback(async (assetId: string): Promise<EngineAsset | null> => {
-    const ctx = ctxRef.current;
-    if (!ctx) throw new Error('Soundboard: loadAsset ran with no AudioContext');
+  const loadAsset = useCallback(
+    async (assetId: string, signal: AbortSignal): Promise<EngineAsset | null> => {
+      const ctx = ctxRef.current;
+      if (!ctx) throw new Error('Soundboard: loadAsset ran with no AudioContext');
 
-    const assets = optionsRef.current.assets;
-    // `enableAudio` refuses to build an engine while this is undefined, so
-    // reaching here means the invariant broke. THROW rather than return null:
-    // both end up in the engine's permanent `unplayable` set, but only a throw
-    // reaches `onLoadError` -> `captureException` instead of vanishing.
-    if (!assets) throw new Error('Soundboard: loadAsset ran before the asset list settled');
+      const assets = optionsRef.current.assets;
+      // `enableAudio` refuses to build an engine while this is undefined, so
+      // reaching here means the invariant broke. THROW rather than return null:
+      // both end up in the engine's permanent `unplayable` set, but only a throw
+      // reaches `onLoadError` -> `captureException` instead of vanishing.
+      if (!assets) throw new Error('Soundboard: loadAsset ran before the asset list settled');
 
-    const asset = assets.find((candidate) => candidate.id === assetId);
-    // Absent from a SETTLED list is not "nothing to play" — it is the list
-    // being wrong. Today that happens two ways: `listAudioAssetsFn` is
-    // cursor-paginated (default 50) while a package holds up to 64 items, and
-    // it filters `{ ownerId: userId }` so no system package's assets are ever
-    // in it (Task 21 adds `listPackageAssetsFn` to fix the source). Either way
-    // the pad dies permanently, so it must not die quietly.
-    if (!asset) throw new Error(`Soundboard: asset ${assetId} is not in the board's asset list`);
-    // Still transcoding: temporary in the world, permanent for this engine.
-    // Loud, for the same reason.
-    if (
-      asset.status === 'pending' ||
-      asset.status === 'processing' ||
-      asset.status === 'uploading'
-    ) {
-      throw new Error(`Soundboard: asset ${assetId} is not ready (status: ${asset.status})`);
-    }
+      const asset = assets.find((candidate) => candidate.id === assetId);
+      // Absent from a SETTLED list is not "nothing to play" — it is the list
+      // being wrong. Today that happens two ways: `listAudioAssetsFn` is
+      // cursor-paginated (default 50) while a package holds up to 64 items, and
+      // it filters `{ ownerId: userId }` so no system package's assets are ever
+      // in it (Task 21 adds `listPackageAssetsFn` to fix the source). Either way
+      // the pad dies permanently, so it must not die quietly.
+      if (!asset) throw new Error(`Soundboard: asset ${assetId} is not in the board's asset list`);
+      // Still transcoding: temporary in the world, permanent for this engine.
+      // Loud, for the same reason.
+      if (
+        asset.status === 'pending' ||
+        asset.status === 'processing' ||
+        asset.status === 'uploading'
+      ) {
+        throw new Error(`Soundboard: asset ${assetId} is not ready (status: ${asset.status})`);
+      }
 
-    // `failed`/no rendition are the only genuine "there is nothing to play,
-    // ever" answers, and the only ones that may return null silently.
-    if (asset.status !== 'ready') return null;
-    const rendition = pickRendition(asset.renditions);
-    if (!rendition) return null;
+      // `failed`/no rendition are the only genuine "there is nothing to play,
+      // ever" answers, and the only ones that may return null silently.
+      if (asset.status !== 'ready') return null;
+      const rendition = pickRendition(asset.renditions);
+      if (!rendition) return null;
 
-    const response = await fetch(rendition.url);
-    if (!response.ok) throw new Error(`Audio rendition fetch failed (${response.status})`);
-    const bytes = await response.arrayBuffer();
-    const buffer = await ctx.decodeAudioData(bytes);
-    // `durationSamples` passes through UNMODIFIED: the engine divides it by
-    // `AUDIO_RENDITION_SAMPLE_RATE` to compute `loopEnd`, and rounding it
-    // anywhere on the way makes Safari loops tick on every repeat.
-    return { buffer, durationSamples: asset.durationSamples };
-  }, []);
+      // `signal` aborts the instant the engine's `dispose()` runs — teardown,
+      // a board clear, or the retry path rebuilding a desynced engine (see
+      // `teardownAudio`). Passing it through actually cancels the network
+      // request rather than merely leaving its result unread.
+      const response = await fetch(rendition.url, { signal });
+      if (!response.ok) throw new Error(`Audio rendition fetch failed (${response.status})`);
+      const bytes = await response.arrayBuffer();
+      const buffer = await ctx.decodeAudioData(bytes);
+      // `durationSamples` passes through UNMODIFIED: the engine divides it by
+      // `AUDIO_RENDITION_SAMPLE_RATE` to compute `loopEnd`, and rounding it
+      // anywhere on the way makes Safari loops tick on every repeat.
+      return { buffer, durationSamples: asset.durationSamples };
+    },
+    []
+  );
 
   const teardownAudio = useCallback((): void => {
     schedulerRef.current?.dispose();
@@ -561,11 +584,18 @@ export function useSoundboard(
 
   const runEnableAudio = useCallback(async (): Promise<void> => {
     const fail = (message: string, error?: unknown) => {
-      captureException(error ?? new Error(message), {
-        area: 'soundboard',
-        campaignId: campaignIdRef.current,
-        stage: 'enableAudio',
-      });
+      // Guarded for UNIFORMITY, not because a refusal can reach here today:
+      // this path fails on AudioContext construction and engine setup, none of
+      // which crosses a server fn. The rule that every `captureException` on
+      // this surface is gated is worth more exceptionless than it is worth
+      // minimal — eleven sites were left open the last time it was applied
+      // site by site. `tests/lib/client-refusal.test.ts` enforces it.
+      if (!isClientRefusal(error))
+        captureException(error ?? new Error(message), {
+          area: 'soundboard',
+          campaignId: campaignIdRef.current,
+          stage: 'enableAudio',
+        });
       if (mountedRef.current) {
         setAudioReady(false);
         setAudioError(message);
@@ -641,11 +671,32 @@ export function useSoundboard(
       // Without this the pad stays lit forever.
       onItemEnded: (itemId) => dispatch({ type: 'stop', itemId }),
       onLoadError: (assetId, error) => {
-        captureException(error, { area: 'soundboard', campaignId: campaignIdRef.current, assetId });
+        // Guard FIRST. `dispose()` aborts every in-flight load and the
+        // engine itself already stops calling this once it is disposed (see
+        // `ensureAsset`'s `disposed` guard in `engine.ts`) — but the cleanup
+        // effect below flips `mountedRef` to `false` and THEN calls
+        // `teardownAudio()`, so a rejection that was already mid-flight when
+        // this callback starts running can still land here in the same tick
+        // dispose fires. Capturing it would be exactly the "one GlitchTip
+        // event per asset on every board clear" this task exists to stop —
+        // a teardown is not a genuine failure, so it must never reach
+        // `captureException`. A real failure while the board is still
+        // mounted falls through untouched.
+        if (!mountedRef.current) return;
+        // `loadAsset` fetches a rendition straight from the CDN, so a refusal
+        // cannot reach here as the code stands. Guarded anyway, and this one
+        // is the least theoretical of the three: the moment asset loading
+        // moves behind a server fn — a signed-URL endpoint, say — every
+        // rate-limit refusal on it would land in exactly this handler.
+        if (!isClientRefusal(error))
+          captureException(error, {
+            area: 'soundboard',
+            campaignId: campaignIdRef.current,
+            assetId,
+          });
         // Surface it too. A GlitchTip event tells ME; `loadErrors` tells the
         // GM mid-session, which is the only audience that can react to a pad
         // that will now be silent for the rest of the engine's life.
-        if (!mountedRef.current) return;
         setLoadErrors((previous) => {
           if (previous.has(assetId)) return previous;
           const next = new Set(previous);
@@ -728,12 +779,17 @@ export function useSoundboard(
       // and let `hydrateBoardState`'s package-mismatch branch keep
       // `masterVolume` and nothing else — the board resolves to "no package
       // loaded", which is both true and something Task 17 already renders.
-      captureException(
-        new Error(
-          `Soundboard: persisted board names package ${initialState.packageId}, which did not resolve`
-        ),
-        { area: 'soundboard', campaignId: campaignIdRef.current, stage: 'hydrate' }
+      // Uniformity again — this one constructs its own `Error`, so the guard
+      // is provably never true. See the `fail` helper above.
+      const unresolved = new Error(
+        `Soundboard: persisted board names package ${initialState.packageId}, which did not resolve`
       );
+      if (!isClientRefusal(unresolved))
+        captureException(unresolved, {
+          area: 'soundboard',
+          campaignId: campaignIdRef.current,
+          stage: 'hydrate',
+        });
     }
 
     hydratedRef.current = true;

@@ -6,14 +6,28 @@
  * Application errors thrown by server-fn code (validation, not-found, auth)
  * cannot heal on retry and must never trip the breaker.
  *
- * Server-fn errors cross the wire as plain `Error`s: TanStack Start's
- * serialization (seroval) does NOT preserve own props on `Error` instances,
- * so a handler throwing `Object.assign(new Error(...), { status: 503 })`
- * arrives client-side with only `name`/`message` — `status` is gone.
- * Classification of server-thrown failures therefore relies entirely on
- * message patterns below; the `status >= 500` branch only ever fires for
- * errors constructed client-side (e.g. from a fetch Response), never for
- * ones that came back through a server function.
+ * Server-fn errors cross the wire as plain `Error`s — the CLASS does not
+ * survive, so nothing here may use `instanceof` on a server-thrown value.
+ * Its `name` and its own properties do survive: seroval's error encoder
+ * copies every own property across (`stack` excepted, behind a feature
+ * flag), which is what lets `~/lib/soundboard/stale-write.ts` read
+ * `currentUpdatedAt` and `~/lib/client-refusal.ts` key on `name`.
+ *
+ * An earlier version of this comment claimed the opposite — that own props
+ * are dropped, so `Object.assign(new Error(...), { status: 503 })` arrives
+ * with only `name`/`message` — and concluded that the `status >= 500` branch
+ * below "only ever fires for errors constructed client-side, never for ones
+ * that came back through a server function." Both halves were wrong, and the
+ * conclusion is the dangerous one: a server-thrown error carrying `status`
+ * DOES reach that branch and can trip the breaker. Nothing in this codebase
+ * throws one today, so this is a correction to the reasoning rather than to
+ * the behaviour — but the two files above depend on the true version, and a
+ * reader who reconciled them in the direction of this paragraph would
+ * silently break both.
+ *
+ * Message patterns are still the primary classifier for server-thrown
+ * failures, because the failures that matter here (proxy responses, driver
+ * faults) arrive as bare `Error`s with nothing but text.
  */
 
 /** Thrown by guarded callers when the circuit breaker is open. */

@@ -234,6 +234,10 @@ export const queryKeys = {
     // of truth instead of a second, driftable definition.
     list: (filters: AudioFilters) => ['audio', 'list', filters] as const,
     detail: (id: string) => ['audio', 'detail', id] as const,
+    // Task 5: per-user storage usage against the quota, shown on `/audio`
+    // near the dropzone. No filters — one key, same fixed shape as
+    // `packages.list`.
+    usage: () => ['audio', 'usage'] as const,
   },
   monsters: {
     all: ['monsters'] as const,

@@ -105,4 +105,41 @@ describe('AudioOrphanCleanup', () => {
     expect(screen.getByRole('button', { name: /scanning/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /delete 1 file/i })).toBeDisabled();
   });
+
+  /**
+   * B2 (phase-B): this component now imports the shared `~/utils/format-
+   * bytes` instead of its own copy, which had no GB tier and stopped at MB
+   * with 1 decimal. `ORPHAN.sizeBytes` (2_097_152) is exactly 2.0 MB, so this
+   * pins the per-row size — a fixture picked because it renders identically
+   * under BOTH the old and new implementations, proving the MB tier itself
+   * still works after the switch.
+   */
+  it('formats an individual orphan size in the row list', () => {
+    render(<AudioOrphanCleanup {...BASE} result={scan({ orphans: [ORPHAN] })} />);
+    expect(screen.getByText('2.0 MB')).toBeInTheDocument();
+  });
+
+  /**
+   * This is the assertion that would have passed for the wrong reason before
+   * the consolidation: the old copy of `formatBytes` in this file had no GB
+   * tier at all, so a 1.5 GiB total rendered as "1536.0 MB" — a plain
+   * `/delete 2 files/i` match (the style every other test in this file uses)
+   * would still pass either way. Asserting the exact button name is what
+   * actually pins the shared implementation's GB tier here, mirroring what
+   * `AudioQuotaBar.test.tsx` already pins for its own GB-scale numbers.
+   * Individual assets can never reach this tier (`AUDIO_MAX_BYTES` caps one
+   * asset at 50 MB), but the aggregate this button sums can, on an account
+   * with enough orphaned files.
+   */
+  it('formats the delete total in GB once the orphan set crosses 1 GiB', () => {
+    const GIB = 1024 * 1024 * 1024;
+    const bigOrphans = [
+      { key: 'uploads/audio/a.opus', sizeBytes: 0.75 * GIB, lastModified: null },
+      { key: 'uploads/audio/b.opus', sizeBytes: 0.75 * GIB, lastModified: null },
+    ];
+    render(<AudioOrphanCleanup {...BASE} result={scan({ orphans: bigOrphans })} />);
+    expect(
+      screen.getByRole('button', { name: /delete 2 files \(1\.50 gb\)/i })
+    ).toBeInTheDocument();
+  });
 });

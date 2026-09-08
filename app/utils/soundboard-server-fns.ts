@@ -1,5 +1,11 @@
 import { createServerFn } from '@tanstack/react-start';
 import {
+  packageWriteLimiter,
+  packageEditLimiter,
+  boardStateLimiter,
+  rateLimitMessage,
+} from '~/lib/audio-rate-limits';
+import {
   getPackageSchema,
   createPackageSchema,
   updatePackageSchema,
@@ -47,6 +53,42 @@ import {
 // tagging only. Do not add a second campaign-membership check here — that
 // would duplicate, and could drift from, the one `soundboard.ts` already
 // owns.
+//
+// RATE LIMITING. Applied identically to `~/utils/audio-server-fns.ts` (read
+// that module's note for the full reasoning) — after `requireActor()`, keyed
+// on the Mongo `_id`, before the `~/server/functions/*` call, refusing with
+// the module's own client-error class so a rejection files no GlitchTip
+// event. Two buckets from `~/lib/audio-rate-limits.ts` land here:
+//
+//  - `packageWriteLimiter` on `createPackageFn`/`clonePackageFn` — the two
+//    that MINT a package against the 100-per-user cap.
+//  - `packageEditLimiter` on `updatePackageFn`. This one is a final-review
+//    addition that SUPERSEDES Task 2's decision to leave it open; that
+//    decision was argued on footprint alone, and footprint is not the only
+//    cost. An update is the largest single write on this surface (a
+//    whole-document `$set` of `items` and `moods`, up to ~410 KiB — several
+//    hundred times a `saveBoardState`, which is gated) and fires one
+//    un-awaited `package_updated` Umami event per call at caller-controlled
+//    volume. Task 7's stale-write fence does not bound either: the refusal
+//    carries `currentUpdatedAt`, so a replay loop succeeds every iteration.
+//    The numbers are sized for a human pressing "Save changes" — see
+//    `~/lib/audio-rate-limits.ts`.
+//  - `boardStateLimiter` on `saveBoardStateFn` only.
+//
+// `deletePackageFn` is the one WRITE here with no bucket, and the reason is
+// specific to it rather than shared with update: it is a single `deleteOne`
+// by `{_id, ownerId}` with no document body to amplify, and its
+// `package_deleted` event fires only on a row that really was removed — a
+// replay hits `deletedCount: 0` and throws `PackageClientError`, which files
+// nothing. Its event volume is bounded by the packages the caller owns, and
+// the only ways to get more are the two gated minting endpoints above,
+// behind a 100-package cap.
+//
+// READS ARE UNGATED — `listPackagesFn`, `getPackageFn`,
+// `listPackageAssetsFn`, `loadBoardStateFn`. Per the design: a read bound
+// risks breaking a legitimate board reload, which fires several of these at
+// once, and one refused read leaves a half-loaded board. See
+// `~/lib/audio-rate-limits.ts` for the full note.
 // ---------------------------------------------------------------------------
 
 export const listPackagesFn = createServerFn({ method: 'GET' }).handler(async () => {
@@ -66,17 +108,36 @@ export const getPackageFn = createServerFn({ method: 'GET' })
 export const createPackageFn = createServerFn({ method: 'POST' })
   .inputValidator(createPackageSchema)
   .handler(async ({ data }) => {
-    const { createPackage } = await import('~/server/functions/packages');
+    const { createPackage, PackageClientError } = await import('~/server/functions/packages');
     const { requireActor } = await import('~/utils/require-actor');
-    return createPackage({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = packageWriteLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      throw new PackageClientError(rateLimitMessage('sound package', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return createPackage({ data, ...actor });
   });
 
 export const updatePackageFn = createServerFn({ method: 'POST' })
   .inputValidator(updatePackageSchema)
   .handler(async ({ data }) => {
-    const { updatePackage } = await import('~/server/functions/packages');
+    const { updatePackage, PackageClientError } = await import('~/server/functions/packages');
     const { requireActor } = await import('~/utils/require-actor');
-    return updatePackage({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = packageEditLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      // `PackageClientError`, not `PackageStaleWriteError` — a rate-limit
+      // refusal is not a conflict, and the editor's `isStalePackageWriteError`
+      // check must not mistake it for one and offer an "overwrite" button
+      // that would only burn the caller's next token. It files no GlitchTip
+      // event either, same as every other bucket's refusal on this surface.
+      throw new PackageClientError(rateLimitMessage('package edit', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return updatePackage({ data, ...actor });
   });
 
 export const deletePackageFn = createServerFn({ method: 'POST' })
@@ -90,9 +151,16 @@ export const deletePackageFn = createServerFn({ method: 'POST' })
 export const clonePackageFn = createServerFn({ method: 'POST' })
   .inputValidator(clonePackageSchema)
   .handler(async ({ data }) => {
-    const { clonePackage } = await import('~/server/functions/packages');
+    const { clonePackage, PackageClientError } = await import('~/server/functions/packages');
     const { requireActor } = await import('~/utils/require-actor');
-    return clonePackage({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = packageWriteLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      throw new PackageClientError(rateLimitMessage('sound package', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return clonePackage({ data, ...actor });
   });
 
 // Task 21: the assets one package's items reference — package-gated, not the
@@ -118,7 +186,14 @@ export const loadBoardStateFn = createServerFn({ method: 'GET' })
 export const saveBoardStateFn = createServerFn({ method: 'POST' })
   .inputValidator(saveBoardStateSchema)
   .handler(async ({ data }) => {
-    const { saveBoardState } = await import('~/server/functions/soundboard');
+    const { saveBoardState, SoundboardClientError } = await import('~/server/functions/soundboard');
     const { requireActor } = await import('~/utils/require-actor');
-    return saveBoardState({ data, ...(await requireActor()) });
+    const actor = await requireActor();
+    const gate = boardStateLimiter.check(actor.userId);
+    if (!gate.allowed) {
+      throw new SoundboardClientError(rateLimitMessage('board save', gate.retryAfterMs), {
+        retryAfterMs: gate.retryAfterMs,
+      });
+    }
+    return saveBoardState({ data, ...actor });
   });

@@ -108,6 +108,24 @@ function loaderFor(assets: Record<string, EngineAsset>) {
   return (assetId: string) => Promise.resolve(assets[assetId] ?? null);
 }
 
+/**
+ * Same as `loaderFor`, plus a call count per `assetId`. The asset cache is
+ * private engine state — the number of times `loadAsset` gets asked for a
+ * given id is the only black-box signal of whether that id's buffer is still
+ * cached (1 call) or was evicted and had to be re-decoded (2+ calls).
+ */
+function countingLoader(assets: Record<string, EngineAsset>): {
+  loadAsset: (assetId: string) => Promise<EngineAsset | null>;
+  calls: Record<string, number>;
+} {
+  const calls: Record<string, number> = {};
+  const loadAsset = (assetId: string) => {
+    calls[assetId] = (calls[assetId] ?? 0) + 1;
+    return Promise.resolve(assets[assetId] ?? null);
+  };
+  return { loadAsset, calls };
+}
+
 describe('createEngine — fades', () => {
   it('fades in on a clean linear ramp that reaches the target at exactly t = fade', async () => {
     const ctx = new OfflineAudioContext(1, 3 * SR, SR);
@@ -730,5 +748,382 @@ describe('createEngine — volume and teardown', () => {
 
     expect(at(rendered, 0.9)).toBeCloseTo(1, 5);
     expect(peakBetween(rendered, 1.01, 2)).toBeCloseTo(0, 5);
+  });
+});
+
+describe('createEngine — teardown aborts in-flight loads (Task 9)', () => {
+  it('does not throw into the graph or file a capture when dispose() runs on a load still in flight', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    const errors: Array<{ assetId: string; error: unknown }> = [];
+    let calls = 0;
+    // Settles ONLY in response to the AbortSignal `dispose()` fires — never
+    // on its own. A loader that resolved by itself would let `dispose()` win
+    // a race against an already-settled load and prove nothing; this shape
+    // guarantees the load is genuinely still pending when dispose runs, which
+    // is the one condition the guard under test actually has to hold up
+    // under.
+    const loadAsset = (_assetId: string, signal: AbortSignal): Promise<EngineAsset | null> => {
+      calls += 1;
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          reject(new DOMException('The operation was aborted.', 'AbortError'));
+        });
+      });
+    };
+    const engine = createEngine(ctx, {
+      loadAsset,
+      onLoadError: (assetId, error) => errors.push({ assetId, error }),
+    });
+
+    engine.apply(
+      board([boardItem({ itemId: 'storm', assetId: 'a1', playing: true, volume: 1, loop: true })])
+    );
+    // The load is genuinely in flight — `loadAsset` above never resolves on
+    // its own, so if this were 0 the rest of the test would be vacuous.
+    expect(calls).toBe(1);
+
+    expect(() => engine.dispose()).not.toThrow();
+    // Let the abort's rejection reach `ensureAsset`'s `.catch` — a microtask,
+    // not a real delay.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(errors).toEqual([]);
+    // Not just "no capture" — the graph itself must still be renderable, i.e.
+    // nothing threw into a callback Web Audio was driving.
+    await expect(ctx.startRendering()).resolves.toBeTruthy();
+  });
+
+  it('still reports a genuine load failure while the engine is live — the disposed guard does not swallow everything', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    const errors: Array<{ assetId: string; error: unknown }> = [];
+    const boom = new Error('decode failed');
+    const engine = createEngine(ctx, {
+      loadAsset: () => Promise.reject(boom),
+      onLoadError: (assetId, error) => errors.push({ assetId, error }),
+    });
+
+    engine.apply(
+      board([boardItem({ itemId: 'storm', assetId: 'a1', playing: true, volume: 1, loop: true })])
+    );
+    await engine.ready();
+
+    // The engine was never disposed, so this is the ordinary case: a real
+    // failure must still reach telemetry. Proves the `disposed` gate added
+    // for teardown does not accidentally silence everything.
+    expect(errors).toEqual([{ assetId: 'a1', error: boom }]);
+  });
+
+  it('dispose() drains `pending` — ready() resolves promptly even for a load that never settles on its own (Handoff 1)', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    // Ignores the abort signal entirely — standing in for a caller whose
+    // network layer cannot be cancelled (or simply did not wire the signal
+    // through). If `dispose()` left this entry in `pending`, `ready()`'s
+    // `while (pending.size > 0) await Promise.all(...)` would await a
+    // promise that never settles and this test would hang until vitest's
+    // timeout, not resolve.
+    const loadAsset = (): Promise<EngineAsset | null> => new Promise(() => {});
+    const engine = createEngine(ctx, { loadAsset });
+
+    engine.apply(
+      board([boardItem({ itemId: 'storm', assetId: 'a1', playing: true, volume: 1, loop: true })])
+    );
+
+    engine.dispose();
+
+    await expect(engine.ready()).resolves.toBeUndefined();
+  });
+});
+
+describe('createEngine — decoded-buffer cache cap', () => {
+  // Real fixtures, real bytes: three 0.01 s mono buffers, 480 samples each.
+  // `assetCacheCapBytes` is overridden per test so the cap is genuinely
+  // crossed by a few KB of fixture instead of requiring gigabytes of real
+  // decoded audio to prove the same thing.
+  const BYTES_PER_ASSET = 480 * 1 * 4; // mono, float32 — 1920 bytes.
+
+  function tinyAsset(ctx: BaseAudioContext): EngineAsset {
+    return { buffer: dcBuffer(ctx, 0.01), durationSamples: 480 };
+  }
+
+  it('evicts an idle asset past the cap, and never the one still playing', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    const fixtures: Record<string, EngineAsset> = {
+      a: tinyAsset(ctx),
+      b: tinyAsset(ctx),
+      c: tinyAsset(ctx),
+    };
+    const { loadAsset, calls } = countingLoader(fixtures);
+    // Room for two assets, not three — the fixture only has teeth if loading
+    // the third genuinely crosses the cap rather than approaching it.
+    const assetCacheCapBytes = BYTES_PER_ASSET * 2 + 1;
+    const engine = createEngine(ctx, { loadAsset, assetCacheCapBytes });
+
+    const itemA = boardItem({ itemId: 'a', assetId: 'a', playing: true, volume: 1, loop: true });
+    const itemB = boardItem({ itemId: 'b', assetId: 'b', playing: true, volume: 1, loop: true });
+    const itemC = boardItem({ itemId: 'c', assetId: 'c', playing: true, volume: 1, loop: true });
+
+    // a loads and is left playing for the rest of the test — the
+    // "currently playing" asset. It is also the OLDEST cache entry once b
+    // and c have loaded, which matters below: a plain LRU-by-age policy
+    // would reach for it first and get this exactly backwards.
+    engine.apply(board([itemA]));
+    await engine.ready();
+
+    // b loads, plays briefly, then stops — idle, but still resident.
+    engine.apply(board([itemA, itemB]));
+    await engine.ready();
+    engine.apply(board([itemA, { ...itemB, playing: false }]));
+    await engine.ready();
+    expect(calls.a).toBe(1);
+    expect(calls.b).toBe(1);
+
+    // c loads. a + b + c is three assets' worth of bytes — over cap. a is
+    // playing and idle-b is not; eviction must take b.
+    engine.apply(board([itemA, { ...itemB, playing: false }, itemC]));
+    await engine.ready();
+
+    // Retrigger a: stop it, then immediately restart it. If a survived
+    // eviction this is a synchronous restart — its buffer is still in the
+    // cache, so no new decode is needed. If a was wrongly evicted instead of
+    // b, `start` finds no buffer and reconcile has to re-request it.
+    engine.apply(board([{ ...itemA, playing: false }, { ...itemB, playing: false }, itemC]));
+    engine.apply(board([itemA, { ...itemB, playing: false }, itemC]));
+    await engine.ready();
+    expect(calls.a).toBe(1);
+
+    // b, in contrast, must have been evicted — playing it again needs a
+    // fresh decode.
+    engine.apply(board([itemA, itemB, itemC]));
+    await engine.ready();
+    expect(calls.b).toBe(2);
+
+    // Nothing here should have thrown or left the graph in a bad state.
+    await expect(ctx.startRendering()).resolves.toBeTruthy();
+  });
+
+  /**
+   * THE FADE-OUT WINDOW.
+   *
+   * `stopTrack` clears `track.source` at the moment it SCHEDULES the stop,
+   * while the source goes on sounding for the whole fade — up to 30 s, the
+   * schema's `fadeSeconds` cap — and stays in `live` until its `onended`
+   * fires. Eviction used to ask `track.source` whether an asset was playing,
+   * so for that entire window it treated a still-sounding buffer as
+   * evictable: it dropped the cache entry and subtracted the bytes from its
+   * running total while the browser still held the buffer, because the source
+   * node keeps its own reference to it.
+   *
+   * Nothing goes silent — that reference is exactly why — so this was never
+   * an audio bug, and a test asserting on rendered output could not catch it.
+   * It was an accounting bug, and it defeated the cap in the direction that
+   * matters: the cache re-admitted up to the full budget ON TOP OF buffers it
+   * had already written off, and the next play of a written-off asset
+   * re-decoded it, so two copies of one buffer could be resident while the
+   * total showed one.
+   *
+   * The observable consequence is the re-decode, which is what this asserts.
+   */
+  it('does not evict a buffer that is still audibly fading out', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    const fixtures: Record<string, EngineAsset> = {
+      a: tinyAsset(ctx),
+      b: tinyAsset(ctx),
+    };
+    const { loadAsset, calls } = countingLoader(fixtures);
+    // Room for one asset only, so loading the second must evict something —
+    // and `a`, mid-fade, is the only candidate.
+    const engine = createEngine(ctx, {
+      loadAsset,
+      assetCacheCapBytes: BYTES_PER_ASSET + 1,
+    });
+
+    // A long fade, so the stop is unambiguously still in flight when b loads.
+    const itemA = boardItem({
+      itemId: 'a',
+      assetId: 'a',
+      playing: true,
+      volume: 1,
+      loop: true,
+      fadeSeconds: 20,
+    });
+    const itemB = boardItem({ itemId: 'b', assetId: 'b', playing: true, volume: 1, loop: true });
+
+    engine.apply(board([itemA]));
+    await engine.ready();
+    expect(calls.a).toBe(1);
+
+    // Stop a. `track.source` is now null, but the source is still sounding.
+    engine.apply(board([{ ...itemA, playing: false }]));
+    await engine.ready();
+
+    // b loads and crosses the cap. a is the only thing that could be evicted.
+    engine.apply(board([{ ...itemA, playing: false }, itemB]));
+    await engine.ready();
+
+    // Play a again. If its buffer survived — as it must, because the bytes
+    // were never actually free — this needs no fresh decode. Against the
+    // `track.source` test this is 2.
+    engine.apply(board([itemA, itemB]));
+    await engine.ready();
+    expect(calls.a).toBe(1);
+
+    await expect(ctx.startRendering()).resolves.toBeTruthy();
+  });
+
+  /**
+   * THE CONTROL for the test above, and it is not optional: a retention rule
+   * with no matching release is a leak that pins every asset ever played and
+   * disables the cap outright — which would pass the fade test perfectly.
+   *
+   * A fade of ZERO is the discriminator. `stopTrack` schedules `stop(now +
+   * fade)`, so with no fade the source's end time is the current time and the
+   * buffer is free the instant the pad stops. The two tests together pin the
+   * boundary rather than either side of it.
+   *
+   * This is also why release is derived from the SCHEDULED stop time rather
+   * than from `onended`. An `OfflineAudioContext` that is never rendered has
+   * a clock that never advances, so `onended` never fires on it at all — an
+   * event-driven version of this rule pins everything here forever, and the
+   * bug it lets through is invisible until a real board runs out of memory.
+   */
+  it('releases a buffer immediately when the pad stops with no fade', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    const fixtures: Record<string, EngineAsset> = {
+      a: tinyAsset(ctx),
+      b: tinyAsset(ctx),
+    };
+    const { loadAsset, calls } = countingLoader(fixtures);
+    const engine = createEngine(ctx, {
+      loadAsset,
+      assetCacheCapBytes: BYTES_PER_ASSET + 1,
+    });
+
+    const itemA = boardItem({
+      itemId: 'a',
+      assetId: 'a',
+      playing: true,
+      volume: 1,
+      loop: true,
+      fadeSeconds: 0,
+    });
+    const itemB = boardItem({ itemId: 'b', assetId: 'b', playing: true, volume: 1, loop: true });
+
+    engine.apply(board([itemA]));
+    await engine.ready();
+    engine.apply(board([{ ...itemA, playing: false }]));
+    await engine.ready();
+
+    // b crosses the cap. a stopped with no fade, so its bytes really are
+    // reclaimable and the cap is entitled to take them.
+    engine.apply(board([{ ...itemA, playing: false }, itemB]));
+    await engine.ready();
+
+    engine.apply(board([itemA, itemB]));
+    await engine.ready();
+    expect(calls.a).toBe(2);
+  });
+
+  it('re-decodes an evicted asset on next play, and it actually plays — not a silent no-op', async () => {
+    const ctx = new OfflineAudioContext(1, SR, SR);
+    const fixtures: Record<string, EngineAsset> = { x: tinyAsset(ctx), y: tinyAsset(ctx) };
+    const { loadAsset, calls } = countingLoader(fixtures);
+    const errors: Array<{ assetId: string; error: unknown }> = [];
+    // Room for exactly one of these assets at a time.
+    const assetCacheCapBytes = BYTES_PER_ASSET + 1;
+    const engine = createEngine(ctx, {
+      loadAsset,
+      assetCacheCapBytes,
+      onLoadError: (assetId, error) => errors.push({ assetId, error }),
+    });
+
+    const itemX = boardItem({ itemId: 'x', assetId: 'x', playing: true, volume: 1, loop: true });
+    const itemY = boardItem({ itemId: 'y', assetId: 'y', playing: true, volume: 1, loop: true });
+
+    // x loads and plays, then stops — idle, but still cached.
+    engine.apply(board([itemX]));
+    await engine.ready();
+    engine.apply(board([{ ...itemX, playing: false }]));
+    await engine.ready();
+
+    // y loads and plays. x + y is two assets' worth of bytes against a
+    // one-asset cap — over cap. x is idle and y is playing, so eviction must
+    // take x, not y.
+    engine.apply(board([{ ...itemX, playing: false }, itemY]));
+    await engine.ready();
+    expect(calls.x).toBe(1);
+
+    // Stop y, then play x again. x's buffer is gone — this must re-decode
+    // rather than leaving the pad silently unlit.
+    engine.apply(board([itemX, { ...itemY, playing: false }]));
+    await engine.ready();
+
+    expect(calls.x).toBe(2);
+    expect(errors).toEqual([]);
+
+    const rendered = await ctx.startRendering();
+    // Not just "no error" — actually sounding, at the volume x was given.
+    expect(at(rendered, 0.005)).toBeCloseTo(1, 4);
+  });
+
+  it('fires a cold one-shot correctly even when the cache is fully saturated with playing assets', async () => {
+    // Stereo, and the two beds vs. the one-shot are put on separate channels
+    // (the same isolation trick the fades tests use) — on a single shared
+    // channel, "the beds are playing" and "the one-shot also played" sum
+    // together and become indistinguishable in the rendered output.
+    const ctx = new OfflineAudioContext(2, SR, SR);
+    const bedBuffer = () => dcBuffer(ctx, 0.01, { channels: 2, activeChannel: 0 });
+    const oneShotBuffer = () => dcBuffer(ctx, 0.01, { channels: 2, activeChannel: 1 });
+    const bytesPerStereoAsset = 480 * 2 * 4; // 3840 bytes.
+    const fixtures: Record<string, EngineAsset> = {
+      p1: { buffer: bedBuffer(), durationSamples: 480 },
+      p2: { buffer: bedBuffer(), durationSamples: 480 },
+      c: { buffer: oneShotBuffer(), durationSamples: 480 },
+    };
+    const { loadAsset, calls } = countingLoader(fixtures);
+    const errors: Array<{ assetId: string; error: unknown }> = [];
+    // Room for exactly the two beds below — zero idle headroom once both are
+    // playing. This is not a contrived corner: the cap's own derivation notes
+    // that two long ambience beds playing together already consume the whole
+    // 1 GiB production cap, so "nothing evictable" is the normal state of a
+    // busy board, not an edge case.
+    const assetCacheCapBytes = bytesPerStereoAsset * 2;
+    const engine = createEngine(ctx, {
+      loadAsset,
+      assetCacheCapBytes,
+      onLoadError: (assetId, error) => errors.push({ assetId, error }),
+    });
+
+    const p1 = boardItem({ itemId: 'p1', assetId: 'p1', playing: true, volume: 1, loop: true });
+    const p2 = boardItem({ itemId: 'p2', assetId: 'p2', playing: true, volume: 1, loop: true });
+    // Never played as a pad (`playing: false`) — only ever reached through
+    // `fireOneShot`, so its asset is genuinely cold when fired below.
+    const cItem = boardItem({ itemId: 'c', assetId: 'c', playing: false, volume: 1, loop: false });
+
+    // Both beds load and are left playing. The cache is now exactly at cap,
+    // nothing idle to reclaim.
+    engine.apply(board([p1, p2]));
+    await engine.ready();
+    expect(calls.p1).toBe(1);
+    expect(calls.p2).toBe(1);
+
+    // Fire a one-shot on the third, never-loaded asset. Decoding it pushes
+    // the cache over cap with both beds still playing — the only thing
+    // `evictAssets` could otherwise reach for is the one-shot's own
+    // just-landed buffer, before `fireOneShot`'s own continuation ever gets a
+    // turn to call `start` and mark it playing. That race is exactly what
+    // `firingOneShots` exists to close.
+    engine.apply(board([p1, p2, cItem]));
+    engine.fireOneShot('c');
+    await engine.ready();
+
+    expect(calls.c).toBe(1);
+    expect(errors).toEqual([]);
+
+    const rendered = await ctx.startRendering();
+    // c's own channel: silence here would mean the fire was dropped — the
+    // assertion that actually rules that out, not just "no thrown error".
+    expect(at(rendered, 0.005, 1)).toBeCloseTo(1, 4);
+    // Sanity: the beds are still there too, undisturbed by the one-shot.
+    expect(at(rendered, 0.005, 0)).toBeCloseTo(2, 4);
   });
 });

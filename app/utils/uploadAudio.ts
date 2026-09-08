@@ -5,6 +5,7 @@ import {
   confirmOnceVariantUploadFn,
 } from '~/utils/audio-server-fns';
 import { captureException } from '~/utils/telemetry-client';
+import { isClientRefusal } from '~/lib/client-refusal';
 import { isBackendDown, reportBackendFailure } from '~/utils/backend-health';
 import { BackendUnavailableError } from '~/utils/error-classification';
 import type { AudioKind, AudioEnvironment, AudioMood } from '~/types/audio';
@@ -60,7 +61,23 @@ export async function uploadAudioFile(
     return { assetId };
   } catch (e) {
     reportBackendFailure(e);
-    captureException(e, { action: 'uploadAudioFile', fileName: file.name, fileSize: file.size });
+    // A REFUSAL IS NOT A FAULT, and it must not be reported as one. The
+    // server takes deliberate care to keep quota / pending-job-cap /
+    // rate-limit / not-found refusals out of GlitchTip — that is the entire
+    // reason `AudioClientError` exists, and `reportAudioError` excludes it —
+    // on the reasoning that a refusal the caller can trigger at will makes
+    // report volume the caller's own parameter. Capturing here undid that
+    // from the other side of the wire: a GM at their storage quota filed one
+    // GlitchTip event per upload attempt, and a folder drop that met the
+    // pending-job cap filed one per refused file. Same control, sibling path.
+    //
+    // The refusal still reaches the user: it is rethrown below, and
+    // `AudioUploadDropzone` renders its message against the file it belongs
+    // to. Only the fault report is suppressed. Genuine failures — a broken
+    // PUT, a 500, a decode error — are untouched.
+    if (!isClientRefusal(e)) {
+      captureException(e, { action: 'uploadAudioFile', fileName: file.name, fileSize: file.size });
+    }
     throw e;
   }
 }
@@ -97,12 +114,17 @@ export async function uploadOnceVariantFile(
     return { assetId };
   } catch (e) {
     reportBackendFailure(e);
-    captureException(e, {
-      action: 'uploadOnceVariantFile',
-      assetId,
-      fileName: file.name,
-      fileSize: file.size,
-    });
+    // Same exclusion, same reasoning as `uploadAudioFile` above — this path
+    // reaches the identical quota and pending-job-cap refusals through
+    // `createOnceVariantUpload`/`confirmOnceVariantUpload`.
+    if (!isClientRefusal(e)) {
+      captureException(e, {
+        action: 'uploadOnceVariantFile',
+        assetId,
+        fileName: file.name,
+        fileSize: file.size,
+      });
+    }
     throw e;
   }
 }

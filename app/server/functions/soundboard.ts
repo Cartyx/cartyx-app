@@ -4,6 +4,7 @@ import { requireCampaignMember, CampaignAccessError } from '../utils/requireCamp
 import { serverCaptureException, serverCaptureEvent } from '../utils/telemetry';
 import { DEFAULT_VOLUME, type BoardStateData, type BoardItemStateData } from '~/types/soundboard';
 import type { saveBoardStateSchema, loadBoardStateSchema } from '~/types/schemas/soundboard';
+import { SOUNDBOARD_CLIENT_ERROR_NAME } from '~/lib/client-refusal';
 
 /**
  * Same reasoning as `PackageClientError` in `app/server/functions/packages.ts`:
@@ -14,9 +15,20 @@ import type { saveBoardStateSchema, loadBoardStateSchema } from '~/types/schemas
  * save function the client-side GM gating exists to prevent them from calling.
  */
 export class SoundboardClientError extends Error {
-  constructor(message: string) {
+  /**
+   * Set only when the refusal is a rate-limit rejection thrown by
+   * `~/utils/soundboard-server-fns.ts`'s wrapper gate — same field, same
+   * meaning, as `AudioClientError.retryAfterMs`.
+   */
+  readonly retryAfterMs?: number;
+
+  constructor(message: string, options?: { retryAfterMs?: number }) {
     super(message);
-    this.name = 'SoundboardClientError';
+    // From the shared constant, for the same reason `AudioClientError` and
+    // `PackageClientError` take theirs from one: the browser suppresses its
+    // own telemetry for these by `.name`. See `~/lib/client-refusal.ts`.
+    this.name = SOUNDBOARD_CLIENT_ERROR_NAME;
+    this.retryAfterMs = options?.retryAfterMs;
   }
 }
 

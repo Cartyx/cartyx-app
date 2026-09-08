@@ -29,6 +29,7 @@ vi.mock('~/server/db/models/AudioAsset', () => ({
 vi.mock('~/server/db/models/AudioPackage', () => ({
   AudioPackage: {
     find: vi.fn(),
+    findOne: vi.fn(),
     updateOne: vi.fn(),
   },
 }));
@@ -37,12 +38,26 @@ import { AudioAsset } from '~/server/db/models/AudioAsset';
 import { AudioPackage } from '~/server/db/models/AudioPackage';
 import { serverCaptureException } from '~/server/utils/telemetry';
 
-/** Mirrors a real `Model.find(...).lean()` chain — same convention as
- * `mockUpdateResult` in `audio-mutations.test.ts`. */
+/**
+ * Drives BOTH halves of the prune's two-query read from one fixture list:
+ * the `find` that collects candidate ids, and the per-package `findOne` that
+ * loads one document at a time.
+ *
+ * The split is a memory bound (see the prune's own comment in
+ * `~/server/functions/audio.ts` — the single unprojected `find` it replaced
+ * could hold ~41 MiB of package documents at once). Mirroring it here rather
+ * than flattening it back into one mock is deliberate: a fixture that served
+ * whole documents from `find` would keep passing against a reverted
+ * implementation, which is the failure mode this repo's mongoose mocks are
+ * most prone to.
+ */
 function mockAffectedPackages(docs: Record<string, unknown>[]) {
   vi.mocked(AudioPackage.find).mockReturnValue({
-    lean: () => Promise.resolve(docs),
+    lean: () => Promise.resolve(docs.map((doc) => ({ _id: doc._id }))),
   } as never);
+  vi.mocked(AudioPackage.findOne).mockImplementation(((filter: { _id: unknown }) => ({
+    lean: () => Promise.resolve(docs.find((doc) => doc._id === filter._id) ?? null),
+  })) as never);
 }
 
 describe('deleteAudioAsset — package/mood pruning', () => {
@@ -103,7 +118,7 @@ describe('deleteAudioAsset — package/mood pruning', () => {
       Record<string, unknown>,
       { $set: { items: unknown[]; moods: { states: unknown[] }[] } },
     ];
-    expect(filter).toEqual({ _id: 'p1', ownerId: 'u1' });
+    expect(filter).toEqual({ _id: 'p1', ownerId: 'u1', updatedAt: null });
     expect(update.$set.items).toEqual([item2]);
     expect(update.$set.moods).toHaveLength(1);
     expect(update.$set.moods[0].states).toHaveLength(1);

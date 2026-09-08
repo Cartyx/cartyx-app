@@ -30,8 +30,17 @@ export type SoundboardEngineOptions = {
    * Fetch + `decodeAudioData` for one asset id. Returning `null` means "this
    * asset cannot be played" (not ready, no rendition, deleted) and the engine
    * will not ask again for the lifetime of the engine.
+   *
+   * `signal` aborts the instant `dispose()` runs (see there). A caller whose
+   * implementation makes a network request SHOULD pass it straight through
+   * (`fetch(url, { signal })`) so a torn-down board actually cancels its
+   * in-flight downloads rather than merely discarding a result nobody will
+   * use. The engine does not depend on this for correctness — any
+   * settlement that lands after `dispose()`, aborted or not, is dropped
+   * unconditionally (see `ensureAsset`) — so an implementation that ignores
+   * `signal` degrades to wasted bandwidth, not wrong behaviour.
    */
-  loadAsset: (assetId: string) => Promise<EngineAsset | null>;
+  loadAsset: (assetId: string, signal: AbortSignal) => Promise<EngineAsset | null>;
   /**
    * Fired when a pad releases itself — a one-shot reaching the end of its
    * buffer, or a loop that was flipped to `1×` finishing its current pass.
@@ -43,7 +52,40 @@ export type SoundboardEngineOptions = {
   onItemEnded?: (itemId: string) => void;
   /** Fired when `loadAsset` rejects. The engine keeps running, silent for that asset. */
   onLoadError?: (assetId: string, error: unknown) => void;
+  /**
+   * Overrides `DEFAULT_ASSET_CACHE_CAP_BYTES`. Not needed in production — the
+   * default is sized against the documented worst case. Exists so tests can
+   * cross the cap with small fixture buffers instead of allocating gigabytes
+   * of real decoded audio.
+   */
+  assetCacheCapBytes?: number;
 };
+
+/**
+ * Default cap, in bytes, on the sum of decoded `AudioBuffer` sizes held in
+ * the engine's asset cache (`assets`).
+ *
+ * Sized against the documented worst case rather than picked round: at the
+ * current caps (64 items, 30-minute assets, 48 kHz stereo float32) ONE fully
+ * decoded asset already costs `48_000 × 1800 × 2 channels × 4 bytes` ≈
+ * 691 MB (≈ 659 MiB) — see `docs/specs/2026-07-31-audio-hardening-design.md`.
+ * 1 GiB leaves only ≈ 365 MiB of headroom past that one asset — enough for a
+ * realistic handful of SHORT residents alongside it (one-shots, stingers, a
+ * minute-or-two loop), NOT a second near-worst-case 30-minute bed: two long
+ * ambience beds playing together (a storm plus rain, both looping — an
+ * entirely normal soundboard pattern) already sum past the cap on their own.
+ * That is an accepted, not a hidden, consequence: when the cache is over cap
+ * and everything resident is playing, `evictAssets` leaves it over cap (see
+ * its doc comment) rather than cutting audio — the cap bounds the RUNAWAY
+ * case, it does not guarantee everything simultaneously playing always fits.
+ * Against that runaway case — a board that plays through all 64
+ * documented-max assets, ~44 GB unbounded — 1 GiB is still roughly a 41×
+ * reduction. It is a per-engine cap: a page holding several boards' engines
+ * multiplies it, which is a lifecycle question for whoever owns how many
+ * engines exist at once, not something one engine's cache can bound from the
+ * inside.
+ */
+export const DEFAULT_ASSET_CACHE_CAP_BYTES = 1024 * 1024 * 1024;
 
 export type SoundboardEngine = {
   /**
@@ -60,6 +102,7 @@ export type SoundboardEngine = {
    * `apply` to notice.
    */
   fireOneShot: (itemId: string) => void;
+  stopAll: () => void;
   /**
    * Resolves once every asset load triggered so far has settled. Exists for
    * tests (and any caller that wants to preload before an offline render);
@@ -85,6 +128,20 @@ export type SoundboardEngine = {
 type Track = {
   gain: GainNode | null;
   source: AudioBufferSourceNode | null;
+  /**
+   * The asset this track's current (or most recent) source plays from. Set by
+   * `start`.
+   *
+   * Read by `stopTrack`, which captures it into the `onended` closure BEFORE
+   * scheduling the stop — that value has to name the source being stopped,
+   * and `start` reassigns this field for the replacement source on the very
+   * next line of a retrigger. It is otherwise stale while `source` is `null`,
+   * which is why no other reader may take it without first establishing which
+   * source it is being asked about. (`isAssetPlaying` used to read it and no
+   * longer does; see `liveAssetCounts` for why that was the wrong source of
+   * truth for eviction.)
+   */
+  assetId: string | null;
   /** `ctx.currentTime` at which `source` started — needed to find the playhead
    * when loop is flipped off mid-play. */
   startedAt: number;
@@ -151,10 +208,39 @@ export function createEngine(
    * that one-shot, because it is the same key within this map.
    */
   const oneShots = new Map<string, Track>();
+  /**
+   * The decoded-buffer cache, keyed by `assetId`. Bounded by
+   * `assetCacheCapBytes` (see `evictAssets`) rather than left to grow for the
+   * engine's whole life — see `DEFAULT_ASSET_CACHE_CAP_BYTES`.
+   *
+   * Iteration order doubles as recency order: `touchAsset` moves an entry to
+   * the end on every access, so `evictAssets` walking front-to-back visits
+   * least-recently-used entries first. `Map` preserves insertion order and
+   * does NOT reorder on a plain `set` of an existing key, which is why
+   * `touchAsset` has to delete-then-set rather than just `set`.
+   */
   const assets = new Map<string, EngineAsset>();
+  const assetCacheCapBytes = options.assetCacheCapBytes ?? DEFAULT_ASSET_CACHE_CAP_BYTES;
   const pending = new Map<string, Promise<void>>();
   /** Assets whose load returned `null` or threw — never retried. */
   const unplayable = new Set<string>();
+  /**
+   * `assetId`s with a `fireOneShot` cold load in flight that has not yet had
+   * its chance to `start()` the resulting source.
+   *
+   * `fireOneShot`'s cold path (see its implementation) chains its own
+   * `.then()` onto the SAME promise `ensureAsset` already attached its
+   * `.finally()` to — and that `.finally()` is what calls `evictAssets`.
+   * Promise semantics guarantee `fireOneShot`'s continuation always runs
+   * strictly AFTER that `.finally()` completes, so by the time it would call
+   * `start()` and mark the asset playing via `isAssetPlaying`, eviction has
+   * already run once. Without this set, a one-shot's own just-decoded buffer
+   * could be evicted before it ever plays, whenever nothing else resident is
+   * evictable — dropping the fire silently, no error. This bridges exactly
+   * that gap: added before `ensureAsset` is asked to load, removed once
+   * `start()` has had its attempt (successful or not).
+   */
+  const firingOneShots = new Set<string>();
   /**
    * Every source that has been started and not yet ended — INCLUDING sources
    * that are stopping but still fading out, which is why `stopTrack` replaces
@@ -167,10 +253,65 @@ export function createEngine(
    * lifetime of engines that come and go.
    */
   const live = new Set<AudioBufferSourceNode>();
+  /**
+   * Sources that have been asked to stop but are still fading out: which
+   * asset each is playing, and the `ctx.currentTime` its `stop()` is
+   * scheduled for.
+   *
+   * WHY THIS EXISTS. `evictAssets` asks `isAssetPlaying`, and that used to
+   * mean "does any track hold this as its `source`" — the engine's own test
+   * for "is this pad sounding" everywhere else, which made it the natural
+   * thing to reuse. It is the wrong question for eviction. `stopTrack` sets
+   * `track.source = null` at the moment it SCHEDULES the stop, while the
+   * source goes on sounding for the whole fade (up to 30 s, the schema's
+   * `fadeSeconds` cap). For that entire window no track named the asset, so
+   * eviction treated it as free and subtracted its bytes from the running
+   * total — while the browser still held the buffer, because the source node
+   * keeps its own reference to it.
+   *
+   * Nothing went silent (that reference is exactly why), so this was never
+   * an audio bug and no assertion on rendered output could catch it. It was
+   * an accounting one, and it defeated the cap in the direction that
+   * matters: the cache re-admitted up to the full budget ON TOP OF buffers it
+   * had already written off, and the next `ensureAsset` for a written-off
+   * asset re-decoded it, so two copies of one buffer could be resident while
+   * the total showed one. A cap whose number does not describe the heap is
+   * not a cap.
+   *
+   * WHY A SCHEDULED TIME AND NOT AN `onended` COUNTER, which is the obvious
+   * alternative and was the first attempt. `onended` is an EVENT: it fires
+   * when the context's clock actually reaches the stop, which means it never
+   * fires at all on a context whose clock is not running. That is not a
+   * hypothetical — an `OfflineAudioContext` that is never rendered is exactly
+   * that, and under a counter every asset it ever played stayed pinned
+   * forever, disabling the cap outright. The scheduled time is data the
+   * engine already computes and can evaluate against `ctx.currentTime`
+   * whenever it is asked, with no dependence on event delivery. A fade of 0
+   * (the ordinary stop) therefore releases immediately, as it should — the
+   * source really is done.
+   *
+   * An ARRAY, not a map keyed by asset: one asset can be behind several
+   * fading sources at once (a pad retriggering while the old source fades, a
+   * one-shot firing over its own loop). Entries are removed by `onended`
+   * when it does fire, and swept by elapsed time in `evictAssets` when it
+   * does not, so the list cannot grow without bound either way.
+   */
+  const fadingOut: { assetId: string; endsAt: number }[] = [];
+  /**
+   * Aborted in `dispose()`. Threaded through to `options.loadAsset` on every
+   * call so a caller whose implementation is a `fetch` can actually cancel
+   * the request on teardown rather than just having its result ignored — see
+   * that option's doc comment. `ensureAsset`'s `disposed` guards are what
+   * make capture-suppression correct even for an implementation that ignores
+   * this signal entirely; aborting is resource hygiene on top of that, not a
+   * second source of truth.
+   */
+  const abortController = new AbortController();
 
   let latest: BoardState | null = null;
   let masterVolume = 1;
   let disposed = false;
+  let fireGeneration = 0;
 
   /**
    * The exact content length, in seconds, that `loopEnd` must use.
@@ -196,6 +337,94 @@ export function createEngine(
     return Math.min(asset.durationSamples / AUDIO_RENDITION_SAMPLE_RATE, asset.buffer.duration);
   }
 
+  /** Decoded size of one asset's buffer: float32 PCM, 4 bytes per sample per channel. */
+  function assetBytes(asset: EngineAsset): number {
+    return asset.buffer.length * asset.buffer.numberOfChannels * 4;
+  }
+
+  /**
+   * Drops `fadingOut` entries whose scheduled stop has already passed.
+   *
+   * Belt and braces with the `onended` handler that also removes them: that
+   * handler is the prompt path, this is the one that cannot fail to run. See
+   * `fadingOut` for why depending on the event alone is not safe.
+   */
+  function sweepFadingOut(): void {
+    const now = ctx.currentTime;
+    for (let i = fadingOut.length - 1; i >= 0; i--) {
+      if (fadingOut[i].endsAt <= now) fadingOut.splice(i, 1);
+    }
+  }
+
+  /**
+   * True if `assetId`'s buffer is behind a source that is still sounding —
+   * a pad in `tracks`, a transient fire in `oneShots`, OR one that has been
+   * asked to stop and has not finished fading.
+   *
+   * This is the one rule `evictAssets` may never break, and the third clause
+   * is the one it used to be missing. A `Track`'s `source` answers "is this
+   * pad sounding", which is the right question everywhere else in the engine
+   * and the wrong one here: the pad is released the instant `stopTrack`
+   * schedules the stop, but the buffer is not free until the source actually
+   * ends. See `fadingOut`.
+   */
+  function isAssetPlaying(assetId: string): boolean {
+    for (const track of tracks.values()) {
+      if (track.source && track.assetId === assetId) return true;
+    }
+    for (const track of oneShots.values()) {
+      if (track.source && track.assetId === assetId) return true;
+    }
+    const now = ctx.currentTime;
+    return fadingOut.some((entry) => entry.assetId === assetId && entry.endsAt > now);
+  }
+
+  /**
+   * Moves `assetId` to the most-recently-used end of `assets`'s iteration
+   * order. See the `assets` doc comment for why a delete + re-set is needed.
+   * A no-op if the asset is not cached (nothing to touch).
+   */
+  function touchAsset(assetId: string): void {
+    const asset = assets.get(assetId);
+    if (!asset) return;
+    assets.delete(assetId);
+    assets.set(assetId, asset);
+  }
+
+  /**
+   * Evict least-recently-used, not-currently-playing assets until the cache
+   * is back at or under `assetCacheCapBytes` — or until nothing left is
+   * evictable.
+   *
+   * Called only after `reconcile` has had a chance to start whatever should
+   * be playing (see the call site in `ensureAsset`): a `finally` ordered the
+   * other way round would let a just-decoded asset that is about to be
+   * played get evicted before `start` ever marks it playing, since at the
+   * moment its bytes land in `assets` its track has no source yet.
+   *
+   * Leaving the cache over cap when everything resident is playing is
+   * correct, not a bug: that memory is sound the GM is actually hearing, and
+   * the only rule that is not negotiable is that eviction never touches it.
+   * An evicted asset is not lost — the next `ensureAsset` for it re-decodes
+   * through the exact same path a cold engine uses for a first play.
+   *
+   * `firingOneShots` extends that same rule to an asset that ISN'T playing
+   * yet but is about to be, for the one caller where "about to be" cannot
+   * wait for a later reconcile to make it so — see that set's doc comment.
+   */
+  function evictAssets(): void {
+    sweepFadingOut();
+    let total = 0;
+    for (const asset of assets.values()) total += assetBytes(asset);
+    if (total <= assetCacheCapBytes) return;
+    for (const [assetId, asset] of assets) {
+      if (total <= assetCacheCapBytes) break;
+      if (isAssetPlaying(assetId) || firingOneShots.has(assetId)) continue;
+      assets.delete(assetId);
+      total -= assetBytes(asset);
+    }
+  }
+
   function trackFor(itemId: string, transient: boolean): Track {
     const map = transient ? oneShots : tracks;
     const existing = map.get(itemId);
@@ -203,6 +432,7 @@ export function createEngine(
     const created: Track = {
       gain: null,
       source: null,
+      assetId: null,
       startedAt: 0,
       volume: 1,
       fadeSeconds: 0,
@@ -268,6 +498,9 @@ export function createEngine(
   function start(item: BoardItemState, transient: boolean): void {
     const asset = assets.get(item.assetId);
     if (!asset) return;
+    // Mark this asset as freshly used before anything below can be evicted
+    // out from under it.
+    touchAsset(item.assetId);
     const track = trackFor(item.itemId, transient);
     if (track.source) stopTrack(item.itemId, track, true);
 
@@ -316,6 +549,7 @@ export function createEngine(
 
     track.gain = gain;
     track.source = source;
+    track.assetId = item.assetId;
     track.startedAt = now;
     track.volume = item.volume;
     track.fadeSeconds = fade;
@@ -371,8 +605,21 @@ export function createEngine(
     // `dispose` can stop it; and the detached gain node — reachable from
     // nothing but this dying source — gets an explicit `disconnect()` rather
     // than waiting on graph GC.
+    // This source keeps sounding for `fade` seconds after the pad is
+    // released, and it holds its own reference to the buffer the whole time —
+    // so the cache cap must not count those bytes as reclaimable yet. See
+    // `fadingOut`. `track.assetId` is read HERE rather than inside the
+    // handler because `start` reassigns it for the replacement source on the
+    // very next line of a retrigger.
+    const entry = track.assetId ? { assetId: track.assetId, endsAt: now + fade } : null;
+    if (entry) fadingOut.push(entry);
+
     source.onended = () => {
       live.delete(source);
+      if (entry) {
+        const i = fadingOut.indexOf(entry);
+        if (i >= 0) fadingOut.splice(i, 1);
+      }
       gain.disconnect();
     };
     source.stop(now + fade);
@@ -385,12 +632,28 @@ export function createEngine(
   function ensureAsset(assetId: string): void {
     if (assets.has(assetId) || pending.has(assetId) || unplayable.has(assetId)) return;
     const load = options
-      .loadAsset(assetId)
+      .loadAsset(assetId, abortController.signal)
       .then((asset) => {
+        // A disposed engine's `assets`/`unplayable` are deliberately cleared
+        // by `dispose()` (Handoff 1) and MUST stay empty afterward — a load
+        // that happened to be mid-flight at teardown and settles successfully
+        // later must not silently repopulate the cache of an engine nobody
+        // can ever play through again.
+        if (disposed) return;
         if (asset) assets.set(assetId, asset);
         else unplayable.add(assetId);
       })
       .catch((error: unknown) => {
+        // THE TEARDOWN-TELEMETRY FIX. Once `dispose()` has run, every load
+        // still in flight is expected to reject — that is the point of
+        // aborting them — and is not a genuine failure anyone needs to hear
+        // about. Gating on `disposed` here (rather than sniffing the error
+        // for an "AbortError" name) also silences a load that fails for an
+        // unrelated reason after teardown, which is correct: nobody is
+        // listening to this engine anymore either way. A failure that lands
+        // while the engine is still live — the ordinary case — is untouched
+        // and still reports exactly as before.
+        if (disposed) return;
         unplayable.add(assetId);
         options.onLoadError?.(assetId, error);
       })
@@ -400,6 +663,10 @@ export function createEngine(
         // the state that triggered the load — the GM may have changed mood
         // three times while a 6 MB ambience downloaded.
         if (!disposed && latest) reconcile(latest);
+        // AFTER reconcile, not before: reconcile is what starts this asset
+        // playing if it should be, and `evictAssets` must see that before it
+        // decides what is safe to evict. See `evictAssets`'s doc comment.
+        if (!disposed) evictAssets();
       });
     pending.set(assetId, load);
   }
@@ -437,7 +704,9 @@ export function createEngine(
         track.fadeSeconds = item.fadeSeconds;
       }
 
-      if (item.playing) {
+      const scheduled =
+        item.randomIntervalMin !== undefined && item.randomIntervalMax !== undefined;
+      if (item.playing && !scheduled) {
         ensureAsset(item.assetId);
         if (!track?.source) {
           start(item, false);
@@ -528,6 +797,7 @@ export function createEngine(
 
     fireOneShot(itemId: string): void {
       if (disposed || !latest) return;
+      const generation = fireGeneration;
       const item = latest.items.find((candidate) => candidate.itemId === itemId);
       if (!item) return;
       if (assets.has(item.assetId)) {
@@ -535,13 +805,52 @@ export function createEngine(
         return;
       }
       if (unplayable.has(item.assetId)) return;
+      // Reserved BEFORE `ensureAsset` so it is visible to `evictAssets` for
+      // the whole window this cold load is in flight — including the
+      // instant `ensureAsset`'s own `.finally()` runs eviction, which is
+      // always before the `.then()` below gets a turn. See `firingOneShots`.
+      firingOneShots.add(item.assetId);
       ensureAsset(item.assetId);
+      const load = pending.get(item.assetId);
+      if (!load) {
+        // `ensureAsset` returns without registering a pending load only when
+        // the asset is already cached, already loading, or already known
+        // unplayable — and all three were ruled out above, so this is
+        // unreachable today. It is handled anyway because the cost of being
+        // wrong is not a missed fire but a PERMANENT one: a reservation left
+        // in `firingOneShots` makes that asset un-evictable for the engine's
+        // whole life, which is a silent leak in the mechanism that exists to
+        // bound memory. Release it and give up on this fire.
+        firingOneShots.delete(item.assetId);
+        return;
+      }
       // Fire as soon as the buffer lands. A random ambient crack that arrives
       // late is still a crack; the alternative is silence until the scheduler's
       // next tick, which for a 5-minute interval is a long wait.
-      void pending.get(item.assetId)?.then(() => {
-        if (!disposed && assets.has(item.assetId)) start(item, true);
+      void load.then(() => {
+        try {
+          if (!disposed && generation === fireGeneration && assets.has(item.assetId)) {
+            const current = latest?.items.find((candidate) => candidate.itemId === itemId);
+            if (current?.assetId === item.assetId) start(current, true);
+          }
+        } finally {
+          // Whether or not this ended up sounding — evicted while cold-loading
+          // fails closed (`assets.has` is false, `start` is skipped) rather
+          // than throwing — the reservation's job is done either way.
+          firingOneShots.delete(item.assetId);
+        }
       });
+    },
+
+    stopAll(): void {
+      fireGeneration += 1;
+      if (latest) {
+        latest = { ...latest, items: latest.items.map((item) => ({ ...item, playing: false })) };
+      }
+      for (const [itemId, track] of tracks) stopTrack(itemId, track, true);
+      for (const [itemId, track] of oneShots) stopTrack(itemId, track, true);
+      for (const source of live) source.stop(ctx.currentTime + IMMEDIATE_FADE_SECONDS);
+      oneShots.clear();
     },
 
     async ready(): Promise<void> {
@@ -555,6 +864,15 @@ export function createEngine(
     dispose(): void {
       if (disposed) return;
       disposed = true;
+      // Cancels every fetch/decode chain still in flight (up to 64 of them,
+      // one per asset a board can reference). This is network hygiene, not
+      // what makes teardown silent — `ensureAsset`'s `disposed` guards do
+      // that regardless of whether `options.loadAsset` honours the signal at
+      // all. Ordering matters only in that `disposed` is already `true`
+      // before this fires: `abort()`'s listeners run synchronously, but the
+      // promise rejection they cause is always a later microtask, so
+      // `ensureAsset`'s guards see the flag correctly either way.
+      abortController.abort();
       const now = ctx.currentTime;
       for (const source of live) {
         source.onended = null;
@@ -565,8 +883,39 @@ export function createEngine(
         }
       }
       live.clear();
+      // Paired with `live.clear()`: the loop above nulls every `onended`, so
+      // no handler will ever remove these entries. Nothing reads this list
+      // after `disposed` (`evictAssets`, its only reader, is gated on
+      // `!disposed` at both call sites), but leaving it populated on a
+      // disposed engine is the same retention `assets.clear()` below exists
+      // to avoid.
+      fadingOut.length = 0;
       tracks.clear();
       oneShots.clear();
+      // Handoff from Task 8's review: without this, a disposed engine held
+      // onto its whole decoded-buffer cache — up to the full byte cap (1 GiB
+      // by default) — reachable until the entire engine object was garbage
+      // collected. Nothing SOUNDS different for clearing these: every source
+      // is already stopped above, and `master.disconnect()` below is what
+      // makes dispose silent. This is releasing memory a dead engine has no
+      // further use for, nothing more.
+      assets.clear();
+      pending.clear();
+      unplayable.clear();
+      // `firingOneShots` is deliberately left alone. Unlike the collections
+      // above it is not dead weight to reclaim: every entry is a reservation
+      // tied to a `pending` promise whose `.then()` continuation
+      // (`fireOneShot`'s cold path) is ALREADY attached and will still run
+      // when that promise settles — dispose cannot detach it, only make its
+      // body a no-op via the `!disposed` check it already has. That
+      // continuation's own `finally` removes the entry regardless of
+      // `disposed` (see the set's doc comment: "self-clears … including
+      // engine disposal"), so it is never permanently retained. And nothing
+      // reads this set once `disposed` is true — `evictAssets`, its only
+      // reader, is gated on `!disposed` at both call sites — so a stale
+      // entry in the window between now and that `finally` is inert. Clearing
+      // it here would just be a second writer racing the one that already
+      // owns cleanup correctly.
       // This, not the loop above, is what makes dispose silent.
       master.disconnect();
     },

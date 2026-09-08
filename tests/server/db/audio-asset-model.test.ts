@@ -68,6 +68,20 @@ describe('AudioAsset model', () => {
     expect(doc.attempts).toBe(0);
   });
 
+  it('permits reclaimed failed sources while still requiring a source for active assets', async () => {
+    const fields = {
+      ownerId: '507f1f77bcf86cd799439011',
+      title: 'Rejected upload',
+      kind: 'ambience',
+    };
+    const failed = new AudioAsset({ ...fields, status: 'failed' });
+    await expect(failed.validate()).resolves.toBeUndefined();
+    const uploading = new AudioAsset({ ...fields, status: 'uploading' });
+    await expect(uploading.validate()).rejects.toMatchObject({
+      errors: { sourceKey: expect.anything() },
+    });
+  });
+
   // The brief's version of this test asserted `doc.kind` after `.validate()` —
   // which never checks tags, and mongoose pre('save') hooks do not run on
   // .validate(). It verified nothing about tag normalization. Fixed per the

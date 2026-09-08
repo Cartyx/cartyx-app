@@ -173,9 +173,14 @@ export async function claimNext<T>(model: ClaimModel, workerId: string): Promise
  * into a real `DeleteObjects` call. The renditions survive untouched, which
  * is what makes it silent: the asset keeps playing right up until someone
  * needs to re-transcode it, at which point the source is already gone.
- * `updatedAt` is what a once-attach actually bumps (the `$set` in
- * `createOnceVariantUpload`), so it reads "how long has THIS attach been
- * stuck" instead of "how old is the row."
+ *
+ * That sibling gates on `onceUploadStartedAt`, a field whose sole writer is
+ * `createOnceVariantUpload`, so it reads "how long has THIS attach been
+ * stuck" instead of "how old is the row." It originally used `updatedAt`,
+ * which was better than `createdAt` but still wrong for the same underlying
+ * reason: `updatedAt` records modification, not progress, and the app's two
+ * unfenced facet editors reset it — see that function's own `$or` for the
+ * whole argument.
  */
 export async function reapStale(
   model: ClaimModel,
@@ -206,8 +211,40 @@ export async function reapStale(
     }
   );
 
+  // TWO writes, split on `variant`, because "out of attempts" means different
+  // things to the two pipelines and this used to answer for both with the
+  // main one's terminal state.
+  //
+  // A MAIN row that exhausts its budget is a failed asset, and `failed` is
+  // what it is. A ONCE row is the same document as a fully-transcoded,
+  // previously-`ready` music asset that merely borrowed `status` for the
+  // duration of an attach — stamping `failed`/`lastError` on it reports the
+  // MAIN asset as broken with a main-pipeline error it never suffered, takes
+  // it out of the board's play gate, and leaves `variant: 'once'` standing.
+  // That is exactly the failure `markOnceFailed` (process.ts) exists to
+  // prevent, and Task 18 review Critical 2 closed it for the two terminal
+  // paths inside `processAsset` — but not for this one, which is reached
+  // when the worker DIES rather than throws (evicted pod, OOM, SIGKILL) and
+  // so never runs `processAsset`'s catch at all.
+  //
+  // The once branch mirrors `markOnceFailed`'s terminal write field for
+  // field: back to `ready`/`main`, once-source key and bytes cleared
+  // together (the `onceSourceBytes` invariant on the app's `AudioAsset`
+  // model), reason on `onceLastError` rather than `lastError`. It does not
+  // delete the once-source object: an `updateMany` cannot report WHICH rows
+  // it moved, and "only a matched write authorizes deleting the object" is
+  // the rule this file is built on (see `reapAbandonedUploads`). The
+  // orphaned object is reclaimable by the owner-scoped orphan scan, which is
+  // the same path `markOnceFailed` leaves it to.
   await model.updateMany(
-    { status: 'processing', claimedAt: { $lt: cutoff }, attempts: { $gte: MAX_ATTEMPTS } },
+    {
+      status: 'processing',
+      claimedAt: { $lt: cutoff },
+      attempts: { $gte: MAX_ATTEMPTS },
+      // `$ne` (not `!=`) so rows predating the field — every ordinary main
+      // asset — still match, same as `reapAbandonedUploads`.
+      variant: { $ne: 'once' },
+    },
     {
       $set: {
         status: 'failed',
@@ -219,6 +256,33 @@ export async function reapStale(
     }
   );
 
+  await model.updateMany(
+    {
+      status: 'processing',
+      claimedAt: { $lt: cutoff },
+      attempts: { $gte: MAX_ATTEMPTS },
+      variant: 'once',
+    },
+    {
+      $set: {
+        status: 'ready',
+        variant: 'main',
+        onceSourceKey: null,
+        onceSourceBytes: null,
+        onceLastError: 'Once-variant processing timed out',
+        claimedAt: null,
+        claimedBy: null,
+        updatedAt: new Date(),
+      },
+    }
+  );
+
+  await reapRejectedUploads(
+    model,
+    new Date(now - Math.max(uploadTimeoutMs, 15 * 60_000)),
+    deleteSource,
+    shouldContinue
+  );
   await reapAbandonedUploads(model, new Date(now - uploadTimeoutMs), deleteSource, shouldContinue);
   await reapAbandonedOnceUploads(
     model,
@@ -228,6 +292,44 @@ export async function reapStale(
   );
 
   return requeued.modifiedCount ?? 0;
+}
+
+export async function reapRejectedUploads(
+  model: ClaimModel,
+  cutoff: Date,
+  deleteSource?: SourceDeleter,
+  shouldContinue?: ShouldContinue
+): Promise<void> {
+  if (!deleteSource || (shouldContinue && !shouldContinue())) return;
+  const rejected = await model
+    .find(
+      {
+        status: 'failed',
+        confirmedAt: null,
+        variant: { $ne: 'once' },
+        sourceKey: { $type: 'string' },
+        createdAt: { $lt: cutoff },
+      },
+      { projection: { sourceKey: 1 }, limit: REAP_UPLOAD_BATCH }
+    )
+    .toArray();
+  const rows = rejected.filter((row) => row.sourceKey);
+  if (rows.length === 0) return;
+  try {
+    await deleteSource(rows.map((row) => row.sourceKey as string));
+    beat();
+    for (const row of rows) {
+      if (shouldContinue && !shouldContinue()) break;
+      await model.updateOne(
+        { _id: row._id, status: 'failed', confirmedAt: null, sourceKey: row.sourceKey },
+        { $unset: { sourceKey: '' }, $set: { sourceBytes: null, updatedAt: new Date() } }
+      );
+      beat();
+    }
+  } catch (err) {
+    logger.warn({ err }, 'failed to reclaim rejected audio uploads');
+    captureException(err, { scope: 'reap-rejected' });
+  }
 }
 
 /**
@@ -344,10 +446,11 @@ async function reapAbandonedUploads(
  * age check against `createdAt` fires immediately instead of after a real
  * timeout.
  *
- * Gated on `updatedAt` instead — the field `createOnceVariantUpload` (and
- * every subsequent write to this row) actually bumps, so this reads "how
- * long has the CURRENT once-attach been stuck," which is the question that
- * needs answering.
+ * Gated on `onceUploadStartedAt` instead — the app field
+ * `createOnceVariantUpload` stamps, and the only writer of it — so this
+ * reads "how long has the CURRENT once-attach been stuck," which is the
+ * question that needs answering. (It was `updatedAt` until the facet-edit
+ * hole below was found; the `$or` in the query documents both.)
  *
  * Reverts the row to a fully playable state rather than failing it: `status:
  * 'ready'` (the main content was never touched by this abandoned attach),
@@ -371,7 +474,45 @@ async function reapAbandonedOnceUploads(
 ): Promise<void> {
   const abandoned = await model
     .find(
-      { status: 'uploading', variant: 'once', updatedAt: { $lt: cutoff } },
+      {
+        status: 'uploading',
+        variant: 'once',
+        // Gated on `onceUploadStartedAt` — the web app's dedicated
+        // attach-liveness stamp — NOT on `updatedAt`, which is what this
+        // reaper originally used and which cannot answer the question.
+        //
+        // `updatedAt` means "when was this document last modified at all",
+        // and two unfenced facet editors bump it on any row their owner
+        // touches: `updateAudioAsset` and `bulkTagAudioAssets` in
+        // `app/server/functions/audio.ts`. So a GM who retitles or retags a
+        // track whose once-attach died mid-PUT reset this reaper's only
+        // clock and bought the dead attach another full timeout — and there
+        // is no way out from the other side either, because
+        // `createOnceVariantUpload` refuses anything that isn't
+        // `status: 'ready'` and the row is stuck in `uploading`. Edit it
+        // again and it is postponed again: the row can be held out of reach
+        // of the reaper forever by ordinary library housekeeping, with the
+        // asset unplayable the whole time (`status` is shared with the main
+        // pipeline — see `variant` on the app's AudioAsset model).
+        // `onceUploadStartedAt` has exactly one writer, the attach itself,
+        // so nothing unrelated can move it.
+        //
+        // The `$or` is the migration fallback, and its second branch is
+        // deliberately the OLD predicate. `onceUploadStartedAt: null`
+        // matches both an explicit null and a document where the field is
+        // absent (Mongo equality-to-null semantics), i.e. every row written
+        // before the app started stamping it — including any attach that
+        // was in flight across the deploy. Those rows keep exactly today's
+        // behaviour. The alternative, treating a missing stamp as
+        // infinitely stale, would have this reaper revert every in-flight
+        // once-attach in the collection on its first pass after the deploy
+        // and delete their once-source objects: the fix's own failure mode,
+        // inflicted on the users who happened to be mid-upload.
+        $or: [
+          { onceUploadStartedAt: { $lt: cutoff } },
+          { onceUploadStartedAt: null, updatedAt: { $lt: cutoff } },
+        ],
+      },
       { projection: { onceSourceKey: 1 }, limit: REAP_UPLOAD_BATCH }
     )
     .toArray();
@@ -382,12 +523,85 @@ async function reapAbandonedOnceUploads(
     if (shouldContinue && !shouldContinue()) break;
 
     const result = await model.updateOne(
-      { _id: row._id, status: 'uploading', variant: 'once' },
+      {
+        _id: row._id,
+        status: 'uploading',
+        variant: 'once',
+        // `onceSourceKey` identifies WHICH attach this write is reverting —
+        // without it the fence is satisfied by any once-attach on this row,
+        // including one that started after the candidate list was read.
+        //
+        // `{_id, status: 'uploading', variant: 'once'}` describes the state a
+        // SECOND attach puts the row in just as exactly as it describes the
+        // abandoned first one, and this loop runs for real time (bounded
+        // batch, a `beat()` and an Atlas round trip per row) — so a second
+        // attach can appear between the `find` above and this row's turn.
+        //
+        // What does NOT get there is the obvious story, and it is worth
+        // saying so because it is the one a reader will assume: the GM
+        // CANNOT simply give up on a stuck attach and start another one.
+        // `createOnceVariantUpload` is fenced on `status: 'ready'`
+        // (app/server/functions/audio.ts), and the stuck row is `uploading`.
+        // Something must return it to `ready` first. Two things do:
+        //
+        //   (a) The browser's PUT finally lands and
+        //       `confirmOnceVariantUpload` REJECTS the file — over
+        //       `AUDIO_MAX_BYTES`, unsupported type, or the pending-job cap.
+        //       Every one of those paths reverts the row to `ready`/`main`
+        //       and records `onceLastError`. The GM sees the failure, picks a
+        //       better file, and attaches again — now permitted, because the
+        //       row is `ready`. All of it can happen while this pass is
+        //       working through earlier rows.
+        //   (b) More than one worker running at once. Replica 1 reverts this
+        //       row (or any of the app paths above does) while replica 2 still
+        //       has it listed from its own `find`, and a re-attach lands in
+        //       the gap. `audioWorker.replicaCount` is 1 today, but that is
+        //       NOT a single-writer guarantee: the chart sets `strategy:
+        //       Recreate` precisely because the default RollingUpdate starts
+        //       the new pod before the old one terminates, so every deploy
+        //       would otherwise run two workers even at `replicas: 1` (see
+        //       deploy/charts/cartyx/values.yaml). A data fence that leans on
+        //       a Deployment strategy is a fence that stops holding the day
+        //       someone changes that strategy, or scales the replica count for
+        //       a bulk import — which values.yaml explicitly contemplates.
+        //       `claimNext` refuses to assume a single writer anywhere else;
+        //       this write must not assume it either.
+        //
+        // Either way, by the time this row's turn comes
+        // `createOnceVariantUpload` has minted a NEW `onceSourceKey` and
+        // restamped the row. The unfenced write then reverted that
+        // seconds-old attach to `ready`/`main`, told the user it "never
+        // completed", and — because `row.onceSourceKey` was projected BEFORE
+        // the re-attach — pushed the OLD key into `DeleteObjects` while the
+        // new object, now referenced by nothing, was stranded. The browser's
+        // PUT to the new presigned URL lands on an object no row points at,
+        // the worker never sees the job, and nothing reports any of it.
+        //
+        // Same class its sibling `reapAbandonedUploads` was hardened against
+        // one review earlier, and the same remedy: make the fence describe
+        // the unit of work, not just the state.
+        //
+        // `?? null` because a projected-but-absent field arrives as
+        // `undefined`, and `{ onceSourceKey: null }` is the filter that
+        // matches null-or-missing in Mongo. Such a row has nothing to delete
+        // anyway (`row.onceSourceKey` is falsy below), but it still has to be
+        // reverted out of `uploading` or it is stuck forever, which is this
+        // reaper's whole purpose.
+        onceSourceKey: row.onceSourceKey ?? null,
+      },
       {
         $set: {
           status: 'ready',
           variant: 'main',
           onceSourceKey: null,
+          // Paired with `onceSourceKey` above, same reasoning as
+          // `markOnceFailed` in `process.ts`: cartyx-app's Task 3b review
+          // finding requires `onceSourceBytes` reset wherever
+          // `onceSourceKey` is cleared or replaced, so a row abandoned
+          // before it ever reached `confirmOnceVariantUpload` (this reaper's
+          // whole reason to exist) can't leave a PRIOR successful attach's
+          // stale byte count standing against a key that no longer exists.
+          onceSourceBytes: null,
           onceLastError: 'Once-variant upload never completed',
           claimedAt: null,
           claimedBy: null,

@@ -295,6 +295,60 @@ if [ "$backoff_max_ms" -ge "$backoff_ms" ] && [ "$backoff_max_ms" -le "$claim_ms
   bad "RETRY_BACKOFF_MAX_MS ($backoff_max_ms) must sit between the base ($backoff_ms) and the claim budget ($claim_ms)"
 fi
 
+# --- Task 11: audio hardening limits (quota, job cap, ingest rate limit) ---
+# All four are optional web.env values, same idiom as CDN_URL/GLITCHTIP_DSN
+# above: Helm renders '' for an unset key and the deployment's `range` drops
+# empty values. The omission checks below cover "unset stays out of the pod
+# entirely"; they do NOT, on their own, prove a SET value renders correctly
+# (that a `--set` reaches the container with its literal content, not just
+# that some `name:` line exists) — that is what the paired name+value checks
+# further down are for. Note `--set` injects the key regardless of what
+# values.yaml declares, so neither group of checks says anything about the
+# values.yaml defaults specifically — that is exercised implicitly by every
+# OTHER assertion in this file, which renders without ever unsetting these.
+assert_not_contains "empty AUDIO_USER_QUOTA_BYTES is omitted" "name: AUDIO_USER_QUOTA_BYTES"
+assert_not_contains "empty MAX_PENDING_JOBS_PER_USER is omitted" "name: MAX_PENDING_JOBS_PER_USER"
+assert_not_contains "empty AUDIO_INGEST_RATE_LIMIT_CAPACITY is omitted" \
+  "name: AUDIO_INGEST_RATE_LIMIT_CAPACITY"
+assert_not_contains "empty AUDIO_INGEST_RATE_LIMIT_REFILL_PER_SEC is omitted" \
+  "name: AUDIO_INGEST_RATE_LIMIT_REFILL_PER_SEC"
+
+# Name-value pairing, all four vars in one render: `grep -A1 "name: X$"`
+# isolates X's own two-line block (the web-deployment template emits
+# `- name: {{ $key }}` immediately followed by `value: {{ $value | quote }}`)
+# before checking the value, so this binds the assertion to THIS var's entry
+# rather than any line elsewhere in a multi-hundred-line render that happens
+# to contain the same digits. `grep -F` (fixed string) rather than `-E` —
+# a bare `-E` match on `value: "2.5"` would treat the `.` as "any character"
+# and pass even if the rendered value were e.g. "2X5".
+name_value_out=$(render \
+  --set web.env.AUDIO_USER_QUOTA_BYTES=1073741824 \
+  --set web.env.MAX_PENDING_JOBS_PER_USER=5 \
+  --set web.env.AUDIO_INGEST_RATE_LIMIT_CAPACITY=120 \
+  --set web.env.AUDIO_INGEST_RATE_LIMIT_REFILL_PER_SEC=2.5)
+assert_name_value() {
+  local var=$1 val=$2
+  echo "$name_value_out" | grep -A1 "name: $var$" | grep -qF "value: \"$val\"" && ok ||
+    bad "$var renders with its literal value, bound to its own name"
+}
+assert_name_value AUDIO_USER_QUOTA_BYTES 1073741824
+assert_name_value MAX_PENDING_JOBS_PER_USER 5
+assert_name_value AUDIO_INGEST_RATE_LIMIT_CAPACITY 120
+assert_name_value AUDIO_INGEST_RATE_LIMIT_REFILL_PER_SEC 2.5
+
+# Scoped to each manifest specifically: these must reach the web pod (the
+# only reader — app/server/functions/audio.ts and
+# app/lib/audio-rate-limits.ts both run in the web image) and must NOT leak
+# onto the audio-worker pod, which shares the same top-level `.Values` but
+# has its own, separate `env` block.
+web_out=$(render -s templates/web-deployment.yaml --set web.env.AUDIO_USER_QUOTA_BYTES=1073741824)
+echo "$web_out" | grep -q "name: AUDIO_USER_QUOTA_BYTES" && ok ||
+  bad "AUDIO_USER_QUOTA_BYTES reaches the web deployment"
+worker_isolation_out=$(render -s templates/audio-worker-deployment.yaml \
+  --set web.env.AUDIO_USER_QUOTA_BYTES=1073741824)
+echo "$worker_isolation_out" | grep -q "name: AUDIO_USER_QUOTA_BYTES" &&
+  bad "AUDIO_USER_QUOTA_BYTES must not leak onto the audio-worker pod" || ok
+
 # ---- summary ----
 echo "render-tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

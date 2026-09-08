@@ -264,6 +264,127 @@ describe('PackageEditorPage save path', () => {
     expect(call.data.moods).toHaveLength(1);
   });
 
+  /**
+   * Task 7: every save carries the revision it was built on. Asserted on the
+   * VALUE, not merely on the key being present — a save that sent, say, the
+   * draft's own `createdAt`, or a hard-coded `new Date().toISOString()`, would
+   * satisfy the schema and be refused by Mongo on every single save.
+   */
+  it('sends the loaded package revision as the save precondition', async () => {
+    const user = userEvent.setup();
+    const pkg = mkPackage({ items: [mkItem()], updatedAt: '2026-03-04T05:06:07.000Z' });
+
+    getPackageFn.mockResolvedValue(pkg);
+    listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+    updatePackageFn.mockResolvedValue(pkg);
+
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <PackageEditorPage />
+      </QueryClientProvider>
+    );
+
+    const nameInput = await screen.findByRole('textbox', { name: /package name/i });
+    await user.type(nameInput, '!');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(updatePackageFn).toHaveBeenCalledTimes(1));
+    const call = updatePackageFn.mock.calls[0][0] as { data: { expectedUpdatedAt: string } };
+    expect(call.data.expectedUpdatedAt).toBe('2026-03-04T05:06:07.000Z');
+  });
+
+  /**
+   * FINAL WHOLE-BRANCH REVIEW, Important #2, regression-locked here because
+   * none of the other twelve tests in this file saves TWICE — and one save is
+   * exactly the number that cannot see this defect.
+   *
+   * The failure it pins: if `onSuccess` only invalidated the package branch
+   * and never seeded the mutation's own return value into the detail cache,
+   * then until the refetch landed `pkg` would still be the PRE-save object.
+   * `dirty` (a reference comparison against `pkg.items`/`.moods`/`.name`)
+   * would stay true, the button would still read "Save changes", and a second
+   * Save would send the `updatedAt` the first save had already superseded —
+   * so Task 7's fence would refuse it and the editor would show the user a
+   * conflict notice about THEIR OWN save. A conflict dialog that fires on the
+   * happy path is the fastest way to teach users to click through conflict
+   * dialogs, which defeats the point of the fence.
+   *
+   * THE FIXTURE DETAIL THAT MAKES THIS MEAN ANYTHING: the refetch triggered
+   * by `invalidateQueries` is never allowed to land (`getPackageFn` returns a
+   * forever-pending promise after its first call). In a browser that refetch
+   * is a network round trip the user can easily click through; in a test it
+   * would resolve instantly and hand an unseeded implementation the fresh
+   * document anyway, so the test would pass against the very bug it exists to
+   * catch. With the refetch pinned open, the second save's precondition can
+   * only be the fresh `updatedAt` if `onSuccess` seeded it from the first
+   * save's own response.
+   */
+  it('seeds the save response into the detail cache, so a second consecutive save carries the fresh revision', async () => {
+    const user = userEvent.setup();
+    const pkg = mkPackage({
+      items: [mkItem({ id: 'i1', label: 'Rain' })],
+      updatedAt: '2026-03-04T05:06:07.000Z',
+    });
+    const afterFirstSave = {
+      ...pkg,
+      name: 'Storm Set!',
+      // A NEW revision, the way `updatePackage`'s `{ new: true }` document
+      // does — this is the value the second save must carry.
+      updatedAt: '2026-03-04T05:06:09.000Z',
+    };
+
+    getPackageFn
+      .mockResolvedValueOnce(pkg)
+      // Every subsequent read — i.e. the post-save invalidation's refetch —
+      // hangs. See this test's doc comment for why that is the point.
+      .mockReturnValue(new Promise(() => {}));
+    listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+    updatePackageFn.mockResolvedValue(afterFirstSave);
+
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <PackageEditorPage />
+      </QueryClientProvider>
+    );
+
+    const nameInput = await screen.findByRole('textbox', { name: /package name/i });
+    await user.type(nameInput, '!');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(updatePackageFn).toHaveBeenCalledTimes(1));
+    expect(
+      (updatePackageFn.mock.calls[0][0] as { data: { expectedUpdatedAt: string } }).data
+        .expectedUpdatedAt
+    ).toBe('2026-03-04T05:06:07.000Z');
+
+    // The button settles back to "Saved": the draft is no longer dirty,
+    // because the seeded `pkg` and the local drafts are the same objects.
+    // This is the user-visible half of the defect — an unseeded cache leaves
+    // "Save changes" enabled on a package that is already saved.
+    await screen.findByRole('button', { name: 'Saved' });
+
+    // A second, genuinely new edit, saved again.
+    updatePackageFn.mockResolvedValue({
+      ...afterFirstSave,
+      name: 'Storm Set!?',
+      updatedAt: '2026-03-04T05:06:11.000Z',
+    });
+    await user.type(screen.getByRole('textbox', { name: /package name/i }), '?');
+    await user.click(await screen.findByRole('button', { name: /save changes/i }));
+
+    await waitFor(() => expect(updatePackageFn).toHaveBeenCalledTimes(2));
+    const second = updatePackageFn.mock.calls[1][0] as {
+      data: { expectedUpdatedAt: string; name: string };
+    };
+    expect(second.data.expectedUpdatedAt).toBe('2026-03-04T05:06:09.000Z');
+    expect(second.data.name).toBe('Storm Set!?');
+
+    // And no conflict notice was ever rendered for the user's own save.
+    expect(screen.queryByText(/changed somewhere else/i)).toBeNull();
+  });
+
   it('does not render an editable name field for a system package', async () => {
     const pkg = mkPackage({ ownerId: null, name: 'Storm Basics' });
     getPackageFn.mockResolvedValue(pkg);
@@ -279,5 +400,252 @@ describe('PackageEditorPage save path', () => {
     const nameInput = await screen.findByRole('textbox', { name: /package name/i });
     expect(nameInput).toHaveValue('Storm Basics');
     expect(nameInput).toBeDisabled();
+  });
+});
+
+/**
+ * Task 7's client half. The server refuses a save built on a stale read
+ * (`PackageStaleWriteError`); what matters here is that the refusal costs the
+ * user nothing until they say so.
+ */
+describe('PackageEditorPage stale-write conflict', () => {
+  /**
+   * Built to look exactly like what crosses the server-fn wire, which is NOT
+   * an instance of the server's class: seroval reconstructs a plain `Error`
+   * carrying the original `name` and own properties. A fixture that imported
+   * `PackageStaleWriteError` and threw a real instance would pass even if the
+   * route keyed on `instanceof` — and `instanceof` cannot work in the browser,
+   * because the class lives in a module the client bundle never loads.
+   */
+  function wireStaleWriteError(currentUpdatedAt: string): Error {
+    const e = new Error('This package changed somewhere else after you opened it.');
+    e.name = 'PackageStaleWriteError';
+    return Object.assign(e, { currentUpdatedAt });
+  }
+
+  it('surfaces the conflict, keeps the unsaved draft, and files no client error report', async () => {
+    const user = userEvent.setup();
+    const pkg = mkPackage({ items: [mkItem({ id: 'i1', label: 'Rain' })] });
+
+    getPackageFn.mockResolvedValue(pkg);
+    listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+    updatePackageFn.mockRejectedValue(wireStaleWriteError('2026-05-05T05:05:05.000Z'));
+
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <PackageEditorPage />
+      </QueryClientProvider>
+    );
+
+    const nameInput = await screen.findByRole('textbox', { name: /package name/i });
+    await user.clear(nameInput);
+    await user.type(nameInput, 'My Renamed Set');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    // The conflict is surfaced as its own thing, with both ways out.
+    await screen.findByTestId('package-conflict-notice');
+    expect(
+      screen.getByRole('button', { name: /keep my edits and overwrite/i })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /discard my edits and load the saved version/i })
+    ).toBeInTheDocument();
+
+    // NOTHING SILENTLY DISCARDED: the refusal did not roll the editor back to
+    // the server's version. The rename is still typed in, and the item is
+    // still on the board.
+    expect(screen.getByRole('textbox', { name: /package name/i })).toHaveValue('My Renamed Set');
+    expect(screen.getByRole('button', { name: /remove rain/i })).toBeInTheDocument();
+
+    // A refused write must not file a GlitchTip event — the same rule the
+    // server applies to `PackageStaleWriteError`, applied on the client that
+    // receives it. Two tabs on one package is expected, not a fault.
+    expect(captureException).not.toHaveBeenCalled();
+  });
+
+  /**
+   * "Keep my edits" is a RETRY against the newer revision, not a force flag:
+   * the same draft, the precondition the refusal reported. Asserting the
+   * second call's `expectedUpdatedAt` is what separates the two — a `force:
+   * true` implementation would resend the ORIGINAL token (or none), and a
+   * test that only checked "it saved again" would not notice.
+   */
+  it('replays the same draft against the revision the refusal reported', async () => {
+    const user = userEvent.setup();
+    const pkg = mkPackage({
+      items: [mkItem({ id: 'i1', label: 'Rain' })],
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+
+    getPackageFn.mockResolvedValue(pkg);
+    listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+    updatePackageFn.mockRejectedValueOnce(wireStaleWriteError('2026-05-05T05:05:05.000Z'));
+
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <PackageEditorPage />
+      </QueryClientProvider>
+    );
+
+    const nameInput = await screen.findByRole('textbox', { name: /package name/i });
+    await user.clear(nameInput);
+    await user.type(nameInput, 'My Renamed Set');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await screen.findByTestId('package-conflict-notice');
+    updatePackageFn.mockResolvedValue({ ...pkg, name: 'My Renamed Set' });
+    await user.click(screen.getByRole('button', { name: /keep my edits and overwrite/i }));
+
+    await waitFor(() => expect(updatePackageFn).toHaveBeenCalledTimes(2));
+    const first = updatePackageFn.mock.calls[0][0] as { data: { expectedUpdatedAt: string } };
+    const retry = updatePackageFn.mock.calls[1][0] as {
+      data: { expectedUpdatedAt: string; name: string; items: PackageItemData[] };
+    };
+    expect(first.data.expectedUpdatedAt).toBe('2026-01-01T00:00:00.000Z');
+    expect(retry.data.expectedUpdatedAt).toBe('2026-05-05T05:05:05.000Z');
+    // The draft itself is replayed unchanged — not re-derived from the server
+    // copy, which would be a second chance to lose the edit.
+    expect(retry.data.name).toBe('My Renamed Set');
+    expect(retry.data.items.map((i) => i.id)).toEqual(['i1']);
+
+    // Succeeded: the notice is gone.
+    await waitFor(() =>
+      expect(screen.queryByTestId('package-conflict-notice')).not.toBeInTheDocument()
+    );
+  });
+
+  /**
+   * The other door, and the only one that throws work away — which is why it
+   * is a labelled button and not the automatic consequence of a conflict.
+   */
+  it('discards the local draft only when the user explicitly asks, and reloads the stored version', async () => {
+    const user = userEvent.setup();
+    const pkg = mkPackage({ name: 'Storm Set', items: [mkItem({ id: 'i1', label: 'Rain' })] });
+    const serverVersion = mkPackage({
+      name: 'Renamed By The Other Tab',
+      items: [mkItem({ id: 'i1', label: 'Rain' })],
+      updatedAt: '2026-05-05T05:05:05.000Z',
+    });
+
+    getPackageFn.mockResolvedValueOnce(pkg).mockResolvedValue(serverVersion);
+    listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+    updatePackageFn.mockRejectedValue(wireStaleWriteError('2026-05-05T05:05:05.000Z'));
+
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <PackageEditorPage />
+      </QueryClientProvider>
+    );
+
+    const nameInput = await screen.findByRole('textbox', { name: /package name/i });
+    await user.clear(nameInput);
+    await user.type(nameInput, 'My Renamed Set');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByTestId('package-conflict-notice');
+
+    await user.click(
+      screen.getByRole('button', { name: /discard my edits and load the saved version/i })
+    );
+
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: /package name/i })).toHaveValue(
+        'Renamed By The Other Tab'
+      )
+    );
+    expect(screen.queryByTestId('package-conflict-notice')).not.toBeInTheDocument();
+    // The refusal is cleared too, not left behind as a red "failed to save"
+    // line describing a conflict that has already been resolved.
+    expect(screen.queryByText(/failed to save changes/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The guard must not swallow real failures. A non-conflict rejection still
+   * takes the original path: the plain error line, and a GlitchTip report.
+   */
+  it('leaves an ordinary save failure reported and rendered as before', async () => {
+    const user = userEvent.setup();
+    const pkg = mkPackage({ items: [mkItem()] });
+
+    getPackageFn.mockResolvedValue(pkg);
+    listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+    updatePackageFn.mockRejectedValue(new Error('Database unavailable'));
+
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <PackageEditorPage />
+      </QueryClientProvider>
+    );
+
+    const nameInput = await screen.findByRole('textbox', { name: /package name/i });
+    await user.type(nameInput, '!');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+
+    await screen.findByText('Database unavailable');
+    expect(screen.queryByTestId('package-conflict-notice')).not.toBeInTheDocument();
+    await waitFor(() => expect(captureException).toHaveBeenCalledTimes(1));
+  });
+
+  /**
+   * The review's Important finding, pinned. The conflict notice SUPPRESSES the
+   * generic error line (`!conflict && saveMutation.error`, in the route), so
+   * if a failed overwrite left the conflict state standing, a retry that fails
+   * with anything other than a stale write would render NOTHING AT ALL: the
+   * button flips back from "Saving…" and the user's only signal that their
+   * click did nothing is the absence of change.
+   *
+   * That is precisely why this test is written against what is ON SCREEN
+   * rather than against state or call counts — the bug's whole signature is
+   * that every other observable stays green (the mutation ran, the error was
+   * captured, the notice is still correct) while the user is told nothing.
+   *
+   * The rejection here is deliberately the reachable one rather than a generic
+   * 500: an empty `currentUpdatedAt` makes the overwrite send
+   * `expectedUpdatedAt: ''`, which `updatePackageSchema`'s `.datetime()`
+   * rejects at the server-fn validator.
+   */
+  it('renders a visible failure when the overwrite retry fails with a non-conflict error', async () => {
+    const user = userEvent.setup();
+    const pkg = mkPackage({ items: [mkItem({ id: 'i1', label: 'Rain' })] });
+
+    getPackageFn.mockResolvedValue(pkg);
+    listAudioAssetsFn.mockResolvedValue({ items: [], nextCursor: null });
+    updatePackageFn.mockRejectedValueOnce(wireStaleWriteError(''));
+
+    const qc = new QueryClient();
+    render(
+      <QueryClientProvider client={qc}>
+        <PackageEditorPage />
+      </QueryClientProvider>
+    );
+
+    const nameInput = await screen.findByRole('textbox', { name: /package name/i });
+    await user.clear(nameInput);
+    await user.type(nameInput, 'My Renamed Set');
+    await user.click(screen.getByRole('button', { name: /save changes/i }));
+    await screen.findByTestId('package-conflict-notice');
+
+    // The retry is refused by the input validator, not by the fence.
+    updatePackageFn.mockRejectedValue(
+      new Error('Invalid input: expected ISO datetime, received ""')
+    );
+    await user.click(screen.getByRole('button', { name: /keep my edits and overwrite/i }));
+
+    // SOMETHING the user can see. Without the fix this assertion is the only
+    // one in the file that fails — the notice below is still rendered, the
+    // capture below still happens, and nothing else notices.
+    await screen.findByText(/expected ISO datetime/i);
+    expect(screen.queryByTestId('package-conflict-notice')).not.toBeInTheDocument();
+
+    // Still a real fault, so it is still reported — only the stale-write
+    // refusal is exempt.
+    await waitFor(() => expect(captureException).toHaveBeenCalledTimes(1));
+    // And the draft is STILL intact: a failed overwrite must not cost the user
+    // their edits any more than the original refusal did.
+    expect(screen.getByRole('textbox', { name: /package name/i })).toHaveValue('My Renamed Set');
+    expect(screen.getByRole('button', { name: /remove rain/i })).toBeInTheDocument();
   });
 });

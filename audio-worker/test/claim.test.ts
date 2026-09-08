@@ -51,6 +51,7 @@ function reaperModel(
   // returned every row regardless would make the bound look like it worked
   // while testing a code path that never sees it.
   const find = vi.fn((f: unknown, options?: { limit?: number }) => {
+    if ((f as { status?: string }).status === 'failed') return { toArray: async () => [] };
     const isOnceQuery = (f as { variant?: unknown } | undefined)?.variant === 'once';
     const source = isOnceQuery ? onceAbandoned : abandoned;
     return { toArray: async () => (options?.limit ? source.slice(0, options.limit) : source) };
@@ -167,12 +168,62 @@ describe('reapStale', () => {
     expect(update.$set.nextAttemptAt).toBeNull();
   });
 
-  it('fails rows that have exhausted their attempts', async () => {
+  it('fails MAIN rows that have exhausted their attempts', async () => {
     const model = reaperModel();
     await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
     const secondCall = model.updateMany.mock.calls[1];
     expect(secondCall[0].attempts.$gte).toBe(3);
     expect(secondCall[1].$set.status).toBe('failed');
+    // The clause that makes this the MAIN pipeline's write and not both
+    // pipelines'. `$ne` rather than `!=` so rows predating the field — every
+    // ordinary main asset — still match.
+    expect(secondCall[0].variant).toEqual({ $ne: 'once' });
+  });
+
+  /**
+   * The third terminal path for a once-variant run, and the one Task 18's
+   * review did not cover.
+   *
+   * `markOnceFailed` (process.ts) exists so a failed once-attach never lands
+   * on `status: 'failed'`: the row it would land on is the MAIN music asset's
+   * own document, already fully transcoded and `ready` before the attach
+   * began, and `failed` + a main-pipeline `lastError` reports a perfectly
+   * good asset as broken and drops it out of the board's play gate. Task 18
+   * routed `processAsset`'s two terminal branches (permanent error, budget
+   * exhausted) through it.
+   *
+   * This path is reached when the worker DIES rather than throws — an evicted
+   * pod, an OOM, a SIGKILL — so `processAsset`'s catch never runs at all and
+   * `reapStale` is what finally resolves the row. It used to fall through to
+   * the main pipeline's `failed` write, bricking the music asset exactly as
+   * `markOnceFailed` was built to prevent, three attempts after the fact.
+   */
+  it('reverts ONCE rows that have exhausted their attempts instead of failing them', async () => {
+    const model = reaperModel();
+    await reapStale(model as never, 600_000, UPLOAD_STALE_MS);
+
+    const [filter, update] = model.updateMany.mock.calls[2];
+    expect(filter.status).toBe('processing');
+    expect(filter.attempts.$gte).toBe(3);
+    expect(filter.variant).toBe('once');
+
+    // Field for field, `markOnceFailed`'s terminal write: the main content was
+    // never touched by this job, so the row goes back to being a playable
+    // music asset.
+    expect(update.$set.status).toBe('ready');
+    expect(update.$set.variant).toBe('main');
+    expect(update.$set.onceLastError).toMatch(/once-variant/i);
+    // NOT `lastError` — that field describes the MAIN pipeline and a once
+    // failure must never overwrite it.
+    expect(update.$set.lastError).toBeUndefined();
+    expect(update.$set.permanentFailure).toBeUndefined();
+    // The `onceSourceBytes` invariant: reset wherever `onceSourceKey` is
+    // cleared, or the storage quota keeps charging for an object the row no
+    // longer references.
+    expect(update.$set.onceSourceKey).toBeNull();
+    expect(update.$set.onceSourceBytes).toBeNull();
+    expect(update.$set.claimedAt).toBeNull();
+    expect(update.$set.claimedBy).toBeNull();
   });
 
   it('bumps updatedAt on every clause — these are real status transitions', async () => {
@@ -186,7 +237,11 @@ describe('reapStale', () => {
     // them claim to have last changed when they were created — most misleading
     // for exactly the rows this function produces. markFailed and
     // requeueForRetry (process.ts) already do this.
-    expect(model.updateMany).toHaveBeenCalledTimes(2);
+    // THREE clauses, not two: the attempts-exhausted write is split on
+    // `variant`, because a once-attach that ran out of attempts must revert to
+    // `ready`/`main` like `markOnceFailed` does rather than stamp the MAIN
+    // asset `failed`. See the once-timeout tests further down.
+    expect(model.updateMany).toHaveBeenCalledTimes(3);
     for (const [, update] of model.updateMany.mock.calls) {
       expect(update.$set.updatedAt).toBeInstanceOf(Date);
     }
@@ -463,7 +518,7 @@ describe('reapStale handles once-variant attaches separately (Task 18 review Cri
     expect(mainUpdateCall![1].$set).not.toHaveProperty('onceSourceKey');
   });
 
-  it('reverts a stale once-attach to ready/main on updatedAt, not createdAt', async () => {
+  it('reverts a stale once-attach to ready/main on the attach clock, not createdAt', async () => {
     const model = reaperModel([], undefined, [
       { _id: 'once-1', onceSourceKey: 'uploads/audio/prefix/once-src.wav' },
     ]);
@@ -477,20 +532,38 @@ describe('reapStale handles once-variant attaches separately (Task 18 review Cri
     expect(onceFindCall).toBeDefined();
     const [filter] = onceFindCall!;
     expect((filter as { status: string }).status).toBe('uploading');
-    // updatedAt, NOT createdAt — the entire fix. A cutoff gated on createdAt
+    // NOT createdAt — the entire Task 18 fix. A cutoff gated on createdAt
     // would match this row (and every other once-attach) immediately, since
     // the MAIN asset's createdAt is whatever it always was.
     expect(filter).not.toHaveProperty('createdAt');
-    const cutoff = (filter as { updatedAt: { $lt: Date } }).updatedAt.$lt;
+    // The clock is `onceUploadStartedAt`, with the legacy `updatedAt`
+    // predicate surviving only as the missing-field fallback branch. Both
+    // branches carry the same cutoff.
+    const branches = (filter as { $or: Record<string, unknown>[] }).$or;
+    expect(branches.map((b) => Object.keys(b).join('+'))).toEqual([
+      'onceUploadStartedAt',
+      'onceUploadStartedAt+updatedAt',
+    ]);
+    const cutoff = (branches[0].onceUploadStartedAt as { $lt: Date }).$lt;
     expect(cutoff).toBeInstanceOf(Date);
     expect(cutoff.getTime()).toBeLessThanOrEqual(before - ONCE_STALE_MS + 1);
+    // The fallback branch is scoped to rows that HAVE no stamp — `null`
+    // matches null-or-missing in Mongo — so a stamped row can never be
+    // reaped on `updatedAt`.
+    expect(branches[1].onceUploadStartedAt).toBeNull();
+    expect((branches[1].updatedAt as { $lt: Date }).$lt).toEqual(cutoff);
 
     const onceUpdateCall = model.updateOne.mock.calls.find(
       ([f]) => (f as { _id: unknown })._id === 'once-1'
     );
     expect(onceUpdateCall).toBeDefined();
     const [updateFilter, update] = onceUpdateCall!;
-    expect(updateFilter).toEqual({ _id: 'once-1', status: 'uploading', variant: 'once' });
+    expect(updateFilter).toEqual({
+      _id: 'once-1',
+      status: 'uploading',
+      variant: 'once',
+      onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+    });
     expect(update.$set).toMatchObject({
       status: 'ready',
       variant: 'main',
@@ -561,20 +634,30 @@ describe('reapStale handles once-variant attaches separately (Task 18 review Cri
  *   driver's projection would expose.
  * - `$lt` returns `false` for anything that isn't a `Date` (see
  *   `matchesFilter` below) — correct for every clause the TWO reapers
- *   tested here actually use (`createdAt`/`updatedAt`/`claimedAt`, all
- *   Dates), but `reapStale`'s OTHER two `updateMany` clauses use `$lt`/
- *   `$gte` on `attempts` (a NUMBER). Nothing in this describe block drives
- *   those branches through `makeRealFilterCollection`, so this gap is
- *   dormant, not exercised — a future test that does route the
- *   `processing`-timeout path through this fake would need `$lt` to handle
- *   numbers too, or it would silently under-match.
+ *   tested here actually use (`createdAt`/`updatedAt`/`onceUploadStartedAt`/
+ *   `claimedAt`, all Dates), but `reapStale`'s OTHER two `updateMany`
+ *   clauses use `$lt`/`$gte` on `attempts` (a NUMBER). Nothing in this
+ *   describe block drives those branches through `makeRealFilterCollection`,
+ *   so this gap is dormant, not exercised — a future test that does route
+ *   the `processing`-timeout path through this fake would need `$lt` to
+ *   handle numbers too, or it would silently under-match.
  */
 function matchesFilter(doc: Record<string, unknown>, filter: Record<string, unknown>): boolean {
   return Object.entries(filter).every(([key, cond]) => {
+    // `$or` is a top-level LOGICAL operator, not a field condition — it takes
+    // an array of whole sub-filters, any one of which may match. Added for
+    // `reapAbandonedOnceUploads`'s `onceUploadStartedAt`-or-legacy-`updatedAt`
+    // gate; without it this fake would throw rather than silently mismatch,
+    // which is the behaviour we want from an unsupported operator.
+    if (key === '$or') {
+      return (cond as Record<string, unknown>[]).some((sub) => matchesFilter(doc, sub));
+    }
     const val = doc[key];
     if (cond !== null && typeof cond === 'object' && !(cond instanceof Date)) {
       return Object.entries(cond as Record<string, unknown>).every(([op, opVal]) => {
         switch (op) {
+          case '$type':
+            return opVal === 'string' && typeof val === 'string';
           case '$ne':
             // Mongo's equality-to-missing-field semantics: `$ne: 'x'` on a
             // document where the field is absent (undefined) counts as
@@ -617,10 +700,14 @@ function makeRealFilterCollection(initialDocs: Record<string, unknown>[]) {
   }));
 
   const updateOne = vi.fn(
-    async (filter: Record<string, unknown>, update: { $set: Record<string, unknown> }) => {
+    async (
+      filter: Record<string, unknown>,
+      update: { $set: Record<string, unknown>; $unset?: Record<string, unknown> }
+    ) => {
       const doc = [...docs.values()].find((d) => matchesFilter(d, filter));
       if (!doc) return { matchedCount: 0 };
       Object.assign(doc, update.$set);
+      for (const key of Object.keys(update.$unset ?? {})) delete doc[key];
       return { matchedCount: 1 };
     }
   );
@@ -682,6 +769,18 @@ describe('reapStale against a real filter-evaluating collection (Task 18 re-revi
     });
   });
 
+  /**
+   * NOTE, load-bearing after Task 10: this fixture carries NO
+   * `onceUploadStartedAt`, so it is also the coverage for the LEGACY-ROW
+   * fallback branch of `reapAbandonedOnceUploads`'s `$or` — a row written
+   * before the app started stamping the attach clock is still reaped on
+   * `updatedAt`, exactly as it was before. Its sibling above ("does not
+   * delete the main sourceKey of a mid-attach once-variant row") is the
+   * other half: an unstamped row with a FRESH `updatedAt` is still left
+   * alone. Between them, old rows keep precisely today's behaviour, which
+   * is why the fallback exists rather than treating a missing stamp as
+   * infinitely stale.
+   */
   it('reclaims a genuinely STALE once-attach — only its own key, never the main one', async () => {
     const now = Date.now();
     const yesterday = new Date(now - 24 * 60 * 60 * 1000);
@@ -695,6 +794,12 @@ describe('reapStale against a real filter-evaluating collection (Task 18 re-revi
         updatedAt: yesterday, // the attach itself is now stale too
         sourceKey: 'uploads/audio/p/main.wav',
         onceSourceKey: 'uploads/audio/p/once.wav',
+        // Task 3b review fix: a PRIOR successful attach set this to a real
+        // number; this abandoned attach (a re-attach after that prior
+        // success) must not leave it standing once its own onceSourceKey is
+        // cleared below — non-null on purpose, so a reset that got deleted
+        // would leave this exact value behind instead of null.
+        onceSourceBytes: 5_000_000,
       },
     ]);
     const deleteSource = vi.fn().mockResolvedValue(undefined);
@@ -707,6 +812,7 @@ describe('reapStale against a real filter-evaluating collection (Task 18 re-revi
       status: 'ready',
       variant: 'main',
       onceSourceKey: null,
+      onceSourceBytes: null,
     });
   });
 
@@ -793,5 +899,241 @@ describe('reapStale against a real filter-evaluating collection (Task 18 re-revi
     // fence narrowed the write rather than disabling the reaper.
     expect(deletedKeys).toContain('uploads/audio/p/a.wav');
     expect(collection.docs.get('a-abandoned')).toMatchObject({ status: 'failed' });
+  });
+
+  /**
+   * TASK 10, FIX 1. `reapAbandonedOnceUploads`' fenced write used to be
+   * `{_id, status: 'uploading', variant: 'once'}` — a description of the
+   * STATE a once-attach is in, not of WHICH attach the candidate list
+   * actually saw. A second attach on the same row puts it in the identical
+   * state, so the fence matched it too.
+   *
+   * No unusual timing needed: the reap loop is bounded but runs for real
+   * time (a `beat()` and an Atlas round trip per row), so a second attach
+   * can appear between the `find` and this row's turn.
+   *
+   * THE ROUTE MATTERS, and the obvious one does not exist. A GM cannot just
+   * give up on a stuck attach and start another — `createOnceVariantUpload`
+   * is fenced on `status: 'ready'` and the stuck row is `uploading`. Some
+   * write must return it to `ready` first. This fixture therefore stages
+   * the real two-step sequence: the browser's PUT finally lands,
+   * `confirmOnceVariantUpload` REJECTS the file (over `AUDIO_MAX_BYTES`
+   * here) and reverts the row to `ready`/`main`, and only THEN does the
+   * re-attach become permissible. (The other real route is two workers
+   * running at once, which `strategy: Recreate` in the chart exists to
+   * limit but does not forbid — see the fence's own comment in claim.ts.)
+   *
+   * Against the old fence, the reaper's write then matched that
+   * seconds-old attach, reverted it, wrote `onceLastError: 'Once-variant
+   * upload never completed'` over the real reason, and deleted the key it
+   * had projected before any of this happened — leaving the browser PUTting
+   * to a presigned URL for an object no row references.
+   *
+   * Driven through the real reaper against the filter-evaluating collection
+   * and asserted on OUTCOMES — the row's final state and the keys actually
+   * handed to `deleteSource` — not on the shape of the filter.
+   *
+   * Wrong-reason checks:
+   * - It would prove nothing if row B were not a genuine reap candidate, so
+   *   B is listed with a day-old `onceUploadStartedAt` and only becomes
+   *   fresh mid-pass.
+   * - It would prove nothing if the fence were satisfiable by timing alone,
+   *   so the staged sequence ENDS with `status`/`variant` back at exactly
+   *   the values the fence tests — the only thing that differs is
+   *   `onceSourceKey`.
+   * - It would prove less than it implies if the staged transition were one
+   *   the real functions would refuse, so the re-attach step asserts its own
+   *   precondition (`status === 'ready'`) rather than assuming the step
+   *   before it left the row there.
+   */
+  it('does not revert a once-attach that was replaced by a NEWER attach mid-pass', async () => {
+    const now = Date.now();
+    const yesterday = new Date(now - 24 * 60 * 60 * 1000);
+    // The message `confirmOnceVariantUpload`'s reject path writes. Kept in a
+    // const because the final assertion turns on it SURVIVING: the reaper
+    // overwriting it with its own "never completed" is one of the two
+    // user-visible harms this fence prevents.
+    const REJECT_REASON = 'File too large: 99999999 bytes exceeds 52428800';
+
+    const collection = makeRealFilterCollection([
+      // Reaped normally. Its write is what the interleave hangs off — it
+      // stands in for "any work at all happening before row B's turn".
+      {
+        _id: 'a-stale-attach',
+        status: 'uploading',
+        variant: 'once',
+        createdAt: yesterday,
+        updatedAt: yesterday,
+        onceUploadStartedAt: yesterday,
+        sourceKey: 'uploads/audio/p/a-main.wav',
+        onceSourceKey: 'uploads/audio/p/a-once.wav',
+      },
+      // Listed by the same `find` as a genuinely-abandoned attach, then
+      // superseded by a fresh attach before its own write runs.
+      {
+        _id: 'b-reattached',
+        status: 'uploading',
+        variant: 'once',
+        createdAt: yesterday,
+        updatedAt: yesterday,
+        onceUploadStartedAt: yesterday,
+        sourceKey: 'uploads/audio/p/b-main.wav',
+        onceSourceKey: 'uploads/audio/p/b-once-v1.wav',
+      },
+    ]);
+
+    const realUpdateOne = collection.updateOne.getMockImplementation()!;
+    let writes = 0;
+    collection.updateOne.mockImplementation(async (filter, update) => {
+      if (writes++ === 0) {
+        // Between row A's write and row B's, both app writes land. Each is
+        // the `$set` of the real function named, minus fields irrelevant
+        // here — and they are applied in order because the SECOND is only
+        // reachable through the FIRST.
+        const b = collection.docs.get('b-reattached')!;
+
+        // (1) `confirmOnceVariantUpload`'s tooLarge/badType reject path
+        //     (app/server/functions/audio.ts). The browser's PUT finally
+        //     landed, HeadObject measured it over the cap, the object was
+        //     deleted, and the row went back to a fully playable asset.
+        Object.assign(b, {
+          status: 'ready',
+          variant: 'main',
+          onceSourceKey: null,
+          onceSourceBytes: null,
+          onceLastError: REJECT_REASON,
+          updatedAt: new Date(now),
+        });
+
+        // (2) ...and only NOW can the GM attach a better file:
+        //     `createOnceVariantUpload` is fenced on `status: 'ready'`, so
+        //     without step (1) this write could not happen at all. Asserted
+        //     rather than assumed, so this fixture can never quietly drift
+        //     into staging a transition the real function would refuse.
+        expect(b.status).toBe('ready');
+        Object.assign(b, {
+          onceSourceKey: 'uploads/audio/p/b-once-v2.wav',
+          onceSourceBytes: null,
+          onceRenditions: {},
+          variant: 'once',
+          status: 'uploading',
+          attempts: 0,
+          nextAttemptAt: null,
+          onceUploadStartedAt: new Date(now),
+          updatedAt: new Date(now),
+        });
+      }
+      return realUpdateOne(filter, update);
+    });
+
+    const deleteSource = vi.fn().mockResolvedValue(undefined);
+    await reapStale(collection as never, 600_000, UPLOAD_STALE_MS, deleteSource);
+
+    // The fresh attach is untouched: still in flight, still pointing at the
+    // object the browser is uploading to.
+    expect(collection.docs.get('b-reattached')).toMatchObject({
+      status: 'uploading',
+      variant: 'once',
+      onceSourceKey: 'uploads/audio/p/b-once-v2.wav',
+    });
+    // And it was never told this attach "never completed" — the error the GM
+    // sees is still the REAL one, from the confirm that actually rejected.
+    // The reaper overwriting it is the second half of the harm: the user is
+    // handed a false explanation for a failure they did not have.
+    expect(collection.docs.get('b-reattached')!.onceLastError).toBe(REJECT_REASON);
+
+    // Exactly one key was reclaimed — row A's. Not the superseded
+    // `b-once-v1.wav` (the fenced write no-opped, so this pass never earned
+    // the right to delete anything for row B; `createOnceVariantUpload`
+    // already deletes the object it replaced), and never a main source.
+    const deletedKeys = deleteSource.mock.calls.flatMap(([keys]) => keys as string[]);
+    expect(deletedKeys).toEqual(['uploads/audio/p/a-once.wav']);
+
+    // Positive control: the fence narrowed the write, it did not disable the
+    // reaper — the genuinely-abandoned attach was still reverted.
+    expect(collection.docs.get('a-stale-attach')).toMatchObject({
+      status: 'ready',
+      variant: 'main',
+      onceSourceKey: null,
+    });
+  });
+
+  /**
+   * TASK 10, FIX 2. The once reaper's only clock used to be `updatedAt`,
+   * which records "this document was modified", not "this job made
+   * progress". `updateAudioAsset` and `bulkTagAudioAssets` are unfenced
+   * facet editors — retitle, retag, change the mood — so any edit to an
+   * asset whose once-attach had died reset the reaper's clock and bought
+   * the dead attach another full timeout.
+   *
+   * That is not a delay, it is a trap: the row is stuck in
+   * `status: 'uploading'`, and `createOnceVariantUpload` refuses anything
+   * that isn't `status: 'ready'`, so the owner has no way to clear it
+   * themselves — and because `status` is shared with the main pipeline, the
+   * asset reads as un-ready everywhere (the board's play gate included) the
+   * whole time. Every further edit postpones it again.
+   *
+   * Wrong-reason check: the fixture's `updatedAt` is a second old, so the
+   * OLD predicate cannot match it — the row is reaped here if and only if
+   * the reaper reads the dedicated stamp. And the second row is a genuinely
+   * fresh attach, so a reaper that had simply become unconditional would
+   * fail on the `toEqual` below rather than passing.
+   */
+  it('reaps an attach that died a day ago even though a facet edit just bumped updatedAt', async () => {
+    const now = Date.now();
+    const yesterday = new Date(now - 24 * 60 * 60 * 1000);
+    const aSecondAgo = new Date(now - 1_000);
+
+    const collection = makeRealFilterCollection([
+      {
+        _id: 'edited-while-stuck',
+        status: 'uploading',
+        variant: 'once',
+        createdAt: yesterday,
+        // The attach itself died a day ago...
+        onceUploadStartedAt: yesterday,
+        // ...but the owner retitled the track a second ago, which is all
+        // `updatedAt` has ever meant.
+        updatedAt: aSecondAgo,
+        sourceKey: 'uploads/audio/p/main.wav',
+        onceSourceKey: 'uploads/audio/p/stuck-once.wav',
+        onceSourceBytes: 5_000_000,
+      },
+      // A genuinely fresh attach, stamped seconds ago. Nothing about the new
+      // clock may make this one reapable.
+      {
+        _id: 'in-flight',
+        status: 'uploading',
+        variant: 'once',
+        createdAt: yesterday,
+        onceUploadStartedAt: aSecondAgo,
+        updatedAt: aSecondAgo,
+        sourceKey: 'uploads/audio/p/other-main.wav',
+        onceSourceKey: 'uploads/audio/p/in-flight-once.wav',
+      },
+    ]);
+    const deleteSource = vi.fn().mockResolvedValue(undefined);
+
+    await reapStale(collection as never, 600_000, UPLOAD_STALE_MS, deleteSource);
+
+    // The stuck row is finally unstuck: back to a fully playable asset, its
+    // orphaned once-source reclaimed, the reason recorded.
+    expect(collection.docs.get('edited-while-stuck')).toMatchObject({
+      status: 'ready',
+      variant: 'main',
+      onceSourceKey: null,
+      onceSourceBytes: null,
+      onceLastError: 'Once-variant upload never completed',
+    });
+
+    // The in-flight attach is untouched, and only the stuck row's own key
+    // was deleted — never a main source, never the live attach's object.
+    expect(collection.docs.get('in-flight')).toMatchObject({
+      status: 'uploading',
+      variant: 'once',
+      onceSourceKey: 'uploads/audio/p/in-flight-once.wav',
+    });
+    const deletedKeys = deleteSource.mock.calls.flatMap(([keys]) => keys as string[]);
+    expect(deletedKeys).toEqual(['uploads/audio/p/stuck-once.wav']);
   });
 });

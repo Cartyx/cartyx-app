@@ -1,12 +1,13 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { createFileRoute, redirect } from '@tanstack/react-router';
-import { useMutation, useInfiniteQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { InfiniteData, QueryKey } from '@tanstack/react-query';
 import { X } from 'lucide-react';
 import { getMe } from '~/server/functions/rpc';
 import { Topbar } from '~/components/Topbar';
 import { AudioLibraryBrowser } from '~/components/audio/AudioLibraryBrowser';
 import { AudioUploadDropzone } from '~/components/audio/AudioUploadDropzone';
+import { AudioQuotaBar } from '~/components/audio/AudioQuotaBar';
 import { AudioBulkTagBar } from '~/components/audio/AudioBulkTagBar';
 import type { BulkTagPayload } from '~/components/audio/AudioBulkTagBar';
 import { AudioAssetDetail } from '~/components/audio/AudioAssetDetail';
@@ -23,10 +24,12 @@ import {
   retryAudioAssetFn,
   scanOrphanAudioFn,
   deleteOrphanAudioFn,
+  getAudioStorageUsageFn,
 } from '~/utils/audio-server-fns';
 import { uploadOnceVariantFile } from '~/utils/uploadAudio';
 import { queryKeys } from '~/utils/queryKeys';
 import { captureException } from '~/utils/telemetry-client';
+import { isClientRefusal } from '~/lib/client-refusal';
 import type { AudioAssetData, AudioEnvironment, AudioMood } from '~/types/audio';
 import type { ScanOrphanAudioResult } from '~/types/schemas/audio';
 
@@ -154,6 +157,15 @@ export function AudioLibraryPage() {
     refetchInterval: (q) => (shouldPoll(flattenAudioPages(q.state.data)) ? POLL_MS : false),
   });
 
+  // Task 5: usage against the storage quota, shown near the dropzone. Not
+  // part of the poll above — the quota only moves on ingest/delete, not on
+  // transcode progress, so it doesn't need the 4s refetch. `invalidateAudio`
+  // covers it below alongside every other audio-branch query.
+  const usageQuery = useQuery({
+    queryKey: queryKeys.audio.usage(),
+    queryFn: () => getAudioStorageUsageFn(),
+  });
+
   const assets = useMemo(() => flattenAudioPages(query.data), [query.data]);
   // The live record for whichever asset is being edited — not the snapshot
   // captured when Edit was clicked. AudioAssetDetail's reset effect keys off
@@ -186,7 +198,11 @@ export function AudioLibraryPage() {
       setSelectedIds([]);
       invalidateAudio();
     },
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.bulkTag' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'AudioLibraryPage.bulkTag' });
+      invalidateAudio();
+    },
   });
 
   const update = useMutation({
@@ -196,13 +212,19 @@ export function AudioLibraryPage() {
       setEditingAssetId(null);
       invalidateAudio();
     },
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.updateAsset' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'AudioLibraryPage.updateAsset' });
+    },
   });
 
   const retry = useMutation({
     mutationFn: (asset: AudioAssetData) => retryAudioAssetFn({ data: { id: asset.id } }),
     onSuccess: invalidateAudio,
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.retryAsset' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'AudioLibraryPage.retryAsset' });
+    },
   });
 
   // Task 18: attach a once-variant. Kept as its own mutation (not folded
@@ -214,7 +236,11 @@ export function AudioLibraryPage() {
     mutationFn: ({ assetId, file }: { assetId: string; file: File }) =>
       uploadOnceVariantFile(assetId, file),
     onSuccess: invalidateAudio,
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.attachOnceVariant' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e))
+        captureException(e, { action: 'AudioLibraryPage.attachOnceVariant' });
+    },
   });
 
   const deleteMutation = useMutation({
@@ -236,7 +262,10 @@ export function AudioLibraryPage() {
       // cleaned up by deleting the asset again.
       invalidatePackages();
     },
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.deleteAsset' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'AudioLibraryPage.deleteAsset' });
+    },
   });
 
   // Orphan cleanup is a deliberate, explicit action, not part of the 4s poll:
@@ -248,7 +277,10 @@ export function AudioLibraryPage() {
       setLastOrphanDelete(null);
       setOrphanScan(data);
     },
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.scanOrphanAudio' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e)) captureException(e, { action: 'AudioLibraryPage.scanOrphanAudio' });
+    },
   });
 
   const deleteOrphans = useMutation({
@@ -259,7 +291,11 @@ export function AudioLibraryPage() {
       // user re-scans to see what is left.
       setOrphanScan((prev) => (prev ? { ...prev, orphans: [] } : prev));
     },
-    onError: (e) => captureException(e, { action: 'AudioLibraryPage.deleteOrphanAudio' }),
+    onError: (e) => {
+      // A refusal is not a fault — see `~/lib/client-refusal.ts`.
+      if (!isClientRefusal(e))
+        captureException(e, { action: 'AudioLibraryPage.deleteOrphanAudio' });
+    },
   });
 
   const { pendingDelete, deleteError, requestDelete, cancelDelete, confirmDelete } =
@@ -330,6 +366,17 @@ export function AudioLibraryPage() {
           </h1>
 
           <AudioUploadDropzone onUploaded={invalidateAudio} />
+
+          <AudioQuotaBar
+            usageBytes={usageQuery.data?.bytes ?? null}
+            assetCount={usageQuery.data?.assetCount ?? 0}
+            limitBytes={usageQuery.data?.limitBytes ?? null}
+            error={
+              usageQuery.error
+                ? errorMessage(usageQuery.error, 'Failed to load storage usage.')
+                : null
+            }
+          />
 
           {nowPlaying && playbackSources.length > 0 && (
             <div className="mt-4 flex items-center gap-3 rounded border border-white/[0.07] bg-white/[0.02] p-3">

@@ -488,6 +488,7 @@ export function makeSourceDeleter(): (keys: string[]) => Promise<void> {
         { count: result.Errors.length, first: result.Errors[0]?.Key },
         'R2 refused to delete some abandoned upload objects'
       );
+      throw new Error(`R2 refused to delete ${result.Errors.length} audio objects`);
     }
   };
 }
@@ -618,6 +619,15 @@ async function markOnceFailed(
       status: 'ready',
       variant: 'main',
       onceSourceKey: null,
+      // Paired with `onceSourceKey` above — cartyx-app's Task 3b review
+      // finding, applied here too: `onceSourceBytes` (the web app's
+      // `AudioAsset` field recording this key's HeadObject-measured size,
+      // set only by `confirmOnceVariantUpload`'s success write) must be
+      // reset wherever `onceSourceKey` is cleared or replaced, or the
+      // storage quota keeps charging this row for an object it no longer
+      // references. The worker doesn't otherwise read or write this field,
+      // but it owns this write, so it owns keeping the pair consistent.
+      onceSourceBytes: null,
       onceLastError: message,
       claimedAt: null,
       claimedBy: null,
@@ -1002,6 +1012,7 @@ export async function processAsset(
           status: 'ready',
           variant: 'main',
           onceRenditions: renditions,
+          onceLastError: null,
           lastError: null,
           permanentFailure: false,
           claimedAt: null,

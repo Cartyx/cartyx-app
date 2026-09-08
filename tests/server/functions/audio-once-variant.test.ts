@@ -7,7 +7,7 @@ vi.mock('~/server/utils/telemetry', () => ({
   serverCaptureEvent: vi.fn(),
 }));
 vi.mock('~/server/db/models/AudioAsset', () => ({
-  AudioAsset: { findOne: vi.fn(), findOneAndUpdate: vi.fn() },
+  AudioAsset: { findOne: vi.fn(), findOneAndUpdate: vi.fn(), countDocuments: vi.fn() },
 }));
 
 const send = vi.fn();
@@ -24,6 +24,9 @@ vi.mock('~/server/functions/audio-storage', () => ({
   resolveAudioStoragePrefix: vi.fn(async () => 'a1b2c3d4e5f60718293a4b5c6d7e8f90'),
 }));
 
+const getUserStorageUsage = vi.fn();
+vi.mock('~/server/functions/audio-quota', () => ({ getUserStorageUsage }));
+
 import { AudioAsset } from '~/server/db/models/AudioAsset';
 import { serverCaptureEvent } from '~/server/utils/telemetry';
 
@@ -35,7 +38,16 @@ const READY_MUSIC_ASSET = {
 };
 
 describe('createOnceVariantUpload', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Safe default for every pre-existing test below, which predates the
+    // quota check and never mocks it: comfortably under any real limit.
+    // Tests that care about the quota itself override this explicitly.
+    getUserStorageUsage.mockResolvedValue({ bytes: 0, assetCount: 1 });
+    // Same, for the pending-job cap now checked at presign — explicit rather
+    // than relying on an unconfigured mock's `undefined` comparing false.
+    vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0 as never);
+  });
 
   it('presigns and flips the row to uploading with variant: once, for a ready music asset', async () => {
     vi.mocked(AudioAsset.findOne).mockResolvedValue(READY_MUSIC_ASSET as never);
@@ -118,6 +130,45 @@ describe('createOnceVariantUpload', () => {
     const [, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
     const set = (update as { $set: Record<string, unknown> }).$set;
     expect(set.onceRenditions).toEqual({});
+  });
+
+  /**
+   * Task 3b review fix (Important). `onceSourceBytes` mirrors `onceSourceKey`
+   * one field over — the byte count describes the object the key points at —
+   * so the same reset `onceRenditions: {}` gets above is required for this
+   * field too, and for the same reason: a prior SUCCESSFUL attach set it to
+   * a real number, this new attach mints a brand-new key the old number no
+   * longer describes, and the old value must not survive to be
+   * misattributed to the new (not-yet-confirmed) object.
+   *
+   * Fixture starts `onceSourceBytes` at a real non-null number (5,000,000),
+   * not null and not absent — a fixture that started null/absent would pass
+   * this assertion even with the reset deleted from the implementation,
+   * because `undefined === null` reads the same as an explicit reset from
+   * `toBe(null)`'s perspective only if nothing else supplies a value; a
+   * non-null start makes the assertion fail unless the code actually writes
+   * the reset.
+   */
+  it('resets onceSourceBytes to null when re-attaching, so a stale prior measurement cannot survive onto the new key', async () => {
+    vi.mocked(AudioAsset.findOne).mockResolvedValue({
+      ...READY_MUSIC_ASSET,
+      onceSourceKey: 'uploads/audio/prefix/once-old.wav',
+      onceSourceBytes: 5_000_000,
+    } as never);
+    vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+      _id: 'a1',
+      status: 'uploading',
+    } as never);
+
+    const { createOnceVariantUpload } = await import('~/server/functions/audio');
+    await createOnceVariantUpload({
+      data: { assetId: 'a1', filename: 'ending2.wav', contentType: 'audio/wav', bytes: 2048 },
+      userId: 'u1',
+    });
+
+    const [, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
+    const set = (update as { $set: Record<string, unknown> }).$set;
+    expect(set.onceSourceBytes).toBeNull();
   });
 
   it('refuses a non-music asset, without presigning or touching the row', async () => {
@@ -255,10 +306,131 @@ describe('createOnceVariantUpload', () => {
 
     expect(r.assetId).toBe('a1');
   });
+
+  /**
+   * Review fix (Important): the quota check originally landed only on
+   * `createAudioUpload`. Task 3b made `onceSourceBytes` the sixth term in
+   * `getUserStorageUsage`'s aggregation specifically so once-variant bytes
+   * COUNT toward the quota — but counting them while leaving THIS path
+   * (the one that creates them) ungated meant a caller already at the
+   * limit could keep attaching once-variants to every `music` asset they
+   * own, roughly doubling the effective ceiling for a music-heavy library.
+   * These two tests hold this path to the same standard as
+   * `createAudioUpload`'s own quota tests in `audio-ingest.test.ts`, via
+   * the shared `assertUnderStorageQuota` helper both now call.
+   */
+  /**
+   * The cap at presign, same placement fix as `createAudioUpload`'s — and
+   * with one extra reason that is specific to this path. The attach write
+   * flips an EXISTING, previously-`ready` music asset into `uploading`, and
+   * `status` is shared with the main pipeline, so an attach that confirm was
+   * always going to refuse takes a playable asset out of service (the board's
+   * play gate, the library row) for the whole round trip. Refusing before the
+   * presign means the row is never touched at all.
+   */
+  describe('pending job cap at presign', () => {
+    it('refuses at the cap, issues no presign, and never touches the row', async () => {
+      const { getMaxPendingJobsPerUser, createOnceVariantUpload } =
+        await import('~/server/functions/audio');
+      const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(getMaxPendingJobsPerUser() as never);
+
+      await expect(
+        createOnceVariantUpload({
+          data: { assetId: 'a1', filename: 'ending.wav', contentType: 'audio/wav', bytes: 1024 },
+          userId: 'u1',
+        })
+      ).rejects.toThrow(/too many pending transcode jobs/i);
+
+      // `findOneAndUpdate` in particular: that is the write that would have
+      // pulled a `ready` music asset out of service. Asserting it never ran
+      // is what distinguishes "refused early" from "refused eventually".
+      expect(vi.mocked(getAudioUploadUrl)).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.findOne)).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.findOneAndUpdate)).not.toHaveBeenCalled();
+      // The cheap count precedes the expensive aggregation.
+      expect(getUserStorageUsage).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('storage quota', () => {
+    it('refuses over quota, issues no presign, and never looks up the asset', async () => {
+      const { getAudioUserQuotaBytes, createOnceVariantUpload } =
+        await import('~/server/functions/audio');
+      const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+      const limit = getAudioUserQuotaBytes();
+      getUserStorageUsage.mockResolvedValue({ bytes: limit + 1, assetCount: 5 });
+
+      await expect(
+        createOnceVariantUpload({
+          data: { assetId: 'a1', filename: 'ending.wav', contentType: 'audio/wav', bytes: 1024 },
+          userId: 'u1',
+        })
+      ).rejects.toThrow(/storage quota exceeded/i);
+
+      // Pinned on the quota message specifically, not merely "it threw": the
+      // asset-lookup mock is never configured to succeed in this test (it
+      // would resolve `undefined` and throw "Audio asset not found" instead
+      // if ever reached), so a version of this test that only asserted
+      // rejection would pass just as well with the quota check deleted.
+      // These negative assertions catch that — they fail unless the quota
+      // check runs BEFORE the asset lookup, not just before the presign.
+      expect(vi.mocked(getAudioUploadUrl)).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.findOne)).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.findOneAndUpdate)).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Its own test, not a branch of the one above — this fixture never sets
+     * a bytes value, only makes the aggregation call itself reject. Kept
+     * separate for the same reason `audio-ingest.test.ts`'s equivalent test
+     * is separate: merged into the over-quota case (which pins a resolved
+     * bytes VALUE), a missing fail-closed guard could still pass as long as
+     * something else downstream happened to throw.
+     */
+    it('refuses the attach when the usage aggregation itself rejects — fail closed', async () => {
+      const { createOnceVariantUpload } = await import('~/server/functions/audio');
+      const { getAudioUploadUrl } = await import('~/server/functions/uploads');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+      getUserStorageUsage.mockRejectedValue(new Error('mongo unreachable'));
+
+      await expect(
+        createOnceVariantUpload({
+          data: { assetId: 'a1', filename: 'ending.wav', contentType: 'audio/wav', bytes: 1024 },
+          userId: 'u1',
+        })
+      ).rejects.toThrow(/unable to verify your storage usage/i);
+
+      expect(vi.mocked(getAudioUploadUrl)).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.findOne)).not.toHaveBeenCalled();
+
+      // The underlying fault is still captured, exactly once, tagged for
+      // THIS caller specifically — proves `assertUnderStorageQuota`'s
+      // `action` parameter is actually threaded through, not hardcoded to
+      // `createAudioUpload`'s own string.
+      expect(vi.mocked(serverCaptureException)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(serverCaptureException).mock.calls[0][2]).toMatchObject({
+        action: 'createOnceVariantUpload.quotaCheck',
+      });
+    });
+  });
 });
 
 describe('confirmOnceVariantUpload', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Safe default for every pre-existing test below, which predates the
+    // pending-job cap and never mocks it: zero pending jobs is comfortably
+    // under any real cap. Tests that care about the cap itself override
+    // this explicitly.
+    vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0);
+    // Same, for the confirm-side storage-quota check added in the final
+    // whole-branch review. Required rather than tidy: `vi.clearAllMocks`
+    // clears CALLS but not IMPLEMENTATIONS, so without this every test here
+    // inherits the last `createOnceVariantUpload` quota test's rejected
+    // aggregation mock and fails closed.
+    getUserStorageUsage.mockResolvedValue({ bytes: 0, assetCount: 1 });
+  });
 
   /**
    * THE LOAD-BEARING CASE the task brief names explicitly: a once-variant
@@ -292,10 +464,27 @@ describe('confirmOnceVariantUpload', () => {
     expect(headCall.input).toEqual({ Bucket: 'b', Key: 'uploads/audio/prefix/once-src.wav' });
 
     const [filter, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
-    expect(filter).toEqual({ _id: 'a1', ownerId: 'u1', status: 'uploading', variant: 'once' });
+    expect(filter).toEqual({
+      _id: 'a1',
+      ownerId: 'u1',
+      status: 'uploading',
+      variant: 'once',
+      onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+    });
     const set = (update as { $set: Record<string, unknown> }).$set;
-    expect(Object.keys(set).sort()).toEqual(['confirmedAt', 'status', 'updatedAt']);
+    expect(Object.keys(set).sort()).toEqual([
+      'confirmedAt',
+      'onceSourceBytes',
+      'status',
+      'updatedAt',
+    ]);
     expect(set.status).toBe('pending');
+    // Task 3b: the HeadObject size already computed for the AUDIO_MAX_BYTES
+    // gate (`ContentLength: 2048` mocked above) must be the exact number
+    // persisted — not re-derived, not a different mocked value threaded
+    // through, and not merely present. This is what makes the byte count
+    // visible to `getUserStorageUsage`.
+    expect(set.onceSourceBytes).toBe(2048);
     expect('renditions' in set).toBe(false);
     expect('onceRenditions' in set).toBe(false);
     expect('sourceKey' in set).toBe(false);
@@ -330,6 +519,13 @@ describe('confirmOnceVariantUpload', () => {
       status: 'uploading',
       variant: 'once',
       onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      // Task 3b review fix: non-null on purpose, modelling a row where
+      // something (in production, always null by this point thanks to
+      // `createOnceVariantUpload`'s own reset — asserted separately above)
+      // left a real number here. This write's own reset must not depend on
+      // that other function having run; a fixture starting at null/absent
+      // would pass this test even if THIS write's reset were deleted.
+      onceSourceBytes: 5_000_000,
     } as never);
     send.mockResolvedValue({ ContentLength: 50 * 1024 * 1024 + 1, ContentType: 'audio/wav' });
     vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({ _id: 'a1' } as never);
@@ -360,12 +556,18 @@ describe('confirmOnceVariantUpload', () => {
       ownerId: 'u1',
       status: 'uploading',
       variant: 'once',
+      onceSourceKey: 'uploads/audio/prefix/once-src.wav',
     });
     const set = (update as { $set: Record<string, unknown> }).$set;
     // The load-bearing assertions: never 'failed', never permanentFailure.
     expect(set.status).toBe('ready');
     expect(set.variant).toBe('main');
     expect(set.onceSourceKey).toBeNull();
+    // Paired with onceSourceKey: cartyx-app Task 3b review fix. The rejected
+    // object is deleted (asserted above) and this row no longer has a
+    // once-source of any kind — nothing may describe its size, so this
+    // must reset to null in the same write, not merely stay unmentioned.
+    expect(set.onceSourceBytes).toBeNull();
     expect(set.onceLastError).toMatch(/too large/i);
     expect('permanentFailure' in set).toBe(false);
     expect('lastError' in set).toBe(false);
@@ -420,6 +622,287 @@ describe('confirmOnceVariantUpload', () => {
     await expect(
       confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u2' })
     ).rejects.toThrow(/not found/i);
+  });
+
+  describe('pending job cap', () => {
+    /**
+     * Pins the ACTUAL count filter, not merely that a refusal happened —
+     * same standard `audio-ingest.test.ts` holds `confirmAudioUpload` to. A
+     * weaker assertion (`toHaveBeenCalled()` with no argument check) would
+     * pass with `ownerId` dropped from the shared `checkPendingJobCap`
+     * filter, or `status` narrowed to just `'pending'`.
+     */
+    it('counts pending+processing jobs scoped to the caller before allowing a once-variant to become claimable', async () => {
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      } as never);
+      send.mockResolvedValue({ ContentLength: 2048, ContentType: 'audio/wav' });
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+        _id: 'a1',
+        status: 'pending',
+      } as never);
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(0);
+
+      const { confirmOnceVariantUpload } = await import('~/server/functions/audio');
+      await confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' });
+
+      expect(vi.mocked(AudioAsset.countDocuments)).toHaveBeenCalledWith({
+        ownerId: 'u1',
+        status: { $in: ['pending', 'processing'] },
+      });
+    });
+
+    /**
+     * The load-bearing difference from `confirmAudioUpload`'s cap refusal:
+     * THIS row is the main asset's own document, already `ready` before the
+     * once-attach started, so a cap refusal must revert it the same way the
+     * tooLarge/badType branch above does (`status: 'ready', variant:
+     * 'main'`) — never `status: 'failed'`, which would brick the whole
+     * asset. A fixture shape that would make a weaker version of this test
+     * pass for the wrong reason: asserting only that SOME write happened,
+     * without pinning `set.status`/`set.variant` — that would still pass
+     * against an implementation that copied `confirmAudioUpload`'s
+     * `status: 'failed'` write verbatim, which is exactly the bug this test
+     * exists to catch. Also pins: refusal happens before `HeadObject` (only
+     * one R2 call — the delete), the message carries the count, no
+     * GlitchTip event, and the once-source object is deleted so it isn't
+     * stranded.
+     */
+    it('refuses over the cap by reverting to ready/main (not failed) and deleting the once-source object', async () => {
+      const { getMaxPendingJobsPerUser, confirmOnceVariantUpload, AudioClientError } =
+        await import('~/server/functions/audio');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+      const cap = getMaxPendingJobsPerUser();
+
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      } as never);
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(cap);
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({ _id: 'a1' } as never);
+      send.mockResolvedValue({ ContentLength: 2048, ContentType: 'audio/wav' });
+
+      const err = await confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' }).catch(
+        (e: unknown) => e
+      );
+      expect(err).toBeInstanceOf(AudioClientError);
+      expect((err as Error).message).toContain(String(cap));
+
+      // Exactly one R2 call: the delete of the once-source object.
+      // HeadObject never runs — the cap refusal happens before it.
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send.mock.calls[0][0]).toBeInstanceOf(DeleteObjectCommand);
+      expect((send.mock.calls[0][0] as DeleteObjectCommand).input).toEqual({
+        Bucket: 'b',
+        Key: 'uploads/audio/prefix/once-src.wav',
+      });
+
+      const [filter, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
+      expect(filter).toEqual({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      });
+      const set = (update as { $set: Record<string, unknown> }).$set;
+      expect(set.status).toBe('ready');
+      expect(set.variant).toBe('main');
+      expect(set.onceSourceKey).toBeNull();
+      expect(set.onceSourceBytes).toBeNull();
+      expect(set.onceLastError).toContain(String(cap));
+      expect('permanentFailure' in set).toBe(false);
+      expect('lastError' in set).toBe(false);
+
+      // The caller's own doing — must not file a GlitchTip event.
+      expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+    });
+
+    /**
+     * THE OTHER HALF OF THE FENCE, and the half it did not used to have.
+     *
+     * The fence on the revert write was added so a stale refusal could not
+     * cancel a once-attach that a later request had legitimately started.
+     * It did that — but the `DeleteObjectCommand` ran BEFORE it and
+     * unconditionally, so the stale refusal destroyed the fresh attach's
+     * once-source object anyway. The row was protected; the bytes were not,
+     * and the browser's PUT to the new presigned URL landed on an object no
+     * row pointed at, with nothing reporting any of it.
+     *
+     * A matched write is now the authorization to delete — the rule
+     * `reapAbandonedUploads` has always used ("only a matched write
+     * authorizes deleting the object"). This test drives the no-match case
+     * directly: `findOneAndUpdate` resolves null, exactly as Mongo would when
+     * the row has moved on, and NOTHING may be deleted.
+     */
+    it('deletes nothing when the fenced revert matches no row', async () => {
+      const { getMaxPendingJobsPerUser, confirmOnceVariantUpload, AudioClientError } =
+        await import('~/server/functions/audio');
+      const cap = getMaxPendingJobsPerUser();
+
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      } as never);
+      vi.mocked(AudioAsset.countDocuments).mockResolvedValue(cap);
+      // The row moved on between this request's read and its write — a
+      // second attach, or a confirm that beat it.
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue(null as never);
+
+      const err = await confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' }).catch(
+        (e: unknown) => e
+      );
+      // The caller is still told why THEIR request failed. Losing the race
+      // does not change the answer they get.
+      expect(err).toBeInstanceOf(AudioClientError);
+      expect((err as Error).message).toContain(String(cap));
+
+      // The assertion that fails against a delete-first implementation, and
+      // the only one that does: everything above passes either way.
+      expect(send).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * FINAL WHOLE-BRANCH REVIEW, Important #1 — the once half. Same defect as
+   * `confirmAudioUpload`'s: `onceSourceBytes` is written by the success write
+   * below and nowhere else, so a presign-only quota check cannot see a
+   * once-source that has already been PUT.
+   *
+   * The cleanup is NOT `confirmAudioUpload`'s. This row is the main asset's
+   * own document — a fully-transcoded, previously-`ready` `music` asset — so
+   * a refusal reverts it to `ready`/`main` exactly as the cap refusal and the
+   * tooLarge branch do, rather than writing `status: 'failed'`, which would
+   * brick it.
+   */
+  describe('storage quota at confirm', () => {
+    it('refuses an over-quota once-confirm before HeadObject, deletes the once-source, and reverts to ready/main on a fenced filter', async () => {
+      const { getAudioUserQuotaBytes, confirmOnceVariantUpload, AudioClientError } =
+        await import('~/server/functions/audio');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+      const limit = getAudioUserQuotaBytes();
+
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      } as never);
+      getUserStorageUsage.mockResolvedValue({ bytes: limit + 1, assetCount: 9 });
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({ _id: 'a1' } as never);
+      // A VALID object on purpose: an implementation that measured first
+      // would succeed here, so this fixture cannot pass for the wrong reason.
+      send.mockResolvedValue({ ContentLength: 2048, ContentType: 'audio/wav' });
+
+      const err = await confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' }).catch(
+        (e: unknown) => e
+      );
+
+      expect(err).toBeInstanceOf(AudioClientError);
+      expect((err as Error).message).toMatch(/storage quota exceeded/i);
+      const clientErr = err as InstanceType<typeof AudioClientError>;
+      expect(clientErr.usageBytes).toBe(limit + 1);
+      expect(clientErr.limitBytes).toBe(limit);
+
+      // NO HeadObject — pinned on the command class, not on a bare count.
+      expect(send.mock.calls.filter(([cmd]) => cmd instanceof HeadObjectCommand)).toHaveLength(0);
+      const deletes = send.mock.calls.filter(([cmd]) => cmd instanceof DeleteObjectCommand);
+      expect(deletes).toHaveLength(1);
+      expect((deletes[0][0] as DeleteObjectCommand).input).toEqual({
+        Bucket: 'b',
+        Key: 'uploads/audio/prefix/once-src.wav',
+      });
+
+      // The ACTUAL filter — `variant: 'once'` EXACT, not `$ne`, matching the
+      // two writes around it: only a row still mid-attach may be reverted.
+      const [filter, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
+      expect(filter).toEqual({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      });
+      const set = (update as { $set: Record<string, unknown> }).$set;
+      // The load-bearing difference from confirmAudioUpload's refusal.
+      expect(set.status).toBe('ready');
+      expect(set.variant).toBe('main');
+      expect(set.onceSourceKey).toBeNull();
+      expect(set.onceSourceBytes).toBeNull();
+      expect(set.onceLastError).toMatch(/storage quota exceeded/i);
+      expect('permanentFailure' in set).toBe(false);
+      expect('lastError' in set).toBe(false);
+      // The main asset's own playable content is untouched.
+      expect('renditions' in set).toBe(false);
+      expect('onceRenditions' in set).toBe(false);
+      expect('sourceKey' in set).toBe(false);
+
+      expect(vi.mocked(serverCaptureException)).not.toHaveBeenCalled();
+    });
+
+    it('refuses exactly at the limit and admits one byte under it', async () => {
+      const { getAudioUserQuotaBytes, confirmOnceVariantUpload } =
+        await import('~/server/functions/audio');
+      const limit = getAudioUserQuotaBytes();
+
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      } as never);
+      vi.mocked(AudioAsset.findOneAndUpdate).mockResolvedValue({
+        _id: 'a1',
+        status: 'pending',
+      } as never);
+      send.mockResolvedValue({ ContentLength: 2048, ContentType: 'audio/wav' });
+
+      getUserStorageUsage.mockResolvedValue({ bytes: limit, assetCount: 9 });
+      await expect(
+        confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' })
+      ).rejects.toThrow(/storage quota exceeded/i);
+
+      getUserStorageUsage.mockResolvedValue({ bytes: limit - 1, assetCount: 9 });
+      await expect(
+        confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' })
+      ).resolves.toMatchObject({ status: 'pending' });
+    });
+
+    it('fails closed when the aggregation rejects, leaving the once-source object in place', async () => {
+      const { confirmOnceVariantUpload } = await import('~/server/functions/audio');
+      const { serverCaptureException } = await import('~/server/utils/telemetry');
+      vi.mocked(AudioAsset.findOne).mockResolvedValue({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      } as never);
+      getUserStorageUsage.mockRejectedValue(new Error('mongo unreachable'));
+
+      await expect(
+        confirmOnceVariantUpload({ data: { assetId: 'a1' }, userId: 'u1' })
+      ).rejects.toThrow(/unable to verify your storage usage/i);
+      // Nothing deleted and nothing reverted: a transient fault must leave a
+      // retryable attach intact rather than destroying the uploaded object.
+      expect(send).not.toHaveBeenCalled();
+      expect(vi.mocked(AudioAsset.findOneAndUpdate)).not.toHaveBeenCalled();
+      expect(vi.mocked(serverCaptureException).mock.calls[0][2]).toMatchObject({
+        action: 'confirmOnceVariantUpload.quotaCheck',
+      });
+    });
   });
 });
 

@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { AlertTriangle, RefreshCw, Search, Trash2 } from 'lucide-react';
 import type { ScanOrphanAudioResult } from '~/types/schemas/audio';
+import { formatBytes } from '~/utils/format-bytes';
 
 export interface AudioOrphanCleanupProps {
   /** Latest scan result, or null before the first scan has returned. */
@@ -13,12 +14,6 @@ export interface AudioOrphanCleanupProps {
   lastDelete: { deleted: number; failed: number } | null;
   onScan: () => void;
   onDelete: (keys: string[]) => void;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 /**

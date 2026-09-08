@@ -22,11 +22,13 @@ generation tool. Those have different shapes, different risks, and different
 definitions of done. One spec covering all three would be too coarse to plan
 against.
 
-| Phase | Scope                                                                                                              | Spec                                                       |
-| ----- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
-| **1** | **Audio asset library** — bulk upload, server-side transcode/normalize, classification, search                     | [design](./2026-07-28-audio-library-design.md) ✅ approved |
-| **2** | **Packages + soundboard** — collections, moods, Web Audio engine, GM controls, realtime broadcast, player playback | not started                                                |
-| **3** | **`ai-sound-generator`** — Python generate → approve → upload tool                                                 | not started                                                |
+| Phase   | Scope                                                                                                               | Spec                                                                      |
+| ------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| **1**   | **Audio asset library** — bulk upload, server-side transcode/normalize, classification, search                      | [design](./2026-07-28-audio-library-design.md) ✅ approved                |
+| **2a**  | **Packages + the GM board** — collections, moods, ported Web Audio engine, GM controls, playback local to the GM    | [design](./2026-07-30-soundboard-packages-design.md) ✅ shipped to `dev`  |
+| **1.5** | **Audio hardening** — rate limits, per-user storage quota, transcode-queue fairness. Blocks promotion to production | [design](./2026-07-31-audio-hardening-design.md) ✅ approved, not started |
+| **2b**  | **Realtime broadcast + player playback** — command relay, join-audio gesture, position-accurate late join           | not designed                                                              |
+| **3**   | **`ai-sound-generator`** — Python generate → approve → upload tool                                                  | not started                                                               |
 
 **Ordering rationale.** Phase 1 is a hard prerequisite: there is nothing to put
 in a package or play on a board until assets exist, are classified, and are
@@ -200,13 +202,14 @@ hits it.
 
 Deliberately unresolved; each belongs to the phase that first needs it.
 
-| Question                                                   | Phase |
-| ---------------------------------------------------------- | ----- |
-| Per-user storage quota, and behaviour at the limit         | 1     |
-| Facet counts in the filter UI (deferred, not rejected)     | 1     |
-| Whether moods crossfade or hard-cut by default             | 2     |
-| Who owns the random-trigger schedule — GM client or server | 2     |
-| Whether players get per-track volume or only a master      | 2     |
-| Licensing/ToS position on user-uploaded audio              | 2     |
-| Which generation models ship, and their licences           | 3     |
-| Token scope granularity (per-tool vs per-user)             | 3     |
+| Question                                                  | Phase                                                                                                                                                                                                 |
+| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ~~Per-user storage quota, and behaviour at the limit~~    | **1.5 — answered:** aggregate-on-demand, enforced before presign, fail closed. See the [hardening design](./2026-07-31-audio-hardening-design.md).                                                    |
+| Facet counts in the filter UI (deferred, not rejected)    | 1                                                                                                                                                                                                     |
+| ~~Whether moods crossfade or hard-cut by default~~        | **2a — answered:** crossfade, per-item duration. A single global fade cannot serve a 4 s storm swell and a 0 s door slam at once.                                                                     |
+| Late-join fidelity — same items, or same playhead         | **2b — answered:** position-accurate. Needs clock sync and a broadcast playhead; 2a's engine tracks `startedAt` per-browser only, so this is new machinery.                                           |
+| ~~Who owns the random-trigger schedule~~                  | **2a — answered:** the GM's browser, by construction. Players receive fires and never schedule.                                                                                                       |
+| ~~Whether players get per-track volume or only a master~~ | **2b — answered:** master **and** per-track. Inherits a hazard: the GM's mood switches will fight a player's overrides, and 2b must decide explicitly whether a mood change resets or preserves them. |
+| Licensing/ToS position on user-uploaded audio             | 2                                                                                                                                                                                                     |
+| Which generation models ship, and their licences          | 3                                                                                                                                                                                                     |
+| Token scope granularity (per-tool vs per-user)            | 3                                                                                                                                                                                                     |

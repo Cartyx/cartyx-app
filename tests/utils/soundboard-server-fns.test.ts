@@ -29,7 +29,22 @@ vi.mock('~/server/db/models/User', () => ({
   User: { findOne: vi.fn() },
 }));
 
+// `PackageClientError`/`SoundboardClientError` are real classes rather than
+// `vi.fn()`s because the wrappers' rate-limit gates construct one and the
+// tests below assert `instanceof` on what comes back — that `instanceof` is
+// the GlitchTip proof, since `reportPackageError`/`reportSoundboardError` in
+// the real modules exclude exactly these classes. They mirror the real
+// constructor signatures; `npm run typecheck` is what keeps the stand-ins from
+// drifting, because the wrappers are typechecked against the real modules.
 vi.mock('~/server/functions/packages', () => ({
+  PackageClientError: class PackageClientError extends Error {
+    readonly retryAfterMs?: number;
+    constructor(message: string, options?: { retryAfterMs?: number }) {
+      super(message);
+      this.name = 'PackageClientError';
+      this.retryAfterMs = options?.retryAfterMs;
+    }
+  },
   listPackages: vi.fn(),
   getPackage: vi.fn(),
   createPackage: vi.fn(),
@@ -40,13 +55,31 @@ vi.mock('~/server/functions/packages', () => ({
 }));
 
 vi.mock('~/server/functions/soundboard', () => ({
+  SoundboardClientError: class SoundboardClientError extends Error {
+    readonly retryAfterMs?: number;
+    constructor(message: string, options?: { retryAfterMs?: number }) {
+      super(message);
+      this.name = 'SoundboardClientError';
+      this.retryAfterMs = options?.retryAfterMs;
+    }
+  },
   loadBoardState: vi.fn(),
   saveBoardState: vi.fn(),
+}));
+
+// Not in the wrappers' import graph (the server functions that would call it
+// are mocked above), so this assertion cannot fail today — which is the
+// point. It fails the day someone reports a rate-limit rejection from the
+// wrapper itself, which would hand an attacker a telemetry-volume lever.
+vi.mock('~/server/utils/telemetry', () => ({
+  serverCaptureException: vi.fn(),
+  serverCaptureEvent: vi.fn(),
 }));
 
 import { getSession } from '~/server/session';
 import { User } from '~/server/db/models/User';
 import {
+  PackageClientError,
   listPackages,
   getPackage,
   createPackage,
@@ -55,7 +88,12 @@ import {
   clonePackage,
   listPackageAssets,
 } from '~/server/functions/packages';
-import { loadBoardState, saveBoardState } from '~/server/functions/soundboard';
+import {
+  SoundboardClientError,
+  loadBoardState,
+  saveBoardState,
+} from '~/server/functions/soundboard';
+import { serverCaptureException } from '~/server/utils/telemetry';
 import {
   listPackagesFn,
   getPackageFn,
@@ -210,7 +248,10 @@ describe('createPackageFn', () => {
 });
 
 describe('updatePackageFn', () => {
-  const data = { id: 'p1', name: 'Renamed' };
+  // `expectedUpdatedAt` is required by `updatePackageSchema` (Task 7's
+  // optimistic-concurrency precondition) — this wrapper passes `data` straight
+  // through, so it travels with everything else.
+  const data = { id: 'p1', expectedUpdatedAt: '2026-01-01T00:00:00.000Z', name: 'Renamed' };
 
   it('rejects with "Not authenticated" and never calls updatePackage when there is no session', async () => {
     vi.mocked(getSession).mockResolvedValue(null);
@@ -326,6 +367,268 @@ describe('loadBoardStateFn', () => {
       sessionUserId: SESSION_USER.id,
     });
     expect(r).toEqual(FAKE_BOARD_STATE);
+  });
+});
+
+/**
+ * The wrapper-layer rate limits (`packageWriteLimiter` /`boardStateLimiter`,
+ * see `~/lib/audio-rate-limits.ts`).
+ *
+ * As in `tests/utils/audio-server-fns.test.ts`, every test uses its OWN
+ * `DB_USER_ID`: the limiters are module-scope singletons with no reset hook,
+ * `vi.clearAllMocks()` cannot empty their buckets, and the bucket key IS the
+ * resolved Mongo `_id`. A distinct id per test is a fresh, full bucket.
+ *
+ * The `15` and `40` below are the two capacities, written as literals on
+ * purpose: raising a capacity makes the "next call is refused" assertion
+ * fail, lowering it makes the drain loop throw early. Both directions pinned.
+ */
+describe('package-write rate limit', () => {
+  const createData = { name: 'Storm Set', items: [], moods: [] };
+
+  /** Spends the whole package-write bucket for `userId` via `createPackageFn`. */
+  async function drainPackageBucket(userId: string) {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(userId);
+    vi.mocked(createPackage).mockResolvedValue(FAKE_PACKAGE);
+    for (let i = 0; i < 15; i++) {
+      await createPackageFn({ data: createData });
+    }
+    expect(createPackage).toHaveBeenCalledTimes(15);
+    vi.mocked(createPackage).mockClear();
+  }
+
+  it('lets a full 15-call burst through, then refuses the 16th without calling createPackage', async () => {
+    await drainPackageBucket('mongo-pkg-create');
+
+    await expect(createPackageFn({ data: createData })).rejects.toThrow(
+      /Too many sound package requests/
+    );
+    // Without this, the test would still pass with the gate deleted.
+    expect(createPackage).not.toHaveBeenCalled();
+  });
+
+  it('refuses with PackageClientError carrying retryAfterMs, and files no GlitchTip event', async () => {
+    await drainPackageBucket('mongo-pkg-shape');
+
+    const err = await createPackageFn({ data: createData }).catch((e: unknown) => e);
+    // `reportPackageError` excludes exactly this class from
+    // `serverCaptureException` — the class is the no-telemetry contract.
+    expect(err).toBeInstanceOf(PackageClientError);
+    expect((err as PackageClientError).retryAfterMs).toBeGreaterThan(0);
+    expect(serverCaptureException).not.toHaveBeenCalled();
+    expect(createPackage).not.toHaveBeenCalled();
+  });
+
+  it('shares one bucket with clonePackageFn, so a drained bucket refuses a clone too', async () => {
+    await drainPackageBucket('mongo-pkg-clone');
+
+    await expect(clonePackageFn({ data: { id: 'p1' } })).rejects.toThrow(
+      /Too many sound package requests/
+    );
+    expect(clonePackage).not.toHaveBeenCalled();
+    expect(serverCaptureException).not.toHaveBeenCalled();
+  });
+
+  it('is keyed per account: draining one user does not refuse another', async () => {
+    await drainPackageBucket('mongo-pkg-victim');
+
+    mockDbUser('mongo-pkg-bystander');
+    vi.mocked(createPackage).mockResolvedValue(FAKE_PACKAGE);
+    await expect(createPackageFn({ data: createData })).resolves.toEqual(FAKE_PACKAGE);
+  });
+
+  /**
+   * Retitled in the final whole-branch review, which gave `updatePackageFn`
+   * its own bucket. What this still proves is bucket SEPARATION: a user who
+   * has exhausted their minting budget can still edit and delete the packages
+   * they already have. `deletePackageFn` is genuinely ungated (a `deleteOne`
+   * with no body to amplify, whose telemetry event only fires on a row that
+   * really existed); `updatePackageFn` is gated by `packageEditLimiter`
+   * instead, which the describe block below drains on its own.
+   */
+  it('is separate from the edit/delete path: a drained mint bucket still allows updatePackageFn and deletePackageFn', async () => {
+    await drainPackageBucket('mongo-pkg-update-delete');
+
+    vi.mocked(updatePackage).mockResolvedValue(FAKE_PACKAGE);
+    vi.mocked(deletePackage).mockResolvedValue({ deleted: true });
+    await expect(
+      updatePackageFn({
+        data: { id: 'p1', expectedUpdatedAt: '2026-01-01T00:00:00.000Z', name: 'Renamed' },
+      })
+    ).resolves.toEqual(FAKE_PACKAGE);
+    await expect(deletePackageFn({ data: { id: 'p1' } })).resolves.toEqual({ deleted: true });
+  });
+
+  it('does not gate reads: listPackagesFn/getPackageFn/listPackageAssetsFn survive past the capacity', async () => {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser('mongo-pkg-reader');
+    vi.mocked(listPackages).mockResolvedValue({ items: [FAKE_PACKAGE_SUMMARY] });
+    vi.mocked(getPackage).mockResolvedValue(FAKE_PACKAGE);
+    vi.mocked(listPackageAssets).mockResolvedValue({ items: [] });
+    for (let i = 0; i < 40; i++) {
+      await listPackagesFn();
+      await getPackageFn({ data: { id: 'p1' } });
+      await listPackageAssetsFn({ data: { packageId: 'p1' } });
+    }
+    expect(listPackages).toHaveBeenCalledTimes(40);
+    expect(getPackage).toHaveBeenCalledTimes(40);
+    expect(listPackageAssets).toHaveBeenCalledTimes(40);
+  });
+});
+
+/**
+ * FINAL WHOLE-BRANCH REVIEW, Important #3. `updatePackageFn` was ungated on a
+ * justification that only covered footprint. The costs it did not cover: each
+ * call is a whole-document `$set` of `items` and `moods` (~410 KiB, the
+ * largest write on this surface, several hundred times a `saveBoardState` —
+ * which IS gated), and each success fires an un-awaited `package_updated`
+ * Umami event at caller-controlled volume. Task 7's fence bounds neither,
+ * because `PackageStaleWriteError` hands the caller the fresh
+ * `currentUpdatedAt` a replay needs.
+ *
+ * `30` is written as a literal for the same reason the other capacities are:
+ * raising it makes the refusal assertion fail, lowering it makes the drain
+ * loop throw early.
+ */
+describe('package-edit rate limit', () => {
+  const updateData = { id: 'p1', expectedUpdatedAt: '2026-01-01T00:00:00.000Z', name: 'Renamed' };
+
+  /** Spends the whole package-edit bucket for `userId`. */
+  async function drainEditBucket(userId: string) {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(userId);
+    vi.mocked(updatePackage).mockResolvedValue(FAKE_PACKAGE);
+    for (let i = 0; i < 30; i++) {
+      await updatePackageFn({ data: updateData });
+    }
+    expect(updatePackage).toHaveBeenCalledTimes(30);
+    vi.mocked(updatePackage).mockClear();
+  }
+
+  it('lets a full 30-call burst through, then refuses the 31st without calling updatePackage', async () => {
+    await drainEditBucket('mongo-pkg-edit');
+
+    await expect(updatePackageFn({ data: updateData })).rejects.toThrow(
+      /Too many package edit requests/
+    );
+    // The load-bearing negative: without it this passes with the gate
+    // deleted, because nothing else here would throw.
+    expect(updatePackage).not.toHaveBeenCalled();
+  });
+
+  it('refuses with PackageClientError carrying retryAfterMs, and files no GlitchTip event', async () => {
+    await drainEditBucket('mongo-pkg-edit-shape');
+
+    const err = await updatePackageFn({ data: updateData }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(PackageClientError);
+    expect((err as PackageClientError).retryAfterMs).toBeGreaterThan(0);
+    // NOT the stale-write refusal: `PackageStaleWriteError` is a subclass, so
+    // an implementation that threw one here would still satisfy the
+    // `instanceof` above — but the editor keys its conflict UI off the NAME,
+    // and offering "keep my edits and overwrite" for a rate limit would just
+    // burn the caller's next token.
+    expect((err as Error).name).toBe('PackageClientError');
+    expect(serverCaptureException).not.toHaveBeenCalled();
+    expect(updatePackage).not.toHaveBeenCalled();
+  });
+
+  it('leaves room for a second consecutive save — the editor re-seeds its draft and a follow-up Save is legitimate', async () => {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser('mongo-pkg-edit-twice');
+    vi.mocked(updatePackage).mockResolvedValue(FAKE_PACKAGE);
+
+    await expect(updatePackageFn({ data: updateData })).resolves.toEqual(FAKE_PACKAGE);
+    await expect(updatePackageFn({ data: updateData })).resolves.toEqual(FAKE_PACKAGE);
+    expect(updatePackage).toHaveBeenCalledTimes(2);
+  });
+
+  it('is keyed per account: draining one editor does not refuse another', async () => {
+    await drainEditBucket('mongo-pkg-edit-victim');
+
+    mockDbUser('mongo-pkg-edit-bystander');
+    vi.mocked(updatePackage).mockResolvedValue(FAKE_PACKAGE);
+    await expect(updatePackageFn({ data: updateData })).resolves.toEqual(FAKE_PACKAGE);
+  });
+
+  it('does not gate deletePackageFn: a drained edit bucket still allows a delete', async () => {
+    await drainEditBucket('mongo-pkg-edit-vs-delete');
+
+    vi.mocked(deletePackage).mockResolvedValue({ deleted: true });
+    await expect(deletePackageFn({ data: { id: 'p1' } })).resolves.toEqual({ deleted: true });
+  });
+
+  it('is a separate bucket from the package writes: a drained edit bucket still allows createPackage', async () => {
+    await drainEditBucket('mongo-pkg-edit-vs-create');
+
+    vi.mocked(createPackage).mockResolvedValue(FAKE_PACKAGE);
+    await expect(
+      createPackageFn({ data: { name: 'Storm Set', items: [], moods: [] } })
+    ).resolves.toEqual(FAKE_PACKAGE);
+  });
+});
+
+describe('board-save rate limit', () => {
+  const saveData = { campaignId: 'c1', items: [], masterVolume: 1 };
+
+  /** Spends the whole board-state bucket for `userId`. */
+  async function drainBoardBucket(userId: string) {
+    vi.mocked(getSession).mockResolvedValue(SESSION_USER);
+    mockDbUser(userId);
+    vi.mocked(saveBoardState).mockResolvedValue(FAKE_BOARD_STATE);
+    for (let i = 0; i < 40; i++) {
+      await saveBoardStateFn({ data: saveData });
+    }
+    expect(saveBoardState).toHaveBeenCalledTimes(40);
+    vi.mocked(saveBoardState).mockClear();
+  }
+
+  it('lets a full 40-call burst through, then refuses the 41st without calling saveBoardState', async () => {
+    await drainBoardBucket('mongo-board-save');
+
+    await expect(saveBoardStateFn({ data: saveData })).rejects.toThrow(
+      /Too many board save requests/
+    );
+    // Without this, the test would still pass with the gate deleted.
+    expect(saveBoardState).not.toHaveBeenCalled();
+  });
+
+  it('refuses with SoundboardClientError carrying retryAfterMs, and files no GlitchTip event', async () => {
+    await drainBoardBucket('mongo-board-shape');
+
+    const err = await saveBoardStateFn({ data: saveData }).catch((e: unknown) => e);
+    // `reportSoundboardError` excludes exactly this class from
+    // `serverCaptureException` — the class is the no-telemetry contract.
+    expect(err).toBeInstanceOf(SoundboardClientError);
+    expect((err as SoundboardClientError).retryAfterMs).toBeGreaterThan(0);
+    expect(serverCaptureException).not.toHaveBeenCalled();
+    expect(saveBoardState).not.toHaveBeenCalled();
+  });
+
+  it('is a separate bucket from the package writes: a drained board bucket still allows createPackage', async () => {
+    await drainBoardBucket('mongo-board-vs-package');
+
+    vi.mocked(createPackage).mockResolvedValue(FAKE_PACKAGE);
+    await expect(
+      createPackageFn({ data: { name: 'Storm Set', items: [], moods: [] } })
+    ).resolves.toEqual(FAKE_PACKAGE);
+  });
+
+  it('is keyed per account: draining one GM does not refuse another', async () => {
+    await drainBoardBucket('mongo-board-victim');
+
+    mockDbUser('mongo-board-bystander');
+    vi.mocked(saveBoardState).mockResolvedValue(FAKE_BOARD_STATE);
+    await expect(saveBoardStateFn({ data: saveData })).resolves.toEqual(FAKE_BOARD_STATE);
+  });
+
+  it('does not gate loadBoardStateFn — a board reload must not be refused', async () => {
+    await drainBoardBucket('mongo-board-reload');
+
+    vi.mocked(loadBoardState).mockResolvedValue(FAKE_BOARD_STATE);
+    await expect(loadBoardStateFn({ data: { campaignId: 'c1' } })).resolves.toEqual(
+      FAKE_BOARD_STATE
+    );
   });
 });
 
