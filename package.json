@@ -39,7 +39,13 @@
     "fixture": "tsx scripts/dev-fixtures/cli.ts",
     "srd:lint": "tsx scripts/srd/lint.ts",
     "srd:extract": "tsx scripts/srd/extract-rules.ts",
-    "srd:generate": "tsx scripts/srd/generate-srd-data.ts"
+    "srd:generate": "tsx scripts/srd/generate-srd-data.ts",
+    "db:up": "node scripts/dev-data.mjs up",
+    "db:down": "node scripts/dev-data.mjs down",
+    "db:status": "node scripts/dev-data.mjs status",
+    "db:smoke": "node scripts/dev-data.mjs smoke",
+    "db:tools": "node scripts/dev-data.mjs tools",
+    "db:chart-test": "node scripts/dev-data.mjs chart-test"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1090.0",
@@ -79,8 +85,8 @@
   "overrides": {
     "esbuild": "^0.28.1",
     "h3-v2": "npm:h3@2.0.1-rc.19",
-    "js-yaml": "4.3.0",
-    "postcss": "8.5.19"
+    "js-yaml": "4.3.2",
+    "postcss": "8.5.28"
   },
   "devDependencies": {
     "@chromatic-com/storybook": "^5.1.1",

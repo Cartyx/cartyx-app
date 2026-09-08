@@ -97,6 +97,9 @@ up() {
     log "Reusing existing kind cluster '$CLUSTER'."
   fi
 
+  log "Deploying persistent Cassandra and JanusGraph infrastructure..."
+  DATA_KIND_CLUSTER="$CLUSTER" bash "$SCRIPT_DIR/data-kind.sh"
+
   log "Building realtime image $REALTIME_IMAGE..."
   docker build -t "$REALTIME_IMAGE" "$REPO_ROOT/realtime"
 

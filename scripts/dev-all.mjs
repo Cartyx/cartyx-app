@@ -10,8 +10,14 @@
  *
  * Ctrl+C, or either child exiting, tears the whole stack down — no orphans.
  */
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+
+// Database containers remain running when the host processes stop; db:down is
+// explicit and never deletes their data volume.
+const data = spawnSync(process.execPath, ['scripts/dev-data.mjs', 'up'], { stdio: 'inherit' });
+if (data.error) throw data.error;
+if (data.status !== 0) process.exit(data.status ?? 1);
 
 // Load .env into process.env so the realtime service gets SESSION_SECRET /
 // MONGODB_URI. Vite loads .env on its own, so this is harmless for the web app.

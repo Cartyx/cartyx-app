@@ -12,6 +12,7 @@ dist/
 
 # Environment & secrets
 .env
+.local/
 keys/
 
 # Uploads (user content, not in repo)

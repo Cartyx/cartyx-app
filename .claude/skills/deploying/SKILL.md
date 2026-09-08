@@ -76,7 +76,7 @@ gh run rerun <run-id> --failed
 
 | Thing                             | Where                                                                               |
 | --------------------------------- | ----------------------------------------------------------------------------------- |
-| Kubeconfig                        | `~/.kube/cartyx.yaml` (server 192.168.1.130:6443)                                   |
+| Kubeconfig                        | `~/.kube/cartyx.yaml` (server 192.168.1.222:6443)                                   |
 | Namespaces                        | `dev`, `prod` (app), `platform` (observability)                                     |
 | Chart + render tests              | `deploy/charts/cartyx/`, `tests/render-tests.sh`                                    |
 | Infra repo (Flux source of truth) | github.com/biozal/cartyx-infrastructure                                             |

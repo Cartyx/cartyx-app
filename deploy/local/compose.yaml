@@ -3,7 +3,26 @@
 #   docker compose --env-file .env -f deploy/local/compose.yaml up --build
 # Env (SESSION_SECRET, MONGODB_URI, ...) comes from the repo-root .env.
 # Web is on host port 3100 (3000 stays free for `vite dev`).
+name: cartyx-local
+include:
+  - ${CARTYX_INFRASTRUCTURE_DIR:-../../../cartyx-infrastructure}/deploy/local/data.compose.yaml
 services:
+  audio-worker:
+    # Explicit profile prevents an infrastructure-only start from consuming an
+    # existing Mongo/R2 queue. Full-stack audio: --profile audio up --build.
+    profiles: [audio]
+    build:
+      context: ../../audio-worker
+    image: cartyx-audio-worker:local
+    env_file:
+      - ../../.env
+    environment:
+      APP_ENV: development
+    restart: unless-stopped
+    stop_grace_period: 900s
+    mem_limit: 768m
+    cpus: 2
+
   realtime:
     build:
       context: ../../realtime

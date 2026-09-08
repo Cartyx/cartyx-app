@@ -27,7 +27,9 @@ export default defineConfig({
   webServer: process.env.E2E_BASE_URL
     ? undefined
     : {
-        command: 'npm run dev',
+        // This suite uses the ephemeral Mongo service supplied by CI. The full
+        // developer stack starts its database dependencies through npm run dev.
+        command: 'npm run dev:web',
         url: 'http://localhost:3000',
         reuseExistingServer: !process.env.CI,
         // The dev server's first cold route compile can exceed Playwright's default
