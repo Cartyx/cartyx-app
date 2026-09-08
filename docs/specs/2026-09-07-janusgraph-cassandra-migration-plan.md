@@ -2,7 +2,7 @@
 
 Date: 2026-09-07
 
-Status: Infrastructure implementation started. Docker and local Kubernetes validation passed; home-cluster access and initial capacity preflight now pass; deployment is staged in infrastructure PR #3 and production recovery gates remain open. No application data migration performed. See [implementation evidence](2026-09-07-data-infrastructure-progress.md).
+Status: Local Docker and dev Kubernetes run the hardened database images. Production is active from immutable tag `data-v0.1.1`. Both environments passed independent off-host restores and reboot checks, and daily backups are enabled. No application subsystem has migrated. See [implementation evidence](2026-09-07-data-infrastructure-progress.md).
 
 ## Outcome and approach
 
@@ -74,7 +74,7 @@ Every persisted field gets one authority. For example, an audio job row owns pro
 
 Use replication factor 1 while there is only one Cassandra node per environment; select explicit datacenter/replication and consistency settings that work with that topology. Three pods on `z440` would not survive loss of `z440`. Future HA is a separate milestone: at least three independent hosts/storage failure domains, RF 3, quorum settings, tested repair, and multiple JanusGraph instances. Change existing keyspace replication deliberately; changing a startup default does not migrate it.
 
-The separate `cartyx-infrastructure` repository owns `deploy/charts/cartyx-data`, its local/dev/prod values, Docker definitions, operations tools, tests, and infrastructure CI. Its `data/dev` and `data/prod` HelmReleases are reconciled independently of the application releases. Dev reads the infrastructure main branch through `flux-system`; prod reads a specifically promoted `data-v*` tag through `cartyx-data-prod`. Publish a new tag only from an infrastructure revision validated in dev, and update the production source to that tag. Never move an existing release tag. The app repository retains local startup wrappers, the Mongo inventory, and application migration code. Pin upstream database images; only add an image-build workflow if a custom configuration/migration image is needed. Do not repurpose the three existing application CI image-tag markers.
+The separate `cartyx-infrastructure` repository owns `deploy/charts/cartyx-data`, its local/dev/prod values, Docker definitions, operations tools, tests, and infrastructure CI. Its `data/dev` and `data/prod` HelmReleases are reconciled independently of the application releases. Dev reads the infrastructure main branch through `flux-system`; prod reads a specifically promoted `data-v*` tag through `cartyx-data-prod`. Publish a new tag only from an infrastructure revision validated in dev, and update the production source to that tag. Never move an existing release tag. The app repository retains local startup wrappers, the Mongo inventory, and application migration code. Pin the tested published database image digests. The infrastructure image-build workflow maintains the minimal runtime and dependency security patches, with native architecture scans and recovery tests. Do not repurpose the three existing application CI image-tag markers.
 
 Declare data → schema job → dependent app rollout ordering without a circular dependency. Separate Flux Kustomizations where necessary so failure of a data rollout does not prevent unrelated resources from reconciling. Keep the existing app independent of the new database until a subsystem actually uses it.
 
@@ -84,45 +84,45 @@ retain the full acceptance scope; a partially completed phase is not an exit.
 
 ## Phase 0 — Inventory, compatibility, and capacity
 
-- [ ] Record actual node CPU/RAM, free disk/inodes, filesystem/device layout, StorageClass reclaim behavior, architecture, Kubernetes versions, and current pod resource consumption. The app chart's documented 62 GiB host is a starting clue, not a live measurement.
+- [x] Record actual node CPU/RAM, free disk/inodes, filesystem/device layout, StorageClass reclaim behavior, architecture, Kubernetes versions, and current pod resource consumption. The app chart's documented 62 GiB host is a starting clue, not a live measurement.
 - [ ] Inventory each Atlas environment read-only: collections, document counts, byte sizes, all indexes/TTL/partial constraints, orphan references, free-text location values, and existing backup options. Include raw-driver collections and encrypted/hidden fields.
 - [ ] Produce a field/query ownership matrix: graph properties/edges, CQL state, retained media, derived values, and replacements for every Mongo transaction/conditional update.
 - [ ] Run a disposable compatibility spike: JavaScript Gremlin create/read/update/delete, edge IDs and serialization, reconnect, authentication, schema installation, and persistence through server restart. Verify both developer-machine and cluster image architectures. Use the official [container configuration guidance](https://github.com/JanusGraph/janusgraph-docker/blob/master/README.md).
 - [ ] Set measured resource requests/limits and JVM heap below container memory limits with native-memory/page-cache headroom. Size disks for data, indexes, commit logs, compaction, snapshots, and backup staging for both environments together.
-- [ ] Record backup targets. Proposed initial policy: nightly off-host backups, an additional backup before every cutover/upgrade, 14 daily plus 8 weekly retained copies; steady-state RPO ≤24 hours and target RTO ≤4 hours, verified by restore timing. Accepted migration downtime does not silently set the long-term recovery policy.
+- [ ] Record backup targets. Implemented initial policy: nightly off-host backups, an additional backup before every cutover/upgrade, every completed backup for 14 days and one per UTC week through day 56; steady-state RPO ≤24 hours and target RTO ≤4 hours, verified by restore timing. Accepted migration downtime does not silently set the long-term recovery policy.
 
 **Exit:** tested versions, collection/constraint inventory, resource budget, disk budget, and recovery runbook outline are committed. Resolve version/support gaps before committing to a production image set.
 
 ## Phase 1 — Local database infrastructure
 
-- [ ] Add Cassandra and JanusGraph to `deploy/local/compose.yaml`, with named volumes, explicit backend/keyspace configuration, non-default credentials, and health checks that perform CQL/Gremlin operations.
-- [ ] Use long startup allowances for Cassandra/JVM boot. JanusGraph waits for Cassandra readiness. Liveness checks detect a hung process; dependency outages should affect readiness without a restart cascade.
+- [x] Add Cassandra and JanusGraph to `deploy/local/compose.yaml`, with named volumes, explicit backend/keyspace configuration, non-default credentials, and health checks that perform CQL/Gremlin operations.
+- [x] Use long startup allowances for Cassandra/JVM boot. JanusGraph waits for Cassandra readiness. Liveness checks detect a hung process; dependency outages should affect readiness without a restart cascade.
 - [ ] Add an idempotent one-shot bootstrap/smoke service: create a small test schema, two vertices and an edge, read the relationship, and clean up its fixture.
-- [ ] Add explicit `db:up`, `db:down`, `db:status`, and `db:smoke` commands. Make `npm run dev` start/wait for the Docker database dependencies before launching host processes. Ctrl+C stops the host processes; database volumes survive. Keep destructive reset a separate explicit command.
-- [ ] Add the audio worker to the full Compose path and document its media credentials. Keep host-process and full-container modes clear to avoid competing workers or port 1999 collisions.
-- [ ] Update `.env.example`, `deploy/local/README.md`, and the kind deployment path. Supply server-only Gremlin/CQL settings; no database secrets or endpoints in `VITE_PUBLIC_*`.
+- [x] Add explicit `db:up`, `db:down`, `db:status`, and `db:smoke` commands. Make `npm run dev` start/wait for the Docker database dependencies before launching host processes. Ctrl+C stops the host processes; database volumes survive. Keep destructive reset a separate explicit command.
+- [x] Add the audio worker to the full Compose path and document its media credentials. Keep host-process and full-container modes clear to avoid competing workers or port 1999 collisions.
+- [x] Update `.env.example`, `deploy/local/README.md`, and the kind deployment path. Supply server-only Gremlin/CQL settings; no database secrets or endpoints in `VITE_PUBLIC_*`.
 
 **Exit:** a fresh checkout can start the dependencies, run the smoke query, restart containers, and read the same persisted relationship. Normal teardown/recreation preserves data. Existing Mongo-backed app behavior still works in this infrastructure-only phase.
 
 ## Phase 2 — Kubernetes development infrastructure
 
-- [ ] Implement the data chart: Cassandra StatefulSet, stable/headless discovery service, PVCs, JanusGraph Deployment/ClusterIP service, config maps, secret references, service accounts, probes, resources, and graceful shutdown.
-- [ ] Configure retained volumes and PV reclaim behavior explicitly. Review Helm uninstall, StatefulSet replacement, and Flux prune paths; prove that an ordinary chart upgrade cannot discard database data. Protect production data resources from accidental pruning.
-- [ ] Add namespace-scoped network policy allowing only intended application, migration, monitoring, and database traffic; allow required DNS. Verify enforcement in k3s. No public ingress, tunnel route, or NodePort for Gremlin/CQL/search/JMX. Test credentials and encrypted connections for cluster traffic.
+- [x] Implement the data chart: Cassandra StatefulSet, stable/headless discovery service, PVCs, JanusGraph Deployment/ClusterIP service, config maps, secret references, service accounts, probes, resources, and graceful shutdown.
+- [x] Configure retained volumes and PV reclaim behavior explicitly. Review Helm uninstall, StatefulSet replacement, and Flux prune paths; prove that an ordinary chart upgrade cannot discard database data. Protect production data resources from accidental pruning.
+- [x] Add namespace-scoped network policy allowing only intended application, migration, monitoring, and database traffic; allow required DNS. Verify enforcement in k3s. No public ingress, tunnel route, or NodePort for Gremlin/CQL/search/JMX. Test credentials and encrypted connections for cluster traffic.
 - [ ] Keep schema administration credentials separate from runtime credentials. Bootstrap pre-created keyspaces/tables as needed, then reduce privileges. Store secrets out of Git using the existing named-secret convention; document rotation/restarts.
-- [ ] Add the dev data HelmRelease and reconciliation ordering in the infrastructure repository. Allow enough Helm/job time for initial database startup.
-- [ ] Extend Helm rendering/validation for local/dev/prod configurations, secret references, storage retention, required settings, and forbidden public services; add real container integration coverage in CI.
+- [x] Add the dev data HelmRelease and reconciliation ordering in the infrastructure repository. Allow enough Helm/job time for initial database startup.
+- [x] Extend Helm rendering/validation for local/dev/prod configurations, secret references, storage retention, required settings, and forbidden public services; add real container integration coverage in CI.
 - [ ] Connect metrics/logs to the existing platform: query errors/latency, heap/GC, Cassandra timeouts, disk/inodes, compaction backlog, backup age, and restore outcomes. Label by environment without logging private content.
 
 **Exit:** Flux reports the actual data release Ready, the in-cluster graph smoke test passes, and data survives JanusGraph/Cassandra pod replacement and a dev chart upgrade. Dev credentials cannot read prod. No application cutover yet.
 
 ## Phase 3 — Production infrastructure and recovery
 
-- [ ] Tag the infrastructure revision verified in dev, then promote that tag through `clusters/z440/data-source-prod.yaml`. Enable the production source and HelmRelease only after recovery gates pass. Provision separate prod secrets and storage.
-- [ ] Implement scheduled Cassandra backups for graph and operational keyspaces, schema, and required system/auth metadata. Upload manifests, checksums, version/config references, and data to private R2 prefixes per environment. Keep credentials in the secret recovery process.
-- [ ] Use a Cassandra-aware consistent backup and upload it off-host. The initial implementation drains and stops Cassandra after stopping graph writers, then archives the full data directory and recovery credentials. This deliberately accepts backup downtime. If moving to online snapshots later, account for snapshots being hard links on the source disk and validate write consistency and off-host recovery separately. [Cassandra backup guidance](https://cassandra.apache.org/doc/4.0/operating/backups.html).
-- [ ] Rehearse restoration into a new isolated instance/volume from only off-host backups and documented secrets. Restore graph and CQL state to the same checkpoint; rebuild search indexes when present. Verify records, relationships, permissions, and timed recovery.
-- [ ] Test orderly node reboot in dev first, then during a production maintenance window. Separate this persistence check from the empty-volume restore drill.
+- [x] Tag the infrastructure revision verified in dev, then promote that tag through `clusters/z440/data-source-prod.yaml`. Enable the production source and HelmRelease only after recovery gates pass. Provision separate prod secrets and storage.
+- [x] Implement scheduled Cassandra backups for graph and operational keyspaces, schema, and required system/auth metadata. Upload manifests, checksums, version/config references, and data to private R2 prefixes per environment. Keep credentials in the secret recovery process.
+- [x] Use a Cassandra-aware consistent backup and upload it off-host. The initial implementation drains and stops Cassandra after stopping graph writers, then archives the full data directory and recovery credentials. This deliberately accepts backup downtime. If moving to online snapshots later, account for snapshots being hard links on the source disk and validate write consistency and off-host recovery separately. [Cassandra backup guidance](https://cassandra.apache.org/doc/4.0/operating/backups.html).
+- [x] Rehearse restoration into a new isolated instance/volume from only off-host backups and documented secrets. Restore graph and CQL state to the same checkpoint; rebuild search indexes when present. Verify records, relationships, permissions, and timed recovery.
+- [x] Test orderly node reboot in dev first, then during a production maintenance window. Separate this persistence check from the empty-volume restore drill.
 - [ ] Verify live deployment revisions, alert delivery, backup retention/cleanup, and disk budgets. Public HTTP 200 from the current deploy workflow is insufficient evidence of database readiness.
 
 **Exit:** both Kubernetes environments are operational, independently persistent and restorable, with a recorded successful off-host restore. This is the first major deliverable and the stopping point before application replacement work begins.

@@ -1,218 +1,199 @@
 # Data infrastructure implementation evidence
 
-Work started 2026-09-07 (local time; test timestamps cross into 2026-09-08 UTC).
+Updated 2026-09-08. Infrastructure work began 2026-09-07; UTC test timestamps
+cross into September 8.
 
-## Scope
+## Current scope
 
-The infrastructure PR was merged and the dev data release is deployed on z440.
-Follow-up infrastructure PRs added native R2 backups, restore tooling, monitoring
-and rollout fixes. Production remains staged because scans of the upstream
-images found unresolved high/critical dependencies; no production data release
-tag has been published. The companion app startup changes are prepared separately on the
-`data-local-integration` branch based on dev.
-Mongo remains authoritative for every application subsystem. Atlas access was
-read-only. This is progress through phases 0–3, not completion of those phases.
+JanusGraph/Cassandra run in local Docker and dev Kubernetes. Production has been
+activated from immutable infrastructure tag `data-v0.1.1` after its own off-host
+recovery, isolation and reboot checks passed. Both daily backup schedules are enabled. MongoDB is
+still authoritative for every application subsystem. No application documents
+have been migrated or deleted.
 
-Infrastructure ownership: `cartyx-infrastructure` contains the chart, Docker
-services, shared database configuration, operations tools, render tests, and CI.
-The app contains local startup wrappers and the read-only Mongo inventory at
-`scripts/mongo-inventory.mjs`. The app wrapper defaults to the sibling checkout;
-`CARTYX_INFRASTRUCTURE_DIR` supports an alternate absolute path.
+The infrastructure repository owns the chart, Docker services, database image
+builds, shared configuration, operations tools, tests and infrastructure CI.
+The app owns local startup wrappers and the read-only Mongo inventory script.
+The app wrapper defaults to the sibling `cartyx-infrastructure` checkout;
+`CARTYX_INFRASTRUCTURE_DIR` supports another absolute path. Private credentials,
+preflight reports and recovery artifacts stay under the infrastructure repo's
+ignored `.local` directory.
 
-Runbook: [cartyx-data](https://github.com/biozal/cartyx-infrastructure/blob/main/deploy/charts/cartyx-data/README.md).
+Current runbooks and evidence:
 
-After moving infrastructure ownership, the app's `db:up` recreated the local
-containers from the infrastructure checkout using the same named volume and
-existing credentials. The persisted relationship, TLS rejection checks, and CQL
-role isolation all passed again. Full-app Compose and dependency-only Compose
-resolve identical database services and volume names; both the default sibling
-path and an explicit checkout override passed. All nine chart checks, app ESLint,
-Flux source/path validation, shell syntax, and the isolated dependency audit
-passed. Infrastructure CI now lives in the infrastructure repository. Earlier
-kind and backup drills below predate the file move; they were not rerun for a
-path-only relocation. No deployment tag was published.
+- [Database deployment](https://github.com/biozal/cartyx-infrastructure/blob/main/deploy/charts/cartyx-data/README.md)
+- [Backup, restore and monitoring](https://github.com/biozal/cartyx-infrastructure/blob/main/deploy/data/README.md)
+- [Maintained image builds and exception review](https://github.com/biozal/cartyx-infrastructure/blob/main/deploy/images/README.md)
+- [Security scan and promotion record](https://github.com/biozal/cartyx-infrastructure/blob/main/deploy/data/SECURITY.md)
 
-## Compatibility and inventory
+## Tested compatibility
 
-| Component               | Selected/tested                                                               |
-| ----------------------- | ----------------------------------------------------------------------------- |
-| Cassandra               | Official 4.0.21 image, OCI digest pinned in chart/Compose                     |
-| JanusGraph              | Official 1.1.0 image, OCI digest pinned in chart/Compose                      |
-| Container architectures | OCI indexes include linux/amd64 and linux/arm64; runtime tests here use arm64 |
-| JVM / server traversal  | Bundled Java 11 / TinkerPop 3.7.3                                             |
-| JavaScript client       | Gremlin 3.7.6, GraphSON 3, script and bytecode traversals                     |
-| Transport               | TLS-verified Gremlin and CQL, separate generated local credentials            |
-| Tool dependency audit   | No vulnerabilities after pinning uuid 11.1.1 and js-yaml 4.3.2                |
-| Docker resources        | Approximately 20 GiB allocated, 8 CPUs                                        |
-| Local Kubernetes        | kind v0.32.0, node image kindest/node:v1.36.1                                 |
+| Component              | Tested selection                                                                  |
+| ---------------------- | --------------------------------------------------------------------------------- |
+| Cassandra              | Maintained 4.0.21 distribution; upstream server/storage version retained          |
+| JanusGraph             | Maintained 1.1.0 core/CQL distribution                                            |
+| JVM / traversal server | Temurin 11.0.32 / TinkerPop 3.7.6                                                 |
+| JavaScript client      | Gremlin 3.7.6, GraphSON 3, script and bytecode traversals                         |
+| Architectures          | Native linux/amd64 and linux/arm64 build, scan, security and recovery CI          |
+| Transport              | Verified TLS and authentication for Gremlin/CQL; distinct environment credentials |
+| Image references       | Identical published GHCR OCI index digests in chart and Compose                   |
 
-JanusGraph's [published compatibility matrix](https://docs.janusgraph.org/changelog/)
-lists Cassandra 4.0 and TinkerPop 3.7. Patch choices were verified against real
-images and exercised locally. The selected images also passed live amd64 functional/recovery checks. Image
-scans were subsequently completed and found unresolved advisories; production
-promotion remains gated on the security work described below. These functional
-tests are not a production load assessment.
+The original upstream images had 12 critical/142 high advisory IDs for JanusGraph
+and 5 critical/40 high for Cassandra in the amd64 baseline scan. Maintained builds
+replace their vulnerable Java/OS/Python dependencies and omit unused backends and
+startup tools. TinkerPop's embedded Jackson is rebuilt from checksum-verified
+source; changing the ordinary Jackson dependency alone would leave that embedded
+copy unchanged. Inputs and final JARs are locked, and CI records scans/SBOMs.
 
-Both live application namespace configurations were inventoried read-only:
+Both native architecture scans report zero high/critical findings for JanusGraph.
+Cassandra has zero critical findings and one reviewed high finding:
+`CVE-2022-1471` in SnakeYAML 1.33. Its scoped exception expires **2026-10-08**.
+Cassandra's actual YAML constructor is unsafe for untrusted input; the exception
+rests on operator-controlled configuration, not on a safe-constructor claim.
+The linked image guide records the source evidence, boundary and required follow-up.
+Production promotion does not close this advisory review.
 
-| Atlas environment | Collections | Documents | Logical bytes |
-| ----------------- | ----------: | --------: | ------------: |
-| dev               |          39 |     1,080 |     1,099,083 |
-| prod              |          25 |         2 |         1,405 |
+These are infrastructure fixture/compatibility tests, not production load tests
+or application authorization tests. JanusGraph's [published compatibility matrix](https://docs.janusgraph.org/changelog/)
+lists Cassandra 4.0 and TinkerPop 3.7; Cartyx's dependency changes have their own
+explicit test and maintenance obligations.
 
-Private collection/index reports are `.local/data/inventory/dev.json` and
-`prod.json`. The earlier local-env report matches dev's totals. Legacy collection
-names still require explicit mapping and field/reference validation before
-import. No documents were changed or removed. This is a collection/index
-inventory, not a completed document-level orphan/visibility/ownership audit.
+## Atlas inventory
 
-Resource limits per environment are 3 GiB Cassandra and 2 GiB JanusGraph, with
-1 GiB JVM heaps and remaining headroom. Observed idle memory was roughly
-1.5–1.8 GiB Cassandra and 0.6–0.7 GiB JanusGraph. These are smoke-test measurements,
-not production sizing evidence. The private kind preflight report records
-capacity, disk/inodes and storage-class behavior.
+Both live namespace configurations were inventoried read-only:
 
-## Verified locally
+| Environment | Collections | Documents | Logical bytes |
+| ----------- | ----------: | --------: | ------------: |
+| dev         |          39 |     1,080 |     1,099,083 |
+| prod        |          25 |         2 |         1,405 |
 
-- Docker initial bootstrap creates independent graph/state keyspaces and scoped
-  roles, then disables the default Cassandra login.
-- Authenticated, trusted-TLS graph queries create/read a repeatable fixture with
-  two vertices and one edge, and JavaScript bytecode traversals read it back.
-- Invalid/missing Gremlin credentials and an untrusted certificate are rejected.
-  CQL tests prove state credentials cannot read graph tables, graph credentials
-  cannot read state tables, and the default login no longer works.
-- A cold backup drains/stops Cassandra, archives its full data directory with a
-  checksum, and restarts the source. The fixture survives source restart.
-- An independent-volume restore verifies the checksum and reads the same
-  relationship from a separate Compose project on port 18183.
-- Helm installs the chart in local Kubernetes with the bootstrap job complete and
-  Cassandra/JanusGraph ready. The credential isolation tests also run there.
-- Nine rendering tests check local/dev/prod manifests and reject unsafe replica,
-  image, identifier, shared-keyspace and empty-secret settings.
+Private collection/index reports remain in the application checkout under
+`.local/data/inventory/dev.json` and `prod.json`. Counts include raw-driver
+collections. This is not yet a document-level audit of orphan references,
+ownership, visibility, legacy names or field mappings. Those checks are required
+before any import or subsystem cutover.
 
-The drills found and corrected two issues: startup-time role/schema propagation
-needed bounded idempotent retries; Cassandra's Pod IP could become stale in the
-driver after replacement. The final chart advertises a stable CQL ClusterIP and
-uses a separate headless service for StatefulSet identity. JanusGraph readiness
-reads through its live CQL session so cached schema cannot hide backend failure.
-Revalidation passed: after installing the corrected topology, Cassandra changed
-Pod IP from `10.244.0.12` to `10.244.0.14`; the existing JanusGraph pod remained
-running and the same authenticated JavaScript relationship query succeeded after
-Cassandra became ready. Helm revision 2 completed and the stored fixture survived
-the upgrade. This is local kind evidence, not a home-cluster deployment claim.
+## Local development
 
-Final static checks: repository ESLint passed; the existing app chart retained
-94 passing render tests; all nine data-chart tests passed; the changed Flux
-Kustomizations and Grafana dashboard/alert parsed successfully; the isolated data
-tool dependency audit reported zero vulnerabilities. Application tests were not
-rerun because no domain/application persistence code changed. CI is configured
-to repeat the real-container checks, and remote CI has now passed repeatedly in the infrastructure repository. The
-latest monitoring fix (PR #8) passed 17 tests and the full container bootstrap,
-TLS/authentication, persistence, backup and independent-volume restore job.
+- `npm run dev` starts/waits for Docker database dependencies before host web and
+  realtime processes. Ctrl+C stops the host processes; database teardown is
+  explicit and preserves named volumes. `dev:web` starts only the web server.
+- Dependency-only and full-app Compose resolve the same database services and
+  volume names. The audio worker is an explicit full-stack profile so ordinary
+  database startup cannot accidentally consume a configured remote queue.
+- Docker bootstrap creates graph/state keyspaces and scoped CQL roles, then
+  disables the default Cassandra login. The fixture has two vertices and an edge.
+  Idempotent creation, persisted reads, bytecode, invalid/missing credentials,
+  untrusted TLS and CQL role isolation passed.
+- Existing-volume upgrades to the maintained images and then their published
+  digests preserved the fixture. Both images run as UID/GID 999.
+- Cold backups drain/stop Cassandra and restart the source. An independent-volume
+  restore reads the same persisted relationship. Local archive format 2 records
+  both image references and running IDs, rejecting changed candidate tags.
+- Local kind testing also verified Helm bootstrap, persistence and CQL roles.
+  Cassandra Pod IP replacement was tested while JanusGraph remained running;
+  stable CQL service discovery allowed reconnect and the fixture survived.
 
-## Home-cluster recovery and deployment
+The companion app PR includes compatible dependency patches that clear its npm
+audit. ESLint, TypeScript, 218 unit-test files/2,477 tests, service tests and the
+application build passed. The complete remote CI suite, including Playwright and
+Storybook/browser tests, passed after the startup integration fix. Playwright starts `dev:web` against CI's ephemeral
+MongoDB; infrastructure's native CI separately tests the database containers.
+The original working checkout retains its audio-derived branch and local changes;
+that unrelated ancestry is excluded from the app integration PR.
 
-Cluster access was restored on 2026-09-08 UTC. Key-based SSH as
-`labeaaa@192.168.1.222` works, including without the old HostKeyAlias. The local
-`~/.kube/cartyx.yaml` uses the new address and verifies the Kubernetes TLS
-certificate normally.
+## Cluster and storage
 
-The outage had two configuration problems: MicroK8s was occupying k3s kubelet
-and controller ports, and k3s still advertised the old node IP/TLS SAN. The
-MicroK8s API contained only its three system pods and no PVCs. Its services were
-stopped and disabled (installation/data retained). The k3s service unit was
-backed up on the host, its two old-IP settings were updated to `192.168.1.222`,
-and k3s was restarted. The API `/readyz` returned `ok`, the node became Ready,
-and all running workload containers reported Ready after recovery, including
-Flux, both Cartyx environments, and observability.
+Key-based SSH works as `labeaaa@192.168.1.222`. The dedicated kubeconfig is
+`~/.kube/cartyx.yaml`; the default Docker Desktop context was not repurposed.
+The initial outage involved conflicting MicroK8s services and stale k3s node-IP/TLS
+SAN settings. MicroK8s was stopped/disabled with its installation/data retained;
+the k3s unit was backed up and corrected for the new address.
 
-Live preflight: amd64 Ubuntu 26.04, k3s v1.36.2+k3s1, 36 CPU cores, about 60.7 GiB
-allocatable RAM, and about 827 GiB available disk with ample free inodes. An
-initial node metric sample reported 889m CPU and 6330 MiB RAM used. Existing
-regular-container requests totaled about 2.43 cores / 2.78 GiB; both proposed
-data environments add 1.5 cores / 7 GiB before init-container overhead. These
-are initial capacity observations, not sustained database load-test results.
-The private report is in
-`cartyx-infrastructure/.local/data/preflight/z440.json`.
+Live preflight recorded amd64 Ubuntu 26.04, k3s v1.36.2+k3s1, 36 CPUs and about
+60.7 GiB allocatable RAM. The database storage filesystem has approximately
+827 GiB free and ample inodes. Resource limits are 3 GiB Cassandra and 2 GiB
+JanusGraph per environment, with 1 GiB JVM heaps and native-memory headroom.
+These are initial budgets, not sustained-load sizing evidence.
 
-The retained `cartyx-data-retain` StorageClass is installed. Dev uses its own
-30 GiB claim and credentials; production credentials are separately provisioned,
-but the production HelmRelease, source and backup schedule remain suspended.
-All source credentials, preflight reports and recovery archives stay out of Git.
+The dedicated `cartyx-data-retain` StorageClass uses retained local storage.
+Dev has a 30 GiB claim and production is configured for 60 GiB. These requests
+are not filesystem quotas. Each environment has its own credentials, certificate
+and keyspaces. This is **one host with RF=1**, without high availability.
 
-## Live dev evidence (2026-09-08 UTC)
+Dev follows infrastructure main. Production's entire data overlay, including
+backup configuration, follows an exact immutable `data-v*` tag. Application
+release sources remain separate. Production tags must never be moved.
 
-- Flux deployed the data chart and bootstrap successfully. Gremlin graph reads,
-  bytecode traversals, trusted TLS, invalid/missing credentials, CQL role
-  isolation and disabled default Cassandra login all passed.
-- Real k3s NetworkPolicy checks passed for allowed data pods, allowed Gremlin
-  clients, denied unlabeled clients, and denied cross-namespace clients.
-- Cassandra changed Pod IP from `10.42.0.25` to `10.42.0.31` while JanusGraph's
-  existing pod remained running. The graph relationship survived and could be
-  read through the stable CQL service. Subsequent chart revisions also retained
-  the same source PVC.
-- Native cold backup suspends the environment's Flux/Helm reconciliation,
-  stops graph writers, drains/stops Cassandra, and archives data plus recovery
-  credentials. It restores services before multipart R2 upload, verifies the
-  full downloaded SHA256, and only then publishes a completion manifest.
-- The first successful live backup took 88 seconds and uploaded 109,688 bytes.
-  Restore from only that R2 archive onto a fresh namespace/PV took 79 seconds;
-  graph persistence, TLS/authentication and scoped CQL permissions passed.
-  The scratch namespace/volume were subsequently removed after checking that
-  they were distinct from the source claim.
-- A SIGTERM drill interrupted a backup while Cassandra was down. The handler
-  restored both databases and Flux, cleared the Lease and preserved the previous
-  verified backup timestamp. A subsequent backup completed in 86 seconds. The final backup against the monitoring/metadata fixes completed
-  in 87 seconds, with a verified 122,065-byte archive.
-- Dev's CronJob is enabled at 08:00 UTC. Retention keeps all backups for 14 days
-  and one per UTC week through day 56. Per-environment status exposes verified
-  backup age, failures, schedule state, archive size and certificate expiry.
-- Both exporters are Ready and VictoriaMetrics reports both scrape targets up.
-  Live series show dev scheduling enabled, prod disabled, and the dev verified
-  backup timestamp preserved. Grafana serves the nine-panel data dashboard and
-  all five data alert rules evaluate with health `ok` and no errors. Actual
-  notification delivery was not manually triggered.
+## Live dev verification
 
-The tiny fixture demonstrates the recovery path; it does not establish an RTO
-for production-sized data. A hard-kill/host-loss recovery-mode drill, retention
-expiry rehearsal and orderly host reboot remain outstanding.
+- Flux installed/upgraded the chart and bootstrap. Graph persistence, bytecode,
+  trusted TLS, credential rejection, scoped CQL roles and disabled default login
+  passed against the published maintained images.
+- k3s NetworkPolicy allowed intended database and Gremlin clients and denied
+  unlabeled/cross-namespace clients. Dev/prod credentials and certificates are
+  distinct. There are no public database services or runtime app credentials.
+- Pod replacement, chart revisions and the hardened image upgrade retained the
+  original source PVC/PV. Cassandra runs under enforced non-root UID 999.
+- Native backups acquire an environment Lease, suspend its Flux/Helm, stop graph
+  writers, drain/stop Cassandra and archive data/configuration/recovery credentials.
+  Services resume before multipart private R2 upload. Full download/checksum
+  verification precedes the completion manifest.
+- The hardened dev backup completed in 73 seconds. Its R2-only fresh-volume
+  restore passed graph, TLS/auth and CQL checks in 57 seconds. Scratch resources
+  were removed after proving they were independent of the source volume.
+- Graceful SIGTERM recovery passed. A separate host-runtime SIGKILL drill produced
+  exit 137 while Cassandra was scaled down; the Lease and previous success
+  timestamp remained. A recovery Job restored both databases/Flux and cleared
+  the Lease, and the next off-host backup passed.
+- An orderly host reboot recovered the node/databases in 233 seconds with the
+  same source PVC/PV. k3s started automatically, MicroK8s remained stopped, all
+  active workload pods recovered, and graph/security/network checks passed again.
 
-Two live-only problems were corrected: Lease timestamps require six fractional
-second digits; Kubernetes ConfigMap symlinks require resolving the script path
-before deciding whether to start the metrics server. The former failed before
-pausing databases; the latter caused the exporter to exit without listening.
-Regression tests now cover both cases.
+Tiny-fixture durations demonstrate the recovery path; they do not establish a
+production-size RTO or simulate a complete lost-host rebuild.
 
-## Production gate and next infrastructure slice
+## Live production verification
 
-The Docker Scout 1.24.0 amd64 scan reported 12 critical/142 high advisory IDs for
-JanusGraph 1.1.0 and 5 critical/40 high for Cassandra 4.0.21. These are dependency
-findings, not a count of proven exploitable endpoints. Some are unused startup
-or optional tooling, but active Java networking dependencies are also affected.
-There is no newer released JanusGraph patch to simply substitute.
+Production installed from `data-v0.1.0` with its own 60 GiB retained claim and
+credentials. Graph/bytecode queries, verified TLS, credential rejection, CQL role
+permissions and enforced namespace network restrictions passed. Production also
+rejected dev's Gremlin credentials over its own trusted TLS connection.
 
-The exact image digests, scan reproduction, triage and required work are in the
-infrastructure [security review](https://github.com/biozal/cartyx-infrastructure/blob/main/deploy/data/SECURITY.md).
-Resolve reachable findings through reproducible patched/minimal image builds,
-assess individual residual findings, and rerun compatibility/recovery checks.
-Only then tag the verified revision, deploy production and run its own backup,
-empty-volume recovery and network isolation checks before enabling scheduling.
+The first production backup completed in 71 seconds with a verified 79,683-byte
+R2 archive. Its R2-only independent-volume restore passed graph/TLS/auth/CQL
+checks in 58 seconds. The scratch namespace and volume were removed after
+confirming they were independent of both source environments.
 
-Also finish alert delivery verification, dedicated query/GC/compaction/disk
-instrumentation, realistic data-size recovery/performance measurements, the
-field/query ownership matrix and document-level migration audit. Application
-repositories, search deployment and runtime authorization belong to the next
-foundation phase; no domain conversion or backend switch has started.
+A second orderly host reboot with both environments present returned all four
+freshly restarted database containers to Ready within 225 seconds, retaining
+both original PVC/PV identities. This timing uses fresh container start times
+and Pod Ready transitions, avoiding stale controller replica counts during boot.
+Real graph, TLS/authentication, CQL and network checks passed afterward in both
+environments, including production rejection of dev credentials.
 
-Infrastructure evidence and fixes are in PRs
-[#4](https://github.com/biozal/cartyx-infrastructure/pull/4),
-[#5](https://github.com/biozal/cartyx-infrastructure/pull/5),
-[#6](https://github.com/biozal/cartyx-infrastructure/pull/6),
-[#7](https://github.com/biozal/cartyx-infrastructure/pull/7),
-[#8](https://github.com/biozal/cartyx-infrastructure/pull/8), and
-[#9](https://github.com/biozal/cartyx-infrastructure/pull/9).
+`data-v0.1.1` then enabled production backups while keeping the same image set and
+source storage. The entire production overlay follows that immutable tag.
 
-The companion app integration diff was copied onto an isolated branch from dev
-for its own PR. The original working checkout retains its audio-derived branch
-and local changes; unrelated audio hardening commits are excluded from the PR.
-Existing app CI image-tag markers are untouched.
+## Monitoring and remaining work
+
+Dev backups run at 08:00 UTC and production at 09:00 UTC. Both schedules are
+enabled after the respective recovery rehearsals. Retention keeps every
+completed backup for 14 days and one per UTC week through day 56. Both metrics
+exporters, VictoriaMetrics targets, the nine-panel Grafana dashboard and five
+alert rules have been verified. Alerts cover stale/failed/stuck backups, database
+availability, certificate expiry and missing metrics. Abrupt exits that cannot
+write failure status are detected by a stale in-progress attempt.
+
+Still required before application cutover: alert notification delivery, retention
+expiry rehearsal, detailed query/GC/compaction/disk instrumentation, realistic
+recovery/load measurements, the field/query ownership matrix, document-level
+migration audit, and graph schema/client/runtime authorization work. Search and
+all domain conversions belong to the next foundation/subsystem phases.
+
+Infrastructure implementation and fixes are recorded in PRs
+[#3–#9](https://github.com/biozal/cartyx-infrastructure/pulls?q=is%3Apr+is%3Amerged),
+[#10](https://github.com/biozal/cartyx-infrastructure/pull/10),
+[#11](https://github.com/biozal/cartyx-infrastructure/pull/11), and
+[#12](https://github.com/biozal/cartyx-infrastructure/pull/12), and
+[#13](https://github.com/biozal/cartyx-infrastructure/pull/13).
