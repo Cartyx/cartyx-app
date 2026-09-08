@@ -5,6 +5,8 @@
 # (npm run dev:seed), Docker running.
 set -euo pipefail
 
+node scripts/dev-data.mjs secrets
+
 COMPOSE=(docker compose --env-file .env -f deploy/local/compose.yaml)
 
 cleanup() { "${COMPOSE[@]}" down; }

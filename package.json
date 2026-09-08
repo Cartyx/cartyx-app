@@ -39,7 +39,13 @@
     "fixture": "tsx scripts/dev-fixtures/cli.ts",
     "srd:lint": "tsx scripts/srd/lint.ts",
     "srd:extract": "tsx scripts/srd/extract-rules.ts",
-    "srd:generate": "tsx scripts/srd/generate-srd-data.ts"
+    "srd:generate": "tsx scripts/srd/generate-srd-data.ts",
+    "db:up": "node scripts/dev-data.mjs up",
+    "db:down": "node scripts/dev-data.mjs down",
+    "db:status": "node scripts/dev-data.mjs status",
+    "db:smoke": "node scripts/dev-data.mjs smoke",
+    "db:tools": "node scripts/dev-data.mjs tools",
+    "db:chart-test": "node scripts/dev-data.mjs chart-test"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1090.0",
