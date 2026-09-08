@@ -17,7 +17,12 @@ const audioAssetSchema = new mongoose.Schema({
   intensity: { type: Number, min: 1, max: 5, default: null },
   tags: { type: [String], default: [] },
 
-  sourceKey: { type: String, required: true },
+  sourceKey: {
+    type: String,
+    required: function (this: { status?: string }) {
+      return this.status !== 'failed';
+    },
+  },
   // The object's REAL size, measured by confirmAudioUpload's HeadObject. Null
   // until then — deliberately: this used to be seeded at row creation from the
   // client's self-declared `bytes`, which meant anything reading it before

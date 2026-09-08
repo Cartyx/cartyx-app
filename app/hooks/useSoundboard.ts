@@ -323,6 +323,30 @@ export type UseSoundboardResult = {
 /** Stable identity for the common "nothing has failed" case. */
 const NO_LOAD_ERRORS: ReadonlySet<string> = new Set<string>();
 
+const boardSaves = new Map<string, { next?: () => Promise<void> }>();
+
+function enqueueBoardSave(campaignId: string, save: () => Promise<void>): void {
+  const existing = boardSaves.get(campaignId);
+  if (existing) {
+    existing.next = save;
+    return;
+  }
+  const queue: { next?: () => Promise<void> } = {};
+  boardSaves.set(campaignId, queue);
+  void (async () => {
+    try {
+      let next: (() => Promise<void>) | undefined = save;
+      while (next) {
+        await next();
+        next = queue.next;
+        queue.next = undefined;
+      }
+    } finally {
+      boardSaves.delete(campaignId);
+    }
+  })();
+}
+
 /**
  * The GM board's one stateful seam: reducer + Web Audio engine + random
  * one-shot scheduler + debounced persistence.
@@ -372,10 +396,6 @@ export function useSoundboard(
   const deadlineRef = useRef<number | null>(null);
   /** True while a `prompt`-urgency flush is already queued. */
   const promptPendingRef = useRef(false);
-  /** True while a write is in flight — writes are serialized, never raced. */
-  const inFlightRef = useRef(false);
-  /** A flush that arrived while a write was in flight, to run after it lands. */
-  const resaveRef = useRef(false);
 
   useEffect(() => {
     optionsRef.current = options;
@@ -397,27 +417,11 @@ export function useSoundboard(
     // exists to prevent.
     if (optionsRef.current.persist === false) return;
 
-    // Writes are serialized. `saveBoardState` is a full-state REPLACE, so two
-    // concurrent writes are not merely wasteful: a slow 200 ms prompt write and
-    // a faster later settle write can land at Atlas in the wrong order and
-    // persist stale state. Queue instead, and re-read `stateRef` when the queued
-    // write actually runs so it carries the newest state rather than a snapshot.
-    if (inFlightRef.current) {
-      resaveRef.current = true;
-      return;
-    }
-    inFlightRef.current = true;
-
     const id = campaignIdRef.current;
-    // `try/catch/finally` rather than `.then().catch().finally()`: a
-    // SYNCHRONOUS throw from `saveBoardStateFn` never reaches a promise chain,
-    // so the chain's `finally` would not run, `inFlightRef` would stay stuck
-    // `true`, and every later save would queue behind a request that no longer
-    // exists — persistence silently dead for the session. Unlikely (server fns
-    // return promises) but total, and this shape costs nothing.
-    void (async () => {
+    const data = toBoardStatePayload(id, stateRef.current);
+    enqueueBoardSave(id, async () => {
       try {
-        await saveBoardStateFn({ data: toBoardStatePayload(id, stateRef.current) });
+        await saveBoardStateFn({ data });
         if (mountedRef.current) setSaveError(null);
       } catch (error: unknown) {
         // The engine keeps playing. This is a mirror falling behind, not an
@@ -439,14 +443,8 @@ export function useSoundboard(
         if (mountedRef.current) {
           setSaveError(error instanceof Error ? error.message : String(error));
         }
-      } finally {
-        inFlightRef.current = false;
-        if (resaveRef.current) {
-          resaveRef.current = false;
-          save();
-        }
       }
-    })();
+    });
   }, []);
 
   const scheduleSave = useCallback(
@@ -503,6 +501,10 @@ export function useSoundboard(
       // path), which means an effect that diffs board state sees nothing and
       // drops every random fire with the whole suite green.
       if (command.type === 'fireOneShot') engineRef.current?.fireOneShot(command.itemId);
+      if (command.type === 'stopAll') {
+        engineRef.current?.stopAll();
+        schedulerRef.current?.sync(boardReducer(stateRef.current, command));
+      }
 
       rawDispatch(command);
 

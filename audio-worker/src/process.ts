@@ -488,6 +488,7 @@ export function makeSourceDeleter(): (keys: string[]) => Promise<void> {
         { count: result.Errors.length, first: result.Errors[0]?.Key },
         'R2 refused to delete some abandoned upload objects'
       );
+      throw new Error(`R2 refused to delete ${result.Errors.length} audio objects`);
     }
   };
 }
@@ -1011,6 +1012,7 @@ export async function processAsset(
           status: 'ready',
           variant: 'main',
           onceRenditions: renditions,
+          onceLastError: null,
           lastError: null,
           permanentFailure: false,
           claimedAt: null,

@@ -464,7 +464,13 @@ describe('confirmOnceVariantUpload', () => {
     expect(headCall.input).toEqual({ Bucket: 'b', Key: 'uploads/audio/prefix/once-src.wav' });
 
     const [filter, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
-    expect(filter).toEqual({ _id: 'a1', ownerId: 'u1', status: 'uploading', variant: 'once' });
+    expect(filter).toEqual({
+      _id: 'a1',
+      ownerId: 'u1',
+      status: 'uploading',
+      variant: 'once',
+      onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+    });
     const set = (update as { $set: Record<string, unknown> }).$set;
     expect(Object.keys(set).sort()).toEqual([
       'confirmedAt',
@@ -550,6 +556,7 @@ describe('confirmOnceVariantUpload', () => {
       ownerId: 'u1',
       status: 'uploading',
       variant: 'once',
+      onceSourceKey: 'uploads/audio/prefix/once-src.wav',
     });
     const set = (update as { $set: Record<string, unknown> }).$set;
     // The load-bearing assertions: never 'failed', never permanentFailure.
@@ -698,7 +705,13 @@ describe('confirmOnceVariantUpload', () => {
       });
 
       const [filter, update] = vi.mocked(AudioAsset.findOneAndUpdate).mock.calls[0];
-      expect(filter).toEqual({ _id: 'a1', ownerId: 'u1', status: 'uploading', variant: 'once' });
+      expect(filter).toEqual({
+        _id: 'a1',
+        ownerId: 'u1',
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
+      });
       const set = (update as { $set: Record<string, unknown> }).$set;
       expect(set.status).toBe('ready');
       expect(set.variant).toBe('main');
@@ -819,6 +832,7 @@ describe('confirmOnceVariantUpload', () => {
         ownerId: 'u1',
         status: 'uploading',
         variant: 'once',
+        onceSourceKey: 'uploads/audio/prefix/once-src.wav',
       });
       const set = (update as { $set: Record<string, unknown> }).$set;
       // The load-bearing difference from confirmAudioUpload's refusal.

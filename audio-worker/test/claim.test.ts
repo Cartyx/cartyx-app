@@ -51,6 +51,7 @@ function reaperModel(
   // returned every row regardless would make the bound look like it worked
   // while testing a code path that never sees it.
   const find = vi.fn((f: unknown, options?: { limit?: number }) => {
+    if ((f as { status?: string }).status === 'failed') return { toArray: async () => [] };
     const isOnceQuery = (f as { variant?: unknown } | undefined)?.variant === 'once';
     const source = isOnceQuery ? onceAbandoned : abandoned;
     return { toArray: async () => (options?.limit ? source.slice(0, options.limit) : source) };
@@ -655,6 +656,8 @@ function matchesFilter(doc: Record<string, unknown>, filter: Record<string, unkn
     if (cond !== null && typeof cond === 'object' && !(cond instanceof Date)) {
       return Object.entries(cond as Record<string, unknown>).every(([op, opVal]) => {
         switch (op) {
+          case '$type':
+            return opVal === 'string' && typeof val === 'string';
           case '$ne':
             // Mongo's equality-to-missing-field semantics: `$ne: 'x'` on a
             // document where the field is absent (undefined) counts as
@@ -697,10 +700,14 @@ function makeRealFilterCollection(initialDocs: Record<string, unknown>[]) {
   }));
 
   const updateOne = vi.fn(
-    async (filter: Record<string, unknown>, update: { $set: Record<string, unknown> }) => {
+    async (
+      filter: Record<string, unknown>,
+      update: { $set: Record<string, unknown>; $unset?: Record<string, unknown> }
+    ) => {
       const doc = [...docs.values()].find((d) => matchesFilter(d, filter));
       if (!doc) return { matchedCount: 0 };
       Object.assign(doc, update.$set);
+      for (const key of Object.keys(update.$unset ?? {})) delete doc[key];
       return { matchedCount: 1 };
     }
   );

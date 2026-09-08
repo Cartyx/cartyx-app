@@ -51,6 +51,19 @@ function Harness({
 }
 
 describe('AudioAssetDetail', () => {
+  it('shows a background once-variant error while the main asset remains ready', () => {
+    render(
+      <AudioAssetDetail
+        asset={{ ...asset, kind: 'music', onceLastError: 'Audio file is completely silent' }}
+        onSave={vi.fn()}
+        onClose={vi.fn()}
+        onAttachOnceVariant={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Audio file is completely silent');
+    expect(screen.getByLabelText('Attach once-variant audio file')).toBeEnabled();
+  });
+
   it('shows read-only duration and status context', () => {
     render(<AudioAssetDetail asset={asset} onSave={vi.fn()} onClose={vi.fn()} />);
     expect(screen.getByText('2:05')).toBeInTheDocument();

@@ -240,7 +240,13 @@ describe('bulkTagAudioAssets', () => {
       Record<string, unknown>,
       Record<string, unknown>,
     ];
-    expect(filter).toEqual({ _id: { $in: ['a', 'b'] }, ownerId: 'u1' });
+    expect(filter).toEqual({
+      _id: { $in: ['a', 'b'] },
+      ownerId: 'u1',
+      $expr: {
+        $lte: [{ $size: { $setUnion: [{ $ifNull: ['$tags', []] }, { $literal: ['storm'] }] } }, 30],
+      },
+    });
     expect(update.$addToSet).toEqual({ tags: { $each: ['storm'] } });
     expect((update.$set as Record<string, unknown>).tags).toBeUndefined();
     expect(res).toEqual({ modified: 2 });

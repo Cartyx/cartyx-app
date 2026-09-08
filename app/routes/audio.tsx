@@ -201,6 +201,7 @@ export function AudioLibraryPage() {
     onError: (e) => {
       // A refusal is not a fault — see `~/lib/client-refusal.ts`.
       if (!isClientRefusal(e)) captureException(e, { action: 'AudioLibraryPage.bulkTag' });
+      invalidateAudio();
     },
   });
 

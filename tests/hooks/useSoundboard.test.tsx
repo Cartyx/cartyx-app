@@ -22,6 +22,7 @@ import type { BoardState } from '~/lib/soundboard/reducer';
 const engine = vi.hoisted(() => ({
   apply: vi.fn(),
   fireOneShot: vi.fn(),
+  stopAll: vi.fn(),
   ready: vi.fn(async () => {}),
   dispose: vi.fn(),
 }));
@@ -258,6 +259,22 @@ afterEach(() => {
 });
 
 describe('useSoundboard', () => {
+  it('forwards Stop All immediately to the engine and scheduler', async () => {
+    const { result } = renderBoard();
+    await act(async () => {
+      await result.current.enableAudio();
+    });
+    act(() => {
+      result.current.dispatch({ type: 'stopAll' });
+    });
+    expect(engine.stopAll).toHaveBeenCalledTimes(1);
+    expect(scheduler.sync).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        items: expect.arrayContaining([expect.objectContaining({ playing: false })]),
+      })
+    );
+  });
+
   it('does not dispatch audio commands before the context is resumed', () => {
     const { result } = renderBoard();
 

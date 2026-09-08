@@ -102,6 +102,7 @@ export type SoundboardEngine = {
    * `apply` to notice.
    */
   fireOneShot: (itemId: string) => void;
+  stopAll: () => void;
   /**
    * Resolves once every asset load triggered so far has settled. Exists for
    * tests (and any caller that wants to preload before an offline render);
@@ -310,6 +311,7 @@ export function createEngine(
   let latest: BoardState | null = null;
   let masterVolume = 1;
   let disposed = false;
+  let fireGeneration = 0;
 
   /**
    * The exact content length, in seconds, that `loopEnd` must use.
@@ -702,7 +704,9 @@ export function createEngine(
         track.fadeSeconds = item.fadeSeconds;
       }
 
-      if (item.playing) {
+      const scheduled =
+        item.randomIntervalMin !== undefined && item.randomIntervalMax !== undefined;
+      if (item.playing && !scheduled) {
         ensureAsset(item.assetId);
         if (!track?.source) {
           start(item, false);
@@ -793,6 +797,7 @@ export function createEngine(
 
     fireOneShot(itemId: string): void {
       if (disposed || !latest) return;
+      const generation = fireGeneration;
       const item = latest.items.find((candidate) => candidate.itemId === itemId);
       if (!item) return;
       if (assets.has(item.assetId)) {
@@ -824,7 +829,10 @@ export function createEngine(
       // next tick, which for a 5-minute interval is a long wait.
       void load.then(() => {
         try {
-          if (!disposed && assets.has(item.assetId)) start(item, true);
+          if (!disposed && generation === fireGeneration && assets.has(item.assetId)) {
+            const current = latest?.items.find((candidate) => candidate.itemId === itemId);
+            if (current?.assetId === item.assetId) start(current, true);
+          }
         } finally {
           // Whether or not this ended up sounding — evicted while cold-loading
           // fails closed (`assets.has` is false, `start` is skipped) rather
@@ -832,6 +840,17 @@ export function createEngine(
           firingOneShots.delete(item.assetId);
         }
       });
+    },
+
+    stopAll(): void {
+      fireGeneration += 1;
+      if (latest) {
+        latest = { ...latest, items: latest.items.map((item) => ({ ...item, playing: false })) };
+      }
+      for (const [itemId, track] of tracks) stopTrack(itemId, track, true);
+      for (const [itemId, track] of oneShots) stopTrack(itemId, track, true);
+      for (const source of live) source.stop(ctx.currentTime + IMMEDIATE_FADE_SECONDS);
+      oneShots.clear();
     },
 
     async ready(): Promise<void> {

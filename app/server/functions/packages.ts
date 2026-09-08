@@ -617,13 +617,6 @@ async function resolveExistingItems(items: PackageItemData[]): Promise<PackageIt
  *    unsaveable, unless paired with a `$exists` special case that then lives
  *    forever or a backfill this phase has no migration mechanism for.
  *
- * The cost is stated honestly: `updatedAt` has millisecond resolution, so two
- * writes to the same package inside the same clock tick can both satisfy the
- * precondition and the later one still clobbers. Both writers are behind a
- * human click, both are scoped to the same single owner, and the outcome in
- * that window is merely today's behaviour — a bounded, non-escalating
- * residual, and one a counter would not have paid for at the price above.
- *
  * NOT the same mistake as Task 10's. That defect is `updateAudioAsset`
  * bumping `updatedAt` and thereby resetting a clock the once-upload reaper
  * reads as "how long since this JOB progressed" — a second, different
@@ -646,7 +639,9 @@ export async function updatePackage({
     await ensureDb();
     // Only include fields the caller actually provided, same reasoning as
     // `updateAudioAsset` in audio.ts: an omitted field must not be clobbered.
-    const set: Record<string, unknown> = { updatedAt: new Date() };
+    const set: Record<string, unknown> = {
+      updatedAt: new Date(Math.max(Date.now(), new Date(data.expectedUpdatedAt).getTime() + 1)),
+    };
     if (data.name !== undefined) set.name = data.name;
     if (data.description !== undefined) set.description = data.description;
     if (data.items !== undefined) {

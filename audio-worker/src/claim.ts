@@ -277,6 +277,12 @@ export async function reapStale(
     }
   );
 
+  await reapRejectedUploads(
+    model,
+    new Date(now - Math.max(uploadTimeoutMs, 15 * 60_000)),
+    deleteSource,
+    shouldContinue
+  );
   await reapAbandonedUploads(model, new Date(now - uploadTimeoutMs), deleteSource, shouldContinue);
   await reapAbandonedOnceUploads(
     model,
@@ -286,6 +292,44 @@ export async function reapStale(
   );
 
   return requeued.modifiedCount ?? 0;
+}
+
+export async function reapRejectedUploads(
+  model: ClaimModel,
+  cutoff: Date,
+  deleteSource?: SourceDeleter,
+  shouldContinue?: ShouldContinue
+): Promise<void> {
+  if (!deleteSource || (shouldContinue && !shouldContinue())) return;
+  const rejected = await model
+    .find(
+      {
+        status: 'failed',
+        confirmedAt: null,
+        variant: { $ne: 'once' },
+        sourceKey: { $type: 'string' },
+        createdAt: { $lt: cutoff },
+      },
+      { projection: { sourceKey: 1 }, limit: REAP_UPLOAD_BATCH }
+    )
+    .toArray();
+  const rows = rejected.filter((row) => row.sourceKey);
+  if (rows.length === 0) return;
+  try {
+    await deleteSource(rows.map((row) => row.sourceKey as string));
+    beat();
+    for (const row of rows) {
+      if (shouldContinue && !shouldContinue()) break;
+      await model.updateOne(
+        { _id: row._id, status: 'failed', confirmedAt: null, sourceKey: row.sourceKey },
+        { $unset: { sourceKey: '' }, $set: { sourceBytes: null, updatedAt: new Date() } }
+      );
+      beat();
+    }
+  } catch (err) {
+    logger.warn({ err }, 'failed to reclaim rejected audio uploads');
+    captureException(err, { scope: 'reap-rejected' });
+  }
 }
 
 /**

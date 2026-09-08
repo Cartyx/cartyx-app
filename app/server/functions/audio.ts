@@ -741,7 +741,7 @@ export async function confirmAudioUpload({
     // failure) and not reachable from the UI (nothing calls
     // `confirmAudioUpload` for an assetId mid-once-attach), but there is no
     // reason for this function to accept a row it was never meant to touch.
-    if (asset.status !== 'uploading' || asset.variant === 'once') {
+    if (!asset.sourceKey || asset.status !== 'uploading' || asset.variant === 'once') {
       throw new Error('Audio asset is not awaiting confirmation');
     }
 
@@ -1052,6 +1052,7 @@ export async function createOnceVariantUpload({
           // recoverable state; the previous behaviour was an asset that
           // claimed a once-variant it could no longer play correctly.
           onceRenditions: {},
+          onceLastError: null,
           variant: 'once',
           status: 'uploading',
           attempts: 0,
@@ -1162,7 +1163,13 @@ export async function confirmOnceVariantUpload({
       // match, the object must be reclaimed: it already exists in R2 (the
       // browser's PUT landed) and nothing will reference it again.
       await fenceThenReclaim({
-        filter: { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
+        filter: {
+          _id: data.assetId,
+          ownerId: userId,
+          status: 'uploading',
+          variant: 'once',
+          onceSourceKey: asset.onceSourceKey,
+        },
         set: {
           status: 'ready',
           variant: 'main',
@@ -1211,7 +1218,13 @@ export async function confirmOnceVariantUpload({
       // a no-op instead of silently cancelling that fresh attach — and, via
       // `fenceThenReclaim`, is a no-op for that fresh attach's OBJECT too.
       await fenceThenReclaim({
-        filter: { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
+        filter: {
+          _id: data.assetId,
+          ownerId: userId,
+          status: 'uploading',
+          variant: 'once',
+          onceSourceKey: asset.onceSourceKey,
+        },
         set: {
           status: 'ready',
           variant: 'main',
@@ -1288,7 +1301,13 @@ export async function confirmOnceVariantUpload({
       // the fresh attach's object either — which the fence alone never
       // stopped, because the delete used to run before it.
       await fenceThenReclaim({
-        filter: { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
+        filter: {
+          _id: data.assetId,
+          ownerId: userId,
+          status: 'uploading',
+          variant: 'once',
+          onceSourceKey: asset.onceSourceKey,
+        },
         set: {
           status: 'ready',
           variant: 'main',
@@ -1314,7 +1333,13 @@ export async function confirmOnceVariantUpload({
     }
 
     const updated = await AudioAsset.findOneAndUpdate(
-      { _id: data.assetId, ownerId: userId, status: 'uploading', variant: 'once' },
+      {
+        _id: data.assetId,
+        ownerId: userId,
+        status: 'uploading',
+        variant: 'once',
+        onceSourceKey: asset.onceSourceKey,
+      },
       {
         $set: {
           status: 'pending',
@@ -1365,6 +1390,7 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     renditions?: AudioAssetData['renditions'];
     onceRenditions?: AudioAssetData['onceRenditions'];
     lastError?: string | null;
+    onceLastError?: string | null;
     permanentFailure?: boolean | null;
     confirmedAt?: Date | null;
     createdAt?: Date;
@@ -1391,6 +1417,7 @@ export function serializeAudioAsset(a: AudioDoc): AudioAssetData {
     // is the honest "nothing attached yet" value, not a placeholder.
     onceRenditions: d.onceRenditions ?? {},
     lastError: d.lastError ?? null,
+    onceLastError: d.onceLastError ?? null,
     // Serialized so the UI can EXPLAIN a non-retryable row, not so it can
     // decide about one — `retryable` below is what decides. Absent (a row
     // written before the field existed) means not-permanent.
@@ -1607,6 +1634,8 @@ export async function bulkTagAudioAssets({
     if (data.intensity !== undefined) set.intensity = data.intensity;
 
     const update: Record<string, unknown> = { $set: set };
+    const filter: Record<string, unknown> = { _id: { $in: data.ids }, ownerId: userId };
+    let mergedTagCount: Record<string, unknown> | undefined;
     // Distinguish "tags absent" (leave alone) from "tags: []" (explicit, meaningful
     // input): in replace mode an empty array means "clear the tags," so it must
     // still reach $set. In add mode an empty array has nothing to add, so it's a
@@ -1620,10 +1649,30 @@ export async function bulkTagAudioAssets({
         // $addToSet + $each preserves existing tags; findOneAndUpdate's own
         // pre('save') normalization doesn't run here, so tags are normalized above.
         update.$addToSet = { tags: { $each: tags } };
+        mergedTagCount = {
+          $size: { $setUnion: [{ $ifNull: ['$tags', []] }, { $literal: tags }] },
+        };
+        filter.$expr = { $lte: [mergedTagCount, 30] };
       }
     }
 
-    const res = await AudioAsset.updateMany({ _id: { $in: data.ids }, ownerId: userId }, update);
+    const res = await AudioAsset.updateMany(filter, update);
+    if (
+      mergedTagCount &&
+      res.matchedCount !== undefined &&
+      res.matchedCount < new Set(data.ids).size
+    ) {
+      const skipped = await AudioAsset.countDocuments({
+        _id: { $in: data.ids },
+        ownerId: userId,
+        $expr: { $gt: [mergedTagCount, 30] },
+      });
+      if (skipped > 0) {
+        throw new AudioClientError(
+          `${skipped} audio assets would exceed the 30-tag limit and were not changed. Other matching assets were updated. Remove tags or use Replace before trying again.`
+        );
+      }
+    }
     return { modified: res.modifiedCount ?? 0 };
   } catch (e) {
     reportAudioError(e, { userId, sessionUserId }, { action: 'bulkTagAudioAssets' });
@@ -1902,31 +1951,42 @@ export async function deleteAudioAsset({
       ).lean()) as unknown as { _id: unknown }[];
 
       for (const { _id } of affectedIds) {
-        // Re-read under the same owner scope. A package deleted between the
-        // two queries simply yields null and is skipped — there is nothing
-        // left to prune, which is the outcome this loop wanted anyway.
-        const pkg = (await AudioPackage.findOne(
-          { _id, ownerId: userId },
-          { items: 1, moods: 1 }
-        ).lean()) as unknown as {
-          _id: unknown;
-          items: PackageItemData[];
-          moods: MoodData[];
-        } | null;
-        if (!pkg) continue;
-        // Two steps, not one `$pull`: moods reference `item.id`, never
-        // `assetId` (see `~/lib/soundboard/prune`'s doc comment), so the
-        // surviving item ids must be computed FIRST and used to prune
-        // `moods[].states[]` too. A single `$pull` on `items` alone would
-        // leave every mood state that named the removed item pointing at
-        // an id that no longer exists — exactly the orphan Task 14 had to
-        // go back and fix for the editor's own item-removal path.
-        const survivingItems = pkg.items.filter((item) => !sameObjectId(item.assetId, data.id));
-        const survivingMoods = pruneOrphanedMoodStates(pkg.moods, survivingItems);
-        await AudioPackage.updateOne(
-          { _id: pkg._id, ownerId: userId },
-          { $set: { items: survivingItems, moods: survivingMoods, updatedAt: new Date() } }
-        );
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          // Re-read under the same owner scope. A package deleted between the
+          // two queries simply yields null and is skipped — there is nothing
+          // left to prune, which is the outcome this loop wanted anyway.
+          const pkg = (await AudioPackage.findOne(
+            { _id, ownerId: userId },
+            { items: 1, moods: 1, updatedAt: 1 }
+          ).lean()) as unknown as {
+            _id: unknown;
+            items: PackageItemData[];
+            moods: MoodData[];
+            updatedAt?: Date;
+          } | null;
+          if (!pkg) break;
+          // Two steps, not one `$pull`: moods reference `item.id`, never
+          // `assetId` (see `~/lib/soundboard/prune`'s doc comment), so the
+          // surviving item ids must be computed FIRST and used to prune
+          // `moods[].states[]` too. A single `$pull` on `items` alone would
+          // leave every mood state that named the removed item pointing at
+          // an id that no longer exists — exactly the orphan Task 14 had to
+          // go back and fix for the editor's own item-removal path.
+          const survivingItems = pkg.items.filter((item) => !sameObjectId(item.assetId, data.id));
+          const survivingMoods = pruneOrphanedMoodStates(pkg.moods, survivingItems);
+          const result = await AudioPackage.updateOne(
+            { _id: pkg._id, ownerId: userId, updatedAt: pkg.updatedAt ?? null },
+            {
+              $set: {
+                items: survivingItems,
+                moods: survivingMoods,
+                updatedAt: new Date(Math.max(Date.now(), (pkg.updatedAt?.getTime() ?? 0) + 1)),
+              },
+            }
+          );
+          if (result.matchedCount !== 0) break;
+          if (attempt === 4) throw new Error('Package kept changing during audio deletion');
+        }
       }
     } catch (e) {
       void reportAudioError(

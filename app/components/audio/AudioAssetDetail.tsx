@@ -398,9 +398,9 @@ export function AudioAssetDetail({
                   ? 'A once-variant is attached and stored. Choose a new file to replace it.'
                   : 'Optional. A 1× (non-looping) ending for this music track. It is uploaded and transcoded now; the board plays the looping version until once-playback ships.'}
               </p>
-              {onceVariantError && (
+              {(onceVariantError || asset.onceLastError) && (
                 <p role="alert" className="mt-1 text-xs text-red-400">
-                  {onceVariantError}
+                  {onceVariantError || asset.onceLastError}
                 </p>
               )}
               <input

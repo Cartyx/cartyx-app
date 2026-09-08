@@ -118,7 +118,7 @@ describe('deleteAudioAsset — package/mood pruning', () => {
       Record<string, unknown>,
       { $set: { items: unknown[]; moods: { states: unknown[] }[] } },
     ];
-    expect(filter).toEqual({ _id: 'p1', ownerId: 'u1' });
+    expect(filter).toEqual({ _id: 'p1', ownerId: 'u1', updatedAt: null });
     expect(update.$set.items).toEqual([item2]);
     expect(update.$set.moods).toHaveLength(1);
     expect(update.$set.moods[0].states).toHaveLength(1);

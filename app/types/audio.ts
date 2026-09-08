@@ -118,6 +118,7 @@ export type AudioAssetData = {
    */
   onceRenditions?: { opus?: AudioRendition; aac?: AudioRendition };
   lastError: string | null;
+  onceLastError?: string | null;
   /**
    * True when the worker rejected the SOURCE ITSELF, so no rerun of the same
    * bytes can ever succeed and `retryAudioAsset` refuses the row.
